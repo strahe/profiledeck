@@ -81,11 +81,41 @@ func TestProfileTargetAppCRUDValidationAndRedaction(t *testing.T) {
 			ConfigDir:  configDir,
 			ProfileID:  "profile-a",
 			ProviderID: "provider-a",
-			TargetID:   "bad-secret",
+			TargetID:   "bad-env-ref",
 			Path:       filepath.Join(t.TempDir(), "target.txt"),
 			Format:     "json",
 			Strategy:   "json-merge",
-			ValueJSON:  `{"api_key":"raw-key"}`,
+			ValueJSON:  `{"api_key":{"ref_type":"env","name":"OPENAI_API_KEY"}}`,
+		},
+		{
+			ConfigDir:  configDir,
+			ProfileID:  "profile-a",
+			ProviderID: "provider-a",
+			TargetID:   "bad-env-key",
+			Path:       filepath.Join(t.TempDir(), "target.txt"),
+			Format:     "env",
+			Strategy:   "env-merge",
+			ValueJSON:  `{"1BAD":"value"}`,
+		},
+		{
+			ConfigDir:  configDir,
+			ProfileID:  "profile-a",
+			ProviderID: "provider-a",
+			TargetID:   "bad-env-value",
+			Path:       filepath.Join(t.TempDir(), "target.txt"),
+			Format:     "env",
+			Strategy:   "env-merge",
+			ValueJSON:  "{\"OPENAI_API_KEY\":\"bad\\nvalue\"}",
+		},
+		{
+			ConfigDir:  configDir,
+			ProfileID:  "profile-a",
+			ProviderID: "provider-a",
+			TargetID:   "bad-toml-null",
+			Path:       filepath.Join(t.TempDir(), "target.txt"),
+			Format:     "toml",
+			Strategy:   "toml-merge",
+			ValueJSON:  `{"model":null}`,
 		},
 		{
 			ConfigDir:  configDir,
@@ -108,16 +138,6 @@ func TestProfileTargetAppCRUDValidationAndRedaction(t *testing.T) {
 			ValueJSON:  `{"content":123}`,
 		},
 		{
-			ConfigDir:  configDir,
-			ProfileID:  "profile-a",
-			ProviderID: "provider-a",
-			TargetID:   "bad-env-ref",
-			Path:       filepath.Join(t.TempDir(), "target.txt"),
-			Format:     "json",
-			Strategy:   "json-merge",
-			ValueJSON:  `{"api_key":{"ref_type":"env","name":"1BAD"}}`,
-		},
-		{
 			ConfigDir:    configDir,
 			ProfileID:    "profile-a",
 			ProviderID:   "provider-a",
@@ -131,6 +151,25 @@ func TestProfileTargetAppCRUDValidationAndRedaction(t *testing.T) {
 	} {
 		_, err := CreateProfileTarget(ctx, tc)
 		assertAppErrorCode(t, err, ErrorTargetInvalid)
+	}
+
+	rawMergeEnabled := false
+	rawMergeTarget, err := CreateProfileTarget(ctx, CreateProfileTargetRequest{
+		ConfigDir:  configDir,
+		ProfileID:  "profile-a",
+		ProviderID: "provider-a",
+		TargetID:   "target-raw-merge",
+		Path:       filepath.Join(t.TempDir(), "target-raw-merge.json"),
+		Format:     "json",
+		Strategy:   "json-merge",
+		ValueJSON:  `{"api_key":"raw-key","model":"x"}`,
+		Enabled:    &rawMergeEnabled,
+	})
+	if err != nil {
+		t.Fatalf("expected raw credential-looking target desired content to be accepted, got %v", err)
+	}
+	if strings.Contains(rawMergeTarget.ValuePreview.Content, "raw-key") || !strings.Contains(rawMergeTarget.ValuePreview.Content, redactedValue) {
+		t.Fatalf("expected raw merge target preview to redact sensitive key, got %#v", rawMergeTarget.ValuePreview)
 	}
 
 	target, err := CreateProfileTarget(ctx, CreateProfileTargetRequest{
@@ -172,28 +211,6 @@ func TestProfileTargetAppCRUDValidationAndRedaction(t *testing.T) {
 	}
 	if strings.Contains(largeTarget.ValuePreview.Content, "raw-large-key") || !strings.Contains(largeTarget.ValuePreview.Content, redactedValue) {
 		t.Fatalf("expected large target preview to redact raw key, got %#v", largeTarget.ValuePreview)
-	}
-
-	disabled := false
-	envTarget, err := CreateProfileTarget(ctx, CreateProfileTargetRequest{
-		ConfigDir:  configDir,
-		ProfileID:  "profile-a",
-		ProviderID: "provider-a",
-		TargetID:   "target-b",
-		Path:       filepath.Join(t.TempDir(), "target-b.json"),
-		Format:     "json",
-		Strategy:   "json-merge",
-		ValueJSON:  `{"api_key":{"ref_type":"env","name":"OPENAI_API_KEY"},"model":"x"}`,
-		Enabled:    &disabled,
-	})
-	if err != nil {
-		t.Fatalf("expected env-ref target create to succeed, got %v", err)
-	}
-	if envTarget.Enabled {
-		t.Fatalf("expected env-ref target to be disabled")
-	}
-	if strings.Contains(envTarget.ValuePreview.Content, "raw-key") || !strings.Contains(envTarget.ValuePreview.Content, "<env:OPENAI_API_KEY>") {
-		t.Fatalf("expected env ref in redacted preview, got %#v", envTarget.ValuePreview)
 	}
 
 	targets, err := ListProfileTargets(ctx, ListProfileTargetsRequest{ConfigDir: configDir, ProfileID: "profile-a", ProviderID: "provider-a"})
@@ -432,6 +449,77 @@ func TestBuildPlanUsesBoundedPreviewForLargeTargets(t *testing.T) {
 	}
 }
 
+func TestBuildPlanRejectsOversizedMergeTargets(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	createGenericProviderAndProfile(t, ctx, configDir, true)
+
+	targetPath := filepath.Join(t.TempDir(), "oversized.env")
+	if err := os.WriteFile(targetPath, []byte(strings.Repeat("x", maxTargetContentBytes+1)), 0o600); err != nil {
+		t.Fatalf("expected oversized file setup to succeed, got %v", err)
+	}
+	if _, err := CreateProfileTarget(ctx, CreateProfileTargetRequest{
+		ConfigDir:  configDir,
+		ProfileID:  "profile-a",
+		ProviderID: "provider-a",
+		TargetID:   "target-oversized",
+		Path:       targetPath,
+		Format:     "env",
+		Strategy:   "env-merge",
+		ValueJSON:  `{"A":"1"}`,
+	}); err != nil {
+		t.Fatalf("expected oversized target create to succeed, got %v", err)
+	}
+
+	_, err := BuildPlan(ctx, BuildPlanRequest{ConfigDir: configDir, ProviderID: "provider-a", ProfileID: "profile-a"})
+	assertAppErrorCode(t, err, ErrorTargetReadFailed)
+}
+
+func TestBuildPlanStreamsOversizedReplaceFileTargets(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	createGenericProviderAndProfile(t, ctx, configDir, true)
+
+	targetPath := filepath.Join(t.TempDir(), "oversized.env")
+	beforeContent := strings.Repeat("x", maxTargetContentBytes+1)
+	if err := os.WriteFile(targetPath, []byte(beforeContent), 0o600); err != nil {
+		t.Fatalf("expected oversized file setup to succeed, got %v", err)
+	}
+	if _, err := CreateProfileTarget(ctx, CreateProfileTargetRequest{
+		ConfigDir:  configDir,
+		ProfileID:  "profile-a",
+		ProviderID: "provider-a",
+		TargetID:   "target-oversized-replace",
+		Path:       targetPath,
+		Format:     "env",
+		Strategy:   "replace-file",
+		ValueJSON:  `{"content":"ok"}`,
+	}); err != nil {
+		t.Fatalf("expected oversized replace target create to succeed, got %v", err)
+	}
+
+	plan, err := BuildPlan(ctx, BuildPlanRequest{ConfigDir: configDir, ProviderID: "provider-a", ProfileID: "profile-a"})
+	if err != nil {
+		t.Fatalf("expected oversized replace-file plan to succeed, got %v", err)
+	}
+	if len(plan.Operations) != 1 {
+		t.Fatalf("expected one oversized replace-file operation, got %#v", plan.Operations)
+	}
+	op := plan.Operations[0]
+	if op.Action != planActionUpdate || op.BeforeSHA256 != sha256Hex([]byte(beforeContent)) || op.DesiredSHA256 != sha256Hex([]byte("ok")) {
+		t.Fatalf("unexpected oversized replace-file operation: %#v", op)
+	}
+	if !op.BeforePreview.Truncated || op.AfterPreview.Content != "ok" {
+		t.Fatalf("unexpected oversized replace-file previews: before=%#v after=%#v", op.BeforePreview, op.AfterPreview)
+	}
+}
+
 func TestBuildPlanReadOnlyOperationsAndRedaction(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
@@ -445,15 +533,15 @@ func TestBuildPlanReadOnlyOperationsAndRedaction(t *testing.T) {
 	missingPath := filepath.Join(targetDir, "missing.env")
 	samePath := filepath.Join(targetDir, "same.env")
 	differentPath := filepath.Join(targetDir, "different.env")
-	unsupportedPath := filepath.Join(targetDir, "settings.json")
+	settingsPath := filepath.Join(targetDir, "settings.json")
 	if err := os.WriteFile(samePath, []byte("OPENAI_API_KEY=same\nsafe=value"), 0o600); err != nil {
 		t.Fatalf("expected same file setup to succeed, got %v", err)
 	}
 	if err := os.WriteFile(differentPath, []byte("OPENAI_API_KEY=old\nsafe=value"), 0o600); err != nil {
 		t.Fatalf("expected different file setup to succeed, got %v", err)
 	}
-	if err := os.WriteFile(unsupportedPath, []byte(`{"safe":"value","api_key":"stored-secret"}`), 0o600); err != nil {
-		t.Fatalf("expected unsupported file setup to succeed, got %v", err)
+	if err := os.WriteFile(settingsPath, []byte(`{"safe":"value","api_key":"stored-secret"}`), 0o600); err != nil {
+		t.Fatalf("expected settings file setup to succeed, got %v", err)
 	}
 
 	for _, req := range []CreateProfileTargetRequest{
@@ -491,17 +579,17 @@ func TestBuildPlanReadOnlyOperationsAndRedaction(t *testing.T) {
 			ConfigDir:  configDir,
 			ProfileID:  "profile-a",
 			ProviderID: "provider-a",
-			TargetID:   "target-unsupported",
-			Path:       unsupportedPath,
+			TargetID:   "target-json-update",
+			Path:       settingsPath,
 			Format:     "json",
 			Strategy:   "json-merge",
-			ValueJSON:  `{"api_key":{"ref_type":"env","name":"OPENAI_API_KEY"},"model":"x"}`,
+			ValueJSON:  `{"api_key":"new","model":"x"}`,
 		},
 		{
 			ConfigDir:  configDir,
 			ProfileID:  "profile-a",
 			ProviderID: "provider-a",
-			TargetID:   "target-unsupported-second",
+			TargetID:   "target-json-create",
 			Path:       filepath.Join(targetDir, "settings-2.json"),
 			Format:     "json",
 			Strategy:   "json-merge",
@@ -526,8 +614,8 @@ func TestBuildPlanReadOnlyOperationsAndRedaction(t *testing.T) {
 	if !plan.ReadOnly || len(plan.Operations) != 5 {
 		t.Fatalf("unexpected plan summary: %#v", plan)
 	}
-	if len(plan.Warnings) != 1 {
-		t.Fatalf("expected duplicate top-level warnings to be collapsed, got %#v", plan.Warnings)
+	if len(plan.Warnings) != 0 {
+		t.Fatalf("expected no top-level warnings for JSON merge plan, got %#v", plan.Warnings)
 	}
 	if countTableRows(t, initResult.DatabasePath, "profile_targets") != beforeTargetCount {
 		t.Fatalf("expected build plan not to mutate profile_targets")
@@ -562,19 +650,19 @@ func TestBuildPlanReadOnlyOperationsAndRedaction(t *testing.T) {
 	if actions["target-update"] != planActionUpdate || reasons["target-update"] != planReasonTargetDifferentContent {
 		t.Fatalf("unexpected update operation: actions=%#v reasons=%#v", actions, reasons)
 	}
-	if actions["target-unsupported"] != planActionUnsupported || reasons["target-unsupported"] != planReasonStrategyNotImplemented {
-		t.Fatalf("unexpected unsupported operation: actions=%#v reasons=%#v", actions, reasons)
+	if actions["target-json-update"] != planActionUpdate || reasons["target-json-update"] != planReasonTargetDifferentContent {
+		t.Fatalf("unexpected json update operation: actions=%#v reasons=%#v", actions, reasons)
 	}
-	if actions["target-unsupported-second"] != planActionUnsupported || reasons["target-unsupported-second"] != planReasonStrategyNotImplemented {
-		t.Fatalf("unexpected second unsupported operation: actions=%#v reasons=%#v", actions, reasons)
+	if actions["target-json-create"] != planActionCreate || reasons["target-json-create"] != planReasonTargetMissing {
+		t.Fatalf("unexpected json create operation: actions=%#v reasons=%#v", actions, reasons)
 	}
 	for _, op := range plan.Operations {
-		if op.TargetID == "target-unsupported" {
-			if op.DesiredSHA256 != "" || op.AfterPreview.Content != "" {
-				t.Fatalf("expected unsupported merge to omit desired hash and after preview, got %#v", op)
+		if op.TargetID == "target-json-update" {
+			if op.DesiredSHA256 == "" || op.AfterPreview.Content == "" {
+				t.Fatalf("expected merge to include desired hash and after preview, got %#v", op)
 			}
 			if op.BeforeSHA256 == "" || op.BeforePreview.Content == "" {
-				t.Fatalf("expected unsupported merge to include existing target preview, got %#v", op)
+				t.Fatalf("expected merge to include existing target preview, got %#v", op)
 			}
 		}
 	}

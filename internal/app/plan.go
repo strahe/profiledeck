@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -22,8 +23,9 @@ const (
 	planReasonTargetMissing          = "target_missing"
 	planReasonTargetSameContent      = "target_same_content"
 	planReasonTargetDifferentContent = "target_different_content"
-	planReasonStrategyNotImplemented = "strategy_not_implemented"
 	planReasonTargetIsSymlink        = "target_is_symlink"
+
+	maxTargetContentBytes = 16 * 1024 * 1024
 )
 
 type BuildPlanRequest struct {
@@ -194,7 +196,7 @@ func buildGenericPlanOperation(ctx context.Context, provider store.Provider, pro
 		Strategy:   target.Strategy,
 	}
 
-	before, err := readTargetForPlan(ctx, target.Path)
+	before, err := readTargetForPlan(ctx, target.Path, targetStrategyNeedsContent(target.Strategy))
 	if err != nil {
 		return PlanOperation{}, err
 	}
@@ -211,22 +213,11 @@ func buildGenericPlanOperation(ctx context.Context, provider store.Provider, pro
 		op.BeforePreview = before.Preview
 	}
 
-	if target.Strategy != targetStrategyReplaceFile {
-		preview, err := targetValuePreview(target.Format, target.Strategy, target.ValueJSON)
-		if err != nil {
-			return PlanOperation{}, NewError(ErrorTargetInvalid, "stored profile target value_json is invalid")
-		}
-		op.Action = planActionUnsupported
-		op.StatusReason = planReasonStrategyNotImplemented
-		op.DesiredPreview = preview
-		op.Warnings = append(op.Warnings, "target strategy is not implemented in read-only plan stage")
-		return op, nil
-	}
-
-	content, err := replaceFileContentFromValueJSON(target.ValueJSON)
+	content, warnings, err := desiredTargetContent(target, before)
 	if err != nil {
 		return PlanOperation{}, err
 	}
+	op.Warnings = append(op.Warnings, warnings...)
 	op.DesiredSHA256 = sha256HexString(content)
 	op.DesiredPreview = previewSensitiveText(content)
 	op.AfterPreview = op.DesiredPreview
@@ -252,9 +243,19 @@ type targetPlanRead struct {
 	IsSymlink  bool
 	SHA256     string
 	Preview    TextPreview
+	Content    string
 }
 
-func readTargetForPlan(ctx context.Context, path string) (targetPlanRead, error) {
+func targetStrategyNeedsContent(strategy string) bool {
+	switch strategy {
+	case targetStrategyJSONMerge, targetStrategyTOMLMerge, targetStrategyEnvMerge:
+		return true
+	default:
+		return false
+	}
+}
+
+func readTargetForPlan(ctx context.Context, path string, needsContent bool) (targetPlanRead, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -271,6 +272,13 @@ func readTargetForPlan(ctx context.Context, path string) (targetPlanRead, error)
 	if !info.Mode().IsRegular() {
 		return targetPlanRead{FileExists: true}, NewError(ErrorTargetReadFailed, "target path is not a regular file").WithDetail("path", path)
 	}
+	// Merge strategies need full target content; replace-file keeps streaming hash/preview only.
+	if needsContent && info.Size() > maxTargetContentBytes {
+		return targetPlanRead{FileExists: true}, NewError(ErrorTargetReadFailed, "target file is too large").
+			WithDetail("path", path).
+			WithDetail("size_bytes", info.Size()).
+			WithDetail("max_bytes", maxTargetContentBytes)
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return targetPlanRead{FileExists: true}, WrapError(ErrorTargetReadFailed, "failed to read target file", err).WithDetail("path", path)
@@ -279,13 +287,27 @@ func readTargetForPlan(ctx context.Context, path string) (targetPlanRead, error)
 
 	hash := sha256.New()
 	preview := &prefixPreviewWriter{maxBytes: maxPreviewBytes}
-	if _, err := io.Copy(io.MultiWriter(hash, preview), contextReader{ctx: ctx, reader: file}); err != nil {
+	var content bytes.Buffer
+	reader := io.Reader(contextReader{ctx: ctx, reader: file})
+	writer := io.MultiWriter(hash, preview)
+	if needsContent {
+		reader = io.LimitReader(reader, maxTargetContentBytes+1)
+		writer = io.MultiWriter(hash, preview, &content)
+	}
+	read, err := io.Copy(writer, reader)
+	if err != nil {
 		return targetPlanRead{FileExists: true}, WrapError(ErrorTargetReadFailed, "failed to read target file", err).WithDetail("path", path)
+	}
+	if needsContent && read > maxTargetContentBytes {
+		return targetPlanRead{FileExists: true}, NewError(ErrorTargetReadFailed, "target file is too large").
+			WithDetail("path", path).
+			WithDetail("max_bytes", maxTargetContentBytes)
 	}
 	return targetPlanRead{
 		FileExists: true,
 		SHA256:     hex.EncodeToString(hash.Sum(nil)),
 		Preview:    preview.TextPreview(),
+		Content:    content.String(),
 	}, nil
 }
 

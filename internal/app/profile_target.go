@@ -483,7 +483,7 @@ func targetFormatStrategyAllowed(format string, strategy string) bool {
 	}
 }
 
-func validateTargetValueShape(_ string, strategy string, value map[string]any) *AppError {
+func validateTargetValueShape(format string, strategy string, value map[string]any) *AppError {
 	if strategy == targetStrategyReplaceFile {
 		content, ok := value["content"].(string)
 		if !ok || len(value) != 1 {
@@ -492,8 +492,19 @@ func validateTargetValueShape(_ string, strategy string, value map[string]any) *
 		_ = content
 		return nil
 	}
-	if err := rejectRawTargetSecretValues(value); err != nil {
-		return NewError(ErrorTargetInvalid, err.Error())
+	if containsReservedEnvRefObject(value) {
+		return NewError(ErrorTargetInvalid, "value_json cannot contain ProfileDeck env reference objects")
+	}
+	target := store.ProfileTarget{Format: format, Strategy: strategy}
+	switch strategy {
+	case targetStrategyTOMLMerge:
+		if _, appErr := jsonObjectToTOML(value, target); appErr != nil {
+			return appErr
+		}
+	case targetStrategyEnvMerge:
+		if _, appErr := envPatchValues(value, target); appErr != nil {
+			return appErr
+		}
 	}
 	return nil
 }
@@ -522,31 +533,6 @@ func decodeSingleJSONObject(raw string, code ErrorCode, field string) (map[strin
 	return object, nil
 }
 
-func rejectRawTargetSecretValues(value any) error {
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, child := range typed {
-			if isCredentialMetadataKey(key) {
-				// Merge strategies store structured config, so secret-shaped keys must use references.
-				if _, ok := envRefDisplay(child); ok {
-					continue
-				}
-				return errors.New("value_json cannot contain raw credential values")
-			}
-			if err := rejectRawTargetSecretValues(child); err != nil {
-				return err
-			}
-		}
-	case []any:
-		for _, child := range typed {
-			if err := rejectRawTargetSecretValues(child); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 func envRefDisplay(value any) (string, bool) {
 	object, ok := value.(map[string]any)
 	if !ok || len(object) != 2 {
@@ -561,6 +547,29 @@ func envRefDisplay(value any) (string, bool) {
 		return "", false
 	}
 	return "<env:" + name + ">", true
+}
+
+func containsReservedEnvRefObject(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		refType, hasRefType := typed["ref_type"].(string)
+		_, hasName := typed["name"]
+		if hasRefType && refType == "env" && hasName {
+			return true
+		}
+		for _, child := range typed {
+			if containsReservedEnvRefObject(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if containsReservedEnvRefObject(child) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func validEnvName(value string) bool {

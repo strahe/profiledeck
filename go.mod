@@ -3,6 +3,7 @@ module github.com/strahe/profiledeck
 go 1.26
 
 require (
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/uptrace/bun v1.2.18
 	github.com/uptrace/bun/dialect/sqlitedialect v1.2.18
 	github.com/urfave/cli/v3 v3.10.1
