@@ -5,8 +5,14 @@ import "fmt"
 type ErrorCode string
 
 const (
-	ErrorInvalidRuntimePath ErrorCode = "INVALID_RUNTIME_PATH"
-	ErrorCommandFailed      ErrorCode = "COMMAND_FAILED"
+	ErrorInvalidRuntimePath   ErrorCode = "INVALID_RUNTIME_PATH"
+	ErrorCommandFailed        ErrorCode = "COMMAND_FAILED"
+	ErrorRuntimeInitFailed    ErrorCode = "RUNTIME_INIT_FAILED"
+	ErrorStoreInitFailed      ErrorCode = "STORE_INIT_FAILED"
+	ErrorStoreOpenFailed      ErrorCode = "STORE_OPEN_FAILED"
+	ErrorStoreMigrationFailed ErrorCode = "STORE_MIGRATION_FAILED"
+	ErrorStoreSchemaInvalid   ErrorCode = "STORE_SCHEMA_INVALID"
+	ErrorStoreStatusFailed    ErrorCode = "STORE_STATUS_FAILED"
 )
 
 type AppError struct {
@@ -35,13 +41,22 @@ func (e *AppError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
+	message := ""
 	if e.Code == "" {
-		return e.Message
+		message = e.Message
+	} else if e.Message == "" {
+		message = string(e.Code)
+	} else {
+		message = fmt.Sprintf("%s: %s", e.Code, e.Message)
 	}
-	if e.Message == "" {
-		return string(e.Code)
+
+	if e.Cause == nil {
+		return message
 	}
-	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+	if message == "" {
+		return e.Cause.Error()
+	}
+	return fmt.Sprintf("%s: %v", message, e.Cause)
 }
 
 func (e *AppError) Unwrap() error {

@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/strahe/profiledeck/internal/app"
 )
 
 func TestResolvePaths(t *testing.T) {
@@ -38,12 +36,8 @@ func TestResolvePathsRejectsEmptyConfigDir(t *testing.T) {
 		t.Fatalf("expected error for empty config dir")
 	}
 
-	var appErr *app.AppError
-	if !errors.As(err, &appErr) {
-		t.Fatalf("expected AppError, got %T", err)
-	}
-	if appErr.Code != app.ErrorInvalidRuntimePath {
-		t.Fatalf("expected code %q, got %q", app.ErrorInvalidRuntimePath, appErr.Code)
+	if !errors.Is(err, ErrEmptyUserConfigDir) {
+		t.Fatalf("expected ErrEmptyUserConfigDir, got %T", err)
 	}
 }
 

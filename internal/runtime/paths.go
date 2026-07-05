@@ -1,13 +1,15 @@
 package runtime
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/strahe/profiledeck/internal/app"
 )
 
 const runtimeDirName = "profiledeck"
+
+var ErrEmptyUserConfigDir = errors.New("user config directory is required")
 
 type Paths struct {
 	Root     string
@@ -18,9 +20,13 @@ type Paths struct {
 	Lock     string
 }
 
+func DefaultUserConfigDir() (string, error) {
+	return os.UserConfigDir()
+}
+
 func ResolvePaths(userConfigDir string) (Paths, error) {
 	if strings.TrimSpace(userConfigDir) == "" {
-		return Paths{}, app.NewError(app.ErrorInvalidRuntimePath, "user config directory is required")
+		return Paths{}, ErrEmptyUserConfigDir
 	}
 
 	root := filepath.Join(userConfigDir, runtimeDirName)

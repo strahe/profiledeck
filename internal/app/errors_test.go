@@ -27,6 +27,22 @@ func TestAppErrorWrapsCause(t *testing.T) {
 	}
 }
 
+func TestAppErrorIncludesCauseInMessage(t *testing.T) {
+	cause := errors.New("permission denied")
+	err := WrapError(ErrorRuntimeInitFailed, "failed to initialize runtime directories", cause)
+
+	got := err.Error()
+	for _, want := range []string{
+		string(ErrorRuntimeInitFailed),
+		"failed to initialize runtime directories",
+		"permission denied",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected error to contain %q, got %q", want, got)
+		}
+	}
+}
+
 func TestAppErrorDetails(t *testing.T) {
 	err := NewError(ErrorInvalidRuntimePath, "runtime path is invalid").WithDetail("path", "")
 
