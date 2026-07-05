@@ -32,6 +32,9 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	if cmd.Command("status") == nil {
 		t.Fatalf("expected status subcommand")
 	}
+	if cmd.Command("plan") == nil {
+		t.Fatalf("expected plan subcommand")
+	}
 	if cmd.Command("provider") == nil {
 		t.Fatalf("expected provider subcommand")
 	}
@@ -337,6 +340,105 @@ func TestProfileCLIJSONFlow(t *testing.T) {
 		t.Fatalf("unexpected delete result: %#v", deleted)
 	}
 	assertNoTargetToolConfigCreated(t, configDir)
+}
+
+func TestProfileTargetAndPlanCLIFlow(t *testing.T) {
+	configDir := t.TempDir()
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	if _, err := runCLI(t,
+		"--config-dir", configDir,
+		"provider", "create", "provider-a",
+		"--name", "Provider A",
+		"--adapter", "generic",
+		"--json",
+	); err != nil {
+		t.Fatalf("expected provider create to succeed, got %v", err)
+	}
+	if _, err := runCLI(t,
+		"--config-dir", configDir,
+		"profile", "create", "profile-a",
+		"--name", "Profile A",
+		"--json",
+	); err != nil {
+		t.Fatalf("expected profile create to succeed, got %v", err)
+	}
+
+	targetPath := filepath.Join(t.TempDir(), "target.env")
+	out, err := runCLI(t,
+		"--config-dir", configDir,
+		"profile", "target", "add", "profile-a", "target-a",
+		"--provider", "provider-a",
+		"--path", targetPath,
+		"--format", "env",
+		"--strategy", "replace-file",
+		"--value-json", `{"content":"OPENAI_API_KEY=raw-key\nsafe=value"}`,
+		"--json",
+	)
+	if err != nil {
+		t.Fatalf("expected profile target add to succeed, got %v", err)
+	}
+	if strings.Contains(out, "raw-key") || !strings.Contains(out, "[REDACTED]") {
+		t.Fatalf("expected target add JSON to redact raw key, got %q", out)
+	}
+	var target app.ProfileTarget
+	decodeCLIJSON(t, []byte(out), &target)
+	if target.TargetID != "target-a" || target.ValuePreview.Content == "" {
+		t.Fatalf("unexpected target add result: %#v", target)
+	}
+
+	out, err = runCLI(t, "--config-dir", configDir, "profile", "target", "list", "profile-a", "--provider", "provider-a", "--json")
+	if err != nil {
+		t.Fatalf("expected profile target list to succeed, got %v", err)
+	}
+	if strings.Contains(out, "raw-key") {
+		t.Fatalf("expected target list JSON to redact raw key, got %q", out)
+	}
+	var targets []app.ProfileTarget
+	decodeCLIJSON(t, []byte(out), &targets)
+	if len(targets) != 1 || targets[0].TargetID != "target-a" {
+		t.Fatalf("unexpected target list result: %#v", targets)
+	}
+
+	humanOut, err := runCLI(t, "--config-dir", configDir, "profile", "target", "show", "profile-a", "provider-a", "target-a")
+	if err != nil {
+		t.Fatalf("expected profile target show to succeed, got %v", err)
+	}
+	if strings.Contains(humanOut, "raw-key") || !strings.Contains(humanOut, "[REDACTED]") {
+		t.Fatalf("expected target show human output to redact raw key, got %q", humanOut)
+	}
+
+	out, err = runCLI(t, "--config-dir", configDir, "plan", "provider-a", "profile-a", "--json")
+	if err != nil {
+		t.Fatalf("expected plan JSON to succeed, got %v", err)
+	}
+	if strings.Contains(out, "raw-key") {
+		t.Fatalf("expected plan JSON to redact raw key, got %q", out)
+	}
+	var plan app.SwitchPlan
+	decodeCLIJSON(t, []byte(out), &plan)
+	if !plan.ReadOnly || len(plan.Operations) != 1 || plan.Operations[0].Action != "create" {
+		t.Fatalf("unexpected plan result: %#v", plan)
+	}
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Fatalf("expected plan not to create target file, stat error: %v", err)
+	}
+
+	if _, err := runCLI(t, "--config-dir", configDir, "profile", "target", "update", "profile-a", "provider-a", "target-a", "--enabled", "--disabled", "--json"); err != nil {
+		assertCLIAppErrorCode(t, err, app.ErrorTargetInvalid)
+	} else {
+		t.Fatalf("expected enabled/disabled conflict to fail")
+	}
+	out, err = runCLI(t, "--config-dir", configDir, "profile", "target", "delete", "profile-a", "provider-a", "target-a", "--yes", "--json")
+	if err != nil {
+		t.Fatalf("expected profile target delete to succeed, got %v", err)
+	}
+	var deleted app.DeleteResult
+	decodeCLIJSON(t, []byte(out), &deleted)
+	if !deleted.Deleted || deleted.ID != "target-a" {
+		t.Fatalf("unexpected target delete result: %#v", deleted)
+	}
 }
 
 func TestProviderCLIOutputRedactsSensitiveMetadata(t *testing.T) {

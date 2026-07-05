@@ -31,7 +31,10 @@ var (
 	ErrAlreadyExists = errors.New("already exists")
 	ErrInUse         = errors.New("in use")
 	ErrNotFound      = errors.New("not found")
+	ErrPathOwned     = errors.New("path owned")
 )
+
+const profileTargetPathOwnerMessage = "profile target path is owned by another provider target"
 
 type Store struct {
 	db *bun.DB
@@ -72,6 +75,21 @@ type Profile struct {
 	UpdatedAtUnixMS int64
 }
 
+type ProfileTarget struct {
+	ProfileID       string
+	ProviderID      string
+	TargetID        string
+	Path            string
+	PathKey         string
+	Format          string
+	Strategy        string
+	ValueJSON       string
+	Enabled         bool
+	MetadataJSON    string
+	CreatedAtUnixMS int64
+	UpdatedAtUnixMS int64
+}
+
 type CreateProfileParams struct {
 	ID           string
 	Name         string
@@ -83,6 +101,32 @@ type UpdateProfileParams struct {
 	ID           string
 	Name         *string
 	Description  *string
+	MetadataJSON *string
+}
+
+type CreateProfileTargetParams struct {
+	ProfileID    string
+	ProviderID   string
+	TargetID     string
+	Path         string
+	PathKey      string
+	Format       string
+	Strategy     string
+	ValueJSON    string
+	Enabled      bool
+	MetadataJSON string
+}
+
+type UpdateProfileTargetParams struct {
+	ProfileID    string
+	ProviderID   string
+	TargetID     string
+	Path         *string
+	PathKey      *string
+	Format       *string
+	Strategy     *string
+	ValueJSON    *string
+	Enabled      *bool
 	MetadataJSON *string
 }
 
@@ -122,6 +166,13 @@ type indexSpec struct {
 	name    string
 	table   string
 	columns []string
+	unique  bool
+}
+
+type triggerSpec struct {
+	name   string
+	table  string
+	checks []string
 }
 
 var initialTableSpecs = []tableSpec{
@@ -187,6 +238,28 @@ var initialTableSpecs = []tableSpec{
 			"CHECK (status IN ('pending', 'failed', 'applied'))",
 		},
 	},
+	{
+		name: "profile_targets",
+		columns: []columnSpec{
+			{name: "profile_id", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "provider_id", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "target_id", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "path", columnType: "TEXT", notNull: true},
+			{name: "path_key", columnType: "TEXT", notNull: true},
+			{name: "format", columnType: "TEXT", notNull: true},
+			{name: "strategy", columnType: "TEXT", notNull: true},
+			{name: "value_json", columnType: "TEXT", notNull: true},
+			{name: "enabled", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "1"},
+			{name: "metadata_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
+			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
+			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
+		},
+		checks: []string{
+			"CHECK (format IN ('text', 'json', 'toml', 'env'))",
+			"CHECK (strategy IN ('replace-file', 'json-merge', 'toml-merge', 'env-merge'))",
+			"CHECK (enabled IN (0, 1))",
+		},
+	},
 }
 
 var initialIndexSpecs = []indexSpec{
@@ -194,6 +267,38 @@ var initialIndexSpecs = []indexSpec{
 	{name: "idx_providers_enabled", table: "providers", columns: []string{"enabled"}},
 	{name: "idx_operations_status", table: "operations", columns: []string{"status"}},
 	{name: "idx_operations_operation_type", table: "operations", columns: []string{"operation_type"}},
+	{name: "idx_profile_targets_profile_id", table: "profile_targets", columns: []string{"profile_id"}},
+	{name: "idx_profile_targets_provider_id", table: "profile_targets", columns: []string{"provider_id"}},
+	{name: "idx_profile_targets_enabled", table: "profile_targets", columns: []string{"enabled"}},
+	{name: "idx_profile_targets_unique_path", table: "profile_targets", columns: []string{"profile_id", "provider_id", "path_key"}, unique: true},
+}
+
+var initialTriggerSpecs = []triggerSpec{
+	{
+		name:  "trg_profile_targets_path_owner_insert",
+		table: "profile_targets",
+		checks: []string{
+			"BEFORE INSERT ON profile_targets",
+			"path_key = NEW.path_key",
+			"provider_id <> NEW.provider_id",
+			"target_id <> NEW.target_id",
+			"RAISE(ABORT, '" + profileTargetPathOwnerMessage + "')",
+		},
+	},
+	{
+		name:  "trg_profile_targets_path_owner_update",
+		table: "profile_targets",
+		checks: []string{
+			"BEFORE UPDATE OF path, path_key, provider_id, target_id ON profile_targets",
+			"path_key = NEW.path_key",
+			"profile_id = OLD.profile_id",
+			"provider_id = OLD.provider_id",
+			"target_id = OLD.target_id",
+			"provider_id <> NEW.provider_id",
+			"target_id <> NEW.target_id",
+			"RAISE(ABORT, '" + profileTargetPathOwnerMessage + "')",
+		},
+	},
 }
 
 func Open(ctx context.Context, databasePath string, readOnly bool) (*Store, error) {
@@ -382,11 +487,27 @@ func (s *Store) UpdateProvider(ctx context.Context, params UpdateProviderParams)
 }
 
 func (s *Store) DeleteProvider(ctx context.Context, id string) error {
-	result, err := s.db.DB.ExecContext(ctx, "DELETE FROM providers WHERE id = ?", id)
+	result, err := s.db.DB.ExecContext(ctx, `
+		DELETE FROM providers
+		WHERE id = ?
+			AND NOT EXISTS (SELECT 1 FROM profile_targets WHERE provider_id = ?)
+	`, id, id)
 	if err != nil {
 		return err
 	}
 	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		if _, getErr := s.GetProvider(ctx, id); errors.Is(getErr, ErrNotFound) {
+			return ErrNotFound
+		} else if getErr != nil {
+			return getErr
+		}
+		references, refErr := s.CountProviderTargetReferences(ctx, id)
+		if refErr != nil {
+			return refErr
+		}
+		if references > 0 {
+			return ErrInUse
+		}
 		return ErrNotFound
 	}
 	return nil
@@ -497,7 +618,8 @@ func (s *Store) DeleteProfile(ctx context.Context, id string) error {
 		WHERE id = ?
 			AND NOT EXISTS (SELECT 1 FROM active_states WHERE profile_id = ?)
 			AND NOT EXISTS (SELECT 1 FROM operations WHERE profile_id = ?)
-	`, id, id, id)
+			AND NOT EXISTS (SELECT 1 FROM profile_targets WHERE profile_id = ?)
+	`, id, id, id, id)
 	if err != nil {
 		return err
 	}
@@ -517,6 +639,228 @@ func (s *Store) DeleteProfile(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (s *Store) CreateProfileTarget(ctx context.Context, params CreateProfileTargetParams) (ProfileTarget, error) {
+	now := time.Now().UnixMilli()
+	enabled := 0
+	if params.Enabled {
+		enabled = 1
+	}
+	pathKey := params.PathKey
+	if pathKey == "" {
+		pathKey = params.Path
+	}
+	_, err := s.db.DB.ExecContext(
+		ctx,
+		`INSERT INTO profile_targets
+			(profile_id, provider_id, target_id, path, path_key, format, strategy, value_json, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		params.ProfileID,
+		params.ProviderID,
+		params.TargetID,
+		params.Path,
+		pathKey,
+		params.Format,
+		params.Strategy,
+		params.ValueJSON,
+		enabled,
+		params.MetadataJSON,
+		now,
+		now,
+	)
+	if err != nil {
+		if isSQLiteConstraintError(err) {
+			return ProfileTarget{}, profileTargetConstraintError(err)
+		}
+		return ProfileTarget{}, err
+	}
+	return s.GetProfileTarget(ctx, params.ProfileID, params.ProviderID, params.TargetID)
+}
+
+func (s *Store) ListProfileTargets(ctx context.Context, profileID string, providerID string, includeDisabled bool) ([]ProfileTarget, error) {
+	query := `
+		SELECT profile_id, provider_id, target_id, path, path_key, format, strategy, value_json, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		FROM profile_targets
+		WHERE profile_id = ?
+	`
+	args := []any{profileID}
+	if providerID != "" {
+		query += " AND provider_id = ?"
+		args = append(args, providerID)
+	}
+	if !includeDisabled {
+		query += " AND enabled = ?"
+		args = append(args, 1)
+	}
+	query += " ORDER BY provider_id ASC, target_id ASC"
+
+	rows, err := s.db.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var targets []ProfileTarget
+	for rows.Next() {
+		target, err := scanProfileTarget(rows)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
+func (s *Store) ListProfileTargetsByPathKey(ctx context.Context, pathKey string) ([]ProfileTarget, error) {
+	rows, err := s.db.DB.QueryContext(
+		ctx,
+		`SELECT profile_id, provider_id, target_id, path, path_key, format, strategy, value_json, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		FROM profile_targets
+		WHERE path_key = ?
+		ORDER BY provider_id ASC, target_id ASC, profile_id ASC`,
+		pathKey,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var targets []ProfileTarget
+	for rows.Next() {
+		target, err := scanProfileTarget(rows)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
+func (s *Store) GetProfileTarget(ctx context.Context, profileID string, providerID string, targetID string) (ProfileTarget, error) {
+	row := s.db.DB.QueryRowContext(
+		ctx,
+		`SELECT profile_id, provider_id, target_id, path, path_key, format, strategy, value_json, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		FROM profile_targets
+		WHERE profile_id = ? AND provider_id = ? AND target_id = ?`,
+		profileID,
+		providerID,
+		targetID,
+	)
+	target, err := scanProfileTarget(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ProfileTarget{}, ErrNotFound
+	}
+	return target, err
+}
+
+func (s *Store) UpdateProfileTarget(ctx context.Context, params UpdateProfileTargetParams) (ProfileTarget, error) {
+	assignments := []string{}
+	args := []any{}
+	if params.Path != nil {
+		assignments = append(assignments, "path = ?")
+		args = append(args, *params.Path)
+		pathKey := *params.Path
+		if params.PathKey != nil {
+			pathKey = *params.PathKey
+		}
+		assignments = append(assignments, "path_key = ?")
+		args = append(args, pathKey)
+	}
+	if params.Format != nil {
+		assignments = append(assignments, "format = ?")
+		args = append(args, *params.Format)
+	}
+	if params.Strategy != nil {
+		assignments = append(assignments, "strategy = ?")
+		args = append(args, *params.Strategy)
+	}
+	if params.ValueJSON != nil {
+		assignments = append(assignments, "value_json = ?")
+		args = append(args, *params.ValueJSON)
+	}
+	if params.Enabled != nil {
+		enabled := 0
+		if *params.Enabled {
+			enabled = 1
+		}
+		assignments = append(assignments, "enabled = ?")
+		args = append(args, enabled)
+	}
+	if params.MetadataJSON != nil {
+		assignments = append(assignments, "metadata_json = ?")
+		args = append(args, *params.MetadataJSON)
+	}
+	if len(assignments) == 0 {
+		return s.GetProfileTarget(ctx, params.ProfileID, params.ProviderID, params.TargetID)
+	}
+	assignments = append(assignments, "updated_at_unix_ms = ?")
+	args = append(args, time.Now().UnixMilli(), params.ProfileID, params.ProviderID, params.TargetID)
+
+	result, err := s.db.DB.ExecContext(
+		ctx,
+		`UPDATE profile_targets SET `+strings.Join(assignments, ", ")+` WHERE profile_id = ? AND provider_id = ? AND target_id = ?`,
+		args...,
+	)
+	if err != nil {
+		if isSQLiteConstraintError(err) {
+			return ProfileTarget{}, profileTargetConstraintError(err)
+		}
+		return ProfileTarget{}, err
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return ProfileTarget{}, ErrNotFound
+	}
+	return s.GetProfileTarget(ctx, params.ProfileID, params.ProviderID, params.TargetID)
+}
+
+func (s *Store) DeleteProfileTarget(ctx context.Context, profileID string, providerID string, targetID string) error {
+	result, err := s.db.DB.ExecContext(
+		ctx,
+		"DELETE FROM profile_targets WHERE profile_id = ? AND provider_id = ? AND target_id = ?",
+		profileID,
+		providerID,
+		targetID,
+	)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) CountProviderTargetReferences(ctx context.Context, providerID string) (int, error) {
+	var count int
+	err := s.db.DB.QueryRowContext(
+		ctx,
+		"SELECT COUNT(1) FROM profile_targets WHERE provider_id = ?",
+		providerID,
+	).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *Store) CountProfileTargetReferences(ctx context.Context, profileID string) (int, error) {
+	var count int
+	err := s.db.DB.QueryRowContext(
+		ctx,
+		"SELECT COUNT(1) FROM profile_targets WHERE profile_id = ?",
+		profileID,
+	).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func (s *Store) schemaHealthy(ctx context.Context) (bool, error) {
@@ -548,15 +892,28 @@ func (s *Store) schemaHealthy(ctx context.Context) (bool, error) {
 		}
 	}
 
+	for _, trigger := range initialTriggerSpecs {
+		ok, err := s.triggerSchemaHealthy(ctx, trigger)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+
 	return true, nil
 }
 
 func (s *Store) indexSchemaHealthy(ctx context.Context, spec indexSpec) (bool, error) {
-	exists, err := s.indexExistsOnTable(ctx, spec.table, spec.name)
+	exists, unique, err := s.indexExistsOnTable(ctx, spec.table, spec.name)
 	if err != nil {
 		return false, err
 	}
 	if !exists {
+		return false, nil
+	}
+	if unique != spec.unique {
 		return false, nil
 	}
 
@@ -630,10 +987,36 @@ func (s *Store) tableSchemaHealthy(ctx context.Context, spec tableSpec) (bool, e
 	return true, nil
 }
 
-func (s *Store) indexExistsOnTable(ctx context.Context, table string, index string) (bool, error) {
-	rows, err := s.db.DB.QueryContext(ctx, fmt.Sprintf("PRAGMA index_list(%s)", quoteSQLiteIdentifier(table)))
+func (s *Store) triggerSchemaHealthy(ctx context.Context, spec triggerSpec) (bool, error) {
+	var table string
+	var sqlText string
+	err := s.db.DB.QueryRowContext(
+		ctx,
+		"SELECT tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+		spec.name,
+	).Scan(&table, &sqlText)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
+	}
+	if table != spec.table {
+		return false, nil
+	}
+	compactSQLText := compactSQL(sqlText)
+	for _, check := range spec.checks {
+		if !strings.Contains(compactSQLText, compactSQL(check)) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (s *Store) indexExistsOnTable(ctx context.Context, table string, index string) (bool, bool, error) {
+	rows, err := s.db.DB.QueryContext(ctx, fmt.Sprintf("PRAGMA index_list(%s)", quoteSQLiteIdentifier(table)))
+	if err != nil {
+		return false, false, err
 	}
 	defer rows.Close()
 
@@ -644,16 +1027,16 @@ func (s *Store) indexExistsOnTable(ctx context.Context, table string, index stri
 		var origin string
 		var partial int
 		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
-			return false, err
+			return false, false, err
 		}
 		if name == index {
-			return true, nil
+			return true, unique != 0, nil
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return false, err
+		return false, false, err
 	}
-	return false, nil
+	return false, false, nil
 }
 
 func (s *Store) indexColumns(ctx context.Context, index string) ([]string, error) {
@@ -790,7 +1173,12 @@ func (s *Store) profileReferenceCount(ctx context.Context, profileID string) (in
 		return 0, err
 	}
 
-	return activeStateCount + operationCount, nil
+	targetCount, err := s.CountProfileTargetReferences(ctx, profileID)
+	if err != nil {
+		return 0, err
+	}
+
+	return activeStateCount + operationCount + targetCount, nil
 }
 
 type rowScanner interface {
@@ -830,9 +1218,39 @@ func scanProfile(row rowScanner) (Profile, error) {
 	return profile, nil
 }
 
+func scanProfileTarget(row rowScanner) (ProfileTarget, error) {
+	var target ProfileTarget
+	var enabled int
+	if err := row.Scan(
+		&target.ProfileID,
+		&target.ProviderID,
+		&target.TargetID,
+		&target.Path,
+		&target.PathKey,
+		&target.Format,
+		&target.Strategy,
+		&target.ValueJSON,
+		&enabled,
+		&target.MetadataJSON,
+		&target.CreatedAtUnixMS,
+		&target.UpdatedAtUnixMS,
+	); err != nil {
+		return ProfileTarget{}, err
+	}
+	target.Enabled = enabled != 0
+	return target, nil
+}
+
 func isSQLiteConstraintError(err error) bool {
 	var sqliteErr *sqlite.Error
 	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqlite3.SQLITE_CONSTRAINT
+}
+
+func profileTargetConstraintError(err error) error {
+	if strings.Contains(err.Error(), profileTargetPathOwnerMessage) {
+		return ErrPathOwned
+	}
+	return ErrAlreadyExists
 }
 
 func sqliteDSN(databasePath string, readOnly bool) string {

@@ -203,6 +203,7 @@ func newProfileCommand() *urfavecli.Command {
 		Name:  "profile",
 		Usage: "Manage ProfileDeck profiles",
 		Commands: []*urfavecli.Command{
+			newProfileTargetCommand(),
 			newProfileListCommand(),
 			newProfileShowCommand(),
 			newProfileCreateCommand(),
@@ -394,8 +395,12 @@ func stringFlagPtr(cmd *urfavecli.Command, name string) *string {
 }
 
 func enabledFlagPtr(cmd *urfavecli.Command) (*bool, error) {
+	return enabledFlagPtrWithCode(cmd, app.ErrorProviderInvalid)
+}
+
+func enabledFlagPtrWithCode(cmd *urfavecli.Command, code app.ErrorCode) (*bool, error) {
 	if cmd.IsSet(enabledFlagName) && cmd.IsSet(disabledFlagName) {
-		return nil, app.NewError(app.ErrorProviderInvalid, "provider update cannot set both enabled and disabled")
+		return nil, app.NewError(code, "cannot set both enabled and disabled")
 	}
 	if cmd.IsSet(enabledFlagName) {
 		value := true

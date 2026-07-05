@@ -32,6 +32,7 @@ func NewCommand(info app.Info) *urfavecli.Command {
 		},
 		Commands: []*urfavecli.Command{
 			newInitCommand(),
+			newPlanCommand(),
 			newProviderCommand(),
 			newProfileCommand(),
 			newStatusCommand(),

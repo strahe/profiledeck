@@ -23,6 +23,13 @@ const (
 	ErrorProfileInUse          ErrorCode = "PROFILE_IN_USE"
 	ErrorProfileInvalid        ErrorCode = "PROFILE_INVALID"
 	ErrorProfileNotFound       ErrorCode = "PROFILE_NOT_FOUND"
+	ErrorPlanBuildFailed       ErrorCode = "PLAN_BUILD_FAILED"
+	ErrorAdapterNotFound       ErrorCode = "ADAPTER_NOT_FOUND"
+	ErrorProviderDisabled      ErrorCode = "PROVIDER_DISABLED"
+	ErrorTargetInvalid         ErrorCode = "TARGET_INVALID"
+	ErrorTargetAlreadyExists   ErrorCode = "TARGET_EXISTS"
+	ErrorTargetNotFound        ErrorCode = "TARGET_NOT_FOUND"
+	ErrorTargetReadFailed      ErrorCode = "TARGET_READ_FAILED"
 )
 
 type AppError struct {

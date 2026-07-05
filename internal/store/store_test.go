@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,8 +24,8 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
-	if result.Applied != 1 {
-		t.Fatalf("expected 1 migration to apply, got %d", result.Applied)
+	if result.Applied != 2 {
+		t.Fatalf("expected 2 migrations to apply, got %d", result.Applied)
 	}
 
 	for _, table := range []string{
@@ -34,6 +35,7 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 		"settings",
 		"active_states",
 		"operations",
+		"profile_targets",
 	} {
 		assertSQLiteObjectExists(t, ctx, db, "table", table)
 	}
@@ -43,8 +45,19 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 		"idx_providers_enabled",
 		"idx_operations_status",
 		"idx_operations_operation_type",
+		"idx_profile_targets_profile_id",
+		"idx_profile_targets_provider_id",
+		"idx_profile_targets_enabled",
+		"idx_profile_targets_unique_path",
 	} {
 		assertSQLiteObjectExists(t, ctx, db, "index", index)
+	}
+
+	for _, trigger := range []string{
+		"trg_profile_targets_path_owner_insert",
+		"trg_profile_targets_path_owner_update",
+	} {
+		assertSQLiteObjectExists(t, ctx, db, "trigger", trigger)
 	}
 }
 
@@ -118,8 +131,8 @@ func TestConcurrentMigrateIsIdempotent(t *testing.T) {
 	if err := db.db.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM bun_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("expected migration count query to succeed, got %v", err)
 	}
-	if migrationCount != 1 {
-		t.Fatalf("expected one migration row after concurrent migration, got %d", migrationCount)
+	if migrationCount != 2 {
+		t.Fatalf("expected two migration rows after concurrent migration, got %d", migrationCount)
 	}
 }
 
@@ -470,6 +483,293 @@ func TestProfileCRUDAndInUseDelete(t *testing.T) {
 	}
 }
 
+func TestProfileTargetCRUDAndReferences(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{
+		ID:           "provider-a",
+		Name:         "Provider A",
+		AdapterID:    "generic",
+		Enabled:      true,
+		MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("expected provider create to succeed, got %v", err)
+	}
+	if _, err := db.CreateProfile(ctx, CreateProfileParams{
+		ID:           "profile-a",
+		Name:         "Profile A",
+		Description:  "",
+		MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("expected profile create to succeed, got %v", err)
+	}
+
+	targetPath := filepath.Join(t.TempDir(), "target-b.txt")
+	target, err := db.CreateProfileTarget(ctx, CreateProfileTargetParams{
+		ProfileID:    "profile-a",
+		ProviderID:   "provider-a",
+		TargetID:     "target-b",
+		Path:         targetPath,
+		Format:       "text",
+		Strategy:     "replace-file",
+		ValueJSON:    `{"content":"b"}`,
+		Enabled:      true,
+		MetadataJSON: `{}`,
+	})
+	if err != nil {
+		t.Fatalf("expected profile target create to succeed, got %v", err)
+	}
+	if target.TargetID != "target-b" || target.PathKey != targetPath || !target.Enabled {
+		t.Fatalf("unexpected created target: %#v", target)
+	}
+	if _, err := db.CreateProfileTarget(ctx, CreateProfileTargetParams{
+		ProfileID:    "profile-a",
+		ProviderID:   "provider-a",
+		TargetID:     "target-a",
+		Path:         filepath.Join(t.TempDir(), "target-a.txt"),
+		Format:       "json",
+		Strategy:     "json-merge",
+		ValueJSON:    `{"model":"x"}`,
+		Enabled:      false,
+		MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("expected disabled profile target create to succeed, got %v", err)
+	}
+
+	enabledTargets, err := db.ListProfileTargets(ctx, "profile-a", "provider-a", false)
+	if err != nil {
+		t.Fatalf("expected profile target list to succeed, got %v", err)
+	}
+	if gotTargetIDs(enabledTargets) != "target-b" {
+		t.Fatalf("expected only enabled target-b, got %#v", enabledTargets)
+	}
+	allTargets, err := db.ListProfileTargets(ctx, "profile-a", "provider-a", true)
+	if err != nil {
+		t.Fatalf("expected all profile target list to succeed, got %v", err)
+	}
+	if gotTargetIDs(allTargets) != "target-a,target-b" {
+		t.Fatalf("expected target-id sorted list, got %#v", allTargets)
+	}
+
+	updatedPath := filepath.Join(t.TempDir(), "updated.txt")
+	enabled := true
+	updated, err := db.UpdateProfileTarget(ctx, UpdateProfileTargetParams{
+		ProfileID:  "profile-a",
+		ProviderID: "provider-a",
+		TargetID:   "target-a",
+		Path:       &updatedPath,
+		Enabled:    &enabled,
+	})
+	if err != nil {
+		t.Fatalf("expected profile target update to succeed, got %v", err)
+	}
+	if updated.Path != updatedPath || updated.PathKey != updatedPath || !updated.Enabled {
+		t.Fatalf("unexpected updated target: %#v", updated)
+	}
+
+	providerRefs, err := db.CountProviderTargetReferences(ctx, "provider-a")
+	if err != nil {
+		t.Fatalf("expected provider reference count to succeed, got %v", err)
+	}
+	profileRefs, err := db.CountProfileTargetReferences(ctx, "profile-a")
+	if err != nil {
+		t.Fatalf("expected profile reference count to succeed, got %v", err)
+	}
+	if providerRefs != 2 || profileRefs != 2 {
+		t.Fatalf("unexpected target references: provider=%d profile=%d", providerRefs, profileRefs)
+	}
+	if err := db.DeleteProvider(ctx, "provider-a"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("expected target-referenced provider delete to fail, got %v", err)
+	}
+	if err := db.DeleteProfile(ctx, "profile-a"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("expected target-referenced profile delete to fail, got %v", err)
+	}
+
+	if err := db.DeleteProfileTarget(ctx, "profile-a", "provider-a", "target-a"); err != nil {
+		t.Fatalf("expected profile target delete to succeed, got %v", err)
+	}
+	if _, err := db.GetProfileTarget(ctx, "profile-a", "provider-a", "target-a"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected deleted target to be missing, got %v", err)
+	}
+}
+
+func TestProfileTargetUniquePath(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{
+		ID:           "provider-a",
+		Name:         "Provider A",
+		AdapterID:    "generic",
+		Enabled:      true,
+		MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("expected first provider create to succeed, got %v", err)
+	}
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{
+		ID:           "provider-b",
+		Name:         "Provider B",
+		AdapterID:    "generic",
+		Enabled:      true,
+		MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("expected second provider create to succeed, got %v", err)
+	}
+	if _, err := db.CreateProfile(ctx, CreateProfileParams{
+		ID:           "profile-a",
+		Name:         "Profile A",
+		Description:  "",
+		MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("expected first profile create to succeed, got %v", err)
+	}
+	if _, err := db.CreateProfile(ctx, CreateProfileParams{
+		ID:           "profile-b",
+		Name:         "Profile B",
+		Description:  "",
+		MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("expected second profile create to succeed, got %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "target.txt")
+	for _, tc := range []struct {
+		profileID  string
+		providerID string
+		targetID   string
+		wantErr    error
+	}{
+		{profileID: "profile-a", providerID: "provider-a", targetID: "target-a"},
+		{profileID: "profile-b", providerID: "provider-a", targetID: "target-a"},
+		{profileID: "profile-a", providerID: "provider-a", targetID: "target-b", wantErr: ErrPathOwned},
+		{profileID: "profile-b", providerID: "provider-b", targetID: "target-b", wantErr: ErrPathOwned},
+	} {
+		_, err := db.CreateProfileTarget(ctx, CreateProfileTargetParams{
+			ProfileID:    tc.profileID,
+			ProviderID:   tc.providerID,
+			TargetID:     tc.targetID,
+			Path:         path,
+			Format:       "text",
+			Strategy:     "replace-file",
+			ValueJSON:    `{"content":"x"}`,
+			Enabled:      true,
+			MetadataJSON: `{}`,
+		})
+		if tc.wantErr == nil && err != nil {
+			t.Fatalf("expected target create to succeed for %#v, got %v", tc, err)
+		}
+		if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+			t.Fatalf("expected duplicate scoped target path to fail with %v, got %v", tc.wantErr, err)
+		}
+	}
+}
+
+func TestProfileTargetPathKeyPreventsCaseVariantOwnershipBypass(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+
+	targetDir := t.TempDir()
+	lowerPath := filepath.Join(targetDir, "settings.json")
+	upperPath := filepath.Join(targetDir, "SETTINGS.JSON")
+	pathKey := strings.ToLower(lowerPath)
+	if _, err := db.CreateProfileTarget(ctx, CreateProfileTargetParams{
+		ProfileID:    "profile-a",
+		ProviderID:   "provider-a",
+		TargetID:     "settings",
+		Path:         lowerPath,
+		PathKey:      pathKey,
+		Format:       "text",
+		Strategy:     "replace-file",
+		ValueJSON:    `{"content":"x"}`,
+		Enabled:      true,
+		MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("expected first case variant target create to succeed, got %v", err)
+	}
+
+	_, err := db.CreateProfileTarget(ctx, CreateProfileTargetParams{
+		ProfileID:    "profile-b",
+		ProviderID:   "provider-b",
+		TargetID:     "settings",
+		Path:         upperPath,
+		PathKey:      strings.ToLower(upperPath),
+		Format:       "text",
+		Strategy:     "replace-file",
+		ValueJSON:    `{"content":"x"}`,
+		Enabled:      true,
+		MetadataJSON: `{}`,
+	})
+	if !errors.Is(err, ErrPathOwned) {
+		t.Fatalf("expected case variant target path to fail with ErrPathOwned, got %v", err)
+	}
+}
+
+func TestConcurrentProfileTargetPathOwnerConflict(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+	closeTestStore(t, db)
+
+	const workers = 8
+	path := filepath.Join(t.TempDir(), "shared-target.txt")
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := range workers {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			db, err := Open(ctx, dbPath, false)
+			if err != nil {
+				errs <- err
+				return
+			}
+
+			_, err = db.CreateProfileTarget(ctx, CreateProfileTargetParams{
+				ProfileID:    fmt.Sprintf("profile-%d", worker),
+				ProviderID:   fmt.Sprintf("provider-%d", worker),
+				TargetID:     "settings",
+				Path:         path,
+				Format:       "text",
+				Strategy:     "replace-file",
+				ValueJSON:    `{"content":"x"}`,
+				Enabled:      true,
+				MetadataJSON: `{}`,
+			})
+			if closeErr := db.Close(); err == nil {
+				err = closeErr
+			}
+			errs <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+
+	assertOneSuccessAndRestErr(t, errs, workers, ErrPathOwned)
+}
+
 func TestSchemaMissingDatabaseIsUnhealthy(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -592,6 +892,55 @@ func TestDriftedIndexIsUnhealthy(t *testing.T) {
 	}
 	if status.SchemaHealthy {
 		t.Fatalf("expected drifted index to be unhealthy")
+	}
+}
+
+func TestDriftedUniquePathIndexIsUnhealthy(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+	if _, err := db.db.DB.ExecContext(ctx, "DROP INDEX idx_profile_targets_unique_path"); err != nil {
+		t.Fatalf("expected unique path index drop to succeed, got %v", err)
+	}
+	if _, err := db.db.DB.ExecContext(ctx, "CREATE INDEX idx_profile_targets_unique_path ON profile_targets(profile_id, provider_id, path_key)"); err != nil {
+		t.Fatalf("expected non-unique path index setup to succeed, got %v", err)
+	}
+
+	status, err := db.Status(ctx)
+	if err != nil {
+		t.Fatalf("expected status to succeed for drifted unique path index, got %v", err)
+	}
+	if status.SchemaHealthy {
+		t.Fatalf("expected non-unique target path index to be unhealthy")
+	}
+}
+
+func TestMissingPathOwnerTriggerIsUnhealthy(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+	if _, err := db.db.DB.ExecContext(ctx, "DROP TRIGGER trg_profile_targets_path_owner_insert"); err != nil {
+		t.Fatalf("expected path owner trigger drop to succeed, got %v", err)
+	}
+
+	status, err := db.Status(ctx)
+	if err != nil {
+		t.Fatalf("expected status to succeed for missing path owner trigger, got %v", err)
+	}
+	if status.SchemaHealthy {
+		t.Fatalf("expected missing path owner trigger to be unhealthy")
 	}
 }
 
@@ -746,20 +1095,26 @@ func assertConcurrentProfileCreate(t *testing.T, ctx context.Context, dbPath str
 func assertOneSuccessAndRestAlreadyExists(t *testing.T, errs <-chan error, total int) {
 	t.Helper()
 
+	assertOneSuccessAndRestErr(t, errs, total, ErrAlreadyExists)
+}
+
+func assertOneSuccessAndRestErr(t *testing.T, errs <-chan error, total int, want error) {
+	t.Helper()
+
 	successes := 0
-	alreadyExists := 0
+	failures := 0
 	for err := range errs {
 		switch {
 		case err == nil:
 			successes++
-		case errors.Is(err, ErrAlreadyExists):
-			alreadyExists++
+		case errors.Is(err, want):
+			failures++
 		default:
-			t.Fatalf("expected nil or ErrAlreadyExists, got %v", err)
+			t.Fatalf("expected nil or %v, got %v", want, err)
 		}
 	}
-	if successes != 1 || alreadyExists != total-1 {
-		t.Fatalf("expected one success and %d ErrAlreadyExists, got success=%d exists=%d", total-1, successes, alreadyExists)
+	if successes != 1 || failures != total-1 {
+		t.Fatalf("expected one success and %d %v, got success=%d failures=%d", total-1, want, successes, failures)
 	}
 }
 
@@ -775,6 +1130,14 @@ func gotProfileIDs(profiles []Profile) string {
 	ids := make([]string, 0, len(profiles))
 	for _, profile := range profiles {
 		ids = append(ids, profile.ID)
+	}
+	return strings.Join(ids, ",")
+}
+
+func gotTargetIDs(targets []ProfileTarget) string {
+	ids := make([]string, 0, len(targets))
+	for _, target := range targets {
+		ids = append(ids, target.TargetID)
 	}
 	return strings.Join(ids, ",")
 }
