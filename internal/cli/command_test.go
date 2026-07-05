@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +31,12 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	}
 	if cmd.Command("status") == nil {
 		t.Fatalf("expected status subcommand")
+	}
+	if cmd.Command("provider") == nil {
+		t.Fatalf("expected provider subcommand")
+	}
+	if cmd.Command("profile") == nil {
+		t.Fatalf("expected profile subcommand")
 	}
 }
 
@@ -180,12 +188,250 @@ func TestInitTwiceAndStatusJSONAfterInit(t *testing.T) {
 	}
 }
 
+func TestProviderCLIJSONFlow(t *testing.T) {
+	configDir := t.TempDir()
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+
+	out, err := runCLI(t,
+		"--config-dir", configDir,
+		"provider", "create", "provider-b",
+		"--name", "Provider B",
+		"--adapter", "adapter-b",
+		"--disabled",
+		"--metadata-json", `{"tier":"paid"}`,
+		"--json",
+	)
+	if err != nil {
+		t.Fatalf("expected disabled provider create to succeed, got %v", err)
+	}
+	var provider app.Provider
+	decodeCLIJSON(t, []byte(out), &provider)
+	if provider.ID != "provider-b" || provider.Enabled || provider.Metadata["tier"] != "paid" {
+		t.Fatalf("unexpected created provider: %#v", provider)
+	}
+
+	if _, err := runCLI(t,
+		"--config-dir", configDir,
+		"provider", "create", "provider-a",
+		"--name", "Provider A",
+		"--adapter", "adapter-a",
+		"--json",
+	); err != nil {
+		t.Fatalf("expected enabled provider create to succeed, got %v", err)
+	}
+
+	out, err = runCLI(t, "--config-dir", configDir, "provider", "list", "--json")
+	if err != nil {
+		t.Fatalf("expected provider list to succeed, got %v", err)
+	}
+	var providers []app.Provider
+	decodeCLIJSON(t, []byte(out), &providers)
+	if providerIDs(providers) != "provider-a" {
+		t.Fatalf("expected default list to include only enabled providers, got %#v", providers)
+	}
+
+	out, err = runCLI(t, "--config-dir", configDir, "provider", "list", "--all", "--json")
+	if err != nil {
+		t.Fatalf("expected provider list --all to succeed, got %v", err)
+	}
+	decodeCLIJSON(t, []byte(out), &providers)
+	if providerIDs(providers) != "provider-a,provider-b" {
+		t.Fatalf("expected id-sorted providers, got %#v", providers)
+	}
+
+	out, err = runCLI(t, "--config-dir", configDir, "provider", "update", "provider-b", "--enabled", "--json")
+	if err != nil {
+		t.Fatalf("expected provider update to succeed, got %v", err)
+	}
+	decodeCLIJSON(t, []byte(out), &provider)
+	if !provider.Enabled {
+		t.Fatalf("expected provider to be enabled after update")
+	}
+
+	_, err = runCLI(t, "--config-dir", configDir, "provider", "update", "provider-b", "--enabled", "--disabled", "--json")
+	assertCLIAppErrorCode(t, err, app.ErrorProviderInvalid)
+
+	_, err = runCLI(t, "--config-dir", configDir, "provider", "delete", "provider-b", "--json")
+	assertCLIAppErrorCode(t, err, app.ErrorConfirmationRequired)
+
+	out, err = runCLI(t, "--config-dir", configDir, "provider", "delete", "provider-b", "--yes", "--json")
+	if err != nil {
+		t.Fatalf("expected provider delete to succeed, got %v", err)
+	}
+	var deleted app.DeleteResult
+	decodeCLIJSON(t, []byte(out), &deleted)
+	if !deleted.Deleted || deleted.ID != "provider-b" {
+		t.Fatalf("unexpected delete result: %#v", deleted)
+	}
+	assertNoTargetToolConfigCreated(t, configDir)
+}
+
+func TestProfileCLIJSONFlow(t *testing.T) {
+	configDir := t.TempDir()
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+
+	if _, err := runCLI(t,
+		"--config-dir", configDir,
+		"profile", "create", "profile-b",
+		"--name", "Profile B",
+		"--description", "Second profile",
+		"--json",
+	); err != nil {
+		t.Fatalf("expected profile-b create to succeed, got %v", err)
+	}
+	out, err := runCLI(t,
+		"--config-dir", configDir,
+		"profile", "create", "profile-a",
+		"--name", "Profile A",
+		"--metadata-json", `{"max_tokens":100}`,
+		"--json",
+	)
+	if err != nil {
+		t.Fatalf("expected profile-a create to succeed, got %v", err)
+	}
+	var profile app.Profile
+	decodeCLIJSON(t, []byte(out), &profile)
+	if profile.ID != "profile-a" || profile.Metadata["max_tokens"] == nil {
+		t.Fatalf("unexpected created profile: %#v", profile)
+	}
+
+	_, err = runCLI(t, "--config-dir", configDir, "profile", "update", "profile-a", "--json")
+	assertCLIAppErrorCode(t, err, app.ErrorProfileInvalid)
+
+	out, err = runCLI(t,
+		"--config-dir", configDir,
+		"profile", "update", "profile-a",
+		"--description", "Updated profile",
+		"--metadata-json", `{"mode":"work"}`,
+		"--json",
+	)
+	if err != nil {
+		t.Fatalf("expected profile update to succeed, got %v", err)
+	}
+	decodeCLIJSON(t, []byte(out), &profile)
+	if profile.Description != "Updated profile" || profile.Metadata["mode"] != "work" {
+		t.Fatalf("unexpected updated profile: %#v", profile)
+	}
+
+	out, err = runCLI(t, "--config-dir", configDir, "profile", "list", "--json")
+	if err != nil {
+		t.Fatalf("expected profile list to succeed, got %v", err)
+	}
+	var profiles []app.Profile
+	decodeCLIJSON(t, []byte(out), &profiles)
+	if profileIDs(profiles) != "profile-a,profile-b" {
+		t.Fatalf("expected id-sorted profiles, got %#v", profiles)
+	}
+
+	out, err = runCLI(t, "--config-dir", configDir, "profile", "delete", "profile-b", "--yes", "--json")
+	if err != nil {
+		t.Fatalf("expected profile delete to succeed, got %v", err)
+	}
+	var deleted app.DeleteResult
+	decodeCLIJSON(t, []byte(out), &deleted)
+	if !deleted.Deleted || deleted.ID != "profile-b" {
+		t.Fatalf("unexpected delete result: %#v", deleted)
+	}
+	assertNoTargetToolConfigCreated(t, configDir)
+}
+
+func TestProviderCLIOutputRedactsSensitiveMetadata(t *testing.T) {
+	configDir := t.TempDir()
+	initOut, err := runCLI(t, "--config-dir", configDir, "init", "--json")
+	if err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	var initResult app.InitResult
+	decodeCLIJSON(t, []byte(initOut), &initResult)
+
+	sqlDB, err := sql.Open("sqlite", initResult.DatabasePath)
+	if err != nil {
+		t.Fatalf("expected sqlite open to succeed, got %v", err)
+	}
+	defer sqlDB.Close()
+	_, err = sqlDB.ExecContext(context.Background(), `
+		INSERT INTO providers (id, name, adapter_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES ('provider-secret', 'Provider Secret', 'adapter-secret', '{"apiKey":"raw-key","safe":"ok"}', 1, 1)
+	`)
+	if err != nil {
+		t.Fatalf("expected provider setup to succeed, got %v", err)
+	}
+
+	jsonOut, err := runCLI(t, "--config-dir", configDir, "provider", "show", "provider-secret", "--json")
+	if err != nil {
+		t.Fatalf("expected provider show JSON to succeed, got %v", err)
+	}
+	if strings.Contains(jsonOut, "raw-key") {
+		t.Fatalf("expected JSON output to redact raw key, got %q", jsonOut)
+	}
+	var provider app.Provider
+	decodeCLIJSON(t, []byte(jsonOut), &provider)
+	if provider.Metadata["apiKey"] != "[REDACTED]" || provider.Metadata["safe"] != "ok" {
+		t.Fatalf("unexpected redacted metadata: %#v", provider.Metadata)
+	}
+
+	humanOut, err := runCLI(t, "--config-dir", configDir, "provider", "show", "provider-secret")
+	if err != nil {
+		t.Fatalf("expected provider show to succeed, got %v", err)
+	}
+	if strings.Contains(humanOut, "raw-key") || !strings.Contains(humanOut, "[REDACTED]") {
+		t.Fatalf("expected human output to redact raw key, got %q", humanOut)
+	}
+}
+
 func decodeCLIJSON(t *testing.T, raw []byte, target any) {
 	t.Helper()
 
 	if err := json.Unmarshal(raw, target); err != nil {
 		t.Fatalf("expected parseable JSON output, got %q: %v", string(raw), err)
 	}
+}
+
+func runCLI(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+
+	var out bytes.Buffer
+	cmd := NewCommand(app.DefaultInfo())
+	cmd.Writer = &out
+
+	argv := append([]string{app.CLIName}, args...)
+	err := cmd.Run(context.Background(), argv)
+	return out.String(), err
+}
+
+func assertCLIAppErrorCode(t *testing.T, err error, code app.ErrorCode) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatalf("expected error code %s, got nil", code)
+	}
+	var appErr *app.AppError
+	if !errors.As(err, &appErr) {
+		t.Fatalf("expected AppError code %s, got %T: %v", code, err, err)
+	}
+	if appErr.Code != code {
+		t.Fatalf("expected error code %s, got %s: %v", code, appErr.Code, err)
+	}
+}
+
+func providerIDs(providers []app.Provider) string {
+	ids := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		ids = append(ids, provider.ID)
+	}
+	return strings.Join(ids, ",")
+}
+
+func profileIDs(profiles []app.Profile) string {
+	ids := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		ids = append(ids, profile.ID)
+	}
+	return strings.Join(ids, ",")
 }
 
 func assertNoTargetToolConfigCreated(t *testing.T, configDir string) {

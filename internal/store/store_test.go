@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -267,6 +268,208 @@ func TestStatusCountsPendingAndFailedOperations(t *testing.T) {
 	}
 }
 
+func TestProviderCRUD(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{
+		ID:           "provider-b",
+		Name:         "Provider B",
+		AdapterID:    "adapter-b",
+		Enabled:      false,
+		MetadataJSON: `{"region":"us"}`,
+	}); err != nil {
+		t.Fatalf("expected disabled provider create to succeed, got %v", err)
+	}
+	provider, err := db.CreateProvider(ctx, CreateProviderParams{
+		ID:           "provider-a",
+		Name:         "Provider A",
+		AdapterID:    "adapter-a",
+		Enabled:      true,
+		MetadataJSON: `{}`,
+	})
+	if err != nil {
+		t.Fatalf("expected provider create to succeed, got %v", err)
+	}
+	if provider.ID != "provider-a" || !provider.Enabled || provider.MetadataJSON != "{}" {
+		t.Fatalf("unexpected created provider: %#v", provider)
+	}
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{
+		ID:           "provider-a",
+		Name:         "Duplicate",
+		AdapterID:    "adapter-a",
+		Enabled:      true,
+		MetadataJSON: `{}`,
+	}); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("expected duplicate provider error, got %v", err)
+	}
+
+	enabledOnly, err := db.ListProviders(ctx, false)
+	if err != nil {
+		t.Fatalf("expected provider list to succeed, got %v", err)
+	}
+	if gotIDs(enabledOnly) != "provider-a" {
+		t.Fatalf("expected enabled provider list to contain provider-a, got %#v", enabledOnly)
+	}
+
+	all, err := db.ListProviders(ctx, true)
+	if err != nil {
+		t.Fatalf("expected all provider list to succeed, got %v", err)
+	}
+	if gotIDs(all) != "provider-a,provider-b" {
+		t.Fatalf("expected id-sorted provider list, got %#v", all)
+	}
+
+	name := "Provider A Updated"
+	adapterID := "adapter-updated"
+	enabled := false
+	metadata := `{"tier":"paid"}`
+	updated, err := db.UpdateProvider(ctx, UpdateProviderParams{
+		ID:           "provider-a",
+		Name:         &name,
+		AdapterID:    &adapterID,
+		Enabled:      &enabled,
+		MetadataJSON: &metadata,
+	})
+	if err != nil {
+		t.Fatalf("expected provider update to succeed, got %v", err)
+	}
+	if updated.Name != name || updated.AdapterID != adapterID || updated.Enabled || updated.MetadataJSON != metadata {
+		t.Fatalf("unexpected updated provider: %#v", updated)
+	}
+	metadataOnly := `{"region":"eu"}`
+	updated, err = db.UpdateProvider(ctx, UpdateProviderParams{
+		ID:           "provider-a",
+		MetadataJSON: &metadataOnly,
+	})
+	if err != nil {
+		t.Fatalf("expected provider partial update to succeed, got %v", err)
+	}
+	if updated.Name != name || updated.AdapterID != adapterID || updated.Enabled || updated.MetadataJSON != metadataOnly {
+		t.Fatalf("expected provider partial update to preserve omitted fields, got %#v", updated)
+	}
+
+	if err := db.DeleteProvider(ctx, "provider-a"); err != nil {
+		t.Fatalf("expected provider delete to succeed, got %v", err)
+	}
+	if _, err := db.GetProvider(ctx, "provider-a"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected deleted provider to be missing, got %v", err)
+	}
+}
+
+func TestConcurrentCreateDuplicateReturnsAlreadyExists(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+	closeTestStore(t, db)
+
+	assertConcurrentProviderCreate(t, ctx, dbPath)
+	assertConcurrentProfileCreate(t, ctx, dbPath)
+}
+
+func TestProfileCRUDAndInUseDelete(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+
+	for _, params := range []CreateProfileParams{
+		{ID: "profile-b", Name: "Profile B", Description: "B", MetadataJSON: `{}`},
+		{ID: "profile-a", Name: "Profile A", Description: "", MetadataJSON: `{"mode":"work"}`},
+		{ID: "profile-c", Name: "Profile C", Description: "", MetadataJSON: `{}`},
+	} {
+		if _, err := db.CreateProfile(ctx, params); err != nil {
+			t.Fatalf("expected profile create to succeed, got %v", err)
+		}
+	}
+	if _, err := db.CreateProfile(ctx, CreateProfileParams{
+		ID:           "profile-a",
+		Name:         "Duplicate",
+		Description:  "",
+		MetadataJSON: `{}`,
+	}); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("expected duplicate profile error, got %v", err)
+	}
+
+	profiles, err := db.ListProfiles(ctx)
+	if err != nil {
+		t.Fatalf("expected profile list to succeed, got %v", err)
+	}
+	if gotProfileIDs(profiles) != "profile-a,profile-b,profile-c" {
+		t.Fatalf("expected id-sorted profile list, got %#v", profiles)
+	}
+
+	description := "Updated profile"
+	metadata := `{"mode":"personal"}`
+	updated, err := db.UpdateProfile(ctx, UpdateProfileParams{
+		ID:           "profile-a",
+		Description:  &description,
+		MetadataJSON: &metadata,
+	})
+	if err != nil {
+		t.Fatalf("expected profile update to succeed, got %v", err)
+	}
+	if updated.Description != description || updated.MetadataJSON != metadata {
+		t.Fatalf("unexpected updated profile: %#v", updated)
+	}
+	name := "Profile A Updated"
+	updated, err = db.UpdateProfile(ctx, UpdateProfileParams{
+		ID:   "profile-a",
+		Name: &name,
+	})
+	if err != nil {
+		t.Fatalf("expected profile partial update to succeed, got %v", err)
+	}
+	if updated.Name != name || updated.Description != description || updated.MetadataJSON != metadata {
+		t.Fatalf("expected profile partial update to preserve omitted fields, got %#v", updated)
+	}
+
+	_, err = db.db.DB.ExecContext(ctx, `
+		INSERT INTO active_states (scope_type, scope_id, profile_id, updated_at_unix_ms)
+		VALUES ('global', 'default', 'profile-a', 1)
+	`)
+	if err != nil {
+		t.Fatalf("expected active state setup to succeed, got %v", err)
+	}
+	if err := db.DeleteProfile(ctx, "profile-a"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("expected in-use profile delete to fail, got %v", err)
+	}
+
+	_, err = db.db.DB.ExecContext(ctx, `
+		INSERT INTO operations (id, operation_type, status, profile_id, created_at_unix_ms, updated_at_unix_ms)
+		VALUES ('operation-c', 'switch', 'applied', 'profile-c', 1, 1)
+	`)
+	if err != nil {
+		t.Fatalf("expected operation setup to succeed, got %v", err)
+	}
+	if err := db.DeleteProfile(ctx, "profile-c"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("expected operation-referenced profile delete to fail, got %v", err)
+	}
+
+	if err := db.DeleteProfile(ctx, "profile-b"); err != nil {
+		t.Fatalf("expected unused profile delete to succeed, got %v", err)
+	}
+	if _, err := db.GetProfile(ctx, "profile-b"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected deleted profile to be missing, got %v", err)
+	}
+}
+
 func TestSchemaMissingDatabaseIsUnhealthy(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -469,4 +672,109 @@ func assertSQLiteObjectExists(t *testing.T, ctx context.Context, db *Store, obje
 	if !exists {
 		t.Fatalf("expected %s %s to exist", objectType, name)
 	}
+}
+
+func assertConcurrentProviderCreate(t *testing.T, ctx context.Context, dbPath string) {
+	t.Helper()
+
+	const workers = 8
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			db, err := Open(ctx, dbPath, false)
+			if err != nil {
+				errs <- err
+				return
+			}
+
+			_, err = db.CreateProvider(ctx, CreateProviderParams{
+				ID:           "provider-concurrent",
+				Name:         "Provider Concurrent",
+				AdapterID:    "adapter-concurrent",
+				Enabled:      true,
+				MetadataJSON: `{}`,
+			})
+			if closeErr := db.Close(); err == nil {
+				err = closeErr
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	assertOneSuccessAndRestAlreadyExists(t, errs, workers)
+}
+
+func assertConcurrentProfileCreate(t *testing.T, ctx context.Context, dbPath string) {
+	t.Helper()
+
+	const workers = 8
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			db, err := Open(ctx, dbPath, false)
+			if err != nil {
+				errs <- err
+				return
+			}
+
+			_, err = db.CreateProfile(ctx, CreateProfileParams{
+				ID:           "profile-concurrent",
+				Name:         "Profile Concurrent",
+				Description:  "",
+				MetadataJSON: `{}`,
+			})
+			if closeErr := db.Close(); err == nil {
+				err = closeErr
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	assertOneSuccessAndRestAlreadyExists(t, errs, workers)
+}
+
+func assertOneSuccessAndRestAlreadyExists(t *testing.T, errs <-chan error, total int) {
+	t.Helper()
+
+	successes := 0
+	alreadyExists := 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrAlreadyExists):
+			alreadyExists++
+		default:
+			t.Fatalf("expected nil or ErrAlreadyExists, got %v", err)
+		}
+	}
+	if successes != 1 || alreadyExists != total-1 {
+		t.Fatalf("expected one success and %d ErrAlreadyExists, got success=%d exists=%d", total-1, successes, alreadyExists)
+	}
+}
+
+func gotIDs(providers []Provider) string {
+	ids := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		ids = append(ids, provider.ID)
+	}
+	return strings.Join(ids, ",")
+}
+
+func gotProfileIDs(profiles []Profile) string {
+	ids := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		ids = append(ids, profile.ID)
+	}
+	return strings.Join(ids, ",")
 }

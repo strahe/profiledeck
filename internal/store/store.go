@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -13,7 +14,8 @@ import (
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"github.com/uptrace/bun/migrate"
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 const (
@@ -25,8 +27,63 @@ const (
 	OperationStatusApplied = "applied"
 )
 
+var (
+	ErrAlreadyExists = errors.New("already exists")
+	ErrInUse         = errors.New("in use")
+	ErrNotFound      = errors.New("not found")
+)
+
 type Store struct {
 	db *bun.DB
+}
+
+type Provider struct {
+	ID              string
+	Name            string
+	AdapterID       string
+	Enabled         bool
+	MetadataJSON    string
+	CreatedAtUnixMS int64
+	UpdatedAtUnixMS int64
+}
+
+type CreateProviderParams struct {
+	ID           string
+	Name         string
+	AdapterID    string
+	Enabled      bool
+	MetadataJSON string
+}
+
+type UpdateProviderParams struct {
+	ID           string
+	Name         *string
+	AdapterID    *string
+	Enabled      *bool
+	MetadataJSON *string
+}
+
+type Profile struct {
+	ID              string
+	Name            string
+	Description     string
+	MetadataJSON    string
+	CreatedAtUnixMS int64
+	UpdatedAtUnixMS int64
+}
+
+type CreateProfileParams struct {
+	ID           string
+	Name         string
+	Description  string
+	MetadataJSON string
+}
+
+type UpdateProfileParams struct {
+	ID           string
+	Name         *string
+	Description  *string
+	MetadataJSON *string
 }
 
 type MigrationResult struct {
@@ -204,6 +261,262 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 		PendingOperations: pending,
 		FailedOperations:  failed,
 	}, nil
+}
+
+func (s *Store) ListProviders(ctx context.Context, includeDisabled bool) ([]Provider, error) {
+	query := `
+		SELECT id, name, adapter_id, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		FROM providers
+	`
+	args := []any{}
+	if !includeDisabled {
+		query += " WHERE enabled = ?"
+		args = append(args, 1)
+	}
+	query += " ORDER BY id ASC"
+
+	rows, err := s.db.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var providers []Provider
+	for rows.Next() {
+		provider, err := scanProvider(rows)
+		if err != nil {
+			return nil, err
+		}
+		providers = append(providers, provider)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return providers, nil
+}
+
+func (s *Store) GetProvider(ctx context.Context, id string) (Provider, error) {
+	row := s.db.DB.QueryRowContext(
+		ctx,
+		`SELECT id, name, adapter_id, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		FROM providers
+		WHERE id = ?`,
+		id,
+	)
+	provider, err := scanProvider(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Provider{}, ErrNotFound
+	}
+	return provider, err
+}
+
+func (s *Store) CreateProvider(ctx context.Context, params CreateProviderParams) (Provider, error) {
+	now := time.Now().UnixMilli()
+	enabled := 0
+	if params.Enabled {
+		enabled = 1
+	}
+	_, err := s.db.DB.ExecContext(
+		ctx,
+		`INSERT INTO providers
+			(id, name, adapter_id, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		params.ID,
+		params.Name,
+		params.AdapterID,
+		enabled,
+		params.MetadataJSON,
+		now,
+		now,
+	)
+	if err != nil {
+		if isSQLiteConstraintError(err) {
+			return Provider{}, ErrAlreadyExists
+		}
+		return Provider{}, err
+	}
+	return s.GetProvider(ctx, params.ID)
+}
+
+func (s *Store) UpdateProvider(ctx context.Context, params UpdateProviderParams) (Provider, error) {
+	assignments := []string{}
+	args := []any{}
+	if params.Name != nil {
+		assignments = append(assignments, "name = ?")
+		args = append(args, *params.Name)
+	}
+	if params.AdapterID != nil {
+		assignments = append(assignments, "adapter_id = ?")
+		args = append(args, *params.AdapterID)
+	}
+	if params.Enabled != nil {
+		enabled := 0
+		if *params.Enabled {
+			enabled = 1
+		}
+		assignments = append(assignments, "enabled = ?")
+		args = append(args, enabled)
+	}
+	if params.MetadataJSON != nil {
+		assignments = append(assignments, "metadata_json = ?")
+		args = append(args, *params.MetadataJSON)
+	}
+	if len(assignments) == 0 {
+		return s.GetProvider(ctx, params.ID)
+	}
+	assignments = append(assignments, "updated_at_unix_ms = ?")
+	args = append(args, time.Now().UnixMilli(), params.ID)
+
+	result, err := s.db.DB.ExecContext(
+		ctx,
+		`UPDATE providers SET `+strings.Join(assignments, ", ")+` WHERE id = ?`,
+		args...,
+	)
+	if err != nil {
+		return Provider{}, err
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return Provider{}, ErrNotFound
+	}
+	return s.GetProvider(ctx, params.ID)
+}
+
+func (s *Store) DeleteProvider(ctx context.Context, id string) error {
+	result, err := s.db.DB.ExecContext(ctx, "DELETE FROM providers WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) ListProfiles(ctx context.Context) ([]Profile, error) {
+	rows, err := s.db.DB.QueryContext(
+		ctx,
+		`SELECT id, name, description, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		FROM profiles
+		ORDER BY id ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var profiles []Profile
+	for rows.Next() {
+		profile, err := scanProfile(rows)
+		if err != nil {
+			return nil, err
+		}
+		profiles = append(profiles, profile)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return profiles, nil
+}
+
+func (s *Store) GetProfile(ctx context.Context, id string) (Profile, error) {
+	row := s.db.DB.QueryRowContext(
+		ctx,
+		`SELECT id, name, description, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		FROM profiles
+		WHERE id = ?`,
+		id,
+	)
+	profile, err := scanProfile(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Profile{}, ErrNotFound
+	}
+	return profile, err
+}
+
+func (s *Store) CreateProfile(ctx context.Context, params CreateProfileParams) (Profile, error) {
+	now := time.Now().UnixMilli()
+	_, err := s.db.DB.ExecContext(
+		ctx,
+		`INSERT INTO profiles
+			(id, name, description, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		params.ID,
+		params.Name,
+		params.Description,
+		params.MetadataJSON,
+		now,
+		now,
+	)
+	if err != nil {
+		if isSQLiteConstraintError(err) {
+			return Profile{}, ErrAlreadyExists
+		}
+		return Profile{}, err
+	}
+	return s.GetProfile(ctx, params.ID)
+}
+
+func (s *Store) UpdateProfile(ctx context.Context, params UpdateProfileParams) (Profile, error) {
+	assignments := []string{}
+	args := []any{}
+	if params.Name != nil {
+		assignments = append(assignments, "name = ?")
+		args = append(args, *params.Name)
+	}
+	if params.Description != nil {
+		assignments = append(assignments, "description = ?")
+		args = append(args, *params.Description)
+	}
+	if params.MetadataJSON != nil {
+		assignments = append(assignments, "metadata_json = ?")
+		args = append(args, *params.MetadataJSON)
+	}
+	if len(assignments) == 0 {
+		return s.GetProfile(ctx, params.ID)
+	}
+	assignments = append(assignments, "updated_at_unix_ms = ?")
+	args = append(args, time.Now().UnixMilli(), params.ID)
+
+	result, err := s.db.DB.ExecContext(
+		ctx,
+		`UPDATE profiles SET `+strings.Join(assignments, ", ")+` WHERE id = ?`,
+		args...,
+	)
+	if err != nil {
+		return Profile{}, err
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return Profile{}, ErrNotFound
+	}
+	return s.GetProfile(ctx, params.ID)
+}
+
+func (s *Store) DeleteProfile(ctx context.Context, id string) error {
+	result, err := s.db.DB.ExecContext(ctx, `
+		DELETE FROM profiles
+		WHERE id = ?
+			AND NOT EXISTS (SELECT 1 FROM active_states WHERE profile_id = ?)
+			AND NOT EXISTS (SELECT 1 FROM operations WHERE profile_id = ?)
+	`, id, id, id)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		if _, getErr := s.GetProfile(ctx, id); errors.Is(getErr, ErrNotFound) {
+			return ErrNotFound
+		} else if getErr != nil {
+			return getErr
+		}
+		references, refErr := s.profileReferenceCount(ctx, id)
+		if refErr != nil {
+			return refErr
+		}
+		if references > 0 {
+			return ErrInUse
+		}
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) schemaHealthy(ctx context.Context) (bool, error) {
@@ -456,6 +769,70 @@ func (s *Store) countOperations(ctx context.Context, status string) (int, error)
 		return 0, err
 	}
 	return count, nil
+}
+
+func (s *Store) profileReferenceCount(ctx context.Context, profileID string) (int, error) {
+	var activeStateCount int
+	if err := s.db.DB.QueryRowContext(
+		ctx,
+		"SELECT COUNT(1) FROM active_states WHERE profile_id = ?",
+		profileID,
+	).Scan(&activeStateCount); err != nil {
+		return 0, err
+	}
+
+	var operationCount int
+	if err := s.db.DB.QueryRowContext(
+		ctx,
+		"SELECT COUNT(1) FROM operations WHERE profile_id = ?",
+		profileID,
+	).Scan(&operationCount); err != nil {
+		return 0, err
+	}
+
+	return activeStateCount + operationCount, nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanProvider(row rowScanner) (Provider, error) {
+	var provider Provider
+	var enabled int
+	if err := row.Scan(
+		&provider.ID,
+		&provider.Name,
+		&provider.AdapterID,
+		&enabled,
+		&provider.MetadataJSON,
+		&provider.CreatedAtUnixMS,
+		&provider.UpdatedAtUnixMS,
+	); err != nil {
+		return Provider{}, err
+	}
+	provider.Enabled = enabled != 0
+	return provider, nil
+}
+
+func scanProfile(row rowScanner) (Profile, error) {
+	var profile Profile
+	if err := row.Scan(
+		&profile.ID,
+		&profile.Name,
+		&profile.Description,
+		&profile.MetadataJSON,
+		&profile.CreatedAtUnixMS,
+		&profile.UpdatedAtUnixMS,
+	); err != nil {
+		return Profile{}, err
+	}
+	return profile, nil
+}
+
+func isSQLiteConstraintError(err error) bool {
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqlite3.SQLITE_CONSTRAINT
 }
 
 func sqliteDSN(databasePath string, readOnly bool) string {

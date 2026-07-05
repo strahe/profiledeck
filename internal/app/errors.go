@@ -5,14 +5,24 @@ import "fmt"
 type ErrorCode string
 
 const (
-	ErrorInvalidRuntimePath   ErrorCode = "INVALID_RUNTIME_PATH"
-	ErrorCommandFailed        ErrorCode = "COMMAND_FAILED"
-	ErrorRuntimeInitFailed    ErrorCode = "RUNTIME_INIT_FAILED"
-	ErrorStoreInitFailed      ErrorCode = "STORE_INIT_FAILED"
-	ErrorStoreOpenFailed      ErrorCode = "STORE_OPEN_FAILED"
-	ErrorStoreMigrationFailed ErrorCode = "STORE_MIGRATION_FAILED"
-	ErrorStoreSchemaInvalid   ErrorCode = "STORE_SCHEMA_INVALID"
-	ErrorStoreStatusFailed    ErrorCode = "STORE_STATUS_FAILED"
+	ErrorInvalidRuntimePath    ErrorCode = "INVALID_RUNTIME_PATH"
+	ErrorCommandFailed         ErrorCode = "COMMAND_FAILED"
+	ErrorRuntimeInitFailed     ErrorCode = "RUNTIME_INIT_FAILED"
+	ErrorStoreInitFailed       ErrorCode = "STORE_INIT_FAILED"
+	ErrorStoreOpenFailed       ErrorCode = "STORE_OPEN_FAILED"
+	ErrorStoreMigrationFailed  ErrorCode = "STORE_MIGRATION_FAILED"
+	ErrorStoreNotInitialized   ErrorCode = "STORE_NOT_INITIALIZED"
+	ErrorStoreSchemaInvalid    ErrorCode = "STORE_SCHEMA_INVALID"
+	ErrorStoreStatusFailed     ErrorCode = "STORE_STATUS_FAILED"
+	ErrorConfirmationRequired  ErrorCode = "CONFIRMATION_REQUIRED"
+	ErrorProviderAlreadyExists ErrorCode = "PROVIDER_EXISTS"
+	ErrorProviderInUse         ErrorCode = "PROVIDER_IN_USE"
+	ErrorProviderInvalid       ErrorCode = "PROVIDER_INVALID"
+	ErrorProviderNotFound      ErrorCode = "PROVIDER_NOT_FOUND"
+	ErrorProfileAlreadyExists  ErrorCode = "PROFILE_EXISTS"
+	ErrorProfileInUse          ErrorCode = "PROFILE_IN_USE"
+	ErrorProfileInvalid        ErrorCode = "PROFILE_INVALID"
+	ErrorProfileNotFound       ErrorCode = "PROFILE_NOT_FOUND"
 )
 
 type AppError struct {
