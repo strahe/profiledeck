@@ -81,6 +81,147 @@ func TestAcquireLockHandlesEmptyDiagnosticLockFile(t *testing.T) {
 	}
 }
 
+func TestProbeLockDoesNotRewriteDiagnosticFile(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "switch.lock")
+	content := "switch-stale\npid=999999999\ncreated_at_unix_ms=1\n"
+	if err := os.WriteFile(lockPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("expected lock setup to succeed, got %v", err)
+	}
+
+	probe, err := ProbeLock(lockPath)
+	if err != nil {
+		t.Fatalf("expected lock probe to succeed, got %v", err)
+	}
+	if !probe.Exists || probe.Held {
+		t.Fatalf("unexpected lock probe: %#v", probe)
+	}
+	if got := readTestFile(t, lockPath); got != content {
+		t.Fatalf("expected probe not to rewrite diagnostic file, got %q", got)
+	}
+}
+
+func TestProbeLockReportsHeldLocalLock(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "switch.lock")
+	lock, err := AcquireLock(lockPath, "switch-active")
+	if err != nil {
+		t.Fatalf("expected lock acquire to succeed, got %v", err)
+	}
+	defer lock.Release()
+
+	probe, err := ProbeLock(lockPath)
+	if err != nil {
+		t.Fatalf("expected lock probe to succeed, got %v", err)
+	}
+	if !probe.Exists || !probe.Held {
+		t.Fatalf("expected held lock probe, got %#v", probe)
+	}
+}
+
+func TestProbeLockSupportsReadOnlyDiagnosticFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod read-only semantics are platform-specific")
+	}
+
+	lockPath := filepath.Join(t.TempDir(), "switch.lock")
+	content := "switch-stale\npid=999999999\ncreated_at_unix_ms=1\n"
+	if err := os.WriteFile(lockPath, []byte(content), 0o400); err != nil {
+		t.Fatalf("expected read-only lock setup to succeed, got %v", err)
+	}
+
+	probe, err := ProbeLock(lockPath)
+	if err != nil {
+		t.Fatalf("expected read-only lock probe to succeed, got %v", err)
+	}
+	if !probe.Exists || probe.Held {
+		t.Fatalf("unexpected read-only lock probe: %#v", probe)
+	}
+}
+
+func TestLocalLockKeyCaseNormalization(t *testing.T) {
+	dir := t.TempDir()
+	upperPath := filepath.Join(dir, "Switch.Lock")
+	lowerPath := filepath.Join(dir, "switch.lock")
+
+	keysMatch := localLockKey(upperPath) == localLockKey(lowerPath)
+	switch runtime.GOOS {
+	case "darwin", "windows":
+		if !keysMatch {
+			t.Fatalf("expected local lock keys to be case-normalized on %s", runtime.GOOS)
+		}
+	default:
+		if keysMatch {
+			t.Fatalf("expected local lock keys to preserve case on %s", runtime.GOOS)
+		}
+	}
+}
+
+func TestRemoveStaleLockFileUsesHashAndLockGuard(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "switch.lock")
+	content := "switch-stale\npid=999999999\ncreated_at_unix_ms=1\n"
+	if err := os.WriteFile(lockPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("expected lock setup to succeed, got %v", err)
+	}
+
+	if err := RemoveStaleLockFile(lockPath, sha256String("different")); err == nil {
+		t.Fatalf("expected stale lock remove to reject changed content")
+	}
+	if got := readTestFile(t, lockPath); got != content {
+		t.Fatalf("expected rejected remove to keep lock file, got %q", got)
+	}
+	if err := RemoveStaleLockFile(lockPath, sha256String(content)); err != nil {
+		t.Fatalf("expected stale lock remove to succeed, got %v", err)
+	}
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected lock file to be removed, got %v", err)
+	}
+}
+
+func TestRemoveStaleLockFileRejectsHeldLock(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "switch.lock")
+	lock, err := AcquireLock(lockPath, "switch-active")
+	if err != nil {
+		t.Fatalf("expected lock acquire to succeed, got %v", err)
+	}
+	defer lock.Release()
+
+	raw, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("expected lock read to succeed, got %v", err)
+	}
+	err = RemoveStaleLockFile(lockPath, sha256String(string(raw)))
+	assertKind(t, err, KindLockHeld)
+}
+
+func TestOpenedUnlinkedLockFileIsRejectedAfterFlock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not allow removing an open lock file in this scenario")
+	}
+
+	lockPath := filepath.Join(t.TempDir(), "switch.lock")
+	content := "switch-stale\npid=999999999\ncreated_at_unix_ms=1\n"
+	if err := os.WriteFile(lockPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("expected lock setup to succeed, got %v", err)
+	}
+	staleFile, err := os.OpenFile(lockPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("expected stale lock open to succeed, got %v", err)
+	}
+	defer staleFile.Close()
+
+	if err := RemoveStaleLockFile(lockPath, sha256String(content)); err != nil {
+		t.Fatalf("expected stale lock remove to succeed, got %v", err)
+	}
+	if err := tryLockFile(staleFile); err != nil {
+		t.Fatalf("expected OS to allow locking the unlinked file, got %v", err)
+	}
+	defer func() {
+		_ = unlockFileHandle(staleFile)
+	}()
+
+	_, err = verifyOpenedLockFileCurrent(lockPath, staleFile)
+	assertKind(t, err, KindTargetChanged)
+}
+
 func TestInspectAndVerifyExpected(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "target.txt")

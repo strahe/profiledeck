@@ -977,6 +977,35 @@ func (s *Store) GetOperation(ctx context.Context, id string) (Operation, error) 
 	return operation, err
 }
 
+func (s *Store) ListIncompleteOperations(ctx context.Context) ([]Operation, error) {
+	rows, err := s.db.DB.QueryContext(
+		ctx,
+		`SELECT id, operation_type, status, profile_id, metadata_json, error_code, error_message, created_at_unix_ms, updated_at_unix_ms
+		FROM operations
+		WHERE status IN (?, ?)
+		ORDER BY updated_at_unix_ms ASC, id ASC`,
+		OperationStatusPending,
+		OperationStatusFailed,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	operations := []Operation{}
+	for rows.Next() {
+		operation, err := scanOperation(rows)
+		if err != nil {
+			return nil, err
+		}
+		operations = append(operations, operation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return operations, nil
+}
+
 func (s *Store) UpdateOperationMetadata(ctx context.Context, id string, metadataJSON string) error {
 	result, err := s.db.DB.ExecContext(
 		ctx,

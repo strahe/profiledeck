@@ -22,3 +22,11 @@ func tryLockFile(file *os.File) error {
 func unlockFileHandle(file *os.File) error {
 	return syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 }
+
+func openProbeFile(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_RDONLY, 0)
+}
+
+func removeVerifiedLockFile(path string, file *os.File, expectedSHA256 string, currentInfo os.FileInfo, lockHeld *bool, fileOpen *bool) error {
+	return os.Remove(path)
+}

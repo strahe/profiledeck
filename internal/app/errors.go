@@ -40,6 +40,7 @@ const (
 	ErrorBackupNotFound        ErrorCode = "BACKUP_NOT_FOUND"
 	ErrorRollbackUnsupported   ErrorCode = "ROLLBACK_UNSUPPORTED"
 	ErrorTargetWriteFailed     ErrorCode = "TARGET_WRITE_FAILED"
+	ErrorLockRepairUnsafe      ErrorCode = "LOCK_REPAIR_UNSAFE"
 )
 
 type AppError struct {

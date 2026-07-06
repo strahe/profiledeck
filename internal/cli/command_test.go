@@ -29,6 +29,9 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	if cmd.Command("backup") == nil {
 		t.Fatalf("expected backup subcommand")
 	}
+	if cmd.Command("doctor") == nil {
+		t.Fatalf("expected doctor subcommand")
+	}
 	if cmd.Command("init") == nil {
 		t.Fatalf("expected init subcommand")
 	}
@@ -663,6 +666,118 @@ func TestBackupShowMissingReturnsNotFound(t *testing.T) {
 	assertCLIAppErrorCode(t, err, app.ErrorBackupNotFound)
 }
 
+func TestDoctorCLIJSONAndHumanOutput(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "config")
+	out, err := runCLI(t, "--config-dir", configDir, "doctor", "--json")
+	if err != nil {
+		t.Fatalf("expected doctor before init to succeed, got %v", err)
+	}
+	var result app.DoctorResult
+	decodeCLIJSON(t, []byte(out), &result)
+	if result.OverallLevel != app.DoctorLevelWarning || len(result.Findings) != 1 {
+		t.Fatalf("unexpected doctor before init result: %#v", result)
+	}
+	if _, err := os.Stat(configDir); !os.IsNotExist(err) {
+		t.Fatalf("expected doctor not to create config dir, got %v", err)
+	}
+
+	initOut, err := runCLI(t, "--config-dir", configDir, "init", "--json")
+	if err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	var initResult app.InitResult
+	decodeCLIJSON(t, []byte(initOut), &initResult)
+	insertFailedOperation(t, initResult.DatabasePath, "switch-cli-failed")
+
+	out, err = runCLI(t, "--config-dir", configDir, "doctor", "--json")
+	if err != nil {
+		t.Fatalf("expected doctor with failed operation to succeed, got %v", err)
+	}
+	decodeCLIJSON(t, []byte(out), &result)
+	if result.OverallLevel != app.DoctorLevelError || len(result.Operations) != 1 || result.Operations[0].ID != "switch-cli-failed" {
+		t.Fatalf("unexpected doctor failed operation result: %#v", result)
+	}
+
+	humanOut, err := runCLI(t, "--config-dir", configDir, "doctor")
+	if err != nil {
+		t.Fatalf("expected doctor human output to succeed, got %v", err)
+	}
+	for _, expected := range []string{"database:", "operations:", "lock:", "TARGET_WRITE_FAILED", "write failed"} {
+		if !strings.Contains(humanOut, expected) {
+			t.Fatalf("expected human doctor output to contain %q, got %q", expected, humanOut)
+		}
+	}
+}
+
+func TestDoctorHumanOperationsUseStableColumns(t *testing.T) {
+	var out bytes.Buffer
+	err := writeDoctorOperations(&out, []app.DoctorOperation{
+		{
+			Level:         app.DoctorLevelError,
+			ID:            "switch-pending",
+			OperationType: "switch",
+			Status:        "pending",
+			Checkpoint:    "planned",
+			Reason:        "pending_operation_without_active_lock",
+		},
+		{
+			Level:         app.DoctorLevelError,
+			ID:            "switch-failed",
+			OperationType: "switch",
+			Status:        "failed",
+			Checkpoint:    "backed_up",
+			ErrorCode:     "TARGET_WRITE_FAILED",
+			ErrorMessage:  "write failed",
+			Reason:        "failed_operation",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected doctor operation output to succeed, got %v", err)
+	}
+	output := out.String()
+	for _, expected := range []string{
+		"error_code=-",
+		"error_message=-",
+		"error_code=TARGET_WRITE_FAILED",
+		"error_message=write failed",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("expected doctor operation output to contain %q, got %q", expected, output)
+		}
+	}
+}
+
+func TestDoctorRepairLockCLIFlow(t *testing.T) {
+	configDir := t.TempDir()
+	initOut, err := runCLI(t, "--config-dir", configDir, "init", "--json")
+	if err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	var initResult app.InitResult
+	decodeCLIJSON(t, []byte(initOut), &initResult)
+	insertFailedOperation(t, initResult.DatabasePath, "switch-cli-stale")
+	lockPath := filepath.Join(initResult.RuntimeRoot, "locks", "switch.lock")
+	if err := os.WriteFile(lockPath, []byte("switch-cli-stale\npid=999999999\ncreated_at_unix_ms=1\n"), 0o600); err != nil {
+		t.Fatalf("expected stale lock setup to succeed, got %v", err)
+	}
+
+	_, err = runCLI(t, "--config-dir", configDir, "doctor", "repair-lock", "--json")
+	assertCLIAppErrorCode(t, err, app.ErrorConfirmationRequired)
+
+	out, err := runCLI(t, "--config-dir", configDir, "doctor", "repair-lock", "--yes", "--json")
+	if err != nil {
+		t.Fatalf("expected doctor repair-lock to succeed, got %v", err)
+	}
+	var repair app.DoctorRepairLockResult
+	decodeCLIJSON(t, []byte(out), &repair)
+	if !repair.Repaired || repair.Path != lockPath {
+		t.Fatalf("unexpected repair result: %#v", repair)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("expected lock file to be removed, got %v", err)
+	}
+}
+
 func TestProviderCLIOutputRedactsSensitiveMetadata(t *testing.T) {
 	configDir := t.TempDir()
 	initOut, err := runCLI(t, "--config-dir", configDir, "init", "--json")
@@ -751,6 +866,23 @@ func assertFileString(t *testing.T, path string, expected string) {
 	}
 	if string(raw) != expected {
 		t.Fatalf("expected file %s content %q, got %q", path, expected, string(raw))
+	}
+}
+
+func insertFailedOperation(t *testing.T, databasePath string, operationID string) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatalf("expected sqlite open to succeed, got %v", err)
+	}
+	defer db.Close()
+	_, err = db.ExecContext(context.Background(), `
+		INSERT INTO operations (id, operation_type, status, profile_id, metadata_json, error_code, error_message, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, 'switch', 'failed', 'profile-a', '{"checkpoint":"backed_up","provider_id":"provider-a","profile_id":"profile-a"}', 'TARGET_WRITE_FAILED', 'write failed', 1, 1)
+	`, operationID)
+	if err != nil {
+		t.Fatalf("expected failed operation setup to succeed, got %v", err)
 	}
 }
 

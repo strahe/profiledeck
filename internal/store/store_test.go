@@ -281,6 +281,38 @@ func TestStatusCountsPendingAndFailedOperations(t *testing.T) {
 	}
 }
 
+func TestListIncompleteOperationsFiltersAndSorts(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+
+	_, err := db.db.DB.ExecContext(ctx, `
+		INSERT INTO operations (id, operation_type, status, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES
+			('operation-applied', 'maintenance', 'applied', '{}', 1, 1),
+			('operation-failed-b', 'maintenance', 'failed', '{}', 1, 20),
+			('operation-pending-a', 'maintenance', 'pending', '{}', 1, 10),
+			('operation-failed-a', 'maintenance', 'failed', '{}', 1, 20)
+	`)
+	if err != nil {
+		t.Fatalf("expected operation setup to succeed, got %v", err)
+	}
+
+	operations, err := db.ListIncompleteOperations(ctx)
+	if err != nil {
+		t.Fatalf("expected incomplete operation list to succeed, got %v", err)
+	}
+	if operationIDs(operations) != "operation-pending-a,operation-failed-a,operation-failed-b" {
+		t.Fatalf("unexpected incomplete operations: %#v", operations)
+	}
+}
+
 func TestSwitchOperationLifecycle(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
@@ -1356,6 +1388,14 @@ func gotProfileIDs(profiles []Profile) string {
 	ids := make([]string, 0, len(profiles))
 	for _, profile := range profiles {
 		ids = append(ids, profile.ID)
+	}
+	return strings.Join(ids, ",")
+}
+
+func operationIDs(operations []Operation) string {
+	ids := make([]string, 0, len(operations))
+	for _, operation := range operations {
+		ids = append(ids, operation.ID)
 	}
 	return strings.Join(ids, ",")
 }
