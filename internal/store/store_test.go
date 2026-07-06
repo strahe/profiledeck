@@ -281,6 +281,92 @@ func TestStatusCountsPendingAndFailedOperations(t *testing.T) {
 	}
 }
 
+func TestSwitchOperationLifecycle(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+
+	operation, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
+		ID:           "switch-1",
+		ProfileID:    "profile-a",
+		MetadataJSON: `{"checkpoint":"created"}`,
+	})
+	if err != nil {
+		t.Fatalf("expected pending switch operation create to succeed, got %v", err)
+	}
+	if operation.OperationType != OperationTypeSwitch || operation.Status != OperationStatusPending || operation.ProfileID != "profile-a" {
+		t.Fatalf("unexpected pending operation: %#v", operation)
+	}
+	if operation.MetadataJSON != `{"checkpoint":"created"}` {
+		t.Fatalf("unexpected operation metadata: %s", operation.MetadataJSON)
+	}
+
+	if err := db.UpdateOperationMetadata(ctx, "switch-1", `{"checkpoint":"backup"}`); err != nil {
+		t.Fatalf("expected metadata update to succeed, got %v", err)
+	}
+	operation, err = db.GetOperation(ctx, "switch-1")
+	if err != nil {
+		t.Fatalf("expected operation read to succeed, got %v", err)
+	}
+	if operation.MetadataJSON != `{"checkpoint":"backup"}` || operation.Status != OperationStatusPending {
+		t.Fatalf("unexpected operation after metadata update: %#v", operation)
+	}
+
+	if err := db.CompleteSwitchOperation(ctx, CompleteSwitchOperationParams{
+		ID:           "switch-1",
+		ProfileID:    "profile-a",
+		ProviderID:   "provider-a",
+		MetadataJSON: `{"checkpoint":"complete"}`,
+	}); err != nil {
+		t.Fatalf("expected switch completion to succeed, got %v", err)
+	}
+	operation, err = db.GetOperation(ctx, "switch-1")
+	if err != nil {
+		t.Fatalf("expected operation read after completion to succeed, got %v", err)
+	}
+	if operation.Status != OperationStatusApplied || operation.ErrorCode != "" || operation.ErrorMessage != "" || operation.MetadataJSON != `{"checkpoint":"complete"}` {
+		t.Fatalf("unexpected completed operation: %#v", operation)
+	}
+
+	activeState, err := db.GetActiveState(ctx, ActiveStateScopeProvider, "provider-a")
+	if err != nil {
+		t.Fatalf("expected active state read to succeed, got %v", err)
+	}
+	if activeState.ProfileID != "profile-a" || activeState.OperationID != "switch-1" {
+		t.Fatalf("unexpected active state: %#v", activeState)
+	}
+
+	if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
+		ID:           "switch-2",
+		ProfileID:    "profile-b",
+		MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("expected second pending switch operation create to succeed, got %v", err)
+	}
+	failedMetadata := `{"checkpoint":"failed"}`
+	if err := db.MarkOperationFailed(ctx, MarkOperationFailedParams{
+		ID:           "switch-2",
+		ErrorCode:    "TARGET_WRITE_FAILED",
+		ErrorMessage: "write failed",
+		MetadataJSON: &failedMetadata,
+	}); err != nil {
+		t.Fatalf("expected operation failure mark to succeed, got %v", err)
+	}
+	operation, err = db.GetOperation(ctx, "switch-2")
+	if err != nil {
+		t.Fatalf("expected failed operation read to succeed, got %v", err)
+	}
+	if operation.Status != OperationStatusFailed || operation.ErrorCode != "TARGET_WRITE_FAILED" || operation.ErrorMessage != "write failed" || operation.MetadataJSON != failedMetadata {
+		t.Fatalf("unexpected failed operation: %#v", operation)
+	}
+}
+
 func TestProviderCRUD(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")

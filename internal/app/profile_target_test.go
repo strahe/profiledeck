@@ -478,7 +478,7 @@ func TestBuildPlanRejectsOversizedMergeTargets(t *testing.T) {
 	assertAppErrorCode(t, err, ErrorTargetReadFailed)
 }
 
-func TestBuildPlanStreamsOversizedReplaceFileTargets(t *testing.T) {
+func TestBuildPlanRejectsOversizedReplaceFileTargets(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
@@ -504,20 +504,8 @@ func TestBuildPlanStreamsOversizedReplaceFileTargets(t *testing.T) {
 		t.Fatalf("expected oversized replace target create to succeed, got %v", err)
 	}
 
-	plan, err := BuildPlan(ctx, BuildPlanRequest{ConfigDir: configDir, ProviderID: "provider-a", ProfileID: "profile-a"})
-	if err != nil {
-		t.Fatalf("expected oversized replace-file plan to succeed, got %v", err)
-	}
-	if len(plan.Operations) != 1 {
-		t.Fatalf("expected one oversized replace-file operation, got %#v", plan.Operations)
-	}
-	op := plan.Operations[0]
-	if op.Action != planActionUpdate || op.BeforeSHA256 != sha256Hex([]byte(beforeContent)) || op.DesiredSHA256 != sha256Hex([]byte("ok")) {
-		t.Fatalf("unexpected oversized replace-file operation: %#v", op)
-	}
-	if !op.BeforePreview.Truncated || op.AfterPreview.Content != "ok" {
-		t.Fatalf("unexpected oversized replace-file previews: before=%#v after=%#v", op.BeforePreview, op.AfterPreview)
-	}
+	_, err := BuildPlan(ctx, BuildPlanRequest{ConfigDir: configDir, ProviderID: "provider-a", ProfileID: "profile-a"})
+	assertAppErrorCode(t, err, ErrorTargetReadFailed)
 }
 
 func TestBuildPlanReadOnlyOperationsAndRedaction(t *testing.T) {

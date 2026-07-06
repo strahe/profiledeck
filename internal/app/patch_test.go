@@ -309,7 +309,7 @@ func buildTestPatchOperation(t *testing.T, format string, strategy string, value
 	if err != nil {
 		t.Fatalf("expected build operation to succeed, got %v", err)
 	}
-	return op
+	return op.PlanOperation
 }
 
 func testPatchTarget(t *testing.T, format string, strategy string, valueJSON string) store.ProfileTarget {

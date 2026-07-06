@@ -321,11 +321,12 @@ func writeProfileTarget(w io.Writer, target app.ProfileTarget) error {
 func writePlan(w io.Writer, plan app.SwitchPlan) error {
 	if _, err := fmt.Fprintf(
 		w,
-		"Switch plan\nprovider: %s (%s)\nprofile: %s (%s)\noperations: %d\n",
+		"Switch plan\nprovider: %s (%s)\nprofile: %s (%s)\nplan_fingerprint: %s\noperations: %d\n",
 		plan.Provider.ID,
 		plan.Provider.Name,
 		plan.Profile.ID,
 		plan.Profile.Name,
+		plan.PlanFingerprint,
 		len(plan.Operations),
 	); err != nil {
 		return err

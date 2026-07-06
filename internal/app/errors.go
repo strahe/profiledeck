@@ -15,6 +15,8 @@ const (
 	ErrorStoreSchemaInvalid    ErrorCode = "STORE_SCHEMA_INVALID"
 	ErrorStoreStatusFailed     ErrorCode = "STORE_STATUS_FAILED"
 	ErrorConfirmationRequired  ErrorCode = "CONFIRMATION_REQUIRED"
+	ErrorOperationCreateFailed ErrorCode = "OPERATION_CREATE_FAILED"
+	ErrorOperationUpdateFailed ErrorCode = "OPERATION_UPDATE_FAILED"
 	ErrorProviderAlreadyExists ErrorCode = "PROVIDER_EXISTS"
 	ErrorProviderInUse         ErrorCode = "PROVIDER_IN_USE"
 	ErrorProviderInvalid       ErrorCode = "PROVIDER_INVALID"
@@ -30,6 +32,11 @@ const (
 	ErrorTargetAlreadyExists   ErrorCode = "TARGET_EXISTS"
 	ErrorTargetNotFound        ErrorCode = "TARGET_NOT_FOUND"
 	ErrorTargetReadFailed      ErrorCode = "TARGET_READ_FAILED"
+	ErrorLockAcquireFailed     ErrorCode = "LOCK_ACQUIRE_FAILED"
+	ErrorSwitchPlanUnsupported ErrorCode = "SWITCH_PLAN_UNSUPPORTED"
+	ErrorTargetChanged         ErrorCode = "TARGET_CHANGED"
+	ErrorBackupFailed          ErrorCode = "BACKUP_FAILED"
+	ErrorTargetWriteFailed     ErrorCode = "TARGET_WRITE_FAILED"
 )
 
 type AppError struct {

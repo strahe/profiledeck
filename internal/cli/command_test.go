@@ -32,6 +32,9 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	if cmd.Command("status") == nil {
 		t.Fatalf("expected status subcommand")
 	}
+	if cmd.Command("switch") == nil {
+		t.Fatalf("expected switch subcommand")
+	}
 	if cmd.Command("plan") == nil {
 		t.Fatalf("expected plan subcommand")
 	}
@@ -425,6 +428,47 @@ func TestProfileTargetAndPlanCLIFlow(t *testing.T) {
 		t.Fatalf("expected plan not to create target file, stat error: %v", err)
 	}
 
+	humanOut, err = runCLI(t, "--config-dir", configDir, "switch", "provider-a", "profile-a")
+	if err == nil {
+		t.Fatalf("expected unconfirmed switch to fail")
+	}
+	assertCLIAppErrorCode(t, err, app.ErrorConfirmationRequired)
+	if !strings.Contains(humanOut, "Switch plan") || !strings.Contains(humanOut, "plan_fingerprint:") {
+		t.Fatalf("expected unconfirmed switch to print plan, got %q", humanOut)
+	}
+	if strings.Contains(humanOut, "raw-key") {
+		t.Fatalf("expected unconfirmed switch plan to redact raw key, got %q", humanOut)
+	}
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Fatalf("expected unconfirmed switch not to create target file, stat error: %v", err)
+	}
+
+	out, err = runCLI(t,
+		"--config-dir", configDir,
+		"switch", "provider-a", "profile-a",
+		"--yes",
+		"--plan-fingerprint", plan.PlanFingerprint,
+		"--json",
+	)
+	if err != nil {
+		t.Fatalf("expected confirmed switch JSON to succeed, got %v", err)
+	}
+	if strings.Contains(out, "raw-key") {
+		t.Fatalf("expected switch JSON to exclude raw key, got %q", out)
+	}
+	var switchResult app.ApplySwitchResult
+	decodeCLIJSON(t, []byte(out), &switchResult)
+	if switchResult.Status != "applied" || switchResult.Counts.Create != 1 || switchResult.OperationID == "" || switchResult.BackupPath == "" {
+		t.Fatalf("unexpected switch result: %#v", switchResult)
+	}
+	rawTarget, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("expected switched target read to succeed, got %v", err)
+	}
+	if !strings.Contains(string(rawTarget), "raw-key") {
+		t.Fatalf("expected target file to contain raw managed content, got %q", rawTarget)
+	}
+
 	if _, err := runCLI(t, "--config-dir", configDir, "profile", "target", "update", "profile-a", "provider-a", "target-a", "--enabled", "--disabled", "--json"); err != nil {
 		assertCLIAppErrorCode(t, err, app.ErrorTargetInvalid)
 	} else {
@@ -438,6 +482,70 @@ func TestProfileTargetAndPlanCLIFlow(t *testing.T) {
 	decodeCLIJSON(t, []byte(out), &deleted)
 	if !deleted.Deleted || deleted.ID != "target-a" {
 		t.Fatalf("unexpected target delete result: %#v", deleted)
+	}
+}
+
+func TestSwitchCLIRejectsStalePlanFingerprint(t *testing.T) {
+	configDir := t.TempDir()
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	if _, err := runCLI(t,
+		"--config-dir", configDir,
+		"provider", "create", "provider-a",
+		"--name", "Provider A",
+		"--adapter", "generic",
+		"--json",
+	); err != nil {
+		t.Fatalf("expected provider create to succeed, got %v", err)
+	}
+	if _, err := runCLI(t,
+		"--config-dir", configDir,
+		"profile", "create", "profile-a",
+		"--name", "Profile A",
+		"--json",
+	); err != nil {
+		t.Fatalf("expected profile create to succeed, got %v", err)
+	}
+
+	targetPath := filepath.Join(t.TempDir(), "target.txt")
+	if _, err := runCLI(t,
+		"--config-dir", configDir,
+		"profile", "target", "add", "profile-a", "target-a",
+		"--provider", "provider-a",
+		"--path", targetPath,
+		"--format", "text",
+		"--strategy", "replace-file",
+		"--value-json", `{"content":"managed\n"}`,
+		"--json",
+	); err != nil {
+		t.Fatalf("expected profile target add to succeed, got %v", err)
+	}
+
+	out, err := runCLI(t, "--config-dir", configDir, "plan", "provider-a", "profile-a", "--json")
+	if err != nil {
+		t.Fatalf("expected plan to succeed, got %v", err)
+	}
+	var plan app.SwitchPlan
+	decodeCLIJSON(t, []byte(out), &plan)
+	if err := os.WriteFile(targetPath, []byte("external\n"), 0o600); err != nil {
+		t.Fatalf("expected external write to succeed, got %v", err)
+	}
+
+	_, err = runCLI(t,
+		"--config-dir", configDir,
+		"switch", "provider-a", "profile-a",
+		"--yes",
+		"--plan-fingerprint", plan.PlanFingerprint,
+		"--json",
+	)
+	assertCLIAppErrorCode(t, err, app.ErrorTargetChanged)
+	raw, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatalf("expected target read to succeed, got %v", err)
+	}
+	if string(raw) != "external\n" {
+		t.Fatalf("expected stale switch not to overwrite target, got %q", raw)
 	}
 }
 

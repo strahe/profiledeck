@@ -22,9 +22,13 @@ const (
 	sqliteDriverName  = "sqlite"
 	sqliteBusyTimeout = 5 * time.Second
 
+	OperationTypeSwitch = "switch"
+
 	OperationStatusPending = "pending"
 	OperationStatusFailed  = "failed"
 	OperationStatusApplied = "applied"
+
+	ActiveStateScopeProvider = "provider"
 )
 
 var (
@@ -90,6 +94,26 @@ type ProfileTarget struct {
 	UpdatedAtUnixMS int64
 }
 
+type Operation struct {
+	ID              string
+	OperationType   string
+	Status          string
+	ProfileID       string
+	MetadataJSON    string
+	ErrorCode       string
+	ErrorMessage    string
+	CreatedAtUnixMS int64
+	UpdatedAtUnixMS int64
+}
+
+type ActiveState struct {
+	ScopeType       string
+	ScopeID         string
+	ProfileID       string
+	OperationID     string
+	UpdatedAtUnixMS int64
+}
+
 type CreateProfileParams struct {
 	ID           string
 	Name         string
@@ -128,6 +152,26 @@ type UpdateProfileTargetParams struct {
 	ValueJSON    *string
 	Enabled      *bool
 	MetadataJSON *string
+}
+
+type CreateSwitchOperationParams struct {
+	ID           string
+	ProfileID    string
+	MetadataJSON string
+}
+
+type MarkOperationFailedParams struct {
+	ID           string
+	ErrorCode    string
+	ErrorMessage string
+	MetadataJSON *string
+}
+
+type CompleteSwitchOperationParams struct {
+	ID           string
+	ProfileID    string
+	ProviderID   string
+	MetadataJSON string
 }
 
 type MigrationResult struct {
@@ -837,6 +881,166 @@ func (s *Store) DeleteProfileTarget(ctx context.Context, profileID string, provi
 	return nil
 }
 
+func (s *Store) CreatePendingSwitchOperation(ctx context.Context, params CreateSwitchOperationParams) (Operation, error) {
+	now := time.Now().UnixMilli()
+	_, err := s.db.DB.ExecContext(
+		ctx,
+		`INSERT INTO operations
+			(id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		params.ID,
+		OperationTypeSwitch,
+		OperationStatusPending,
+		params.ProfileID,
+		params.MetadataJSON,
+		now,
+		now,
+	)
+	if err != nil {
+		if isSQLiteConstraintError(err) {
+			return Operation{}, ErrAlreadyExists
+		}
+		return Operation{}, err
+	}
+	return s.GetOperation(ctx, params.ID)
+}
+
+func (s *Store) GetOperation(ctx context.Context, id string) (Operation, error) {
+	row := s.db.DB.QueryRowContext(
+		ctx,
+		`SELECT id, operation_type, status, profile_id, metadata_json, error_code, error_message, created_at_unix_ms, updated_at_unix_ms
+		FROM operations
+		WHERE id = ?`,
+		id,
+	)
+	operation, err := scanOperation(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Operation{}, ErrNotFound
+	}
+	return operation, err
+}
+
+func (s *Store) UpdateOperationMetadata(ctx context.Context, id string, metadataJSON string) error {
+	result, err := s.db.DB.ExecContext(
+		ctx,
+		`UPDATE operations
+		SET metadata_json = ?, updated_at_unix_ms = ?
+		WHERE id = ?`,
+		metadataJSON,
+		time.Now().UnixMilli(),
+		id,
+	)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) MarkOperationFailed(ctx context.Context, params MarkOperationFailedParams) error {
+	assignments := []string{
+		"status = ?",
+		"error_code = ?",
+		"error_message = ?",
+	}
+	args := []any{OperationStatusFailed, params.ErrorCode, params.ErrorMessage}
+	if params.MetadataJSON != nil {
+		assignments = append(assignments, "metadata_json = ?")
+		args = append(args, *params.MetadataJSON)
+	}
+	assignments = append(assignments, "updated_at_unix_ms = ?")
+	args = append(args, time.Now().UnixMilli(), params.ID)
+
+	result, err := s.db.DB.ExecContext(
+		ctx,
+		`UPDATE operations SET `+strings.Join(assignments, ", ")+` WHERE id = ?`,
+		args...,
+	)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) CompleteSwitchOperation(ctx context.Context, params CompleteSwitchOperationParams) error {
+	tx, err := s.db.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	now := time.Now().UnixMilli()
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE operations
+		SET status = ?, profile_id = ?, metadata_json = ?, error_code = '', error_message = '', updated_at_unix_ms = ?
+		WHERE id = ? AND operation_type = ?`,
+		OperationStatusApplied,
+		params.ProfileID,
+		params.MetadataJSON,
+		now,
+		params.ID,
+		OperationTypeSwitch,
+	)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return ErrNotFound
+	}
+
+	// Completing a switch is a DB-level invariant: the active provider state and
+	// applied operation must be committed together.
+	_, err = tx.ExecContext(
+		ctx,
+		`INSERT INTO active_states (scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(scope_type, scope_id) DO UPDATE SET
+			profile_id = excluded.profile_id,
+			operation_id = excluded.operation_id,
+			updated_at_unix_ms = excluded.updated_at_unix_ms`,
+		ActiveStateScopeProvider,
+		params.ProviderID,
+		params.ProfileID,
+		params.ID,
+		now,
+	)
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (s *Store) GetActiveState(ctx context.Context, scopeType string, scopeID string) (ActiveState, error) {
+	row := s.db.DB.QueryRowContext(
+		ctx,
+		`SELECT scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms
+		FROM active_states
+		WHERE scope_type = ? AND scope_id = ?`,
+		scopeType,
+		scopeID,
+	)
+	activeState, err := scanActiveState(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ActiveState{}, ErrNotFound
+	}
+	return activeState, err
+}
+
 func (s *Store) CountProviderTargetReferences(ctx context.Context, providerID string) (int, error) {
 	var count int
 	err := s.db.DB.QueryRowContext(
@@ -1239,6 +1443,38 @@ func scanProfileTarget(row rowScanner) (ProfileTarget, error) {
 	}
 	target.Enabled = enabled != 0
 	return target, nil
+}
+
+func scanOperation(row rowScanner) (Operation, error) {
+	var operation Operation
+	if err := row.Scan(
+		&operation.ID,
+		&operation.OperationType,
+		&operation.Status,
+		&operation.ProfileID,
+		&operation.MetadataJSON,
+		&operation.ErrorCode,
+		&operation.ErrorMessage,
+		&operation.CreatedAtUnixMS,
+		&operation.UpdatedAtUnixMS,
+	); err != nil {
+		return Operation{}, err
+	}
+	return operation, nil
+}
+
+func scanActiveState(row rowScanner) (ActiveState, error) {
+	var activeState ActiveState
+	if err := row.Scan(
+		&activeState.ScopeType,
+		&activeState.ScopeID,
+		&activeState.ProfileID,
+		&activeState.OperationID,
+		&activeState.UpdatedAtUnixMS,
+	); err != nil {
+		return ActiveState{}, err
+	}
+	return activeState, nil
 }
 
 func isSQLiteConstraintError(err error) bool {
