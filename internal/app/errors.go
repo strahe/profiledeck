@@ -36,6 +36,9 @@ const (
 	ErrorSwitchPlanUnsupported ErrorCode = "SWITCH_PLAN_UNSUPPORTED"
 	ErrorTargetChanged         ErrorCode = "TARGET_CHANGED"
 	ErrorBackupFailed          ErrorCode = "BACKUP_FAILED"
+	ErrorBackupInvalid         ErrorCode = "BACKUP_INVALID"
+	ErrorBackupNotFound        ErrorCode = "BACKUP_NOT_FOUND"
+	ErrorRollbackUnsupported   ErrorCode = "ROLLBACK_UNSUPPORTED"
 	ErrorTargetWriteFailed     ErrorCode = "TARGET_WRITE_FAILED"
 )
 

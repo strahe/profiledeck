@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -22,7 +23,8 @@ const (
 	sqliteDriverName  = "sqlite"
 	sqliteBusyTimeout = 5 * time.Second
 
-	OperationTypeSwitch = "switch"
+	OperationTypeSwitch   = "switch"
+	OperationTypeRollback = "rollback"
 
 	OperationStatusPending = "pending"
 	OperationStatusFailed  = "failed"
@@ -160,6 +162,12 @@ type CreateSwitchOperationParams struct {
 	MetadataJSON string
 }
 
+type CreateRollbackOperationParams struct {
+	ID           string
+	ProfileID    string
+	MetadataJSON string
+}
+
 type MarkOperationFailedParams struct {
 	ID           string
 	ErrorCode    string
@@ -172,6 +180,19 @@ type CompleteSwitchOperationParams struct {
 	ProfileID    string
 	ProviderID   string
 	MetadataJSON string
+}
+
+type RollbackActiveStateParams struct {
+	ProfileID   string
+	OperationID string
+}
+
+type CompleteRollbackOperationParams struct {
+	ID                  string
+	ProfileID           string
+	ProviderID          string
+	RestoredActiveState *RollbackActiveStateParams
+	MetadataJSON        string
 }
 
 type MigrationResult struct {
@@ -531,11 +552,23 @@ func (s *Store) UpdateProvider(ctx context.Context, params UpdateProviderParams)
 }
 
 func (s *Store) DeleteProvider(ctx context.Context, id string) error {
+	if _, err := s.GetProvider(ctx, id); err != nil {
+		return err
+	}
+	references, err := s.providerReferenceCount(ctx, id)
+	if err != nil {
+		return err
+	}
+	if references > 0 {
+		return ErrInUse
+	}
+
 	result, err := s.db.DB.ExecContext(ctx, `
 		DELETE FROM providers
 		WHERE id = ?
 			AND NOT EXISTS (SELECT 1 FROM profile_targets WHERE provider_id = ?)
-	`, id, id)
+			AND NOT EXISTS (SELECT 1 FROM active_states WHERE scope_type = ? AND scope_id = ?)
+	`, id, id, ActiveStateScopeProvider, id)
 	if err != nil {
 		return err
 	}
@@ -545,7 +578,7 @@ func (s *Store) DeleteProvider(ctx context.Context, id string) error {
 		} else if getErr != nil {
 			return getErr
 		}
-		references, refErr := s.CountProviderTargetReferences(ctx, id)
+		references, refErr := s.providerReferenceCount(ctx, id)
 		if refErr != nil {
 			return refErr
 		}
@@ -905,6 +938,30 @@ func (s *Store) CreatePendingSwitchOperation(ctx context.Context, params CreateS
 	return s.GetOperation(ctx, params.ID)
 }
 
+func (s *Store) CreatePendingRollbackOperation(ctx context.Context, params CreateRollbackOperationParams) (Operation, error) {
+	now := time.Now().UnixMilli()
+	_, err := s.db.DB.ExecContext(
+		ctx,
+		`INSERT INTO operations
+			(id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		params.ID,
+		OperationTypeRollback,
+		OperationStatusPending,
+		params.ProfileID,
+		params.MetadataJSON,
+		now,
+		now,
+	)
+	if err != nil {
+		if isSQLiteConstraintError(err) {
+			return Operation{}, ErrAlreadyExists
+		}
+		return Operation{}, err
+	}
+	return s.GetOperation(ctx, params.ID)
+}
+
 func (s *Store) GetOperation(ctx context.Context, id string) (Operation, error) {
 	row := s.db.DB.QueryRowContext(
 		ctx,
@@ -1018,6 +1075,77 @@ func (s *Store) CompleteSwitchOperation(ctx context.Context, params CompleteSwit
 	if err != nil {
 		return err
 	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (s *Store) CompleteRollbackOperation(ctx context.Context, params CompleteRollbackOperationParams) error {
+	tx, err := s.db.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	now := time.Now().UnixMilli()
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE operations
+		SET status = ?, profile_id = ?, metadata_json = ?, error_code = '', error_message = '', updated_at_unix_ms = ?
+		WHERE id = ? AND operation_type = ?`,
+		OperationStatusApplied,
+		params.ProfileID,
+		params.MetadataJSON,
+		now,
+		params.ID,
+		OperationTypeRollback,
+	)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return ErrNotFound
+	}
+
+	// Completing rollback is atomic with active-state restoration so callers
+	// never observe a successful rollback operation with stale active state.
+	if params.RestoredActiveState == nil {
+		if _, err := tx.ExecContext(
+			ctx,
+			`DELETE FROM active_states
+			WHERE scope_type = ? AND scope_id = ?`,
+			ActiveStateScopeProvider,
+			params.ProviderID,
+		); err != nil {
+			return err
+		}
+	} else {
+		_, err = tx.ExecContext(
+			ctx,
+			`INSERT INTO active_states (scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(scope_type, scope_id) DO UPDATE SET
+				profile_id = excluded.profile_id,
+				operation_id = excluded.operation_id,
+				updated_at_unix_ms = excluded.updated_at_unix_ms`,
+			ActiveStateScopeProvider,
+			params.ProviderID,
+			params.RestoredActiveState.ProfileID,
+			params.RestoredActiveState.OperationID,
+			now,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -1383,6 +1511,59 @@ func (s *Store) profileReferenceCount(ctx context.Context, profileID string) (in
 	}
 
 	return activeStateCount + operationCount + targetCount, nil
+}
+
+func (s *Store) providerReferenceCount(ctx context.Context, providerID string) (int, error) {
+	targetCount, err := s.CountProviderTargetReferences(ctx, providerID)
+	if err != nil {
+		return 0, err
+	}
+
+	var activeStateCount int
+	if err := s.db.DB.QueryRowContext(
+		ctx,
+		"SELECT COUNT(1) FROM active_states WHERE scope_type = ? AND scope_id = ?",
+		ActiveStateScopeProvider,
+		providerID,
+	).Scan(&activeStateCount); err != nil {
+		return 0, err
+	}
+
+	operationCount, err := s.providerOperationReferenceCount(ctx, providerID)
+	if err != nil {
+		return 0, err
+	}
+
+	return targetCount + activeStateCount + operationCount, nil
+}
+
+func (s *Store) providerOperationReferenceCount(ctx context.Context, providerID string) (int, error) {
+	rows, err := s.db.DB.QueryContext(ctx, "SELECT metadata_json FROM operations")
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var metadataJSON string
+		if err := rows.Scan(&metadataJSON); err != nil {
+			return 0, err
+		}
+		var metadata struct {
+			ProviderID string `json:"provider_id"`
+		}
+		if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
+			continue
+		}
+		if metadata.ProviderID == providerID {
+			count++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 type rowScanner interface {

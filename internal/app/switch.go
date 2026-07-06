@@ -3,12 +3,10 @@ package app
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +14,7 @@ import (
 
 	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
+	"github.com/strahe/profiledeck/internal/targetfs"
 )
 
 const switchOperationRandomBytes = 6
@@ -76,9 +75,17 @@ type switchOperationMetadata struct {
 	PlanFingerprint string                          `json:"plan_fingerprint,omitempty"`
 	BackupPath      string                          `json:"backup_path,omitempty"`
 	Counts          SwitchCounts                    `json:"counts"`
+	PreviousActive  *switchPreviousActiveState      `json:"previous_active_state,omitempty"`
 	Targets         []switchOperationTargetMetadata `json:"targets,omitempty"`
 	Warnings        []string                        `json:"warnings,omitempty"`
 	UpdatedAtUnixMS int64                           `json:"updated_at_unix_ms"`
+}
+
+type switchPreviousActiveState struct {
+	Exists          bool   `json:"exists"`
+	ProfileID       string `json:"profile_id,omitempty"`
+	OperationID     string `json:"operation_id,omitempty"`
+	UpdatedAtUnixMS int64  `json:"updated_at_unix_ms,omitempty"`
 }
 
 type switchOperationTargetMetadata struct {
@@ -92,11 +99,6 @@ type switchOperationTargetMetadata struct {
 	BeforeSHA256  string   `json:"before_sha256,omitempty"`
 	DesiredSHA256 string   `json:"desired_sha256,omitempty"`
 	Warnings      []string `json:"warnings,omitempty"`
-}
-
-type switchLock struct {
-	path  string
-	token string
 }
 
 func ApplySwitch(ctx context.Context, req ApplySwitchRequest) (ApplySwitchResult, error) {
@@ -130,7 +132,7 @@ func ApplySwitch(ctx context.Context, req ApplySwitchRequest) (ApplySwitchResult
 	if err != nil {
 		return ApplySwitchResult{}, WrapError(ErrorOperationCreateFailed, "failed to create switch operation id", err)
 	}
-	initialMetadata, err := marshalSwitchOperationMetadata("created", providerID, profileID, applyPlan{}, switchBackup{}, SwitchCounts{})
+	initialMetadata, err := marshalSwitchOperationMetadata("created", providerID, profileID, applyPlan{}, switchBackup{}, SwitchCounts{}, nil)
 	if err != nil {
 		return ApplySwitchResult{}, WrapError(ErrorOperationCreateFailed, "failed to encode switch operation metadata", err)
 	}
@@ -148,12 +150,17 @@ func ApplySwitch(ctx context.Context, req ApplySwitchRequest) (ApplySwitchResult
 	}
 	defer lock.Release()
 
+	previousActive, err := readPreviousActiveState(ctx, db, providerID)
+	if err != nil {
+		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, initialMetadata, err)
+	}
+
 	plan, err := buildApplyPlan(ctx, db, providerID, profileID)
 	if err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, initialMetadata, err)
 	}
 	counts := countSwitchOperations(plan.Operations)
-	plannedMetadata, err := marshalSwitchOperationMetadata("planned", providerID, profileID, plan, switchBackup{}, counts)
+	plannedMetadata, err := marshalSwitchOperationMetadata("planned", providerID, profileID, plan, switchBackup{}, counts, previousActive)
 	if err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, initialMetadata, WrapError(ErrorOperationUpdateFailed, "failed to encode switch operation metadata", err))
 	}
@@ -179,7 +186,7 @@ func ApplySwitch(ctx context.Context, req ApplySwitchRequest) (ApplySwitchResult
 	if err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, plannedMetadata, err)
 	}
-	backupMetadata, err := marshalSwitchOperationMetadata("backed_up", providerID, profileID, plan, backup, counts)
+	backupMetadata, err := marshalSwitchOperationMetadata("backed_up", providerID, profileID, plan, backup, counts, previousActive)
 	if err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, plannedMetadata, WrapError(ErrorOperationUpdateFailed, "failed to encode switch operation metadata", err))
 	}
@@ -199,7 +206,7 @@ func ApplySwitch(ctx context.Context, req ApplySwitchRequest) (ApplySwitchResult
 		}
 	}
 
-	appliedMetadata, err := marshalSwitchOperationMetadata("applied", providerID, profileID, plan, backup, counts)
+	appliedMetadata, err := marshalSwitchOperationMetadata("applied", providerID, profileID, plan, backup, counts, previousActive)
 	if err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, backupMetadata, WrapError(ErrorOperationUpdateFailed, "failed to encode switch operation metadata", err))
 	}
@@ -232,39 +239,28 @@ func newSwitchOperationID(now time.Time) (string, error) {
 	return fmt.Sprintf("switch-%d-%s", now.UnixMilli(), hex.EncodeToString(randomBytes)), nil
 }
 
-func acquireSwitchLock(path string, operationID string) (switchLock, error) {
-	token := fmt.Sprintf("%s\npid=%d\ncreated_at_unix_ms=%d\n", operationID, os.Getpid(), time.Now().UnixMilli())
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+func readPreviousActiveState(ctx context.Context, db *store.Store, providerID string) (*switchPreviousActiveState, error) {
+	activeState, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, providerID)
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return switchLock{}, NewError(ErrorLockAcquireFailed, "switch lock is already held").WithDetail("path", path)
+		if errors.Is(err, store.ErrNotFound) {
+			return &switchPreviousActiveState{Exists: false}, nil
 		}
-		return switchLock{}, WrapError(ErrorLockAcquireFailed, "failed to acquire switch lock", err).WithDetail("path", path)
+		return nil, WrapError(ErrorStoreStatusFailed, "failed to read previous active state", err)
 	}
-	if _, err := io.WriteString(file, token); err != nil {
-		_ = file.Close()
-		_ = os.Remove(path)
-		return switchLock{}, WrapError(ErrorLockAcquireFailed, "failed to write switch lock", err).WithDetail("path", path)
-	}
-	if err := file.Close(); err != nil {
-		_ = os.Remove(path)
-		return switchLock{}, WrapError(ErrorLockAcquireFailed, "failed to close switch lock", err).WithDetail("path", path)
-	}
-	return switchLock{path: path, token: token}, nil
+	return &switchPreviousActiveState{
+		Exists:          true,
+		ProfileID:       activeState.ProfileID,
+		OperationID:     activeState.OperationID,
+		UpdatedAtUnixMS: activeState.UpdatedAtUnixMS,
+	}, nil
 }
 
-func (l switchLock) Release() {
-	if l.path == "" {
-		return
-	}
-	raw, err := os.ReadFile(l.path)
+func acquireSwitchLock(path string, operationID string) (targetfs.Lock, error) {
+	lock, err := targetfs.AcquireLock(path, operationID)
 	if err != nil {
-		return
+		return targetfs.Lock{}, mapTargetFSError(err)
 	}
-	if string(raw) != l.token {
-		return
-	}
-	_ = os.Remove(l.path)
+	return lock, nil
 }
 
 func rejectUnsupportedSwitchOperations(operations []applyPlanOperation) error {
@@ -293,26 +289,14 @@ func verifySingleSwitchPlanHash(ctx context.Context, op applyPlanOperation) erro
 	if op.Action == planActionUnsupported {
 		return nil
 	}
-	current, err := readTargetForPlan(ctx, op.Path, false)
+	err := targetfs.VerifyExpected(ctx, targetfs.ExpectedTarget{
+		TargetID: op.TargetID,
+		Path:     op.Path,
+		Exists:   op.FileExists,
+		SHA256:   op.BeforeSHA256,
+	})
 	if err != nil {
-		return WrapError(ErrorTargetChanged, "failed to verify target hash", err).
-			WithDetail("target_id", op.TargetID).
-			WithDetail("path", op.Path)
-	}
-	if !op.FileExists {
-		if current.FileExists {
-			return targetChangedError(op, "target appeared after plan")
-		}
-		return nil
-	}
-	if !current.FileExists {
-		return targetChangedError(op, "target disappeared after plan")
-	}
-	if current.IsSymlink {
-		return targetChangedError(op, "target became a symlink after plan")
-	}
-	if current.SHA256 != op.BeforeSHA256 {
-		return targetChangedError(op, "target content changed after plan")
+		return mapTargetFSError(err)
 	}
 	return nil
 }
@@ -379,124 +363,27 @@ func createSwitchBackup(ctx context.Context, paths runtime.Paths, operationID st
 }
 
 func copyBackupFile(ctx context.Context, source string, destination string) (string, error) {
-	info, err := os.Lstat(source)
+	hash, err := targetfs.CopyBackupFile(ctx, source, destination)
 	if err != nil {
-		return "", WrapError(ErrorBackupFailed, "failed to inspect target for backup", err).WithDetail("path", source)
+		return "", mapTargetFSError(err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 || info.IsDir() || !info.Mode().IsRegular() {
-		return "", NewError(ErrorBackupFailed, "target is not a regular file").WithDetail("path", source)
-	}
-
-	input, err := os.Open(source)
-	if err != nil {
-		return "", WrapError(ErrorBackupFailed, "failed to open target for backup", err).WithDetail("path", source)
-	}
-	defer input.Close()
-
-	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return "", WrapError(ErrorBackupFailed, "failed to create backup file", err).WithDetail("path", destination)
-	}
-	removeOutput := true
-	defer func() {
-		if output != nil {
-			_ = output.Close()
-		}
-		if removeOutput {
-			_ = os.Remove(destination)
-		}
-	}()
-
-	hash := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(output, hash), contextReader{ctx: ctx, reader: input}); err != nil {
-		return "", WrapError(ErrorBackupFailed, "failed to copy backup file", err).WithDetail("path", source)
-	}
-	if err := output.Sync(); err != nil {
-		return "", WrapError(ErrorBackupFailed, "failed to sync backup file", err).WithDetail("path", destination)
-	}
-	if err := output.Close(); err != nil {
-		return "", WrapError(ErrorBackupFailed, "failed to close backup file", err).WithDetail("path", destination)
-	}
-	output = nil
-	removeOutput = false
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	return hash, nil
 }
 
 func writeTargetAtomic(ctx context.Context, op applyPlanOperation) error {
-	if err := verifySingleSwitchPlanHash(ctx, op); err != nil {
-		return err
-	}
-
-	parent := filepath.Dir(op.Path)
-	parentInfo, err := os.Stat(parent)
+	err := targetfs.AtomicWriteContent(ctx, targetfs.AtomicWriteContentRequest{
+		Expected: targetfs.ExpectedTarget{
+			TargetID: op.TargetID,
+			Path:     op.Path,
+			Exists:   op.FileExists,
+			SHA256:   op.BeforeSHA256,
+		},
+		Content: op.DesiredContent,
+	})
 	if err != nil {
-		return WrapError(ErrorTargetWriteFailed, "failed to inspect target parent directory", err).WithDetail("path", parent)
+		return mapTargetFSError(err)
 	}
-	if !parentInfo.IsDir() {
-		return NewError(ErrorTargetWriteFailed, "target parent path is not a directory").WithDetail("path", parent)
-	}
-
-	mode := os.FileMode(0o600)
-	if op.FileExists {
-		info, err := os.Lstat(op.Path)
-		if err != nil {
-			return WrapError(ErrorTargetChanged, "failed to inspect target before write", err).WithDetail("path", op.Path)
-		}
-		if info.Mode()&os.ModeSymlink != 0 || info.IsDir() || !info.Mode().IsRegular() {
-			return NewError(ErrorTargetChanged, "target is not a regular file before write").WithDetail("path", op.Path)
-		}
-		mode = info.Mode().Perm()
-	} else {
-		if _, err := os.Lstat(op.Path); err == nil {
-			return targetChangedError(op, "target appeared before write")
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return WrapError(ErrorTargetChanged, "failed to inspect target before write", err).WithDetail("path", op.Path)
-		}
-	}
-
-	temp, err := os.CreateTemp(parent, ".profiledeck-*")
-	if err != nil {
-		return WrapError(ErrorTargetWriteFailed, "failed to create temporary target file", err).WithDetail("path", parent)
-	}
-	tempPath := temp.Name()
-	removeTemp := true
-	defer func() {
-		if temp != nil {
-			_ = temp.Close()
-		}
-		if removeTemp {
-			_ = os.Remove(tempPath)
-		}
-	}()
-
-	if err := temp.Chmod(mode); err != nil {
-		return WrapError(ErrorTargetWriteFailed, "failed to set temporary target mode", err).WithDetail("path", tempPath)
-	}
-	if _, err := io.Copy(temp, contextReader{ctx: ctx, reader: strings.NewReader(op.DesiredContent)}); err != nil {
-		return WrapError(ErrorTargetWriteFailed, "failed to write temporary target file", err).WithDetail("path", tempPath)
-	}
-	if err := temp.Sync(); err != nil {
-		return WrapError(ErrorTargetWriteFailed, "failed to sync temporary target file", err).WithDetail("path", tempPath)
-	}
-	if err := temp.Close(); err != nil {
-		return WrapError(ErrorTargetWriteFailed, "failed to close temporary target file", err).WithDetail("path", tempPath)
-	}
-	temp = nil
-	if err := os.Rename(tempPath, op.Path); err != nil {
-		return WrapError(ErrorTargetWriteFailed, "failed to replace target file", err).WithDetail("path", op.Path)
-	}
-	removeTemp = false
-	syncParentDirBestEffort(parent)
 	return nil
-}
-
-func syncParentDirBestEffort(parent string) {
-	dir, err := os.Open(parent)
-	if err != nil {
-		return
-	}
-	defer dir.Close()
-	_ = dir.Sync()
 }
 
 func failSwitchOperation(ctx context.Context, db *store.Store, operationID string, metadataJSON string, operationErr error) error {
@@ -543,6 +430,41 @@ func errorCodeAndMessage(err error) (ErrorCode, string) {
 	return ErrorCommandFailed, err.Error()
 }
 
+func mapTargetFSError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	var targetErr *targetfs.Error
+	if !errors.As(err, &targetErr) {
+		return err
+	}
+
+	var code ErrorCode
+	switch targetErr.Kind {
+	case targetfs.KindLockHeld, targetfs.KindLockFailed:
+		code = ErrorLockAcquireFailed
+	case targetfs.KindTargetChanged:
+		code = ErrorTargetChanged
+	case targetfs.KindBackupInvalid:
+		code = ErrorBackupInvalid
+	case targetfs.KindBackupFailed:
+		code = ErrorBackupFailed
+	case targetfs.KindWriteFailed:
+		code = ErrorTargetWriteFailed
+	case targetfs.KindUnsupported:
+		code = ErrorSwitchPlanUnsupported
+	default:
+		code = ErrorCommandFailed
+	}
+
+	appErr := WrapError(code, targetErr.Message, err)
+	for key, value := range targetErr.Details {
+		appErr.WithDetail(key, value)
+	}
+	return appErr
+}
+
 func countSwitchOperations(operations []applyPlanOperation) SwitchCounts {
 	var counts SwitchCounts
 	for _, op := range operations {
@@ -558,7 +480,7 @@ func countSwitchOperations(operations []applyPlanOperation) SwitchCounts {
 	return counts
 }
 
-func marshalSwitchOperationMetadata(checkpoint string, providerID string, profileID string, plan applyPlan, backup switchBackup, counts SwitchCounts) (string, error) {
+func marshalSwitchOperationMetadata(checkpoint string, providerID string, profileID string, plan applyPlan, backup switchBackup, counts SwitchCounts, previousActive *switchPreviousActiveState) (string, error) {
 	targets := []switchOperationTargetMetadata{}
 	for _, op := range plan.Operations {
 		targets = append(targets, switchOperationTargetMetadata{
@@ -582,6 +504,7 @@ func marshalSwitchOperationMetadata(checkpoint string, providerID string, profil
 		PlanFingerprint: plan.SwitchPlan.PlanFingerprint,
 		BackupPath:      backup.Path,
 		Counts:          counts,
+		PreviousActive:  previousActive,
 		Targets:         targets,
 		Warnings:        plan.SwitchPlan.Warnings,
 		UpdatedAtUnixMS: time.Now().UnixMilli(),

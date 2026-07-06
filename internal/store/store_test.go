@@ -367,6 +367,97 @@ func TestSwitchOperationLifecycle(t *testing.T) {
 	}
 }
 
+func TestRollbackOperationLifecycle(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+
+	operation, err := db.CreatePendingRollbackOperation(ctx, CreateRollbackOperationParams{
+		ID:           "rollback-1",
+		ProfileID:    "profile-a",
+		MetadataJSON: `{"checkpoint":"created"}`,
+	})
+	if err != nil {
+		t.Fatalf("expected pending rollback operation create to succeed, got %v", err)
+	}
+	if operation.OperationType != OperationTypeRollback || operation.Status != OperationStatusPending || operation.ProfileID != "profile-a" {
+		t.Fatalf("unexpected pending rollback operation: %#v", operation)
+	}
+
+	if err := db.CompleteRollbackOperation(ctx, CompleteRollbackOperationParams{
+		ID:         "rollback-1",
+		ProfileID:  "profile-a",
+		ProviderID: "provider-a",
+		RestoredActiveState: &RollbackActiveStateParams{
+			ProfileID:   "profile-a",
+			OperationID: "switch-previous",
+		},
+		MetadataJSON: `{"checkpoint":"applied"}`,
+	}); err != nil {
+		t.Fatalf("expected rollback completion to succeed, got %v", err)
+	}
+	operation, err = db.GetOperation(ctx, "rollback-1")
+	if err != nil {
+		t.Fatalf("expected rollback operation read to succeed, got %v", err)
+	}
+	if operation.Status != OperationStatusApplied || operation.ProfileID != "profile-a" || operation.MetadataJSON != `{"checkpoint":"applied"}` {
+		t.Fatalf("unexpected completed rollback operation: %#v", operation)
+	}
+	activeState, err := db.GetActiveState(ctx, ActiveStateScopeProvider, "provider-a")
+	if err != nil {
+		t.Fatalf("expected restored active state read to succeed, got %v", err)
+	}
+	if activeState.ProfileID != "profile-a" || activeState.OperationID != "switch-previous" {
+		t.Fatalf("unexpected restored active state: %#v", activeState)
+	}
+
+	if _, err := db.CreatePendingRollbackOperation(ctx, CreateRollbackOperationParams{
+		ID:           "rollback-2",
+		MetadataJSON: `{"checkpoint":"created"}`,
+	}); err != nil {
+		t.Fatalf("expected second rollback create to succeed, got %v", err)
+	}
+	if err := db.CompleteRollbackOperation(ctx, CompleteRollbackOperationParams{
+		ID:           "rollback-2",
+		ProviderID:   "provider-a",
+		MetadataJSON: `{"checkpoint":"applied"}`,
+	}); err != nil {
+		t.Fatalf("expected rollback completion with active delete to succeed, got %v", err)
+	}
+	if _, err := db.GetActiveState(ctx, ActiveStateScopeProvider, "provider-a"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected active state delete after rollback, got %v", err)
+	}
+
+	if _, err := db.CreatePendingRollbackOperation(ctx, CreateRollbackOperationParams{
+		ID:           "rollback-3",
+		MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("expected third rollback create to succeed, got %v", err)
+	}
+	failedMetadata := `{"checkpoint":"failed"}`
+	if err := db.MarkOperationFailed(ctx, MarkOperationFailedParams{
+		ID:           "rollback-3",
+		ErrorCode:    "TARGET_CHANGED",
+		ErrorMessage: "changed",
+		MetadataJSON: &failedMetadata,
+	}); err != nil {
+		t.Fatalf("expected rollback failure mark to succeed, got %v", err)
+	}
+	operation, err = db.GetOperation(ctx, "rollback-3")
+	if err != nil {
+		t.Fatalf("expected failed rollback read to succeed, got %v", err)
+	}
+	if operation.Status != OperationStatusFailed || operation.ErrorCode != "TARGET_CHANGED" || operation.MetadataJSON != failedMetadata {
+		t.Fatalf("unexpected failed rollback operation: %#v", operation)
+	}
+}
+
 func TestProviderCRUD(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
@@ -460,6 +551,55 @@ func TestProviderCRUD(t *testing.T) {
 	}
 	if _, err := db.GetProvider(ctx, "provider-a"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected deleted provider to be missing, got %v", err)
+	}
+}
+
+func TestProviderDeleteInUseProtection(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{
+		ID:           "provider-active",
+		Name:         "Provider Active",
+		AdapterID:    "generic",
+		Enabled:      true,
+		MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("expected active provider create to succeed, got %v", err)
+	}
+	if _, err := db.db.DB.ExecContext(ctx, `
+		INSERT INTO active_states (scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?)
+	`, ActiveStateScopeProvider, "provider-active", "profile-a", "switch-a", 1); err != nil {
+		t.Fatalf("expected active state setup to succeed, got %v", err)
+	}
+	if err := db.DeleteProvider(ctx, "provider-active"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("expected active provider delete to fail, got %v", err)
+	}
+
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{
+		ID:           "provider-history",
+		Name:         "Provider History",
+		AdapterID:    "generic",
+		Enabled:      true,
+		MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("expected history provider create to succeed, got %v", err)
+	}
+	if _, err := db.db.DB.ExecContext(ctx, `
+		INSERT INTO operations (id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, "switch-history", OperationTypeSwitch, OperationStatusApplied, "profile-a", `{"provider_id":"provider-history"}`, 1, 1); err != nil {
+		t.Fatalf("expected operation setup to succeed, got %v", err)
+	}
+	if err := db.DeleteProvider(ctx, "provider-history"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("expected operation-referenced provider delete to fail, got %v", err)
 	}
 }
 

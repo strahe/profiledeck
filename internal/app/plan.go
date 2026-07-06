@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/strahe/profiledeck/internal/store"
+	"github.com/strahe/profiledeck/internal/targetfs"
 )
 
 const (
@@ -26,7 +27,7 @@ const (
 	planReasonTargetDifferentContent = "target_different_content"
 	planReasonTargetIsSymlink        = "target_is_symlink"
 
-	maxTargetContentBytes = 16 * 1024 * 1024
+	maxTargetContentBytes = targetfs.MaxFileBytes
 )
 
 type BuildPlanRequest struct {
@@ -249,6 +250,13 @@ func buildGenericPlanOperation(ctx context.Context, provider store.Provider, pro
 	content, warnings, err := desiredTargetContent(target, before)
 	if err != nil {
 		return applyPlanOperation{}, err
+	}
+	if len(content) > maxTargetContentBytes {
+		return applyPlanOperation{}, NewError(ErrorTargetInvalid, "desired target content is too large").
+			WithDetail("target_id", target.TargetID).
+			WithDetail("path", target.Path).
+			WithDetail("size_bytes", len(content)).
+			WithDetail("max_bytes", maxTargetContentBytes)
 	}
 	op.DesiredContent = content
 	op.Warnings = append(op.Warnings, warnings...)

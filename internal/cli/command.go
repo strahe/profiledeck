@@ -31,10 +31,12 @@ func NewCommand(info app.Info) *urfavecli.Command {
 			},
 		},
 		Commands: []*urfavecli.Command{
+			newBackupCommand(),
 			newInitCommand(),
 			newPlanCommand(),
 			newProviderCommand(),
 			newProfileCommand(),
+			newRollbackCommand(),
 			newStatusCommand(),
 			newSwitchCommand(),
 			newVersionCommand(info),

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/store"
+	"github.com/strahe/profiledeck/internal/targetfs"
 )
 
 func TestApplySwitchCreateWritesBackupAndActiveState(t *testing.T) {
@@ -76,6 +77,13 @@ func TestApplySwitchCreateWritesBackupAndActiveState(t *testing.T) {
 	}
 	if strings.Contains(operation.MetadataJSON, "raw-create-secret") {
 		t.Fatalf("expected operation metadata to exclude raw target content, got %s", operation.MetadataJSON)
+	}
+	var metadata switchOperationMetadata
+	if err := json.Unmarshal([]byte(operation.MetadataJSON), &metadata); err != nil {
+		t.Fatalf("expected switch metadata decode to succeed, got %v", err)
+	}
+	if metadata.PreviousActive == nil || metadata.PreviousActive.Exists {
+		t.Fatalf("expected switch metadata to record missing previous active state, got %#v", metadata.PreviousActive)
 	}
 	activeState, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, "provider-a")
 	if err != nil {
@@ -380,10 +388,12 @@ func TestApplySwitchFailsWhenLockExistsAndKeepsLockFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected runtime resolve to succeed, got %v", err)
 	}
-	lockContent := []byte("external-lock\n")
-	if err := os.WriteFile(paths.Lock, lockContent, 0o600); err != nil {
+	lock, err := targetfs.AcquireLock(paths.Lock, "external-lock")
+	if err != nil {
 		t.Fatalf("expected lock setup to succeed, got %v", err)
 	}
+	defer lock.Release()
+	lockContent := readFileString(t, paths.Lock)
 
 	_, err = ApplySwitch(ctx, ApplySwitchRequest{
 		ConfigDir:  configDir,
@@ -392,7 +402,7 @@ func TestApplySwitchFailsWhenLockExistsAndKeepsLockFile(t *testing.T) {
 		Confirm:    true,
 	})
 	assertAppErrorCode(t, err, ErrorLockAcquireFailed)
-	if got := readFileString(t, paths.Lock); got != string(lockContent) {
+	if got := readFileString(t, paths.Lock); got != lockContent {
 		t.Fatalf("expected existing lock to remain unchanged, got %q", got)
 	}
 	if _, err := os.Stat(targetPath); !errors.Is(err, os.ErrNotExist) {

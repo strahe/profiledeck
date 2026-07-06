@@ -508,6 +508,31 @@ func TestBuildPlanRejectsOversizedReplaceFileTargets(t *testing.T) {
 	assertAppErrorCode(t, err, ErrorTargetReadFailed)
 }
 
+func TestBuildPlanRejectsOversizedDesiredContent(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	createGenericProviderAndProfile(t, ctx, configDir, true)
+
+	if _, err := CreateProfileTarget(ctx, CreateProfileTargetRequest{
+		ConfigDir:  configDir,
+		ProfileID:  "profile-a",
+		ProviderID: "provider-a",
+		TargetID:   "target-a",
+		Path:       filepath.Join(t.TempDir(), "oversized-desired.txt"),
+		Format:     "text",
+		Strategy:   "replace-file",
+		ValueJSON:  contentValueJSON(t, strings.Repeat("x", maxTargetContentBytes+1)),
+	}); err != nil {
+		t.Fatalf("expected oversized desired target create to succeed, got %v", err)
+	}
+
+	_, err := BuildPlan(ctx, BuildPlanRequest{ConfigDir: configDir, ProviderID: "provider-a", ProfileID: "profile-a"})
+	assertAppErrorCode(t, err, ErrorTargetInvalid)
+}
+
 func TestBuildPlanReadOnlyOperationsAndRedaction(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()

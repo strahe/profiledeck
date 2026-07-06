@@ -26,6 +26,9 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	if cmd.Command("version") == nil {
 		t.Fatalf("expected version subcommand")
 	}
+	if cmd.Command("backup") == nil {
+		t.Fatalf("expected backup subcommand")
+	}
 	if cmd.Command("init") == nil {
 		t.Fatalf("expected init subcommand")
 	}
@@ -43,6 +46,9 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	}
 	if cmd.Command("profile") == nil {
 		t.Fatalf("expected profile subcommand")
+	}
+	if cmd.Command("rollback") == nil {
+		t.Fatalf("expected rollback subcommand")
 	}
 }
 
@@ -549,6 +555,114 @@ func TestSwitchCLIRejectsStalePlanFingerprint(t *testing.T) {
 	}
 }
 
+func TestRollbackCLIJSONFlow(t *testing.T) {
+	configDir := t.TempDir()
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	if _, err := runCLI(t,
+		"--config-dir", configDir,
+		"provider", "create", "provider-a",
+		"--name", "Provider A",
+		"--adapter", "generic",
+		"--json",
+	); err != nil {
+		t.Fatalf("expected provider create to succeed, got %v", err)
+	}
+	if _, err := runCLI(t,
+		"--config-dir", configDir,
+		"profile", "create", "profile-a",
+		"--name", "Profile A",
+		"--json",
+	); err != nil {
+		t.Fatalf("expected profile create to succeed, got %v", err)
+	}
+
+	targetPath := filepath.Join(t.TempDir(), "target.env")
+	if err := os.WriteFile(targetPath, []byte("OLD=value\n"), 0o600); err != nil {
+		t.Fatalf("expected old target setup to succeed, got %v", err)
+	}
+	if _, err := runCLI(t,
+		"--config-dir", configDir,
+		"profile", "target", "add", "profile-a", "target-a",
+		"--provider", "provider-a",
+		"--path", targetPath,
+		"--format", "text",
+		"--strategy", "replace-file",
+		"--value-json", `{"content":"OPENAI_API_KEY=raw-key\n"}`,
+		"--json",
+	); err != nil {
+		t.Fatalf("expected profile target add to succeed, got %v", err)
+	}
+
+	switchOut, err := runCLI(t, "--config-dir", configDir, "switch", "provider-a", "profile-a", "--yes", "--json")
+	if err != nil {
+		t.Fatalf("expected switch to succeed, got %v", err)
+	}
+	if strings.Contains(switchOut, "raw-key") {
+		t.Fatalf("expected switch output to exclude raw key, got %q", switchOut)
+	}
+	var switchResult app.ApplySwitchResult
+	decodeCLIJSON(t, []byte(switchOut), &switchResult)
+	if switchResult.OperationID == "" || switchResult.Counts.Update != 1 {
+		t.Fatalf("unexpected switch result: %#v", switchResult)
+	}
+
+	_, err = runCLI(t, "--config-dir", configDir, "rollback", switchResult.OperationID, "--json")
+	assertCLIAppErrorCode(t, err, app.ErrorConfirmationRequired)
+	assertFileString(t, targetPath, "OPENAI_API_KEY=raw-key\n")
+
+	listOut, err := runCLI(t, "--config-dir", configDir, "backup", "list", "--json")
+	if err != nil {
+		t.Fatalf("expected backup list to succeed, got %v", err)
+	}
+	if strings.Contains(listOut, "raw-key") {
+		t.Fatalf("expected backup list output to exclude raw key, got %q", listOut)
+	}
+	var listResult app.ListBackupsResult
+	decodeCLIJSON(t, []byte(listOut), &listResult)
+	if len(listResult.Backups) != 1 || !listResult.Backups[0].RollbackSupported {
+		t.Fatalf("unexpected backup list result: %#v", listResult)
+	}
+
+	showOut, err := runCLI(t, "--config-dir", configDir, "backup", "show", switchResult.OperationID, "--json")
+	if err != nil {
+		t.Fatalf("expected backup show to succeed, got %v", err)
+	}
+	if strings.Contains(showOut, "raw-key") {
+		t.Fatalf("expected backup show output to exclude raw key, got %q", showOut)
+	}
+	var detail app.BackupDetail
+	decodeCLIJSON(t, []byte(showOut), &detail)
+	if !detail.RollbackSupported || len(detail.Entries) != 1 {
+		t.Fatalf("unexpected backup detail: %#v", detail)
+	}
+
+	rollbackOut, err := runCLI(t, "--config-dir", configDir, "rollback", switchResult.OperationID, "--yes", "--json")
+	if err != nil {
+		t.Fatalf("expected rollback to succeed, got %v", err)
+	}
+	if strings.Contains(rollbackOut, "raw-key") {
+		t.Fatalf("expected rollback output to exclude raw key, got %q", rollbackOut)
+	}
+	var rollbackResult app.ApplyRollbackResult
+	decodeCLIJSON(t, []byte(rollbackOut), &rollbackResult)
+	if rollbackResult.Status != "applied" || rollbackResult.SourceOperationID != switchResult.OperationID || rollbackResult.Counts.Restore != 1 {
+		t.Fatalf("unexpected rollback result: %#v", rollbackResult)
+	}
+	assertFileString(t, targetPath, "OLD=value\n")
+}
+
+func TestBackupShowMissingReturnsNotFound(t *testing.T) {
+	configDir := t.TempDir()
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+
+	_, err := runCLI(t, "--config-dir", configDir, "backup", "show", "missing-backup", "--json")
+	assertCLIAppErrorCode(t, err, app.ErrorBackupNotFound)
+}
+
 func TestProviderCLIOutputRedactsSensitiveMetadata(t *testing.T) {
 	configDir := t.TempDir()
 	initOut, err := runCLI(t, "--config-dir", configDir, "init", "--json")
@@ -625,6 +739,18 @@ func assertCLIAppErrorCode(t *testing.T, err error, code app.ErrorCode) {
 	}
 	if appErr.Code != code {
 		t.Fatalf("expected error code %s, got %s: %v", code, appErr.Code, err)
+	}
+}
+
+func assertFileString(t *testing.T, path string, expected string) {
+	t.Helper()
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected file read to succeed, got %v", err)
+	}
+	if string(raw) != expected {
+		t.Fatalf("expected file %s content %q, got %q", path, expected, string(raw))
 	}
 }
 
