@@ -103,9 +103,9 @@ func TestApplySwitchCreateWritesBackupAndActiveState(t *testing.T) {
 	}
 }
 
-func TestApplySwitchUpdateBacksUpOriginalAndPreservesMode(t *testing.T) {
+func TestApplySwitchUpdateBacksUpOriginalAndPreservesPOSIXMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("mode preservation is platform-specific")
+		t.Skip("POSIX mode preservation is not a Windows ACL guarantee")
 	}
 
 	ctx := context.Background()

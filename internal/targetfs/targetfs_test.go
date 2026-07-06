@@ -366,7 +366,7 @@ func TestBackupCopyAtomicWriteAndGuardedRemove(t *testing.T) {
 			t.Fatalf("expected target stat to succeed, got %v", err)
 		}
 		if info.Mode().Perm() != 0o640 {
-			t.Fatalf("expected target mode to be preserved, got %#o", info.Mode().Perm())
+			t.Fatalf("expected POSIX target mode to be preserved, got %#o", info.Mode().Perm())
 		}
 	}
 
