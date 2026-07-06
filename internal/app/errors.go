@@ -39,6 +39,7 @@ const (
 	ErrorBackupInvalid         ErrorCode = "BACKUP_INVALID"
 	ErrorBackupNotFound        ErrorCode = "BACKUP_NOT_FOUND"
 	ErrorRollbackUnsupported   ErrorCode = "ROLLBACK_UNSUPPORTED"
+	ErrorRecoveryUnsupported   ErrorCode = "RECOVERY_UNSUPPORTED"
 	ErrorTargetWriteFailed     ErrorCode = "TARGET_WRITE_FAILED"
 	ErrorLockRepairUnsafe      ErrorCode = "LOCK_REPAIR_UNSAFE"
 )

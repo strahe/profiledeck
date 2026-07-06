@@ -257,6 +257,101 @@ func TestDoctorReportsStaleFailedLockAndRepairRemovesOnlyLock(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsFailedSwitchRecoveryStatus(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("recoverable", func(t *testing.T) {
+		configDir := t.TempDir()
+		initResult, err := Init(ctx, InitRequest{ConfigDir: configDir})
+		if err != nil {
+			t.Fatalf("expected init to succeed, got %v", err)
+		}
+		createGenericProviderAndProfile(t, ctx, configDir, true)
+		dir := t.TempDir()
+		firstPath := filepath.Join(dir, "target-a.txt")
+		secondPath := filepath.Join(dir, "missing", "target-b.txt")
+		createProfileTargetForRecovery(t, ctx, configDir, "profile-a", "target-a", firstPath, "first\n")
+		createProfileTargetForRecovery(t, ctx, configDir, "profile-a", "target-b", secondPath, "second\n")
+		_, err = ApplySwitch(ctx, ApplySwitchRequest{ConfigDir: configDir, ProviderID: "provider-a", ProfileID: "profile-a", Confirm: true})
+		assertAppErrorCode(t, err, ErrorTargetWriteFailed)
+		failedSwitchID := singleOperationIDByTypeStatus(t, initResult.DatabasePath, store.OperationTypeSwitch, store.OperationStatusFailed)
+
+		result, err := Doctor(ctx, DoctorRequest{ConfigDir: configDir})
+		if err != nil {
+			t.Fatalf("expected doctor to succeed, got %v", err)
+		}
+		operation := doctorTestOperationByID(t, result.Operations, failedSwitchID)
+		if operation.RecoveryStatus != RecoveryStatusRecoverable || operation.RecoveryReason == "" {
+			t.Fatalf("expected recoverable failed switch, got %#v", operation)
+		}
+	})
+
+	t.Run("unrecoverable before backup", func(t *testing.T) {
+		configDir := t.TempDir()
+		initResult, err := Init(ctx, InitRequest{ConfigDir: configDir})
+		if err != nil {
+			t.Fatalf("expected init to succeed, got %v", err)
+		}
+		db := openWritableAppTestStore(t, ctx, initResult.DatabasePath)
+		defer db.Close()
+		if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
+			ID:           "switch-before-backup",
+			ProfileID:    "profile-a",
+			MetadataJSON: `{"checkpoint":"planned","provider_id":"provider-a","profile_id":"profile-a"}`,
+		}); err != nil {
+			t.Fatalf("expected operation setup to succeed, got %v", err)
+		}
+		metadata := `{"checkpoint":"planned","provider_id":"provider-a","profile_id":"profile-a"}`
+		if err := db.MarkOperationFailed(ctx, store.MarkOperationFailedParams{
+			ID:           "switch-before-backup",
+			ErrorCode:    string(ErrorTargetWriteFailed),
+			ErrorMessage: "write failed",
+			MetadataJSON: &metadata,
+		}); err != nil {
+			t.Fatalf("expected failed operation setup to succeed, got %v", err)
+		}
+
+		result, err := Doctor(ctx, DoctorRequest{ConfigDir: configDir})
+		if err != nil {
+			t.Fatalf("expected doctor to succeed, got %v", err)
+		}
+		operation := doctorTestOperationByID(t, result.Operations, "switch-before-backup")
+		if operation.RecoveryStatus != RecoveryStatusUnrecoverable {
+			t.Fatalf("expected unrecoverable failed switch, got %#v", operation)
+		}
+	})
+
+	t.Run("unknown target state", func(t *testing.T) {
+		configDir := t.TempDir()
+		initResult, err := Init(ctx, InitRequest{ConfigDir: configDir})
+		if err != nil {
+			t.Fatalf("expected init to succeed, got %v", err)
+		}
+		createGenericProviderAndProfile(t, ctx, configDir, true)
+		dir := t.TempDir()
+		firstPath := filepath.Join(dir, "target-a.txt")
+		secondPath := filepath.Join(dir, "missing", "target-b.txt")
+		createProfileTargetForRecovery(t, ctx, configDir, "profile-a", "target-a", firstPath, "first\n")
+		createProfileTargetForRecovery(t, ctx, configDir, "profile-a", "target-b", secondPath, "second\n")
+		_, err = ApplySwitch(ctx, ApplySwitchRequest{ConfigDir: configDir, ProviderID: "provider-a", ProfileID: "profile-a", Confirm: true})
+		assertAppErrorCode(t, err, ErrorTargetWriteFailed)
+		failedSwitchID := singleOperationIDByTypeStatus(t, initResult.DatabasePath, store.OperationTypeSwitch, store.OperationStatusFailed)
+		large := strings.Repeat("x", targetfs.MaxFileBytes+1)
+		if err := os.WriteFile(firstPath, []byte(large), 0o600); err != nil {
+			t.Fatalf("expected large target setup to succeed, got %v", err)
+		}
+
+		result, err := Doctor(ctx, DoctorRequest{ConfigDir: configDir})
+		if err != nil {
+			t.Fatalf("expected doctor to succeed, got %v", err)
+		}
+		operation := doctorTestOperationByID(t, result.Operations, failedSwitchID)
+		if operation.RecoveryStatus != RecoveryStatusUnknown {
+			t.Fatalf("expected unknown recovery state, got %#v", operation)
+		}
+	})
+}
+
 func TestDoctorReportsMissingOperationLockAsRepairable(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/store"
 )
 
 func TestNewCommandBuildsRootCommand(t *testing.T) {
@@ -49,6 +50,9 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	}
 	if cmd.Command("profile") == nil {
 		t.Fatalf("expected profile subcommand")
+	}
+	if cmd.Command("recover") == nil {
+		t.Fatalf("expected recover subcommand")
 	}
 	if cmd.Command("rollback") == nil {
 		t.Fatalf("expected rollback subcommand")
@@ -656,6 +660,111 @@ func TestRollbackCLIJSONFlow(t *testing.T) {
 	assertFileString(t, targetPath, "OLD=value\n")
 }
 
+func TestRecoverCLIJSONAndHumanFlow(t *testing.T) {
+	configDir := t.TempDir()
+	initOut, err := runCLI(t, "--config-dir", configDir, "init", "--json")
+	if err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	var initResult app.InitResult
+	decodeCLIJSON(t, []byte(initOut), &initResult)
+	if _, err := runCLI(t,
+		"--config-dir", configDir,
+		"provider", "create", "provider-a",
+		"--name", "Provider A",
+		"--adapter", "generic",
+		"--json",
+	); err != nil {
+		t.Fatalf("expected provider create to succeed, got %v", err)
+	}
+	if _, err := runCLI(t,
+		"--config-dir", configDir,
+		"profile", "create", "profile-a",
+		"--name", "Profile A",
+		"--json",
+	); err != nil {
+		t.Fatalf("expected profile create to succeed, got %v", err)
+	}
+
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "target-a.txt")
+	secondPath := filepath.Join(dir, "missing", "target-b.txt")
+	for _, target := range []struct {
+		id      string
+		path    string
+		content string
+	}{
+		{id: "target-a", path: firstPath, content: "first\n"},
+		{id: "target-b", path: secondPath, content: "second\n"},
+	} {
+		if _, err := runCLI(t,
+			"--config-dir", configDir,
+			"profile", "target", "add", "profile-a", target.id,
+			"--provider", "provider-a",
+			"--path", target.path,
+			"--format", "text",
+			"--strategy", "replace-file",
+			"--value-json", `{"content":"`+strings.ReplaceAll(target.content, "\n", `\n`)+`"}`,
+			"--json",
+		); err != nil {
+			t.Fatalf("expected profile target %s create to succeed, got %v", target.id, err)
+		}
+	}
+
+	_, err = runCLI(t, "--config-dir", configDir, "switch", "provider-a", "profile-a", "--yes", "--json")
+	assertCLIAppErrorCode(t, err, app.ErrorTargetWriteFailed)
+	assertFileString(t, firstPath, "first\n")
+	failedSwitchID := singleCLIOperationIDByTypeStatus(t, initResult.DatabasePath, store.OperationTypeSwitch, store.OperationStatusFailed)
+
+	_, err = runCLI(t, "--config-dir", configDir, "recover", failedSwitchID, "--json")
+	assertCLIAppErrorCode(t, err, app.ErrorConfirmationRequired)
+
+	recoverOut, err := runCLI(t, "--config-dir", configDir, "recover", failedSwitchID, "--yes", "--json")
+	if err != nil {
+		t.Fatalf("expected recovery JSON to succeed, got %v", err)
+	}
+	var recovery app.RecoverFailedSwitchResult
+	decodeCLIJSON(t, []byte(recoverOut), &recovery)
+	if recovery.OperationType != store.OperationTypeRollback || recovery.RollbackKind != "failed_switch_recovery" || recovery.SourceOperationID != failedSwitchID || recovery.Counts.Remove != 1 {
+		t.Fatalf("unexpected recovery result: %#v", recovery)
+	}
+	if _, err := os.Stat(firstPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected first target to be removed, got %v", err)
+	}
+
+	humanOut, err := runCLI(t, "--config-dir", configDir, "recover", failedSwitchID, "--yes")
+	if err != nil {
+		t.Fatalf("expected idempotent recovery human output to succeed, got %v", err)
+	}
+	for _, expected := range []string{"Recovery applied", "rollback_kind: failed_switch_recovery", "operation_type: rollback"} {
+		if !strings.Contains(humanOut, expected) {
+			t.Fatalf("expected recovery human output to contain %q, got %q", expected, humanOut)
+		}
+	}
+}
+
+func TestRecoverHumanOutputIncludesWarnings(t *testing.T) {
+	var out bytes.Buffer
+	err := writeRecoverResult(&out, app.RecoverFailedSwitchResult{
+		OperationID:       "rollback-recovery",
+		OperationType:     store.OperationTypeRollback,
+		RollbackKind:      "failed_switch_recovery",
+		Status:            "applied",
+		SourceOperationID: "switch-failed",
+		ProviderID:        "provider-a",
+		ProfileID:         "profile-a",
+		Counts:            app.RollbackCounts{Noop: 1},
+		BackupPath:        "/tmp/profiledeck-backup",
+		Warnings:          []string{"target already restored"},
+	})
+	if err != nil {
+		t.Fatalf("expected recovery output to succeed, got %v", err)
+	}
+	if !strings.Contains(out.String(), "warning: target already restored") {
+		t.Fatalf("expected recovery output to include warning, got %q", out.String())
+	}
+}
+
 func TestBackupShowMissingReturnsNotFound(t *testing.T) {
 	configDir := t.TempDir()
 	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
@@ -884,6 +993,43 @@ func insertFailedOperation(t *testing.T, databasePath string, operationID string
 	if err != nil {
 		t.Fatalf("expected failed operation setup to succeed, got %v", err)
 	}
+}
+
+func singleCLIOperationIDByTypeStatus(t *testing.T, databasePath string, operationType string, status string) string {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatalf("expected sqlite open to succeed, got %v", err)
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`
+		SELECT id
+		FROM operations
+		WHERE operation_type = ? AND status = ?
+		ORDER BY created_at_unix_ms ASC, id ASC
+	`, operationType, status)
+	if err != nil {
+		t.Fatalf("expected operation query to succeed, got %v", err)
+	}
+	defer rows.Close()
+
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("expected operation id scan to succeed, got %v", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("expected operation rows to succeed, got %v", err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("expected one %s %s operation, got %d: %v", operationType, status, len(ids), ids)
+	}
+	return ids[0]
 }
 
 func providerIDs(providers []app.Provider) string {

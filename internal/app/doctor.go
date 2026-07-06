@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/targetfs"
 )
@@ -63,6 +64,9 @@ type DoctorOperation struct {
 	BackupPath        string `json:"backup_path,omitempty"`
 	BackupID          string `json:"backup_id,omitempty"`
 	SourceOperationID string `json:"source_operation_id,omitempty"`
+	RollbackKind      string `json:"rollback_kind,omitempty"`
+	RecoveryStatus    string `json:"recovery_status,omitempty"`
+	RecoveryReason    string `json:"recovery_reason,omitempty"`
 	ErrorCode         string `json:"error_code,omitempty"`
 	ErrorMessage      string `json:"error_message,omitempty"`
 	UpdatedAtUnixMS   int64  `json:"updated_at_unix_ms"`
@@ -112,6 +116,7 @@ type doctorOperationMetadata struct {
 	CurrentBackupPath  string `json:"current_backup_path"`
 	SourceOperationID  string `json:"source_operation_id"`
 	BackupID           string `json:"backup_id"`
+	RollbackKind       string `json:"rollback_kind"`
 	metadataDecodeFail bool
 }
 
@@ -137,7 +142,7 @@ func Doctor(ctx context.Context, req DoctorRequest) (DoctorResult, error) {
 	}
 
 	result.Lock = inspectDoctorLock(ctx, paths.Lock, dbState)
-	result.Operations = doctorOperations(operations, result.Lock)
+	result.Operations = doctorOperations(ctx, dbState, paths, operations, result.Lock)
 	result.OverallLevel = doctorOverallLevel(result)
 	return result, nil
 }
@@ -397,15 +402,15 @@ func classifyDoctorLock(lock *DoctorLock, parseErr error, probeErr error, dbHeal
 	}
 }
 
-func doctorOperations(operations []store.Operation, lock DoctorLock) []DoctorOperation {
+func doctorOperations(ctx context.Context, dbState doctorDatabaseState, paths runtime.Paths, operations []store.Operation, lock DoctorLock) []DoctorOperation {
 	result := make([]DoctorOperation, 0, len(operations))
 	for _, operation := range operations {
-		result = append(result, doctorOperation(operation, lock))
+		result = append(result, doctorOperation(ctx, dbState, paths, operation, lock))
 	}
 	return result
 }
 
-func doctorOperation(operation store.Operation, lock DoctorLock) DoctorOperation {
+func doctorOperation(ctx context.Context, dbState doctorDatabaseState, paths runtime.Paths, operation store.Operation, lock DoctorLock) DoctorOperation {
 	metadata := parseDoctorOperationMetadata(operation.MetadataJSON)
 	profileID := metadata.ProfileID
 	if profileID == "" {
@@ -426,6 +431,7 @@ func doctorOperation(operation store.Operation, lock DoctorLock) DoctorOperation
 		BackupPath:        backupPath,
 		BackupID:          metadata.BackupID,
 		SourceOperationID: metadata.SourceOperationID,
+		RollbackKind:      metadata.RollbackKind,
 		ErrorCode:         operation.ErrorCode,
 		ErrorMessage:      redactSensitiveText(operation.ErrorMessage),
 		UpdatedAtUnixMS:   operation.UpdatedAtUnixMS,
@@ -453,7 +459,13 @@ func doctorOperation(operation store.Operation, lock DoctorLock) DoctorOperation
 		result.BackupPath = ""
 		result.BackupID = ""
 		result.SourceOperationID = ""
+		result.RollbackKind = ""
 		result.Reason = result.Reason + "_metadata_invalid"
+	}
+	if operation.OperationType == store.OperationTypeSwitch && operation.Status == store.OperationStatusFailed && !metadata.metadataDecodeFail && dbState.healthy && dbState.db != nil {
+		inspection := inspectFailedSwitchRecovery(ctx, dbState.db, paths, operation)
+		result.RecoveryStatus = inspection.Status
+		result.RecoveryReason = inspection.Reason
 	}
 	return result
 }
@@ -481,6 +493,7 @@ func parseDoctorOperationMetadata(raw string) doctorOperationMetadata {
 		CurrentBackupPath: stringMapValue(decoded, "current_backup_path"),
 		SourceOperationID: stringMapValue(decoded, "source_operation_id"),
 		BackupID:          stringMapValue(decoded, "backup_id"),
+		RollbackKind:      stringMapValue(decoded, "rollback_kind"),
 	}
 }
 

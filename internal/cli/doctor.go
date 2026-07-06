@@ -129,7 +129,17 @@ func doctorOperationErrorDetails(operation app.DoctorOperation) string {
 	if errorMessage == "" {
 		errorMessage = "-"
 	}
-	return fmt.Sprintf("\terror_code=%s\terror_message=%s", errorCode, errorMessage)
+	details := fmt.Sprintf("\terror_code=%s\terror_message=%s", errorCode, errorMessage)
+	if operation.RollbackKind != "" {
+		details += fmt.Sprintf("\trollback_kind=%s", doctorOutputField(operation.RollbackKind))
+	}
+	if operation.RecoveryStatus != "" {
+		details += fmt.Sprintf("\trecovery_status=%s", doctorOutputField(operation.RecoveryStatus))
+	}
+	if operation.RecoveryReason != "" {
+		details += fmt.Sprintf("\trecovery_reason=%s", doctorOutputField(operation.RecoveryReason))
+	}
+	return details
 }
 
 func doctorOutputField(value string) string {

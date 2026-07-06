@@ -91,6 +91,7 @@ type BackupEntrySummary struct {
 
 type rollbackOperationMetadata struct {
 	Checkpoint        string                   `json:"checkpoint"`
+	RollbackKind      string                   `json:"rollback_kind,omitempty"`
 	SourceOperationID string                   `json:"source_operation_id,omitempty"`
 	BackupID          string                   `json:"backup_id,omitempty"`
 	ProviderID        string                   `json:"provider_id,omitempty"`
