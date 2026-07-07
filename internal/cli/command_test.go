@@ -42,6 +42,9 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	if cmd.Command("switch") == nil {
 		t.Fatalf("expected switch subcommand")
 	}
+	if cmd.Command("usage") == nil {
+		t.Fatalf("expected usage subcommand")
+	}
 	if cmd.Command("plan") == nil {
 		t.Fatalf("expected plan subcommand")
 	}
@@ -204,6 +207,81 @@ func TestInitTwiceAndStatusJSONAfterInit(t *testing.T) {
 	}
 	if status.PendingOperations != 0 || status.FailedOperations != 0 {
 		t.Fatalf("expected no operations, got pending=%d failed=%d", status.PendingOperations, status.FailedOperations)
+	}
+}
+
+func TestUsageSyncCodexAndSummaryJSON(t *testing.T) {
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	writeCLIUsageFixture(t, codexDir, strings.Join([]string{
+		`{"type":"session_meta","session_id":"session-1"}`,
+		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3,"total_tokens":13},"prompt":"SECRET_PROMPT","api_key":"SECRET_KEY"}}}`,
+	}, "\n"))
+
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+
+	syncOut, err := runCLI(t, "--config-dir", configDir, "usage", "sync", "codex", "--codex-dir", codexDir, "--json")
+	if err != nil {
+		t.Fatalf("expected usage sync to succeed, got %v", err)
+	}
+	for _, forbidden := range []string{"SECRET_PROMPT", "SECRET_KEY", codexDir} {
+		if strings.Contains(syncOut, forbidden) {
+			t.Fatalf("expected usage sync output to exclude %q, got %q", forbidden, syncOut)
+		}
+	}
+	var syncResult app.UsageSyncResult
+	decodeCLIJSON(t, []byte(syncOut), &syncResult)
+	if syncResult.ImportedEvents != 1 || syncResult.ScannedFiles != 1 {
+		t.Fatalf("unexpected usage sync result: %#v", syncResult)
+	}
+
+	summaryOut, err := runCLI(t, "--config-dir", configDir, "usage", "summary", "--provider", "codex", "--json")
+	if err != nil {
+		t.Fatalf("expected usage summary to succeed, got %v", err)
+	}
+	for _, forbidden := range []string{"SECRET_PROMPT", "SECRET_KEY", codexDir} {
+		if strings.Contains(summaryOut, forbidden) {
+			t.Fatalf("expected usage summary output to exclude %q, got %q", forbidden, summaryOut)
+		}
+	}
+	var summary app.UsageSummaryResult
+	decodeCLIJSON(t, []byte(summaryOut), &summary)
+	if summary.EventCount != 1 || summary.InputTokens != 10 || summary.CachedInputTokens != 2 || summary.OutputTokens != 3 || summary.TotalTokens != 13 {
+		t.Fatalf("unexpected usage summary: %#v", summary)
+	}
+	if summary.CostStatus != "estimated" || summary.EstimatedCostUSD == nil {
+		t.Fatalf("expected estimated cost summary, got %#v", summary)
+	}
+}
+
+func TestUsageSyncCodexHumanOutputReportsOversizedLinesWithoutBlockingFile(t *testing.T) {
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	writeCLIUsageFixture(t, codexDir, strings.Repeat("x", 16*1024*1024+1))
+
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+
+	out, err := runCLI(t, "--config-dir", configDir, "usage", "sync", "codex", "--codex-dir", codexDir)
+	if err != nil {
+		t.Fatalf("expected usage sync to succeed with invalid line accounting, got %v", err)
+	}
+	for _, want := range []string{"invalid lines: 1", "errors: 0"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected usage sync output to contain %q, got %q", want, out)
+		}
+	}
+	for _, forbidden := range []string{"error details:", "token too long"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("expected usage sync output to exclude %q, got %q", forbidden, out)
+		}
+	}
+	if strings.Contains(out, codexDir) {
+		t.Fatalf("expected usage sync output to exclude full codex dir, got %q", out)
 	}
 }
 
@@ -992,6 +1070,17 @@ func insertFailedOperation(t *testing.T, databasePath string, operationID string
 	`, operationID)
 	if err != nil {
 		t.Fatalf("expected failed operation setup to succeed, got %v", err)
+	}
+}
+
+func writeCLIUsageFixture(t *testing.T, codexDir string, content string) {
+	t.Helper()
+	path := filepath.Join(codexDir, "sessions", "2026", "07", "06", "session.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("expected usage fixture dir setup to succeed, got %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("expected usage fixture write to succeed, got %v", err)
 	}
 }
 

@@ -40,8 +40,8 @@ func TestInitCreatesRuntimeAndDatabase(t *testing.T) {
 	if !result.Initialized || !result.SchemaHealthy {
 		t.Fatalf("expected initialized healthy result, got %#v", result)
 	}
-	if result.MigrationsApplied != 2 {
-		t.Fatalf("expected first init to apply two migrations, got %d", result.MigrationsApplied)
+	if result.MigrationsApplied != 3 {
+		t.Fatalf("expected first init to apply three migrations, got %d", result.MigrationsApplied)
 	}
 
 	for _, path := range []string{

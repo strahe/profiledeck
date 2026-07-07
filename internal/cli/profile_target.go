@@ -13,7 +13,6 @@ import (
 const (
 	formatFlagName    = "format"
 	pathFlagName      = "path"
-	providerFlagName  = "provider"
 	strategyFlagName  = "strategy"
 	valueJSONFlagName = "value-json"
 )

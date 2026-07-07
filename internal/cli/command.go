@@ -14,6 +14,7 @@ import (
 const (
 	configDirFlagName = "config-dir"
 	jsonFlagName      = "json"
+	providerFlagName  = "provider"
 )
 
 func NewCommand(info app.Info) *urfavecli.Command {
@@ -41,6 +42,7 @@ func NewCommand(info app.Info) *urfavecli.Command {
 			newRollbackCommand(),
 			newStatusCommand(),
 			newSwitchCommand(),
+			newUsageCommand(),
 			newVersionCommand(info),
 		},
 	}

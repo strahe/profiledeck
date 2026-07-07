@@ -42,6 +42,8 @@ const (
 	ErrorRecoveryUnsupported   ErrorCode = "RECOVERY_UNSUPPORTED"
 	ErrorTargetWriteFailed     ErrorCode = "TARGET_WRITE_FAILED"
 	ErrorLockRepairUnsafe      ErrorCode = "LOCK_REPAIR_UNSAFE"
+	ErrorUsageInvalid          ErrorCode = "USAGE_INVALID"
+	ErrorUsageImportFailed     ErrorCode = "USAGE_IMPORT_FAILED"
 )
 
 type AppError struct {
