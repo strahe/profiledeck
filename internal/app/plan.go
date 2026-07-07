@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/strahe/profiledeck/internal/codexconfig"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/targetfs"
 )
@@ -86,6 +87,8 @@ type applyPlanOperation struct {
 	PlanOperation
 	DesiredContent string
 	BeforeMode     os.FileMode
+	DesiredMode    os.FileMode
+	UseDesiredMode bool
 }
 
 type planAdapter interface {
@@ -97,10 +100,14 @@ type planAdapterInput struct {
 	Provider store.Provider
 	Profile  store.Profile
 	Targets  []store.ProfileTarget
+	// Store is provided to adapters that must materialize desired content from
+	// application-owned records while still leaving all writes to the switch pipeline.
+	Store *store.Store
 }
 
 var planAdapters = map[string]planAdapter{
-	"generic": genericPlanAdapter{},
+	"generic":             genericPlanAdapter{},
+	codexconfig.AdapterID: codexPlanAdapter{},
 }
 
 func BuildPlan(ctx context.Context, req BuildPlanRequest) (SwitchPlan, error) {
@@ -154,6 +161,7 @@ func buildApplyPlan(ctx context.Context, db *store.Store, providerID string, pro
 		Provider: provider,
 		Profile:  profile,
 		Targets:  targets,
+		Store:    db,
 	})
 	if err != nil {
 		var appErr *AppError

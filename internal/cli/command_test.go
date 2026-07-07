@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/codexconfig"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -29,6 +30,9 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	}
 	if cmd.Command("backup") == nil {
 		t.Fatalf("expected backup subcommand")
+	}
+	if cmd.Command("codex") == nil {
+		t.Fatalf("expected codex subcommand")
 	}
 	if cmd.Command("doctor") == nil {
 		t.Fatalf("expected doctor subcommand")
@@ -255,6 +259,260 @@ func TestUsageSyncCodexAndSummaryJSON(t *testing.T) {
 	if summary.CostStatus != "estimated" || summary.EstimatedCostUSD == nil {
 		t.Fatalf("expected estimated cost summary, got %#v", summary)
 	}
+}
+
+func TestUsageSyncCodexDefaultsToCodexHomeEnv(t *testing.T) {
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	t.Setenv("CODEX_HOME", codexDir)
+	writeCLIUsageFixture(t, codexDir, strings.Join([]string{
+		`{"type":"session_meta","session_id":"session-env"}`,
+		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7}}}}`,
+	}, "\n"))
+
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	out, err := runCLI(t, "--config-dir", configDir, "usage", "sync", "codex", "--json")
+	if err != nil {
+		t.Fatalf("expected usage sync with CODEX_HOME to succeed, got %v", err)
+	}
+	var result app.UsageSyncResult
+	decodeCLIJSON(t, []byte(out), &result)
+	if result.ScannedFiles != 1 || result.ImportedEvents != 1 {
+		t.Fatalf("expected CODEX_HOME usage file to be imported, got %#v", result)
+	}
+}
+
+func TestCodexDetectAndProfileSetPlanSwitchJSON(t *testing.T) {
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	configPath := filepath.Join(codexDir, codexconfig.ConfigFileName)
+	if err := os.WriteFile(configPath, []byte(strings.Join([]string{
+		`model = "old-model"`,
+		`openai_base_url = "https://old.example.test/v1"`,
+		`approval_policy = "never"`,
+		`api_key = "raw-secret"`,
+	}, "\n")), 0o600); err != nil {
+		t.Fatalf("expected Codex config setup to succeed, got %v", err)
+	}
+
+	out, err := runCLI(t, "--config-dir", configDir, "codex", "detect", "--codex-dir", codexDir, "--json")
+	if err != nil {
+		t.Fatalf("expected codex detect before init to succeed, got %v", err)
+	}
+	var detect app.CodexDetectResult
+	decodeCLIJSON(t, []byte(out), &detect)
+	if detect.ProfileDeckInitialized || detect.ConfigStatus != "valid" {
+		t.Fatalf("unexpected detect result before init: %#v", detect)
+	}
+
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	out, err = runCLI(t,
+		"--config-dir", configDir,
+		"codex", "profile", "set",
+		"--codex-dir", codexDir,
+		"--model", "gpt-5.3-codex",
+		"--name", "Work",
+		"work",
+		"--json",
+	)
+	if err != nil {
+		t.Fatalf("expected codex profile set to succeed, got %v", err)
+	}
+	var setResult app.CodexProfileSetResult
+	decodeCLIJSON(t, []byte(out), &setResult)
+	if setResult.Provider.ID != codexconfig.ProviderID || setResult.Profile.ID != "work" || setResult.Target.TargetID != codexconfig.TargetID {
+		t.Fatalf("unexpected codex profile set result: %#v", setResult)
+	}
+
+	out, err = runCLI(t, "--config-dir", configDir, "plan", codexconfig.ProviderID, "work", "--json")
+	if err != nil {
+		t.Fatalf("expected codex plan to succeed, got %v", err)
+	}
+	var plan app.SwitchPlan
+	decodeCLIJSON(t, []byte(out), &plan)
+	if len(plan.Operations) != 1 || plan.Operations[0].Action != "update" {
+		t.Fatalf("unexpected codex plan: %#v", plan)
+	}
+	if strings.Contains(out, "raw-secret") {
+		t.Fatalf("expected codex plan JSON to redact existing secret-looking values, got %q", out)
+	}
+
+	out, err = runCLI(t, "--config-dir", configDir, "switch", codexconfig.ProviderID, "work", "--yes", "--json")
+	if err != nil {
+		t.Fatalf("expected codex switch to succeed, got %v", err)
+	}
+	var switchResult app.ApplySwitchResult
+	decodeCLIJSON(t, []byte(out), &switchResult)
+	if switchResult.Status != store.OperationStatusApplied || switchResult.Counts.Update != 1 {
+		t.Fatalf("unexpected codex switch result: %#v", switchResult)
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("expected Codex config read to succeed, got %v", err)
+	}
+	for _, want := range []string{"gpt-5.3-codex", "model_provider", "openai", "approval_policy", "never"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("expected Codex config to contain %q, got %q", want, string(raw))
+		}
+	}
+	if strings.Contains(string(raw), "openai_base_url") || strings.Contains(string(raw), "old.example.test") {
+		t.Fatalf("expected omitted openai_base_url to remove stale value, got %q", string(raw))
+	}
+}
+
+func TestCodexProfileCaptureAndAccountCLIJSON(t *testing.T) {
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	configPath := filepath.Join(codexDir, codexconfig.ConfigFileName)
+	authPath := filepath.Join(codexDir, codexconfig.AuthFileName)
+	capturedConfig := `model = "gpt-5.3-codex"` + "\n"
+	capturedAuth := `{"tokens":{"account_id":"Team/Shared","access_token":"captured-secret","refresh_token":"captured-refresh"}}`
+	if err := os.WriteFile(configPath, []byte(capturedConfig), 0o600); err != nil {
+		t.Fatalf("expected Codex config setup to succeed, got %v", err)
+	}
+	if err := os.WriteFile(authPath, []byte(capturedAuth), 0o600); err != nil {
+		t.Fatalf("expected Codex auth setup to succeed, got %v", err)
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+
+	out, err := runCLI(t,
+		"--config-dir", configDir,
+		"codex", "profile", "capture", "work",
+		"--account", "local-work",
+		"--codex-dir", codexDir,
+		"--json",
+	)
+	if err != nil {
+		t.Fatalf("expected codex profile capture to succeed, got %v", err)
+	}
+	if strings.Contains(out, "captured-secret") || strings.Contains(out, "captured-refresh") {
+		t.Fatalf("expected capture output to redact raw auth, got %q", out)
+	}
+	var capture app.CodexProfileCaptureResult
+	decodeCLIJSON(t, []byte(out), &capture)
+	if capture.Account.AccountID != "local-work" || capture.AuthTarget.TargetID != codexconfig.AuthTargetID || capture.Account.Metadata["codex_account_id"] != "Team/Shared" {
+		t.Fatalf("unexpected capture result: %#v", capture)
+	}
+
+	for _, args := range [][]string{
+		{"--config-dir", configDir, "codex", "account", "list", "--json"},
+		{"--config-dir", configDir, "codex", "account", "show", "local-work", "--json"},
+	} {
+		out, err := runCLI(t, args...)
+		if err != nil {
+			t.Fatalf("expected account command %v to succeed, got %v", args, err)
+		}
+		if strings.Contains(out, "captured-secret") || strings.Contains(out, "captured-refresh") {
+			t.Fatalf("expected account output to exclude raw auth, got %q", out)
+		}
+	}
+
+	exportPath := filepath.Join(t.TempDir(), "auth.json")
+	out, err = runCLI(t,
+		"--config-dir", configDir,
+		"codex", "account", "export", "local-work",
+		"--output", exportPath,
+		"--json",
+	)
+	if err != nil {
+		t.Fatalf("expected account export to succeed, got %v", err)
+	}
+	if strings.Contains(out, "captured-secret") {
+		t.Fatalf("expected export output to exclude raw auth, got %q", out)
+	}
+	if got := string(mustReadFile(t, exportPath)); got != capturedAuth {
+		t.Fatalf("expected exported raw auth JSON, got %q", got)
+	}
+	editedAuth := `{"tokens":{"account_id":"Team/Shared","access_token":"edited-secret"}}`
+	if err := os.WriteFile(exportPath, []byte(editedAuth), 0o600); err != nil {
+		t.Fatalf("expected exported auth edit to succeed, got %v", err)
+	}
+	out, err = runCLI(t,
+		"--config-dir", configDir,
+		"codex", "account", "import", "edited-local",
+		"--auth-file", exportPath,
+		"--json",
+	)
+	if err != nil {
+		t.Fatalf("expected account import to succeed, got %v", err)
+	}
+	if strings.Contains(out, "edited-secret") {
+		t.Fatalf("expected import output to exclude raw auth, got %q", out)
+	}
+
+	if err := os.WriteFile(configPath, []byte(`model = "other"`+"\n"), 0o600); err != nil {
+		t.Fatalf("expected config mutation to succeed, got %v", err)
+	}
+	if err := os.WriteFile(authPath, []byte(`{"unknown_auth_shape":"live-secret"}`), 0o600); err != nil {
+		t.Fatalf("expected auth mutation to succeed, got %v", err)
+	}
+	out, err = runCLI(t, "--config-dir", configDir, "plan", codexconfig.ProviderID, "work", "--json")
+	if err != nil {
+		t.Fatalf("expected codex plan to succeed, got %v", err)
+	}
+	if strings.Contains(out, "captured-secret") || strings.Contains(out, "live-secret") {
+		t.Fatalf("expected plan output to redact raw auth, got %q", out)
+	}
+	out, err = runCLI(t, "--config-dir", configDir, "switch", codexconfig.ProviderID, "work", "--yes", "--json")
+	if err != nil {
+		t.Fatalf("expected codex switch to succeed, got %v", err)
+	}
+	if strings.Contains(out, "captured-secret") || strings.Contains(out, "live-secret") {
+		t.Fatalf("expected switch output to redact raw auth, got %q", out)
+	}
+	if got := string(mustReadFile(t, authPath)); got != capturedAuth {
+		t.Fatalf("expected switch to restore captured auth, got %q", got)
+	}
+	if got := string(mustReadFile(t, configPath)); got != capturedConfig {
+		t.Fatalf("expected switch to restore captured config, got %q", got)
+	}
+}
+
+func TestCodexProfileCaptureUsesProfileIDAsLocalAccountByDefault(t *testing.T) {
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.ConfigFileName), []byte(`model = "gpt-5.3-codex"`+"\n"), 0o600); err != nil {
+		t.Fatalf("expected Codex config setup to succeed, got %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.AuthFileName), []byte(`{"tokens":{"account_id":"auth-account","access_token":"captured-secret"}}`), 0o600); err != nil {
+		t.Fatalf("expected Codex auth setup to succeed, got %v", err)
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+
+	out, err := runCLI(t,
+		"--config-dir", configDir,
+		"codex", "profile", "capture", "team-zhu",
+		"--codex-dir", codexDir,
+		"--json",
+	)
+	if err != nil {
+		t.Fatalf("expected codex profile capture with default account to succeed, got %v", err)
+	}
+	var capture app.CodexProfileCaptureResult
+	decodeCLIJSON(t, []byte(out), &capture)
+	if capture.Profile.ID != "team-zhu" || capture.Account.AccountID != "team-zhu" {
+		t.Fatalf("expected profile id to be the default local account id, got %#v", capture)
+	}
+	if capture.Account.Metadata["codex_account_id"] != "auth-account" {
+		t.Fatalf("expected Codex account id to be stored as metadata, got %#v", capture.Account.Metadata)
+	}
+
+	_, err = runCLI(t,
+		"--config-dir", configDir,
+		"codex", "profile", "capture", "team-zhu", "team-zhu",
+		"--codex-dir", codexDir,
+		"--json",
+	)
+	assertCLIAppErrorCode(t, err, app.ErrorProfileInvalid)
 }
 
 func TestUsageSyncCodexHumanOutputReportsOversizedLinesWithoutBlockingFile(t *testing.T) {
@@ -1047,13 +1305,20 @@ func assertCLIAppErrorCode(t *testing.T, err error, code app.ErrorCode) {
 func assertFileString(t *testing.T, path string, expected string) {
 	t.Helper()
 
+	raw := mustReadFile(t, path)
+	if string(raw) != expected {
+		t.Fatalf("expected file %s content %q, got %q", path, expected, string(raw))
+	}
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("expected file read to succeed, got %v", err)
 	}
-	if string(raw) != expected {
-		t.Fatalf("expected file %s content %q, got %q", path, expected, string(raw))
-	}
+	return raw
 }
 
 func insertFailedOperation(t *testing.T, databasePath string, operationID string) {

@@ -44,6 +44,7 @@ const (
 	ErrorLockRepairUnsafe      ErrorCode = "LOCK_REPAIR_UNSAFE"
 	ErrorUsageInvalid          ErrorCode = "USAGE_INVALID"
 	ErrorUsageImportFailed     ErrorCode = "USAGE_IMPORT_FAILED"
+	ErrorCodexInvalid          ErrorCode = "CODEX_INVALID"
 )
 
 type AppError struct {

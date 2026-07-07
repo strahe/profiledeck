@@ -675,6 +675,8 @@ func createRollbackCurrentBackup(ctx context.Context, paths runtime.Paths, opera
 	if err := os.MkdirAll(filesPath, 0o700); err != nil {
 		return switchBackup{}, WrapError(ErrorBackupFailed, "failed to create rollback backup directory", err).WithDetail("path", backupPath)
 	}
+	chmodBestEffort(backupPath, 0o700)
+	chmodBestEffort(filesPath, 0o700)
 
 	backup := switchBackup{Path: backupPath, Entries: []switchBackupEntry{}}
 	for _, target := range source.Targets {

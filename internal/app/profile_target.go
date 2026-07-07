@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/strahe/profiledeck/internal/codexconfig"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -593,7 +594,7 @@ func profileTargetFromStore(target store.ProfileTarget) (ProfileTarget, error) {
 	if err != nil {
 		return ProfileTarget{}, err
 	}
-	preview, err := targetValuePreview(target.Format, target.Strategy, target.ValueJSON)
+	preview, err := targetValuePreview(target.ProviderID, target.TargetID, target.Format, target.Strategy, target.ValueJSON)
 	if err != nil {
 		return ProfileTarget{}, err
 	}
@@ -612,10 +613,13 @@ func profileTargetFromStore(target store.ProfileTarget) (ProfileTarget, error) {
 	}, nil
 }
 
-func targetValuePreview(format string, strategy string, raw string) (TextPreview, error) {
+func targetValuePreview(providerID string, targetID string, format string, strategy string, raw string) (TextPreview, error) {
 	value, appErr := decodeSingleJSONObject(raw, ErrorStoreSchemaInvalid, "stored value_json")
 	if appErr != nil {
 		return TextPreview{}, appErr
+	}
+	if providerID == codexconfig.ProviderID && targetID == codexconfig.AuthTargetID {
+		return codexAuthTargetValuePreview(value)
 	}
 	if strategy == targetStrategyReplaceFile {
 		return replaceFileTargetValuePreview(value)
@@ -624,6 +628,18 @@ func targetValuePreview(format string, strategy string, raw string) (TextPreview
 	rawPreview, err := marshalJSONNoEscape(redacted)
 	if err != nil {
 		return TextPreview{}, WrapError(ErrorStoreSchemaInvalid, "failed to encode target value preview", err)
+	}
+	return truncatePreview(string(rawPreview)), nil
+}
+
+func codexAuthTargetValuePreview(value map[string]any) (TextPreview, error) {
+	accountID, ok := value["account_id"].(string)
+	if !ok || strings.TrimSpace(accountID) == "" || len(value) != 1 {
+		return TextPreview{}, NewError(ErrorStoreSchemaInvalid, `stored Codex auth target value_json must be {"account_id": string}`)
+	}
+	rawPreview, err := marshalJSONNoEscape(map[string]any{"account_id": accountID})
+	if err != nil {
+		return TextPreview{}, WrapError(ErrorStoreSchemaInvalid, "failed to encode Codex auth target value preview", err)
 	}
 	return truncatePreview(string(rawPreview)), nil
 }

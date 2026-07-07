@@ -6,10 +6,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/strahe/profiledeck/internal/codexconfig"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/targetfs"
 )
@@ -641,6 +643,44 @@ func TestDoctorRefusesUnsafeLocks(t *testing.T) {
 	})
 }
 
+func TestDoctorWarnsAboutWeakCodexAuthPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode checks do not apply on Windows")
+	}
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	authPath := filepath.Join(codexDir, codexconfig.AuthFileName)
+	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.ConfigFileName), []byte(`model = "gpt-5.3-codex"`+"\n"), 0o600); err != nil {
+		t.Fatalf("expected Codex config setup to succeed, got %v", err)
+	}
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"account_id":"work-account","access_token":"secret"}}`), 0o600); err != nil {
+		t.Fatalf("expected Codex auth setup to succeed, got %v", err)
+	}
+	if err := os.Chmod(authPath, 0o644); err != nil {
+		t.Fatalf("expected Codex auth chmod setup to succeed, got %v", err)
+	}
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	if _, err := CodexProfileCapture(ctx, CodexProfileCaptureRequest{
+		ConfigDir: configDir,
+		CodexDir:  codexDir,
+		ProfileID: "work",
+		AccountID: "work-account",
+	}); err != nil {
+		t.Fatalf("expected Codex capture to succeed, got %v", err)
+	}
+
+	result, err := Doctor(ctx, DoctorRequest{ConfigDir: configDir})
+	if err != nil {
+		t.Fatalf("expected doctor to succeed, got %v", err)
+	}
+	if !hasDoctorFinding(result.Findings, "codex_auth_target_permissions_weak") {
+		t.Fatalf("expected weak Codex auth permission warning, got %#v", result.Findings)
+	}
+}
+
 func writeTestLockFile(t *testing.T, path string, owner string, pid int) {
 	t.Helper()
 
@@ -660,4 +700,13 @@ func doctorTestOperationByID(t *testing.T, operations []DoctorOperation, id stri
 	}
 	t.Fatalf("expected doctor operation %s in %#v", id, operations)
 	return DoctorOperation{}
+}
+
+func hasDoctorFinding(findings []DoctorFinding, id string) bool {
+	for _, finding := range findings {
+		if finding.ID == id {
+			return true
+		}
+	}
+	return false
 }

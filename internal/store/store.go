@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"time"
@@ -34,6 +35,11 @@ const (
 
 	UsageCostStatusEstimated = "estimated"
 	UsageCostStatusUnknown   = "unknown"
+
+	// provider_account_secrets intentionally constrains secret_kind in v1;
+	// adding another kind requires a schema migration and explicit validation.
+	providerAccountSecretKindCodexAuthJSON = "codex-auth-json"
+	maxProviderAccountSecretPayloadBytes   = 16 * 1024 * 1024
 )
 
 var (
@@ -46,7 +52,15 @@ var (
 const profileTargetPathOwnerMessage = "profile target path is owned by another provider target"
 
 type Store struct {
-	db *bun.DB
+	db            *bun.DB
+	exec          dbExecutor
+	transactional bool
+}
+
+type dbExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 type Provider struct {
@@ -150,6 +164,18 @@ type UsageImportCursor struct {
 	MetadataJSON     string
 	CreatedAtUnixMS  int64
 	UpdatedAtUnixMS  int64
+}
+
+type ProviderAccountSecret struct {
+	ProviderID      string
+	AccountID       string
+	SecretKind      string
+	PayloadJSON     string
+	PayloadSHA256   string
+	DisplayName     string
+	MetadataJSON    string
+	CreatedAtUnixMS int64
+	UpdatedAtUnixMS int64
 }
 
 type CreateProfileParams struct {
@@ -263,6 +289,16 @@ type UpsertUsageImportCursorParams struct {
 	InvalidLines     int64
 	UnsupportedLines int64
 	MetadataJSON     string
+}
+
+type UpsertProviderAccountSecretParams struct {
+	ProviderID    string
+	AccountID     string
+	SecretKind    string
+	PayloadJSON   string
+	PayloadSHA256 string
+	DisplayName   string
+	MetadataJSON  string
 }
 
 type UsageSummary struct {
@@ -460,6 +496,23 @@ var initialTableSpecs = []tableSpec{
 			"CHECK (unsupported_lines >= 0)",
 		},
 	},
+	{
+		name: "provider_account_secrets",
+		columns: []columnSpec{
+			{name: "provider_id", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "account_id", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "secret_kind", columnType: "TEXT", notNull: true},
+			{name: "payload_json", columnType: "TEXT", notNull: true},
+			{name: "payload_sha256", columnType: "TEXT", notNull: true},
+			{name: "display_name", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
+			{name: "metadata_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
+			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
+			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
+		},
+		checks: []string{
+			"CHECK (secret_kind IN ('codex-auth-json'))",
+		},
+	},
 }
 
 var initialIndexSpecs = []indexSpec{
@@ -478,6 +531,7 @@ var initialIndexSpecs = []indexSpec{
 	{name: "idx_usage_events_occurred_at", table: "usage_events", columns: []string{"occurred_at_unix_ms"}},
 	{name: "idx_usage_events_cost_status", table: "usage_events", columns: []string{"cost_status"}},
 	{name: "idx_usage_import_cursors_source", table: "usage_import_cursors", columns: []string{"source"}},
+	{name: "idx_provider_account_secrets_secret_kind", table: "provider_account_secrets", columns: []string{"secret_kind"}},
 }
 
 var initialTriggerSpecs = []triggerSpec{
@@ -522,7 +576,8 @@ func Open(ctx context.Context, databasePath string, readOnly bool) (*Store, erro
 	}
 
 	return &Store{
-		db: bun.NewDB(sqlDB, sqlitedialect.New()),
+		db:   bun.NewDB(sqlDB, sqlitedialect.New()),
+		exec: sqlDB,
 	}, nil
 }
 
@@ -530,7 +585,47 @@ func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
+	if s.transactional {
+		return nil
+	}
 	return s.db.Close()
+}
+
+func (s *Store) WithTransaction(ctx context.Context, fn func(txStore *Store) error) error {
+	if s.transactional {
+		return errors.New("nested store transactions are not supported")
+	}
+	tx, err := s.db.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	txStore := &Store{
+		db:            s.db,
+		exec:          tx,
+		transactional: true,
+	}
+	if err := fn(txStore); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (s *Store) executor() dbExecutor {
+	if s.exec != nil {
+		return s.exec
+	}
+	return s.db.DB
 }
 
 func (s *Store) Migrate(ctx context.Context) (MigrationResult, error) {
@@ -587,7 +682,7 @@ func (s *Store) ListProviders(ctx context.Context, includeDisabled bool) ([]Prov
 	}
 	query += " ORDER BY id ASC"
 
-	rows, err := s.db.DB.QueryContext(ctx, query, args...)
+	rows, err := s.executor().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -608,7 +703,7 @@ func (s *Store) ListProviders(ctx context.Context, includeDisabled bool) ([]Prov
 }
 
 func (s *Store) GetProvider(ctx context.Context, id string) (Provider, error) {
-	row := s.db.DB.QueryRowContext(
+	row := s.executor().QueryRowContext(
 		ctx,
 		`SELECT id, name, adapter_id, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms
 		FROM providers
@@ -628,7 +723,7 @@ func (s *Store) CreateProvider(ctx context.Context, params CreateProviderParams)
 	if params.Enabled {
 		enabled = 1
 	}
-	_, err := s.db.DB.ExecContext(
+	_, err := s.executor().ExecContext(
 		ctx,
 		`INSERT INTO providers
 			(id, name, adapter_id, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms)
@@ -679,7 +774,7 @@ func (s *Store) UpdateProvider(ctx context.Context, params UpdateProviderParams)
 	assignments = append(assignments, "updated_at_unix_ms = ?")
 	args = append(args, time.Now().UnixMilli(), params.ID)
 
-	result, err := s.db.DB.ExecContext(
+	result, err := s.executor().ExecContext(
 		ctx,
 		`UPDATE providers SET `+strings.Join(assignments, ", ")+` WHERE id = ?`,
 		args...,
@@ -705,7 +800,7 @@ func (s *Store) DeleteProvider(ctx context.Context, id string) error {
 		return ErrInUse
 	}
 
-	result, err := s.db.DB.ExecContext(ctx, `
+	result, err := s.executor().ExecContext(ctx, `
 		DELETE FROM providers
 		WHERE id = ?
 			AND NOT EXISTS (SELECT 1 FROM profile_targets WHERE provider_id = ?)
@@ -733,7 +828,7 @@ func (s *Store) DeleteProvider(ctx context.Context, id string) error {
 }
 
 func (s *Store) ListProfiles(ctx context.Context) ([]Profile, error) {
-	rows, err := s.db.DB.QueryContext(
+	rows, err := s.executor().QueryContext(
 		ctx,
 		`SELECT id, name, description, metadata_json, created_at_unix_ms, updated_at_unix_ms
 		FROM profiles
@@ -759,7 +854,7 @@ func (s *Store) ListProfiles(ctx context.Context) ([]Profile, error) {
 }
 
 func (s *Store) GetProfile(ctx context.Context, id string) (Profile, error) {
-	row := s.db.DB.QueryRowContext(
+	row := s.executor().QueryRowContext(
 		ctx,
 		`SELECT id, name, description, metadata_json, created_at_unix_ms, updated_at_unix_ms
 		FROM profiles
@@ -775,7 +870,7 @@ func (s *Store) GetProfile(ctx context.Context, id string) (Profile, error) {
 
 func (s *Store) CreateProfile(ctx context.Context, params CreateProfileParams) (Profile, error) {
 	now := time.Now().UnixMilli()
-	_, err := s.db.DB.ExecContext(
+	_, err := s.executor().ExecContext(
 		ctx,
 		`INSERT INTO profiles
 			(id, name, description, metadata_json, created_at_unix_ms, updated_at_unix_ms)
@@ -817,7 +912,7 @@ func (s *Store) UpdateProfile(ctx context.Context, params UpdateProfileParams) (
 	assignments = append(assignments, "updated_at_unix_ms = ?")
 	args = append(args, time.Now().UnixMilli(), params.ID)
 
-	result, err := s.db.DB.ExecContext(
+	result, err := s.executor().ExecContext(
 		ctx,
 		`UPDATE profiles SET `+strings.Join(assignments, ", ")+` WHERE id = ?`,
 		args...,
@@ -832,7 +927,7 @@ func (s *Store) UpdateProfile(ctx context.Context, params UpdateProfileParams) (
 }
 
 func (s *Store) DeleteProfile(ctx context.Context, id string) error {
-	result, err := s.db.DB.ExecContext(ctx, `
+	result, err := s.executor().ExecContext(ctx, `
 		DELETE FROM profiles
 		WHERE id = ?
 			AND NOT EXISTS (SELECT 1 FROM active_states WHERE profile_id = ?)
@@ -870,7 +965,7 @@ func (s *Store) CreateProfileTarget(ctx context.Context, params CreateProfileTar
 	if pathKey == "" {
 		pathKey = params.Path
 	}
-	_, err := s.db.DB.ExecContext(
+	_, err := s.executor().ExecContext(
 		ctx,
 		`INSERT INTO profile_targets
 			(profile_id, provider_id, target_id, path, path_key, format, strategy, value_json, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms)
@@ -914,7 +1009,35 @@ func (s *Store) ListProfileTargets(ctx context.Context, profileID string, provid
 	}
 	query += " ORDER BY provider_id ASC, target_id ASC"
 
-	rows, err := s.db.DB.QueryContext(ctx, query, args...)
+	rows, err := s.executor().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var targets []ProfileTarget
+	for rows.Next() {
+		target, err := scanProfileTarget(rows)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
+func (s *Store) ListProfileTargetsByProvider(ctx context.Context, providerID string) ([]ProfileTarget, error) {
+	rows, err := s.executor().QueryContext(
+		ctx,
+		`SELECT profile_id, provider_id, target_id, path, path_key, format, strategy, value_json, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		FROM profile_targets
+		WHERE provider_id = ?
+		ORDER BY profile_id ASC, target_id ASC`,
+		providerID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -935,7 +1058,7 @@ func (s *Store) ListProfileTargets(ctx context.Context, profileID string, provid
 }
 
 func (s *Store) ListProfileTargetsByPathKey(ctx context.Context, pathKey string) ([]ProfileTarget, error) {
-	rows, err := s.db.DB.QueryContext(
+	rows, err := s.executor().QueryContext(
 		ctx,
 		`SELECT profile_id, provider_id, target_id, path, path_key, format, strategy, value_json, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms
 		FROM profile_targets
@@ -963,7 +1086,7 @@ func (s *Store) ListProfileTargetsByPathKey(ctx context.Context, pathKey string)
 }
 
 func (s *Store) GetProfileTarget(ctx context.Context, profileID string, providerID string, targetID string) (ProfileTarget, error) {
-	row := s.db.DB.QueryRowContext(
+	row := s.executor().QueryRowContext(
 		ctx,
 		`SELECT profile_id, provider_id, target_id, path, path_key, format, strategy, value_json, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms
 		FROM profile_targets
@@ -1022,7 +1145,7 @@ func (s *Store) UpdateProfileTarget(ctx context.Context, params UpdateProfileTar
 	assignments = append(assignments, "updated_at_unix_ms = ?")
 	args = append(args, time.Now().UnixMilli(), params.ProfileID, params.ProviderID, params.TargetID)
 
-	result, err := s.db.DB.ExecContext(
+	result, err := s.executor().ExecContext(
 		ctx,
 		`UPDATE profile_targets SET `+strings.Join(assignments, ", ")+` WHERE profile_id = ? AND provider_id = ? AND target_id = ?`,
 		args...,
@@ -1040,7 +1163,7 @@ func (s *Store) UpdateProfileTarget(ctx context.Context, params UpdateProfileTar
 }
 
 func (s *Store) DeleteProfileTarget(ctx context.Context, profileID string, providerID string, targetID string) error {
-	result, err := s.db.DB.ExecContext(
+	result, err := s.executor().ExecContext(
 		ctx,
 		"DELETE FROM profile_targets WHERE profile_id = ? AND provider_id = ? AND target_id = ?",
 		profileID,
@@ -1056,9 +1179,128 @@ func (s *Store) DeleteProfileTarget(ctx context.Context, profileID string, provi
 	return nil
 }
 
+func (s *Store) UpsertProviderAccountSecret(ctx context.Context, params UpsertProviderAccountSecretParams) (ProviderAccountSecret, error) {
+	if err := validateProviderAccountSecretParams(params); err != nil {
+		return ProviderAccountSecret{}, err
+	}
+	accountID := strings.TrimSpace(params.AccountID)
+	now := time.Now().UnixMilli()
+	metadataJSON := params.MetadataJSON
+	if metadataJSON == "" {
+		metadataJSON = "{}"
+	}
+	_, err := s.executor().ExecContext(
+		ctx,
+		`INSERT INTO provider_account_secrets
+			(provider_id, account_id, secret_kind, payload_json, payload_sha256, display_name, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(provider_id, account_id) DO UPDATE SET
+			secret_kind = excluded.secret_kind,
+			payload_json = excluded.payload_json,
+			payload_sha256 = excluded.payload_sha256,
+			display_name = excluded.display_name,
+			metadata_json = excluded.metadata_json,
+			updated_at_unix_ms = excluded.updated_at_unix_ms`,
+		params.ProviderID,
+		accountID,
+		params.SecretKind,
+		params.PayloadJSON,
+		params.PayloadSHA256,
+		params.DisplayName,
+		metadataJSON,
+		now,
+		now,
+	)
+	if err != nil {
+		return ProviderAccountSecret{}, err
+	}
+	return s.GetProviderAccountSecret(ctx, params.ProviderID, accountID)
+}
+
+func validateProviderAccountSecretParams(params UpsertProviderAccountSecretParams) error {
+	if strings.TrimSpace(params.AccountID) == "" {
+		return fmt.Errorf("provider account secret account_id is required")
+	}
+	if params.SecretKind != providerAccountSecretKindCodexAuthJSON {
+		return fmt.Errorf("unsupported provider account secret kind: %s", params.SecretKind)
+	}
+	if len(params.PayloadJSON) > maxProviderAccountSecretPayloadBytes {
+		return fmt.Errorf("provider account secret payload is too large")
+	}
+	decoder := json.NewDecoder(strings.NewReader(params.PayloadJSON))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Errorf("provider account secret payload must be a JSON object")
+	}
+	tokens, ok := object["tokens"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("provider account secret payload must contain tokens.account_id")
+	}
+	payloadAccountID, ok := tokens["account_id"].(string)
+	if !ok || strings.TrimSpace(payloadAccountID) == "" {
+		return fmt.Errorf("provider account secret payload must contain tokens.account_id")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err == nil {
+		return fmt.Errorf("provider account secret payload must contain one JSON object")
+	} else if !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) GetProviderAccountSecret(ctx context.Context, providerID string, accountID string) (ProviderAccountSecret, error) {
+	row := s.executor().QueryRowContext(
+		ctx,
+		`SELECT provider_id, account_id, secret_kind, payload_json, payload_sha256, display_name, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		FROM provider_account_secrets
+		WHERE provider_id = ? AND account_id = ?`,
+		providerID,
+		accountID,
+	)
+	secret, err := scanProviderAccountSecret(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ProviderAccountSecret{}, ErrNotFound
+	}
+	return secret, err
+}
+
+func (s *Store) ListProviderAccountSecrets(ctx context.Context, providerID string) ([]ProviderAccountSecret, error) {
+	rows, err := s.executor().QueryContext(
+		ctx,
+		`SELECT provider_id, account_id, secret_kind, payload_json, payload_sha256, display_name, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		FROM provider_account_secrets
+		WHERE provider_id = ?
+		ORDER BY account_id ASC`,
+		providerID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	secrets := []ProviderAccountSecret{}
+	for rows.Next() {
+		secret, err := scanProviderAccountSecret(rows)
+		if err != nil {
+			return nil, err
+		}
+		secrets = append(secrets, secret)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return secrets, nil
+}
+
 func (s *Store) CreatePendingSwitchOperation(ctx context.Context, params CreateSwitchOperationParams) (Operation, error) {
 	now := time.Now().UnixMilli()
-	_, err := s.db.DB.ExecContext(
+	_, err := s.executor().ExecContext(
 		ctx,
 		`INSERT INTO operations
 			(id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
@@ -1082,7 +1324,7 @@ func (s *Store) CreatePendingSwitchOperation(ctx context.Context, params CreateS
 
 func (s *Store) CreatePendingRollbackOperation(ctx context.Context, params CreateRollbackOperationParams) (Operation, error) {
 	now := time.Now().UnixMilli()
-	_, err := s.db.DB.ExecContext(
+	_, err := s.executor().ExecContext(
 		ctx,
 		`INSERT INTO operations
 			(id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
@@ -1105,7 +1347,7 @@ func (s *Store) CreatePendingRollbackOperation(ctx context.Context, params Creat
 }
 
 func (s *Store) GetOperation(ctx context.Context, id string) (Operation, error) {
-	row := s.db.DB.QueryRowContext(
+	row := s.executor().QueryRowContext(
 		ctx,
 		`SELECT id, operation_type, status, profile_id, metadata_json, error_code, error_message, created_at_unix_ms, updated_at_unix_ms
 		FROM operations
@@ -1120,7 +1362,7 @@ func (s *Store) GetOperation(ctx context.Context, id string) (Operation, error) 
 }
 
 func (s *Store) ListIncompleteOperations(ctx context.Context) ([]Operation, error) {
-	rows, err := s.db.DB.QueryContext(
+	rows, err := s.executor().QueryContext(
 		ctx,
 		`SELECT id, operation_type, status, profile_id, metadata_json, error_code, error_message, created_at_unix_ms, updated_at_unix_ms
 		FROM operations
@@ -1149,7 +1391,7 @@ func (s *Store) ListIncompleteOperations(ctx context.Context) ([]Operation, erro
 }
 
 func (s *Store) UpdateOperationMetadata(ctx context.Context, id string, metadataJSON string) error {
-	result, err := s.db.DB.ExecContext(
+	result, err := s.executor().ExecContext(
 		ctx,
 		`UPDATE operations
 		SET metadata_json = ?, updated_at_unix_ms = ?
@@ -1181,7 +1423,7 @@ func (s *Store) MarkOperationFailed(ctx context.Context, params MarkOperationFai
 	assignments = append(assignments, "updated_at_unix_ms = ?")
 	args = append(args, time.Now().UnixMilli(), params.ID)
 
-	result, err := s.db.DB.ExecContext(
+	result, err := s.executor().ExecContext(
 		ctx,
 		`UPDATE operations SET `+strings.Join(assignments, ", ")+` WHERE id = ?`,
 		args...,
@@ -1325,7 +1567,7 @@ func (s *Store) CompleteRollbackOperation(ctx context.Context, params CompleteRo
 }
 
 func (s *Store) GetActiveState(ctx context.Context, scopeType string, scopeID string) (ActiveState, error) {
-	row := s.db.DB.QueryRowContext(
+	row := s.executor().QueryRowContext(
 		ctx,
 		`SELECT scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms
 		FROM active_states
@@ -1418,7 +1660,7 @@ func (s *Store) InsertUsageEvents(ctx context.Context, events []CreateUsageEvent
 }
 
 func (s *Store) GetUsageImportCursor(ctx context.Context, providerID string, source string, sourceKey string) (UsageImportCursor, error) {
-	row := s.db.DB.QueryRowContext(
+	row := s.executor().QueryRowContext(
 		ctx,
 		`SELECT provider_id, source, source_key, modified_unix_ms, size_bytes,
 			imported_events, invalid_lines, unsupported_lines, metadata_json, created_at_unix_ms, updated_at_unix_ms
@@ -1441,7 +1683,7 @@ func (s *Store) UpsertUsageImportCursor(ctx context.Context, params UpsertUsageI
 	if metadataJSON == "" {
 		metadataJSON = "{}"
 	}
-	_, err := s.db.DB.ExecContext(
+	_, err := s.executor().ExecContext(
 		ctx,
 		`INSERT INTO usage_import_cursors
 			(provider_id, source, source_key, modified_unix_ms, size_bytes,
@@ -1471,7 +1713,7 @@ func (s *Store) UpsertUsageImportCursor(ctx context.Context, params UpsertUsageI
 }
 
 func (s *Store) UsageSummary(ctx context.Context, providerID string) (UsageSummary, error) {
-	row := s.db.DB.QueryRowContext(
+	row := s.executor().QueryRowContext(
 		ctx,
 		`SELECT
 			COUNT(1),
@@ -1510,7 +1752,7 @@ func (s *Store) UsageSummary(ctx context.Context, providerID string) (UsageSumma
 }
 
 func (s *Store) usageSummarySources(ctx context.Context, providerID string) ([]string, error) {
-	rows, err := s.db.DB.QueryContext(
+	rows, err := s.executor().QueryContext(
 		ctx,
 		`SELECT DISTINCT source
 		FROM usage_events
@@ -1539,7 +1781,7 @@ func (s *Store) usageSummarySources(ctx context.Context, providerID string) ([]s
 
 func (s *Store) CountProviderTargetReferences(ctx context.Context, providerID string) (int, error) {
 	var count int
-	err := s.db.DB.QueryRowContext(
+	err := s.executor().QueryRowContext(
 		ctx,
 		"SELECT COUNT(1) FROM profile_targets WHERE provider_id = ?",
 		providerID,
@@ -1552,7 +1794,7 @@ func (s *Store) CountProviderTargetReferences(ctx context.Context, providerID st
 
 func (s *Store) CountProfileTargetReferences(ctx context.Context, profileID string) (int, error) {
 	var count int
-	err := s.db.DB.QueryRowContext(
+	err := s.executor().QueryRowContext(
 		ctx,
 		"SELECT COUNT(1) FROM profile_targets WHERE profile_id = ?",
 		profileID,
@@ -1690,7 +1932,7 @@ func (s *Store) tableSchemaHealthy(ctx context.Context, spec tableSpec) (bool, e
 func (s *Store) triggerSchemaHealthy(ctx context.Context, spec triggerSpec) (bool, error) {
 	var table string
 	var sqlText string
-	err := s.db.DB.QueryRowContext(
+	err := s.executor().QueryRowContext(
 		ctx,
 		"SELECT tbl_name, sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
 		spec.name,
@@ -1714,7 +1956,7 @@ func (s *Store) triggerSchemaHealthy(ctx context.Context, spec triggerSpec) (boo
 }
 
 func (s *Store) indexExistsOnTable(ctx context.Context, table string, index string) (bool, bool, error) {
-	rows, err := s.db.DB.QueryContext(ctx, fmt.Sprintf("PRAGMA index_list(%s)", quoteSQLiteIdentifier(table)))
+	rows, err := s.executor().QueryContext(ctx, fmt.Sprintf("PRAGMA index_list(%s)", quoteSQLiteIdentifier(table)))
 	if err != nil {
 		return false, false, err
 	}
@@ -1740,7 +1982,7 @@ func (s *Store) indexExistsOnTable(ctx context.Context, table string, index stri
 }
 
 func (s *Store) indexColumns(ctx context.Context, index string) ([]string, error) {
-	rows, err := s.db.DB.QueryContext(ctx, fmt.Sprintf("PRAGMA index_info(%s)", quoteSQLiteIdentifier(index)))
+	rows, err := s.executor().QueryContext(ctx, fmt.Sprintf("PRAGMA index_info(%s)", quoteSQLiteIdentifier(index)))
 	if err != nil {
 		return nil, err
 	}
@@ -1766,7 +2008,7 @@ func (s *Store) indexColumns(ctx context.Context, index string) ([]string, error
 }
 
 func (s *Store) tableColumns(ctx context.Context, table string) (map[string]columnInfo, error) {
-	rows, err := s.db.DB.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", quoteSQLiteIdentifier(table)))
+	rows, err := s.executor().QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", quoteSQLiteIdentifier(table)))
 	if err != nil {
 		return nil, err
 	}
@@ -1799,7 +2041,7 @@ func (s *Store) tableColumns(ctx context.Context, table string) (map[string]colu
 
 func (s *Store) tableCreateSQL(ctx context.Context, table string) (string, error) {
 	var createSQL string
-	err := s.db.DB.QueryRowContext(
+	err := s.executor().QueryRowContext(
 		ctx,
 		"SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
 		table,
@@ -1812,7 +2054,7 @@ func (s *Store) tableCreateSQL(ctx context.Context, table string) (string, error
 
 func (s *Store) objectExists(ctx context.Context, objectType, name string) (bool, error) {
 	var count int
-	err := s.db.DB.QueryRowContext(
+	err := s.executor().QueryRowContext(
 		ctx,
 		"SELECT COUNT(1) FROM sqlite_master WHERE type = ? AND name = ?",
 		objectType,
@@ -1843,7 +2085,7 @@ func compactSQL(value string) string {
 
 func (s *Store) countOperations(ctx context.Context, status string) (int, error) {
 	var count int
-	err := s.db.DB.QueryRowContext(
+	err := s.executor().QueryRowContext(
 		ctx,
 		"SELECT COUNT(1) FROM operations WHERE status = ?",
 		status,
@@ -1856,7 +2098,7 @@ func (s *Store) countOperations(ctx context.Context, status string) (int, error)
 
 func (s *Store) profileReferenceCount(ctx context.Context, profileID string) (int, error) {
 	var activeStateCount int
-	if err := s.db.DB.QueryRowContext(
+	if err := s.executor().QueryRowContext(
 		ctx,
 		"SELECT COUNT(1) FROM active_states WHERE profile_id = ?",
 		profileID,
@@ -1865,7 +2107,7 @@ func (s *Store) profileReferenceCount(ctx context.Context, profileID string) (in
 	}
 
 	var operationCount int
-	if err := s.db.DB.QueryRowContext(
+	if err := s.executor().QueryRowContext(
 		ctx,
 		"SELECT COUNT(1) FROM operations WHERE profile_id = ?",
 		profileID,
@@ -1888,7 +2130,7 @@ func (s *Store) providerReferenceCount(ctx context.Context, providerID string) (
 	}
 
 	var activeStateCount int
-	if err := s.db.DB.QueryRowContext(
+	if err := s.executor().QueryRowContext(
 		ctx,
 		"SELECT COUNT(1) FROM active_states WHERE scope_type = ? AND scope_id = ?",
 		ActiveStateScopeProvider,
@@ -1906,7 +2148,7 @@ func (s *Store) providerReferenceCount(ctx context.Context, providerID string) (
 }
 
 func (s *Store) providerOperationReferenceCount(ctx context.Context, providerID string) (int, error) {
-	rows, err := s.db.DB.QueryContext(ctx, "SELECT metadata_json FROM operations")
+	rows, err := s.executor().QueryContext(ctx, "SELECT metadata_json FROM operations")
 	if err != nil {
 		return 0, err
 	}
@@ -1992,6 +2234,24 @@ func scanProfileTarget(row rowScanner) (ProfileTarget, error) {
 	}
 	target.Enabled = enabled != 0
 	return target, nil
+}
+
+func scanProviderAccountSecret(row rowScanner) (ProviderAccountSecret, error) {
+	var secret ProviderAccountSecret
+	if err := row.Scan(
+		&secret.ProviderID,
+		&secret.AccountID,
+		&secret.SecretKind,
+		&secret.PayloadJSON,
+		&secret.PayloadSHA256,
+		&secret.DisplayName,
+		&secret.MetadataJSON,
+		&secret.CreatedAtUnixMS,
+		&secret.UpdatedAtUnixMS,
+	); err != nil {
+		return ProviderAccountSecret{}, err
+	}
+	return secret, nil
 }
 
 func scanOperation(row rowScanner) (Operation, error) {

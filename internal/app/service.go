@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +59,7 @@ func Init(ctx context.Context, req InitRequest) (InitResult, error) {
 	if err != nil {
 		return InitResult{}, WrapError(ErrorStoreMigrationFailed, "failed to run database migrations", err)
 	}
+	chmodBestEffort(paths.Database, 0o600)
 
 	status, err := db.Status(ctx)
 	if err != nil {
@@ -148,6 +150,13 @@ func createRuntimeDirs(paths runtime.Paths) error {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
+		chmodBestEffort(dir, 0o700)
 	}
 	return nil
+}
+
+func chmodBestEffort(path string, mode os.FileMode) {
+	if err := os.Chmod(path, mode); err != nil {
+		log.Printf("profiledeck: failed to chmod %s to %s: %v", path, fileModeString(mode), err)
+	}
 }

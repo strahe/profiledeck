@@ -313,6 +313,8 @@ func createSwitchBackup(ctx context.Context, paths runtime.Paths, operationID st
 	if err := os.MkdirAll(filesPath, 0o700); err != nil {
 		return switchBackup{}, WrapError(ErrorBackupFailed, "failed to create backup directory", err).WithDetail("path", backupPath)
 	}
+	chmodBestEffort(backupPath, 0o700)
+	chmodBestEffort(filesPath, 0o700)
 
 	backup := switchBackup{Path: backupPath, Entries: []switchBackupEntry{}}
 	for _, op := range plan.Operations {
@@ -379,6 +381,8 @@ func writeTargetAtomic(ctx context.Context, op applyPlanOperation) error {
 			SHA256:   op.BeforeSHA256,
 		},
 		Content: op.DesiredContent,
+		Mode:    op.DesiredMode,
+		UseMode: op.UseDesiredMode,
 	})
 	if err != nil {
 		return mapTargetFSError(err)

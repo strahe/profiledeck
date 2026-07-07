@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 
+	"github.com/strahe/profiledeck/internal/codexconfig"
 	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/targetfs"
@@ -140,6 +142,7 @@ func Doctor(ctx context.Context, req DoctorRequest) (DoctorResult, error) {
 	if dbState.db != nil {
 		defer dbState.db.Close()
 	}
+	result.Findings = append(result.Findings, inspectSensitivePathPermissions(ctx, paths, dbState)...)
 
 	result.Lock = inspectDoctorLock(ctx, paths.Lock, dbState)
 	result.Operations = doctorOperations(ctx, dbState, paths, operations, result.Lock)
@@ -235,6 +238,69 @@ func inspectDoctorDatabase(ctx context.Context, databasePath string) (doctorData
 		ID:      "database_healthy",
 		Level:   DoctorLevelOK,
 		Message: "application database is healthy",
+	}}
+}
+
+func inspectSensitivePathPermissions(ctx context.Context, paths runtime.Paths, dbState doctorDatabaseState) []DoctorFinding {
+	if goruntime.GOOS == "windows" {
+		return nil
+	}
+	findings := []DoctorFinding{}
+	findings = append(findings, inspectPathPermission(paths.Database, 0o600, "database_permissions_weak", "application database file permissions are wider than 0600")...)
+	findings = append(findings, inspectPathPermission(paths.Backups, 0o700, "backups_permissions_weak", "backup directory permissions are wider than 0700")...)
+
+	if !dbState.healthy || dbState.db == nil {
+		return findings
+	}
+	targets, err := dbState.db.ListProfileTargetsByProvider(ctx, codexconfig.ProviderID)
+	if err != nil {
+		findings = append(findings, DoctorFinding{
+			ID:      "codex_auth_target_permission_check_failed",
+			Level:   DoctorLevelWarning,
+			Message: "failed to inspect Codex auth target permissions",
+			Details: map[string]any{"error": err.Error()},
+		})
+		return findings
+	}
+	seen := map[string]struct{}{}
+	for _, target := range targets {
+		if target.TargetID != codexconfig.AuthTargetID || target.Path == "" {
+			continue
+		}
+		if _, ok := seen[target.Path]; ok {
+			continue
+		}
+		seen[target.Path] = struct{}{}
+		findings = append(findings, inspectPathPermission(target.Path, 0o600, "codex_auth_target_permissions_weak", "Codex auth target file permissions are wider than 0600")...)
+	}
+	return findings
+}
+
+func inspectPathPermission(path string, want os.FileMode, id string, message string) []DoctorFinding {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return []DoctorFinding{{
+			ID:      id + "_inspect_failed",
+			Level:   DoctorLevelWarning,
+			Message: "failed to inspect sensitive path permissions",
+			Details: map[string]any{"path": path, "error": err.Error()},
+		}}
+	}
+	if info.Mode().Perm() == want {
+		return nil
+	}
+	return []DoctorFinding{{
+		ID:      id,
+		Level:   DoctorLevelWarning,
+		Message: message,
+		Details: map[string]any{
+			"path": path,
+			"mode": fileModeString(info.Mode()),
+			"want": fileModeString(want),
+		},
 	}}
 }
 

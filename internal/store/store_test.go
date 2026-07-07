@@ -24,8 +24,8 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
-	if result.Applied != 3 {
-		t.Fatalf("expected 3 migrations to apply, got %d", result.Applied)
+	if result.Applied != 4 {
+		t.Fatalf("expected 4 migrations to apply, got %d", result.Applied)
 	}
 
 	for _, table := range []string{
@@ -38,6 +38,7 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 		"profile_targets",
 		"usage_events",
 		"usage_import_cursors",
+		"provider_account_secrets",
 	} {
 		assertSQLiteObjectExists(t, ctx, db, "table", table)
 	}
@@ -58,6 +59,7 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 		"idx_usage_events_occurred_at",
 		"idx_usage_events_cost_status",
 		"idx_usage_import_cursors_source",
+		"idx_provider_account_secrets_secret_kind",
 	} {
 		assertSQLiteObjectExists(t, ctx, db, "index", index)
 	}
@@ -140,8 +142,126 @@ func TestConcurrentMigrateIsIdempotent(t *testing.T) {
 	if err := db.db.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM bun_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("expected migration count query to succeed, got %v", err)
 	}
-	if migrationCount != 3 {
-		t.Fatalf("expected three migration rows after concurrent migration, got %d", migrationCount)
+	if migrationCount != 4 {
+		t.Fatalf("expected four migration rows after concurrent migration, got %d", migrationCount)
+	}
+}
+
+func TestProviderAccountSecretCRUD(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+
+	created, err := db.UpsertProviderAccountSecret(ctx, UpsertProviderAccountSecretParams{
+		ProviderID:    "codex",
+		AccountID:     " work ",
+		SecretKind:    "codex-auth-json",
+		PayloadJSON:   `{"tokens":{"account_id":"Team/Shared","access_token":"raw"}}`,
+		PayloadSHA256: "hash-a",
+		DisplayName:   "Work",
+	})
+	if err != nil {
+		t.Fatalf("expected account secret create to succeed, got %v", err)
+	}
+	if created.ProviderID != "codex" || created.AccountID != "work" || created.PayloadJSON != `{"tokens":{"account_id":"Team/Shared","access_token":"raw"}}` {
+		t.Fatalf("unexpected created account secret: %#v", created)
+	}
+	if created.MetadataJSON != "{}" {
+		t.Fatalf("expected default metadata JSON object, got %q", created.MetadataJSON)
+	}
+
+	updated, err := db.UpsertProviderAccountSecret(ctx, UpsertProviderAccountSecretParams{
+		ProviderID:    "codex",
+		AccountID:     "work",
+		SecretKind:    "codex-auth-json",
+		PayloadJSON:   `{"tokens":{"account_id":"Team/Shared","access_token":"new"}}`,
+		PayloadSHA256: "hash-b",
+		DisplayName:   "Updated",
+		MetadataJSON:  `{"source":"test"}`,
+	})
+	if err != nil {
+		t.Fatalf("expected account secret update to succeed, got %v", err)
+	}
+	if updated.PayloadJSON != `{"tokens":{"account_id":"Team/Shared","access_token":"new"}}` || updated.PayloadSHA256 != "hash-b" || updated.DisplayName != "Updated" {
+		t.Fatalf("unexpected updated account secret: %#v", updated)
+	}
+	if updated.CreatedAtUnixMS != created.CreatedAtUnixMS || updated.UpdatedAtUnixMS < created.UpdatedAtUnixMS {
+		t.Fatalf("unexpected account secret timestamps: created=%#v updated=%#v", created, updated)
+	}
+
+	_, err = db.UpsertProviderAccountSecret(ctx, UpsertProviderAccountSecretParams{
+		ProviderID:    "codex",
+		AccountID:     "personal",
+		SecretKind:    "codex-auth-json",
+		PayloadJSON:   `{"tokens":{"account_id":"Team/Shared","access_token":"personal"}}`,
+		PayloadSHA256: "hash-c",
+		DisplayName:   "Personal",
+	})
+	if err != nil {
+		t.Fatalf("expected a second local account alias with the same Codex account id to succeed, got %v", err)
+	}
+
+	list, err := db.ListProviderAccountSecrets(ctx, "codex")
+	if err != nil {
+		t.Fatalf("expected account list to succeed, got %v", err)
+	}
+	if len(list) != 2 || list[0].AccountID != "personal" || list[1].AccountID != "work" {
+		t.Fatalf("unexpected account list: %#v", list)
+	}
+
+	_, err = db.UpsertProviderAccountSecret(ctx, UpsertProviderAccountSecretParams{
+		ProviderID:    "codex",
+		AccountID:     "  ",
+		SecretKind:    "codex-auth-json",
+		PayloadJSON:   `{"tokens":{"account_id":"work","access_token":"raw"}}`,
+		PayloadSHA256: "hash",
+		DisplayName:   "Blank",
+	})
+	if err == nil {
+		t.Fatalf("expected blank account id to be rejected")
+	}
+}
+
+func TestProviderAccountSecretRejectsInvalidPayloads(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+
+	for _, tc := range []struct {
+		name       string
+		secretKind string
+		payload    string
+	}{
+		{name: "unsupported kind", secretKind: "other", payload: `{}`},
+		{name: "invalid json", secretKind: "codex-auth-json", payload: `{`},
+		{name: "non object", secretKind: "codex-auth-json", payload: `[]`},
+		{name: "missing tokens account id", secretKind: "codex-auth-json", payload: `{}`},
+		{name: "multiple values", secretKind: "codex-auth-json", payload: `{"tokens":{"account_id":"work"}} {}`},
+		{name: "oversized", secretKind: "codex-auth-json", payload: `{"payload":"` + strings.Repeat("x", maxProviderAccountSecretPayloadBytes) + `"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := db.UpsertProviderAccountSecret(ctx, UpsertProviderAccountSecretParams{
+				ProviderID:    "codex",
+				AccountID:     "work",
+				SecretKind:    tc.secretKind,
+				PayloadJSON:   tc.payload,
+				PayloadSHA256: "hash",
+				DisplayName:   "Work",
+			})
+			if err == nil {
+				t.Fatalf("expected account secret payload to be rejected")
+			}
+		})
 	}
 }
 
@@ -214,6 +334,36 @@ func TestOpenConfiguresSQLiteConnection(t *testing.T) {
 	}
 	if timeoutMS != int(sqliteBusyTimeout.Milliseconds()) {
 		t.Fatalf("expected busy_timeout %d, got %d", sqliteBusyTimeout.Milliseconds(), timeoutMS)
+	}
+}
+
+func TestWithTransactionRollsBackCRUD(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+	errRollback := errors.New("rollback")
+	err := db.WithTransaction(ctx, func(txStore *Store) error {
+		if _, err := txStore.CreateProvider(ctx, CreateProviderParams{
+			ID:        "provider-1",
+			Name:      "Provider 1",
+			AdapterID: "adapter-1",
+			Enabled:   true,
+		}); err != nil {
+			return err
+		}
+		return errRollback
+	})
+	if !errors.Is(err, errRollback) {
+		t.Fatalf("expected rollback error, got %v", err)
+	}
+	if _, err := db.GetProvider(ctx, "provider-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected provider insert to roll back, got %v", err)
 	}
 }
 

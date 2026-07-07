@@ -13,16 +13,18 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/strahe/profiledeck/internal/codexconfig"
 )
 
 const maxCodexSessionLineBytes = 16 * 1024 * 1024
 
 func DefaultCodexDir() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := codexconfig.ResolveHome("")
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".codex"), nil
+	return home.Dir, nil
 }
 
 func ListCodexSessionFiles(codexDir string) ([]SourceFile, error) {
