@@ -1,9 +1,45 @@
 # ProfileDeck
-Safe profile switching for AI agents and coding tools.
 
-## Codex CLI MVP
+Safe profile switching for AI coding tools.
 
-Capture the current Codex user config and file auth, then switch back to it later:
+ProfileDeck is currently a Go CLI with a Codex-first workflow. It can capture Codex user config and file-based auth, switch profiles through a guarded transaction pipeline, import local Codex token usage, and recover interrupted switch operations.
+
+## Documentation
+
+The full documentation is in `docs/` and is built with VitePress.
+
+```bash
+cd docs
+npm install
+npm run dev
+npm run build
+```
+
+English is served at `/`; Simplified Chinese is served at `/zh/`.
+
+GitHub Pages deployment is handled by `.github/workflows/docs.yml`. Pull requests build the docs; pushes to `main` deploy the generated site after the repository Pages source is set to GitHub Actions. The workflow uses `VITEPRESS_BASE` from repository variables when present, otherwise it defaults to `/<repository-name>/` for project Pages.
+
+## Build
+
+```bash
+make build
+```
+
+The binary is written to `bin/profiledeck`.
+
+Command examples assume `profiledeck` is available on `PATH`. When working from a source checkout, install the binary or add `bin/` to your shell path before following the examples.
+
+Useful shortcuts:
+
+```bash
+make fmt
+make vet
+make test
+make check
+make clean
+```
+
+## Codex Quick Start
 
 ```bash
 profiledeck init
@@ -13,30 +49,6 @@ profiledeck plan codex work
 profiledeck switch codex work --yes
 ```
 
-`codex profile capture` reads `$CODEX_HOME/config.toml` and `$CODEX_HOME/auth.json`. Codex must be using file credentials; if `auth.json` is missing, set `cli_auth_credentials_store = "file"` in Codex config and run `codex login` again.
+Full Codex account switching requires file credentials. If `$CODEX_HOME/auth.json` is missing, set `cli_auth_credentials_store = "file"` in `$CODEX_HOME/config.toml` and run `codex login` again.
 
-By default, the local ProfileDeck account id is the profile id. Use `--account ACCOUNT_ID` to store the captured auth under a different local alias. ProfileDeck records Codex `tokens.account_id` as metadata only because it is not guaranteed to uniquely identify a local login.
-
-Captured auth is stored locally in `profiledeck.db`; switch backups may also contain previous `auth.json` content. Treat the ProfileDeck runtime directory as sensitive local data.
-
-Stored auth can be reviewed or edited through explicit export/import:
-
-```bash
-profiledeck codex account list
-profiledeck codex account export <account-id-from-list> --output ./auth.json
-profiledeck codex account import <local-account-id> --auth-file ./auth.json
-```
-
-For lightweight model/base URL switching without capturing auth:
-
-```bash
-profiledeck init
-profiledeck codex detect
-profiledeck codex profile set work --model gpt-5.3-codex
-profiledeck plan codex work
-profiledeck switch codex work --yes
-```
-
-Use `--codex-dir PATH` when Codex uses a non-default home. Without it, ProfileDeck checks `CODEX_HOME` and then `~/.codex`.
-
-`codex profile set` stores the full desired state for ProfileDeck-managed Codex keys. Omitting `--openai-base-url` removes the managed `openai_base_url` from `config.toml` on switch. Pass `--account ACCOUNT_ID` to bind an existing captured/imported local Codex account.
+Stored Codex auth is sensitive. ProfileDeck stores it locally in `profiledeck.db`, and switch backups may contain previous `auth.json` content.

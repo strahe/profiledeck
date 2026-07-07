@@ -14,6 +14,11 @@
 # Local build output
 bin/
 
+# VitePress documentation output
+docs/node_modules/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*
