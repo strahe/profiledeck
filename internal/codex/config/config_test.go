@@ -1,11 +1,13 @@
-package codexconfig
+package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/strahe/profiledeck/internal/targetfs"
 )
 
 func TestResolveHomeOrder(t *testing.T) {
@@ -131,5 +133,35 @@ func TestApplyManagedTOMLRejectsInvalidExistingTOML(t *testing.T) {
 	}
 	if _, err := ApplyManagedTOML(`model = "unterminated`, true, desired); err == nil {
 		t.Fatalf("expected invalid existing TOML to fail")
+	}
+}
+
+func TestReadSnapshotHandlesMissingConfigAsEmpty(t *testing.T) {
+	snapshot, err := ReadSnapshot(filepath.Join(t.TempDir(), ConfigFileName))
+	if err != nil {
+		t.Fatalf("expected missing config to be accepted, got %v", err)
+	}
+	if !snapshot.Missing || snapshot.Content != "" {
+		t.Fatalf("unexpected snapshot: %#v", snapshot)
+	}
+}
+
+func TestReadSnapshotRejectsInvalidTOML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ConfigFileName)
+	if err := os.WriteFile(path, []byte(`model = "unterminated`), 0o600); err != nil {
+		t.Fatalf("expected config setup to succeed, got %v", err)
+	}
+	if _, err := ReadSnapshot(path); err == nil {
+		t.Fatalf("expected invalid TOML snapshot to fail")
+	}
+}
+
+func TestReadSnapshotRejectsOversizedConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ConfigFileName)
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", targetfs.MaxFileBytes+1)), 0o600); err != nil {
+		t.Fatalf("expected config setup to succeed, got %v", err)
+	}
+	if _, err := ReadSnapshot(path); err == nil {
+		t.Fatalf("expected oversized config snapshot to fail")
 	}
 }

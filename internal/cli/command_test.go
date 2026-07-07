@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/app"
-	"github.com/strahe/profiledeck/internal/codexconfig"
+	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/strahe/profiledeck/internal/store"
 )
 

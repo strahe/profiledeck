@@ -2,15 +2,14 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
 
-	"github.com/strahe/profiledeck/internal/codexconfig"
+	codexauth "github.com/strahe/profiledeck/internal/codex/auth"
+	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/targetfs"
 )
@@ -77,11 +76,6 @@ type CodexAccountExportResult struct {
 	PayloadSHA256 string `json:"payload_sha256"`
 }
 
-type codexAuthSnapshot struct {
-	Payload        string
-	CodexAccountID string
-}
-
 func CodexProfileCapture(ctx context.Context, req CodexProfileCaptureRequest) (CodexProfileCaptureResult, error) {
 	profileID, appErr := validateID(req.ProfileID, ErrorProfileInvalid)
 	if appErr != nil {
@@ -111,23 +105,23 @@ func CodexProfileCapture(ctx context.Context, req CodexProfileCaptureRequest) (C
 	if appErr != nil {
 		return CodexProfileCaptureResult{}, appErr
 	}
-	configValueJSON, err := codexReplaceFileValueJSON(configContent)
+	configValueJSON, err := codexpreset.ReplaceFileValueJSON(configContent)
 	if err != nil {
 		return CodexProfileCaptureResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex config target value", err)
 	}
-	providerMetadata, err := codexProviderMetadataJSON(home)
+	providerMetadata, err := codexpreset.ProviderMetadataJSON(home)
 	if err != nil {
 		return CodexProfileCaptureResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex provider metadata", err)
 	}
-	configTargetMetadata, err := codexTargetMetadataJSON(codexconfig.TargetID, codexTargetModeFullFile)
+	configTargetMetadata, err := codexpreset.TargetMetadataJSON(codexconfig.TargetID, codexpreset.TargetModeFullFile)
 	if err != nil {
 		return CodexProfileCaptureResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex config target metadata", err)
 	}
-	authTargetMetadata, err := codexTargetMetadataJSON(codexconfig.AuthTargetID, codexTargetModeFullFile)
+	authTargetMetadata, err := codexpreset.TargetMetadataJSON(codexconfig.AuthTargetID, codexpreset.TargetModeFullFile)
 	if err != nil {
 		return CodexProfileCaptureResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex auth target metadata", err)
 	}
-	accountMetadata, err := codexAccountMetadataJSON(home, authSnapshot.CodexAccountID)
+	accountMetadata, err := codexpreset.AccountMetadataJSON(home, authSnapshot.CodexAccountID)
 	if err != nil {
 		return CodexProfileCaptureResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex account metadata", err)
 	}
@@ -170,7 +164,7 @@ func CodexProfileCapture(ctx context.Context, req CodexProfileCaptureRequest) (C
 		if appErr := requireCodexCaptureProfileAccount(targets, profileID, accountID); appErr != nil {
 			return appErr
 		}
-		authValueJSON, err := codexAuthTargetValueJSON(accountID)
+		authValueJSON, err := codexpreset.AuthTargetValueJSON(accountID)
 		if err != nil {
 			return WrapError(ErrorCodexInvalid, "failed to encode Codex auth target value", err)
 		}
@@ -186,7 +180,7 @@ func CodexProfileCapture(ctx context.Context, req CodexProfileCaptureRequest) (C
 		account, err = txStore.UpsertProviderAccountSecret(ctx, store.UpsertProviderAccountSecretParams{
 			ProviderID:    codexconfig.ProviderID,
 			AccountID:     accountID,
-			SecretKind:    codexSecretKindAuthJSON,
+			SecretKind:    codexpreset.SecretKindAuthJSON,
 			PayloadJSON:   authSnapshot.Payload,
 			PayloadSHA256: sha256HexString(authSnapshot.Payload),
 			DisplayName:   codexAccountDisplayName(accountID, profileFields, req.Name),
@@ -262,13 +256,13 @@ func CodexAccountImport(ctx context.Context, req CodexAccountImportRequest) (Cod
 	if err != nil {
 		return CodexAccount{}, WrapError(ErrorCodexInvalid, "failed to read Codex auth file", err).WithDetail("path", req.AuthFile)
 	}
-	payload, appErr := normalizeCodexAuthPayload(raw)
-	if appErr != nil {
-		return CodexAccount{}, appErr.WithDetail("path", req.AuthFile)
+	payload, err := codexauth.NormalizePayload(raw)
+	if err != nil {
+		return CodexAccount{}, codexAuthPayloadAppError(err).WithDetail("path", req.AuthFile)
 	}
-	codexAccountID, appErr := codexAuthPayloadAccountID([]byte(payload))
-	if appErr != nil {
-		return CodexAccount{}, appErr.WithDetail("path", req.AuthFile)
+	codexAccountID, err := codexauth.ExtractAccountID([]byte(payload))
+	if err != nil {
+		return CodexAccount{}, codexAuthPayloadAppError(err).WithDetail("path", req.AuthFile)
 	}
 	displayName := accountID
 	if req.Name != nil {
@@ -278,7 +272,7 @@ func CodexAccountImport(ctx context.Context, req CodexAccountImportRequest) (Cod
 		}
 		displayName = normalized
 	}
-	metadataJSON, err := codexAccountMetadataJSON(codexconfig.Home{}, codexAccountID)
+	metadataJSON, err := codexpreset.AccountMetadataJSON(codexconfig.Home{}, codexAccountID)
 	if err != nil {
 		return CodexAccount{}, WrapError(ErrorCodexInvalid, "failed to encode Codex account metadata", err)
 	}
@@ -291,7 +285,7 @@ func CodexAccountImport(ctx context.Context, req CodexAccountImportRequest) (Cod
 	secret, err := db.UpsertProviderAccountSecret(ctx, store.UpsertProviderAccountSecretParams{
 		ProviderID:    codexconfig.ProviderID,
 		AccountID:     accountID,
-		SecretKind:    codexSecretKindAuthJSON,
+		SecretKind:    codexpreset.SecretKindAuthJSON,
 		PayloadJSON:   payload,
 		PayloadSHA256: sha256HexString(payload),
 		DisplayName:   displayName,
@@ -341,117 +335,53 @@ func CodexAccountExport(ctx context.Context, req CodexAccountExportRequest) (Cod
 }
 
 func readCodexConfigSnapshot(home codexconfig.Home) (string, bool, *AppError) {
-	raw, err := os.ReadFile(home.ConfigPath)
+	snapshot, err := codexconfig.ReadSnapshot(home.ConfigPath)
+	if err != nil {
+		return "", false, codexConfigSnapshotAppError(home.ConfigPath, err)
+	}
+	return snapshot.Content, snapshot.Missing, nil
+}
+
+func readCodexAuthSnapshot(home codexconfig.Home) (codexauth.Snapshot, *AppError) {
+	snapshot, err := codexauth.ReadSnapshot(home.AuthPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", true, nil
+			return codexauth.Snapshot{}, NewError(ErrorCodexInvalid, codexpreset.FileCredentialStoreHint).WithDetail("auth_path", home.AuthPath)
 		}
-		return "", false, WrapError(ErrorCodexInvalid, "failed to read Codex config", err).WithDetail("path", home.ConfigPath)
-	}
-	if len(raw) > maxTargetContentBytes {
-		return "", false, NewError(ErrorCodexInvalid, "Codex config is too large").WithDetail("path", home.ConfigPath)
-	}
-	content := string(raw)
-	if err := codexconfig.ValidateTOML(content); err != nil {
-		return "", false, WrapError(ErrorCodexInvalid, "Codex config TOML is invalid", err).WithDetail("path", home.ConfigPath)
-	}
-	return content, false, nil
-}
-
-func readCodexAuthSnapshot(home codexconfig.Home) (codexAuthSnapshot, *AppError) {
-	raw, err := os.ReadFile(home.AuthPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return codexAuthSnapshot{}, NewError(ErrorCodexInvalid, codexFileCredentialStoreHint).WithDetail("auth_path", home.AuthPath)
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
+			return codexauth.Snapshot{}, WrapError(ErrorCodexInvalid, "failed to read Codex auth", err).WithDetail("path", home.AuthPath)
 		}
-		return codexAuthSnapshot{}, WrapError(ErrorCodexInvalid, "failed to read Codex auth", err).WithDetail("path", home.AuthPath)
+		return codexauth.Snapshot{}, codexAuthPayloadAppError(err).WithDetail("path", home.AuthPath)
 	}
-	payload, object, appErr := decodeCodexAuthPayload(raw)
-	if appErr != nil {
-		return codexAuthSnapshot{}, appErr.WithDetail("path", home.AuthPath)
-	}
-	accountID, appErr := codexAuthAccountIDFromObject(object)
-	if appErr != nil {
-		return codexAuthSnapshot{}, appErr.WithDetail("path", home.AuthPath)
-	}
-	return codexAuthSnapshot{Payload: payload, CodexAccountID: accountID}, nil
+	return snapshot, nil
 }
 
-func normalizeCodexAuthPayload(raw []byte) (string, *AppError) {
-	payload, object, appErr := decodeCodexAuthPayload(raw)
-	if appErr != nil {
-		return "", appErr
+func codexConfigSnapshotAppError(path string, err error) *AppError {
+	message := err.Error()
+	switch {
+	case strings.HasPrefix(message, "read Codex config:"):
+		return WrapError(ErrorCodexInvalid, "failed to read Codex config", err).WithDetail("path", path)
+	case strings.HasPrefix(message, "Codex config TOML is invalid:"):
+		return WrapError(ErrorCodexInvalid, "Codex config TOML is invalid", err).WithDetail("path", path)
+	case message == "Codex config is too large":
+		return NewError(ErrorCodexInvalid, "Codex config is too large").WithDetail("path", path)
+	default:
+		return WrapError(ErrorCodexInvalid, message, err).WithDetail("path", path)
 	}
-	if _, appErr := codexAuthAccountIDFromObject(object); appErr != nil {
-		return "", appErr
-	}
-	return payload, nil
 }
 
-func decodeCodexAuthPayload(raw []byte) (string, map[string]any, *AppError) {
-	if len(raw) > maxTargetContentBytes {
-		return "", nil, NewError(ErrorCodexInvalid, "Codex auth payload is too large").
-			WithDetail("size_bytes", len(raw)).
-			WithDetail("max_bytes", maxTargetContentBytes)
+func codexAuthPayloadAppError(err error) *AppError {
+	appErr := WrapError(ErrorCodexInvalid, err.Error(), err)
+	var fieldErr codexauth.FieldError
+	if errors.As(err, &fieldErr) {
+		appErr = appErr.WithDetail("field", fieldErr.Field)
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return "", nil, WrapError(ErrorCodexInvalid, "Codex auth payload must be a JSON object", err)
+	var sizeErr codexauth.SizeError
+	if errors.As(err, &sizeErr) {
+		appErr = appErr.WithDetail("size_bytes", sizeErr.Size).WithDetail("max_bytes", sizeErr.Max)
 	}
-	object, ok := value.(map[string]any)
-	if !ok {
-		return "", nil, NewError(ErrorCodexInvalid, "Codex auth payload must be a JSON object")
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		if err != nil {
-			return "", nil, WrapError(ErrorCodexInvalid, "Codex auth payload must contain one JSON object", err)
-		}
-		return "", nil, NewError(ErrorCodexInvalid, "Codex auth payload must contain one JSON object")
-	}
-	return string(raw), object, nil
-}
-
-func codexAuthPayloadAccountID(raw []byte) (string, *AppError) {
-	_, object, appErr := decodeCodexAuthPayload(raw)
-	if appErr != nil {
-		return "", appErr
-	}
-	return codexAuthAccountIDFromObject(object)
-}
-
-func codexAuthAccountIDFromObject(object map[string]any) (string, *AppError) {
-	tokens, ok := object["tokens"].(map[string]any)
-	if !ok {
-		return "", NewError(ErrorCodexInvalid, "Codex auth payload is missing tokens.account_id")
-	}
-	raw, ok := tokens["account_id"].(string)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return "", NewError(ErrorCodexInvalid, "Codex auth payload is missing tokens.account_id")
-	}
-	accountID, appErr := normalizeCodexExternalAccountID(raw)
-	if appErr != nil {
-		return "", appErr.WithDetail("field", "tokens.account_id")
-	}
-	return accountID, nil
-}
-
-func normalizeCodexExternalAccountID(raw string) (string, *AppError) {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return "", NewError(ErrorCodexInvalid, "Codex auth payload is missing tokens.account_id")
-	}
-	if len(value) > maxCodexAuthAccountIDLength {
-		return "", NewError(ErrorCodexInvalid, "Codex auth account id is too long")
-	}
-	for _, r := range value {
-		if unicode.IsControl(r) {
-			return "", NewError(ErrorCodexInvalid, "Codex auth account id cannot contain control characters")
-		}
-	}
-	return value, nil
+	return appErr
 }
 
 func normalizeCodexAccountID(raw string) (string, *AppError) {
@@ -472,7 +402,7 @@ func resolveCodexCaptureAccountID(profileID string, requested string, targets co
 		return normalizeCodexAccountID(requested)
 	}
 	if targets.HasAuth {
-		existingAccountID, err := parseCodexAuthTargetValueJSON(targets.Auth.ValueJSON)
+		existingAccountID, err := codexpreset.ParseAuthTargetValueJSON(targets.Auth.ValueJSON)
 		if err != nil {
 			return "", WrapError(ErrorStoreSchemaInvalid, "stored Codex auth target value_json is invalid", err).
 				WithDetail("profile_id", profileID).
@@ -487,7 +417,7 @@ func requireCodexCaptureProfileAccount(targets codexExistingTargets, profileID s
 	if !targets.HasAuth {
 		return nil
 	}
-	existingAccountID, err := parseCodexAuthTargetValueJSON(targets.Auth.ValueJSON)
+	existingAccountID, err := codexpreset.ParseAuthTargetValueJSON(targets.Auth.ValueJSON)
 	if err != nil {
 		return WrapError(ErrorStoreSchemaInvalid, "stored Codex auth target value_json is invalid", err).
 			WithDetail("profile_id", profileID).
@@ -509,66 +439,11 @@ func codexAccountDisplayName(accountID string, fields codexProfileFields, name *
 	return fields.CreateName
 }
 
-func codexAccountMetadataJSON(home codexconfig.Home, codexAccountID string) (string, error) {
-	metadata := map[string]any{
-		"preset":           codexconfig.PresetName,
-		"preset_version":   codexconfig.PresetVersion,
-		"codex_account_id": codexAccountID,
-	}
-	if home.Dir != "" {
-		metadata["codex_dir"] = home.Dir
-	}
-	if home.AuthPath != "" {
-		metadata["auth_path"] = home.AuthPath
-	}
-	raw, err := json.Marshal(metadata)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
-func codexReplaceFileValueJSON(content string) (string, error) {
-	raw, err := json.Marshal(map[string]string{"content": content})
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
-func codexAuthTargetValueJSON(accountID string) (string, error) {
-	raw, err := json.Marshal(map[string]string{"account_id": accountID})
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
-func parseCodexAuthTargetValueJSON(raw string) (string, error) {
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	var value map[string]string
-	if err := decoder.Decode(&value); err != nil {
-		return "", err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		if err != nil {
-			return "", err
-		}
-		return "", errors.New("auth target value_json must contain one JSON object")
-	}
-	accountID := strings.TrimSpace(value["account_id"])
-	if accountID == "" || len(value) != 1 {
-		return "", errors.New(`auth target value_json must be {"account_id": string}`)
-	}
-	return accountID, nil
-}
-
 func upsertCodexProvider(ctx context.Context, db *store.Store, metadataJSON string, hasProvider bool) (store.Provider, error) {
 	if !hasProvider {
 		provider, err := db.CreateProvider(ctx, store.CreateProviderParams{
 			ID:           codexconfig.ProviderID,
-			Name:         codexProviderName,
+			Name:         codexpreset.ProviderName,
 			AdapterID:    codexconfig.AdapterID,
 			Enabled:      true,
 			MetadataJSON: metadataJSON,
@@ -579,7 +454,7 @@ func upsertCodexProvider(ctx context.Context, db *store.Store, metadataJSON stri
 		return provider, nil
 	}
 	enabled := true
-	name := codexProviderName
+	name := codexpreset.ProviderName
 	provider, err := db.UpdateProvider(ctx, store.UpdateProviderParams{
 		ID:           codexconfig.ProviderID,
 		Name:         &name,

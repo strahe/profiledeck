@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/strahe/profiledeck/internal/codexconfig"
+	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 )
 
 const maxCodexSessionLineBytes = 16 * 1024 * 1024

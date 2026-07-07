@@ -10,7 +10,8 @@ import (
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
-	"github.com/strahe/profiledeck/internal/codexconfig"
+	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -262,23 +263,6 @@ func TestCodexProfileSetRejectsConflictingProviderAndHome(t *testing.T) {
 	assertAppErrorCode(t, err, ErrorCodexInvalid)
 }
 
-func TestCodexTargetMetadataCompatibilityIgnoresManagedKeyOrder(t *testing.T) {
-	metadata := codexTargetMetadata{
-		Preset:        codexconfig.PresetName,
-		PresetVersion: codexconfig.PresetVersion,
-		TargetKind:    codexconfig.TargetID,
-		ManagedKeys:   []string{"openai_base_url", "model_provider", "model"},
-	}
-	if !metadata.compatible() {
-		t.Fatalf("expected managed key order not to affect compatibility")
-	}
-
-	metadata.ManagedKeys = []string{"openai_base_url", "model_provider", "model_provider"}
-	if metadata.compatible() {
-		t.Fatalf("expected duplicate managed keys to be incompatible")
-	}
-}
-
 func TestCodexSwitchWritesManagedConfigThroughPipeline(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
@@ -447,7 +431,7 @@ func TestCodexProfileCaptureSwitchesFullConfigAndAuthThroughPipeline(t *testing.
 			t.Fatalf("expected plan previews to redact %q, got %#v", leaked, plan.Operations)
 		}
 	}
-	if !hasOperationPreview(plan.Operations, codexconfig.AuthTargetID, codexAuthPreviewContent) {
+	if !hasOperationPreview(plan.Operations, codexconfig.AuthTargetID, codexpreset.AuthPreviewContent) {
 		t.Fatalf("expected auth preview to be fully redacted, got %#v", plan.Operations)
 	}
 

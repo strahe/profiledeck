@@ -1,4 +1,4 @@
-package codexconfig
+package config
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/pelletier/go-toml/v2"
+	"github.com/strahe/profiledeck/internal/targetfs"
 )
 
 const (
@@ -43,6 +44,11 @@ type ManagedConfig struct {
 	ModelProvider    string
 	OpenAIBaseURL    string
 	HasOpenAIBaseURL bool
+}
+
+type Snapshot struct {
+	Content string
+	Missing bool
 }
 
 func ManagedKeys() []string {
@@ -204,6 +210,24 @@ func ValidateTOML(raw string) error {
 		return err
 	}
 	return nil
+}
+
+func ReadSnapshot(path string) (Snapshot, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Snapshot{Missing: true}, nil
+		}
+		return Snapshot{}, fmt.Errorf("read Codex config: %w", err)
+	}
+	if len(raw) > targetfs.MaxFileBytes {
+		return Snapshot{}, errors.New("Codex config is too large")
+	}
+	content := string(raw)
+	if err := ValidateTOML(content); err != nil {
+		return Snapshot{}, fmt.Errorf("Codex config TOML is invalid: %w", err)
+	}
+	return Snapshot{Content: content}, nil
 }
 
 func normalizeScalar(value string, field string) (string, error) {

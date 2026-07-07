@@ -11,7 +11,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/strahe/profiledeck/internal/codexconfig"
+	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/strahe/profiledeck/internal/store"
 )
 

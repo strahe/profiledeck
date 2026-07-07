@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 
-	"github.com/strahe/profiledeck/internal/codexconfig"
+	codexauth "github.com/strahe/profiledeck/internal/codex/auth"
+	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -84,14 +86,14 @@ func buildCodexPlanOperation(ctx context.Context, input planAdapterInput, target
 }
 
 func buildCodexConfigPlanOperation(op applyPlanOperation, before targetPlanRead, target store.ProfileTarget) (applyPlanOperation, error) {
-	metadata, appErr := decodeCodexTargetMetadata(target.MetadataJSON)
-	if appErr != nil {
-		return applyPlanOperation{}, appErr
+	metadata, err := codexpreset.DecodeTargetMetadata(target.MetadataJSON)
+	if err != nil {
+		return applyPlanOperation{}, WrapError(ErrorStoreSchemaInvalid, "stored Codex target metadata is invalid", err)
 	}
 
 	var content string
-	switch metadata.modeOrDefault() {
-	case codexTargetModeManagedKeys:
+	switch metadata.ModeOrDefault() {
+	case codexpreset.TargetModeManagedKeys:
 		if before.FileExists {
 			op.Warnings = append(op.Warnings, tomlSemanticRewriteWarning)
 		}
@@ -104,7 +106,7 @@ func buildCodexConfigPlanOperation(op applyPlanOperation, before targetPlanRead,
 			return applyPlanOperation{}, targetContentInvalidError(target, "failed to build Codex config content", err)
 		}
 		content = built
-	case codexTargetModeFullFile:
+	case codexpreset.TargetModeFullFile:
 		built, err := replaceFileContentFromValueJSON(target.ValueJSON)
 		if err != nil {
 			return applyPlanOperation{}, targetContentInvalidError(target, "stored Codex config target value_json is invalid", err)
@@ -125,9 +127,9 @@ func buildCodexAuthPlanOperation(ctx context.Context, input planAdapterInput, op
 		return applyPlanOperation{}, NewError(ErrorPlanBuildFailed, "Codex auth plan requires store access")
 	}
 	if before.FileExists {
-		op.BeforePreview = TextPreview{Content: codexAuthPreviewContent, Truncated: before.Preview.Truncated}
+		op.BeforePreview = TextPreview{Content: codexpreset.AuthPreviewContent, Truncated: before.Preview.Truncated}
 	}
-	accountID, err := parseCodexAuthTargetValueJSON(target.ValueJSON)
+	accountID, err := codexpreset.ParseAuthTargetValueJSON(target.ValueJSON)
 	if err != nil {
 		return applyPlanOperation{}, targetContentInvalidError(target, "stored Codex auth target value_json is invalid", err)
 	}
@@ -135,17 +137,17 @@ func buildCodexAuthPlanOperation(ctx context.Context, input planAdapterInput, op
 	if err != nil {
 		return applyPlanOperation{}, mapCodexAccountStoreError(err)
 	}
-	if secret.SecretKind != codexSecretKindAuthJSON {
+	if secret.SecretKind != codexpreset.SecretKindAuthJSON {
 		return applyPlanOperation{}, NewError(ErrorCodexInvalid, "Codex account secret has unsupported kind").
 			WithDetail("account_id", accountID).
 			WithDetail("secret_kind", secret.SecretKind)
 	}
-	if _, appErr := normalizeCodexAuthPayload([]byte(secret.PayloadJSON)); appErr != nil {
-		return applyPlanOperation{}, appErr.WithDetail("account_id", accountID)
+	if _, err := codexauth.NormalizePayload([]byte(secret.PayloadJSON)); err != nil {
+		return applyPlanOperation{}, codexAuthPayloadAppError(err).WithDetail("account_id", accountID)
 	}
 	op.UseDesiredMode = true
 	op.DesiredMode = 0o600
-	return finishCodexPlanOperation(op, before, target, secret.PayloadJSON, TextPreview{Content: codexAuthPreviewContent})
+	return finishCodexPlanOperation(op, before, target, secret.PayloadJSON, TextPreview{Content: codexpreset.AuthPreviewContent})
 }
 
 func finishCodexPlanOperation(op applyPlanOperation, before targetPlanRead, target store.ProfileTarget, content string, preview TextPreview) (applyPlanOperation, error) {
@@ -183,11 +185,12 @@ func validateCodexPlanTarget(provider store.Provider, target store.ProfileTarget
 	if appErr := requireCodexTargetMetadata(target); appErr != nil {
 		return appErr
 	}
-	metadata, appErr := decodeCodexProviderMetadata(provider.MetadataJSON)
-	if appErr != nil {
-		return appErr.WithDetail("provider_id", provider.ID)
+	metadata, err := codexpreset.DecodeProviderMetadata(provider.MetadataJSON)
+	if err != nil {
+		return WrapError(ErrorStoreSchemaInvalid, "stored Codex provider metadata is invalid", err).
+			WithDetail("provider_id", provider.ID)
 	}
-	if !metadata.compatible() {
+	if !metadata.Compatible() {
 		return NewError(ErrorCodexInvalid, "Codex provider was not created by the Codex preset").
 			WithDetail("provider_id", provider.ID)
 	}

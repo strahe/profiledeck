@@ -2,23 +2,21 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 
-	"github.com/strahe/profiledeck/internal/codexconfig"
+	codexauth "github.com/strahe/profiledeck/internal/codex/auth"
+	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
-const (
-	codexProviderName            = "Codex"
-	codexSecretKindAuthJSON      = "codex-auth-json"
-	codexTargetModeManagedKeys   = "managed-keys"
-	codexTargetModeFullFile      = "full-file"
-	codexAuthPreviewContent      = "[REDACTED_Codex_AUTH]"
-	codexFileCredentialStoreHint = `Codex auth.json is required; set cli_auth_credentials_store = "file" in config.toml and run codex login again`
-	maxCodexAuthAccountIDLength  = 512
-)
+var codexTargetFormatStrategyNames = codexpreset.TargetFormatStrategyNames{
+	JSONFormat:          targetFormatJSON,
+	TOMLFormat:          targetFormatTOML,
+	TOMLMergeStrategy:   targetStrategyTOMLMerge,
+	ReplaceFileStrategy: targetStrategyReplaceFile,
+}
 
 type CodexDetectRequest struct {
 	ConfigDir string
@@ -63,22 +61,6 @@ type CodexProfileSetResult struct {
 	AuthPath    string         `json:"auth_path"`
 	ManagedKeys []string       `json:"managed_keys"`
 	Warnings    []string       `json:"warnings"`
-}
-
-type codexProviderMetadata struct {
-	Preset        string `json:"preset"`
-	PresetVersion int    `json:"preset_version"`
-	CodexDir      string `json:"codex_dir"`
-	ConfigPath    string `json:"config_path"`
-	AuthPath      string `json:"auth_path,omitempty"`
-}
-
-type codexTargetMetadata struct {
-	Preset        string   `json:"preset"`
-	PresetVersion int      `json:"preset_version"`
-	TargetKind    string   `json:"target_kind"`
-	Mode          string   `json:"mode,omitempty"`
-	ManagedKeys   []string `json:"managed_keys"`
 }
 
 type codexExistingTargets struct {
@@ -135,7 +117,7 @@ func CodexDetect(ctx context.Context, req CodexDetectRequest) (CodexDetectResult
 		result.Warnings = append(result.Warnings, "failed to read Codex config: "+err.Error())
 	}
 	if raw, err := os.ReadFile(home.AuthPath); err == nil {
-		if _, appErr := normalizeCodexAuthPayload(raw); appErr != nil {
+		if _, err := codexauth.NormalizePayload(raw); err != nil {
 			result.AuthStatus = "invalid"
 			result.Warnings = append(result.Warnings, "Codex auth JSON is invalid")
 		} else {
@@ -220,19 +202,19 @@ func CodexProfileSet(ctx context.Context, req CodexProfileSetRequest) (CodexProf
 	if err != nil {
 		return CodexProfileSetResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex target value", err)
 	}
-	providerMetadata, err := codexProviderMetadataJSON(home)
+	providerMetadata, err := codexpreset.ProviderMetadataJSON(home)
 	if err != nil {
 		return CodexProfileSetResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex provider metadata", err)
 	}
-	targetMetadata, err := codexTargetMetadataJSON(codexconfig.TargetID, codexTargetModeManagedKeys)
+	targetMetadata, err := codexpreset.TargetMetadataJSON(codexconfig.TargetID, codexpreset.TargetModeManagedKeys)
 	if err != nil {
 		return CodexProfileSetResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex preset metadata", err)
 	}
-	authTargetMetadata, err := codexTargetMetadataJSON(codexconfig.AuthTargetID, codexTargetModeFullFile)
+	authTargetMetadata, err := codexpreset.TargetMetadataJSON(codexconfig.AuthTargetID, codexpreset.TargetModeFullFile)
 	if err != nil {
 		return CodexProfileSetResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex auth target metadata", err)
 	}
-	authValueJSON, err := codexAuthTargetValueJSON(accountID)
+	authValueJSON, err := codexpreset.AuthTargetValueJSON(accountID)
 	if err != nil {
 		return CodexProfileSetResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex auth target value", err)
 	}
@@ -277,14 +259,14 @@ func CodexProfileSet(ctx context.Context, req CodexProfileSetRequest) (CodexProf
 		if !hasProvider {
 			provider, err = txStore.CreateProvider(ctx, store.CreateProviderParams{
 				ID:           codexconfig.ProviderID,
-				Name:         codexProviderName,
+				Name:         codexpreset.ProviderName,
 				AdapterID:    codexconfig.AdapterID,
 				Enabled:      true,
 				MetadataJSON: providerMetadata,
 			})
 		} else {
 			enabled := true
-			name := codexProviderName
+			name := codexpreset.ProviderName
 			provider, err = txStore.UpdateProvider(ctx, store.UpdateProviderParams{
 				ID:           codexconfig.ProviderID,
 				Name:         &name,
@@ -462,9 +444,9 @@ func codexPreflightProvider(ctx context.Context, db *store.Store, home codexconf
 			WithDetail("adapter_id", provider.AdapterID)
 	}
 	if provider.MetadataJSON != "" {
-		metadata, appErr := decodeCodexProviderMetadata(provider.MetadataJSON)
-		if appErr != nil {
-			return store.Provider{}, false, appErr
+		metadata, err := codexpreset.DecodeProviderMetadata(provider.MetadataJSON)
+		if err != nil {
+			return store.Provider{}, false, WrapError(ErrorStoreSchemaInvalid, "stored Codex provider metadata is invalid", err)
 		}
 		if metadata.Preset == codexconfig.PresetName && metadata.PresetVersion != codexconfig.PresetVersion {
 			return store.Provider{}, false, NewError(ErrorCodexInvalid, "existing codex provider preset version is unsupported")
@@ -573,11 +555,13 @@ func codexPreflightTargets(ctx context.Context, db *store.Store, home codexconfi
 }
 
 func requireCodexTargetMetadata(target store.ProfileTarget) *AppError {
-	metadata, appErr := decodeCodexTargetMetadata(target.MetadataJSON)
-	if appErr != nil {
-		return appErr.WithDetail("profile_id", target.ProfileID).WithDetail("target_id", target.TargetID)
+	metadata, err := codexpreset.DecodeTargetMetadata(target.MetadataJSON)
+	if err != nil {
+		return WrapError(ErrorStoreSchemaInvalid, "stored Codex target metadata is invalid", err).
+			WithDetail("profile_id", target.ProfileID).
+			WithDetail("target_id", target.TargetID)
 	}
-	if !metadata.compatible() {
+	if !metadata.Compatible() {
 		return NewError(ErrorCodexInvalid, "existing codex target was not created by the Codex preset").
 			WithDetail("profile_id", target.ProfileID).
 			WithDetail("target_id", target.TargetID)
@@ -621,88 +605,6 @@ func requireCodexTargetForHome(target store.ProfileTarget, home codexconfig.Home
 	return requireCodexTargetMetadata(target)
 }
 
-func decodeCodexProviderMetadata(raw string) (codexProviderMetadata, *AppError) {
-	var metadata codexProviderMetadata
-	if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
-		return codexProviderMetadata{}, WrapError(ErrorStoreSchemaInvalid, "stored Codex provider metadata is invalid", err)
-	}
-	return metadata, nil
-}
-
-func (metadata codexProviderMetadata) compatible() bool {
-	return metadata.Preset == codexconfig.PresetName &&
-		metadata.PresetVersion == codexconfig.PresetVersion &&
-		metadata.CodexDir != "" &&
-		metadata.ConfigPath != ""
-}
-
-func decodeCodexTargetMetadata(raw string) (codexTargetMetadata, *AppError) {
-	var metadata codexTargetMetadata
-	if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
-		return codexTargetMetadata{}, WrapError(ErrorStoreSchemaInvalid, "stored Codex target metadata is invalid", err)
-	}
-	return metadata, nil
-}
-
-func (metadata codexTargetMetadata) compatible() bool {
-	if metadata.Preset != codexconfig.PresetName || metadata.PresetVersion != codexconfig.PresetVersion {
-		return false
-	}
-	switch metadata.TargetKind {
-	case codexconfig.TargetID:
-		switch metadata.modeOrDefault() {
-		case codexTargetModeManagedKeys:
-			return sameStringSet(metadata.ManagedKeys, codexconfig.ManagedKeys())
-		case codexTargetModeFullFile:
-			return len(metadata.ManagedKeys) == 0
-		default:
-			return false
-		}
-	case codexconfig.AuthTargetID:
-		return metadata.Mode == codexTargetModeFullFile && len(metadata.ManagedKeys) == 0
-	default:
-		return false
-	}
-}
-
-func (metadata codexTargetMetadata) modeOrDefault() string {
-	if metadata.Mode == "" && metadata.TargetKind == codexconfig.TargetID {
-		return codexTargetModeManagedKeys
-	}
-	return metadata.Mode
-}
-
-func codexProviderMetadataJSON(home codexconfig.Home) (string, error) {
-	raw, err := json.Marshal(codexProviderMetadata{
-		Preset:        codexconfig.PresetName,
-		PresetVersion: codexconfig.PresetVersion,
-		CodexDir:      home.Dir,
-		ConfigPath:    home.ConfigPath,
-		AuthPath:      home.AuthPath,
-	})
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
-func codexTargetMetadataJSON(targetKind string, mode string) (string, error) {
-	metadata := codexTargetMetadata{
-		Preset:        codexconfig.PresetName,
-		PresetVersion: codexconfig.PresetVersion,
-		TargetKind:    targetKind,
-		Mode:          mode,
-	}
-	if targetKind == codexconfig.TargetID && mode == codexTargetModeManagedKeys {
-		metadata.ManagedKeys = codexconfig.ManagedKeys()
-	}
-	raw, err := json.Marshal(metadata)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
-}
-
 func codexTargetInvalid(target store.ProfileTarget, message string) *AppError {
 	return NewError(ErrorCodexInvalid, message).
 		WithDetail("profile_id", target.ProfileID).
@@ -711,22 +613,22 @@ func codexTargetInvalid(target store.ProfileTarget, message string) *AppError {
 }
 
 func codexConfigTargetFormatValid(target store.ProfileTarget) bool {
-	return target.Format == targetFormatTOML
+	return codexpreset.ConfigTargetFormatValid(target.Format, codexTargetFormatStrategyNames)
 }
 
 func codexConfigTargetStrategyValid(target store.ProfileTarget) bool {
-	return target.Strategy == targetStrategyTOMLMerge || target.Strategy == targetStrategyReplaceFile
+	return codexpreset.ConfigTargetStrategyValid(target.Strategy, codexTargetFormatStrategyNames)
 }
 
 func codexAuthTargetFormatStrategyValid(target store.ProfileTarget) bool {
-	return target.Format == targetFormatJSON && target.Strategy == targetStrategyReplaceFile
+	return codexpreset.AuthTargetFormatStrategyValid(target.Format, target.Strategy, codexTargetFormatStrategyNames)
 }
 
 func codexDetectCompatibilityWarnings(ctx context.Context, db *store.Store, provider store.Provider, home codexconfig.Home) ([]string, error) {
 	warnings := []string{}
 	if provider.MetadataJSON != "" {
-		metadata, appErr := decodeCodexProviderMetadata(provider.MetadataJSON)
-		if appErr != nil {
+		metadata, err := codexpreset.DecodeProviderMetadata(provider.MetadataJSON)
+		if err != nil {
 			warnings = append(warnings, "existing codex provider metadata is invalid")
 		} else if metadata.Preset == codexconfig.PresetName {
 			if metadata.PresetVersion != codexconfig.PresetVersion {
@@ -777,31 +679,11 @@ func codexDetectTargetWarnings(target store.ProfileTarget, home codexconfig.Home
 	default:
 		return append(warnings, "existing codex provider has an unsupported target")
 	}
-	metadata, appErr := decodeCodexTargetMetadata(target.MetadataJSON)
-	if appErr != nil {
+	metadata, err := codexpreset.DecodeTargetMetadata(target.MetadataJSON)
+	if err != nil {
 		warnings = append(warnings, "existing codex target metadata is invalid")
-	} else if !metadata.compatible() {
+	} else if !metadata.Compatible() {
 		warnings = append(warnings, "existing codex target was not created by the Codex preset")
 	}
 	return warnings
-}
-
-func sameStringSet(left []string, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	seen := make(map[string]int, len(left))
-	for _, value := range left {
-		seen[value]++
-	}
-	for _, value := range right {
-		if seen[value] == 0 {
-			return false
-		}
-		seen[value]--
-		if seen[value] == 0 {
-			delete(seen, value)
-		}
-	}
-	return len(seen) == 0
 }
