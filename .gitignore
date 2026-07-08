@@ -19,6 +19,13 @@ docs/node_modules/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
 
+# Desktop frontend
+desktop/frontend/node_modules/
+desktop/frontend/dist/*
+!desktop/frontend/dist/.gitkeep
+desktop/frontend/.svelte-kit/
+desktop/frontend/*.tsbuildinfo
+
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*

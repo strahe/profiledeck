@@ -2,7 +2,7 @@
 
 Safe profile switching for AI coding tools.
 
-ProfileDeck is currently a Go CLI with a Codex-first workflow. It can capture Codex user config and file-based auth, switch profiles through a guarded transaction pipeline, import local Codex token usage, and recover interrupted switch operations.
+ProfileDeck is currently a Go CLI and macOS desktop MVP with a Codex-first workflow. It can capture Codex user config and file-based auth, switch profiles through a guarded transaction pipeline, import local Codex token usage, and recover interrupted switch operations.
 
 ## Documentation
 
@@ -38,6 +38,16 @@ make test
 make check
 make clean
 ```
+
+Desktop checks are kept separate from the CLI/core check because the Wails version and release policy are still desktop-specific:
+
+```bash
+make desktop-check
+```
+
+macOS desktop builds target macOS 14.0 by default. Override it with `MACOS_MIN_VERSION=<version>` when running desktop Make targets.
+
+During desktop development, set `PROFILEDECK_CONFIG_DIR` to a temporary directory when you need to avoid touching the normal ProfileDeck runtime.
 
 ## Codex Quick Start
 
