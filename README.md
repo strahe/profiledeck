@@ -55,6 +55,7 @@ During desktop development, set `PROFILEDECK_CONFIG_DIR` to a temporary director
 profiledeck init
 profiledeck codex detect
 profiledeck codex profile capture work
+profiledeck codex profile list
 profiledeck plan codex work
 profiledeck switch codex work --yes
 ```

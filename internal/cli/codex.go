@@ -62,8 +62,62 @@ func newCodexProfileCommand() *urfavecli.Command {
 		Name:  "profile",
 		Usage: "Manage Codex profiles",
 		Commands: []*urfavecli.Command{
+			newCodexProfileListCommand(),
+			newCodexProfileShowCommand(),
 			newCodexProfileCaptureCommand(),
 			newCodexProfileSetCommand(),
+		},
+	}
+}
+
+func newCodexProfileListCommand() *urfavecli.Command {
+	return &urfavecli.Command{
+		Name:  "list",
+		Usage: "List stored Codex profiles",
+		Flags: []urfavecli.Flag{
+			boolFlag(jsonFlagName, "Write JSON output"),
+		},
+		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
+			result, err := app.ListCodexProfiles(ctx, app.ListCodexProfilesRequest{
+				ConfigDir: configDirValue(cmd),
+			})
+			if err != nil {
+				return err
+			}
+			w := outputWriter(cmd)
+			if cmd.Bool(jsonFlagName) {
+				return writeJSON(w, result)
+			}
+			return writeCodexProfileList(w, result)
+		},
+	}
+}
+
+func newCodexProfileShowCommand() *urfavecli.Command {
+	return &urfavecli.Command{
+		Name:      "show",
+		Usage:     "Show a stored Codex profile",
+		ArgsUsage: "<profile-id>",
+		Flags: []urfavecli.Flag{
+			boolFlag(jsonFlagName, "Write JSON output"),
+		},
+		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
+			profileID, err := singleIDArg(cmd, app.ErrorProfileInvalid)
+			if err != nil {
+				return err
+			}
+			result, err := app.GetCodexProfile(ctx, app.GetCodexProfileRequest{
+				ConfigDir: configDirValue(cmd),
+				ProfileID: profileID,
+			})
+			if err != nil {
+				return err
+			}
+			w := outputWriter(cmd)
+			if cmd.Bool(jsonFlagName) {
+				return writeJSON(w, result)
+			}
+			return writeCodexProfileDetail(w, result)
 		},
 	}
 }
@@ -301,6 +355,82 @@ func writeCodexDetect(w io.Writer, result app.CodexDetectResult) error {
 		return err
 	}
 	return writeWarnings(w, result.Warnings)
+}
+
+func writeCodexProfileList(w io.Writer, result app.CodexProfileListResult) error {
+	if len(result.Profiles) == 0 {
+		_, err := fmt.Fprintln(w, "No Codex profiles")
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Codex profiles\ncount: %d\n", len(result.Profiles)); err != nil {
+		return err
+	}
+	for _, profile := range result.Profiles {
+		active := "idle"
+		if profile.Active {
+			active = "active"
+		}
+		if _, err := fmt.Fprintf(
+			w,
+			"- %s name: %s kind: %s status: %s targets: %d account: %s updated: %d\n",
+			profile.Profile.ID,
+			profile.Profile.Name,
+			profile.SaveKind,
+			active,
+			profile.TargetCount,
+			profile.AccountID,
+			profile.UpdatedAtUnixMS,
+		); err != nil {
+			return err
+		}
+		for _, warning := range profile.Warnings {
+			if _, err := fmt.Fprintf(w, "  warning: %s\n", warning); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func writeCodexProfileDetail(w io.Writer, detail app.CodexProfileDetail) error {
+	summary := detail.Summary
+	active := "false"
+	if summary.Active {
+		active = "true"
+	}
+	if _, err := fmt.Fprintf(
+		w,
+		"Codex profile\nprofile: %s\nname: %s\nkind: %s\nactive: %s\nactive operation: %s\ntargets: %d\naccount: %s\nupdated: %d\n",
+		summary.Profile.ID,
+		summary.Profile.Name,
+		summary.SaveKind,
+		active,
+		summary.ActiveOperationID,
+		summary.TargetCount,
+		summary.AccountID,
+		summary.UpdatedAtUnixMS,
+	); err != nil {
+		return err
+	}
+	if err := writeWarnings(w, summary.Warnings); err != nil {
+		return err
+	}
+	for _, target := range detail.Targets {
+		if _, err := fmt.Fprintf(
+			w,
+			"target: %s provider: %s format: %s strategy: %s enabled: %t path: %s\nvalue_preview: %s\n",
+			target.TargetID,
+			target.ProviderID,
+			target.Format,
+			target.Strategy,
+			target.Enabled,
+			target.Path,
+			target.ValuePreview.Content,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeCodexProfileSet(w io.Writer, result app.CodexProfileSetResult) error {

@@ -34,6 +34,13 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	if cmd.Command("codex") == nil {
 		t.Fatalf("expected codex subcommand")
 	}
+	if codex := cmd.Command("codex"); codex == nil || codex.Command("profile") == nil ||
+		codex.Command("profile").Command("list") == nil ||
+		codex.Command("profile").Command("show") == nil ||
+		codex.Command("profile").Command("capture") == nil ||
+		codex.Command("profile").Command("set") == nil {
+		t.Fatalf("expected codex profile list/show/capture/set subcommands")
+	}
 	if cmd.Command("doctor") == nil {
 		t.Fatalf("expected doctor subcommand")
 	}
@@ -513,6 +520,99 @@ func TestCodexProfileCaptureUsesProfileIDAsLocalAccountByDefault(t *testing.T) {
 		"--json",
 	)
 	assertCLIAppErrorCode(t, err, app.ErrorProfileInvalid)
+}
+
+func TestCodexProfileListAndShowCLI(t *testing.T) {
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	configPath := filepath.Join(codexDir, codexconfig.ConfigFileName)
+	authPath := filepath.Join(codexDir, codexconfig.AuthFileName)
+	rawConfigSecret := "config-secret"
+	rawAuthSecret := "auth-secret"
+	if err := os.WriteFile(configPath, []byte(`model = "gpt-5-codex"`+"\n"+`api_key = "`+rawConfigSecret+`"`+"\n"), 0o600); err != nil {
+		t.Fatalf("expected Codex config setup to succeed, got %v", err)
+	}
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"account_id":"remote-work","access_token":"`+rawAuthSecret+`"}}`), 0o600); err != nil {
+		t.Fatalf("expected Codex auth setup to succeed, got %v", err)
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	if _, err := runCLI(t,
+		"--config-dir", configDir,
+		"codex", "profile", "capture", "work",
+		"--account", "local-work",
+		"--codex-dir", codexDir,
+		"--json",
+	); err != nil {
+		t.Fatalf("expected codex profile capture to succeed, got %v", err)
+	}
+	if _, err := runCLI(t,
+		"--config-dir", configDir,
+		"codex", "profile", "set", "fast",
+		"--model", "gpt-5-codex",
+		"--codex-dir", codexDir,
+		"--json",
+	); err != nil {
+		t.Fatalf("expected codex profile set to succeed, got %v", err)
+	}
+
+	out, err := runCLI(t, "--config-dir", configDir, "codex", "profile", "list", "--json")
+	if err != nil {
+		t.Fatalf("expected codex profile list to succeed, got %v", err)
+	}
+	if strings.Contains(out, rawConfigSecret) || strings.Contains(out, rawAuthSecret) {
+		t.Fatalf("expected codex profile list output to redact raw secrets, got %q", out)
+	}
+	var list app.CodexProfileListResult
+	decodeCLIJSON(t, []byte(out), &list)
+	if len(list.Profiles) != 2 {
+		t.Fatalf("expected two Codex profiles, got %#v", list)
+	}
+	byID := map[string]app.CodexProfileSummary{}
+	for _, summary := range list.Profiles {
+		byID[summary.Profile.ID] = summary
+	}
+	if byID["work"].SaveKind != app.CodexProfileSaveKindSnapshot || byID["work"].AccountID != "local-work" {
+		t.Fatalf("unexpected captured profile summary: %#v", byID["work"])
+	}
+	if byID["fast"].SaveKind != app.CodexProfileSaveKindConfigPreset {
+		t.Fatalf("unexpected managed profile summary: %#v", byID["fast"])
+	}
+
+	humanOut, err := runCLI(t, "--config-dir", configDir, "codex", "profile", "list")
+	if err != nil {
+		t.Fatalf("expected codex profile human list to succeed, got %v", err)
+	}
+	if !strings.Contains(humanOut, "Codex profiles") || strings.Contains(humanOut, rawConfigSecret) || strings.Contains(humanOut, rawAuthSecret) {
+		t.Fatalf("unexpected codex profile human list output: %q", humanOut)
+	}
+
+	out, err = runCLI(t, "--config-dir", configDir, "codex", "profile", "show", "work", "--json")
+	if err != nil {
+		t.Fatalf("expected codex profile show to succeed, got %v", err)
+	}
+	if strings.Contains(out, rawConfigSecret) || strings.Contains(out, rawAuthSecret) || strings.Contains(out, "access_token") {
+		t.Fatalf("expected codex profile show output to redact raw secrets, got %q", out)
+	}
+	var detail app.CodexProfileDetail
+	decodeCLIJSON(t, []byte(out), &detail)
+	if detail.Summary.Profile.ID != "work" || len(detail.Targets) != 2 {
+		t.Fatalf("unexpected codex profile detail: %#v", detail)
+	}
+	humanOut, err = runCLI(t, "--config-dir", configDir, "codex", "profile", "show", "work")
+	if err != nil {
+		t.Fatalf("expected codex profile human show to succeed, got %v", err)
+	}
+	if !strings.Contains(humanOut, "Codex profile") || strings.Contains(humanOut, rawConfigSecret) || strings.Contains(humanOut, rawAuthSecret) {
+		t.Fatalf("unexpected codex profile human show output: %q", humanOut)
+	}
+
+	if _, err := runCLI(t, "--config-dir", configDir, "profile", "create", "generic", "--name", "Generic", "--json"); err != nil {
+		t.Fatalf("expected generic profile create to succeed, got %v", err)
+	}
+	_, err = runCLI(t, "--config-dir", configDir, "codex", "profile", "show", "generic", "--json")
+	assertCLIAppErrorCode(t, err, app.ErrorProfileNotFound)
 }
 
 func TestUsageSyncCodexHumanOutputReportsOversizedLinesWithoutBlockingFile(t *testing.T) {

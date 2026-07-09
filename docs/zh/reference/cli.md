@@ -36,6 +36,8 @@ profiledeck version
 
 ```bash
 profiledeck codex detect [--codex-dir PATH] [--json]
+profiledeck codex profile list [--json]
+profiledeck codex profile show <profile-id> [--json]
 profiledeck codex profile capture <profile-id> [--account ID] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
 profiledeck codex profile set <profile-id> --model MODEL [--model-provider ID] [--openai-base-url URL] [--account ID] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
 ```

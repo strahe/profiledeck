@@ -54,18 +54,13 @@ func TestDesktopChangeDebouncerStopCancelsPendingEvent(t *testing.T) {
 	}
 }
 
-func TestCodexProfilesReturnsTargetListError(t *testing.T) {
+func TestCodexProfilesReturnsSharedListError(t *testing.T) {
 	services := backend.NewServices(app.DefaultInfo(), backend.Environment{ConfigDir: t.TempDir()}, nil)
 
-	_, err := codexProfiles(context.Background(), services, backend.DashboardResult{
-		Profiles: []app.Profile{{ID: "work", Name: "Work"}},
-	})
+	_, err := codexProfiles(context.Background(), services, backend.DashboardResult{})
 
 	if err == nil {
-		t.Fatalf("expected profile target listing error")
-	}
-	if !strings.Contains(err.Error(), "work") || !strings.Contains(err.Error(), "list Codex targets") {
-		t.Fatalf("expected error to include profile context, got %v", err)
+		t.Fatalf("expected Codex profile listing error")
 	}
 }
 

@@ -117,6 +117,15 @@ export interface CodexProfileCaptureResult {
     "warnings": string[] | null;
 }
 
+export interface CodexProfileDetail {
+    "summary": CodexProfileSummary;
+    "targets": ProfileTarget[] | null;
+}
+
+export interface CodexProfileListResult {
+    "profiles": CodexProfileSummary[] | null;
+}
+
 export interface CodexProfileSetResult {
     "provider": Provider;
     "profile": Profile;
@@ -127,6 +136,20 @@ export interface CodexProfileSetResult {
     "auth_path": string;
     "managed_keys": string[] | null;
     "warnings": string[] | null;
+}
+
+export interface CodexProfileSummary {
+    "profile": Profile;
+    "provider_id": string;
+    "save_kind": string;
+    "account_id"?: string;
+    "model"?: string;
+    "model_provider"?: string;
+    "target_count": number;
+    "active": boolean;
+    "active_operation_id"?: string;
+    "updated_at_unix_ms": number;
+    "warnings"?: string[] | null;
 }
 
 export interface DoctorFinding {

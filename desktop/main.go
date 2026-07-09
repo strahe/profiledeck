@@ -5,7 +5,6 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
-	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -67,10 +66,10 @@ func main() {
 	mainWindow := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:             "main",
 		Title:            app.ProductName,
-		Width:            1120,
-		Height:           760,
-		MinWidth:         920,
-		MinHeight:        620,
+		Width:            940,
+		Height:           600,
+		MinWidth:         900,
+		MinHeight:        580,
 		URL:              "/",
 		BackgroundColour: application.NewRGB(248, 250, 252),
 		Mac: application.MacWindow{
@@ -180,22 +179,21 @@ func buildTrayMenu(ctx context.Context, wailsApp *application.App, mainWindow *a
 	} else if len(profiles) == 0 {
 		profilesMenu.Add("No Codex profiles").SetEnabled(false)
 	} else {
-		activeProfileID := activeCodexProfileID(dashboard)
 		for _, profile := range profiles {
 			profile := profile
-			label := profile.Name
+			label := profile.Profile.Name
 			if label == "" {
-				label = profile.ID
+				label = profile.Profile.ID
 			}
 			item := profilesMenu.Add(label)
-			if profile.ID == activeProfileID {
+			if profile.Active {
 				item.SetChecked(true)
 			}
 			item.OnClick(func(*application.Context) {
 				showMainWindow(mainWindow)
 				wailsApp.Event.Emit("profiledeck:open-switch", map[string]string{
 					"provider_id": codexconfig.ProviderID,
-					"profile_id":  profile.ID,
+					"profile_id":  profile.Profile.ID,
 				})
 			})
 		}
@@ -234,19 +232,12 @@ func trayErrorLabel(err error, fallback string) string {
 	return fallback
 }
 
-func codexProfiles(ctx context.Context, services backend.Services, dashboard backend.DashboardResult) ([]app.Profile, error) {
-	profiles := dashboard.Profiles
-	result := make([]app.Profile, 0, len(profiles))
-	for _, profile := range profiles {
-		targets, err := services.Profile.ListTargets(ctx, profile.ID, codexconfig.ProviderID)
-		if err != nil {
-			return nil, fmt.Errorf("list Codex targets for profile %q: %w", profile.ID, err)
-		}
-		if len(targets) > 0 {
-			result = append(result, profile)
-		}
+func codexProfiles(ctx context.Context, services backend.Services, _ backend.DashboardResult) ([]app.CodexProfileSummary, error) {
+	result, err := services.Codex.ListProfiles(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return result, nil
+	return result.Profiles, nil
 }
 
 func currentProfileLabel(dashboard backend.DashboardResult) string {
@@ -272,15 +263,6 @@ func currentProfileLabel(dashboard backend.DashboardResult) string {
 func missingActiveCodexProfileID(dashboard backend.DashboardResult) string {
 	for _, state := range dashboard.ActiveStates {
 		if state.ProviderID == codexconfig.ProviderID && state.ProfileID != "" && !state.ProfileAvailable {
-			return state.ProfileID
-		}
-	}
-	return ""
-}
-
-func activeCodexProfileID(dashboard backend.DashboardResult) string {
-	for _, state := range dashboard.ActiveStates {
-		if state.ProviderID == codexconfig.ProviderID {
 			return state.ProfileID
 		}
 	}

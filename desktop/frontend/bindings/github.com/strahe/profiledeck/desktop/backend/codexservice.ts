@@ -25,6 +25,14 @@ export function ListAccounts(): $CancellablePromise<app$0.CodexAccount[] | null>
     return $Call.ByID(3697642322);
 }
 
+export function ListProfiles(): $CancellablePromise<app$0.CodexProfileListResult> {
+    return $Call.ByID(2936238732);
+}
+
 export function SetManagedProfile(req: $models.CodexProfileSetRequest): $CancellablePromise<app$0.CodexProfileSetResult> {
     return $Call.ByID(2783517948, req);
+}
+
+export function ShowProfile(profileID: string): $CancellablePromise<app$0.CodexProfileDetail> {
+    return $Call.ByID(1381065948, profileID);
 }

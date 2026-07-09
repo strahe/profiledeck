@@ -206,6 +206,14 @@ func (s *CodexService) Detect(ctx context.Context) (app.CodexDetectResult, error
 	return app.CodexDetect(ctx, app.CodexDetectRequest{ConfigDir: s.env.ConfigDir, CodexDir: s.env.CodexDir})
 }
 
+func (s *CodexService) ListProfiles(ctx context.Context) (app.CodexProfileListResult, error) {
+	return app.ListCodexProfiles(ctx, app.ListCodexProfilesRequest{ConfigDir: s.env.ConfigDir})
+}
+
+func (s *CodexService) ShowProfile(ctx context.Context, profileID string) (app.CodexProfileDetail, error) {
+	return app.GetCodexProfile(ctx, app.GetCodexProfileRequest{ConfigDir: s.env.ConfigDir, ProfileID: profileID})
+}
+
 func (s *CodexService) CaptureProfile(ctx context.Context, req CodexProfileCaptureRequest) (app.CodexProfileCaptureResult, error) {
 	result, err := app.CodexProfileCapture(ctx, app.CodexProfileCaptureRequest{
 		ConfigDir:   s.env.ConfigDir,

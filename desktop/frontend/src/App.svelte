@@ -1,65 +1,49 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { CancelError, Events, type CancellablePromise } from "@wailsio/runtime";
+	import { setMode } from "mode-watcher";
 	import { toast } from "svelte-sonner";
-	import ActivityIcon from "@lucide/svelte/icons/activity";
-	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
-	import CheckIcon from "@lucide/svelte/icons/check";
-	import DatabaseIcon from "@lucide/svelte/icons/database";
-	import LoaderIcon from "@lucide/svelte/icons/loader-2";
-	import RefreshCcwIcon from "@lucide/svelte/icons/refresh-ccw";
-	import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
-	import ShieldIcon from "@lucide/svelte/icons/shield";
-	import TerminalIcon from "@lucide/svelte/icons/terminal";
-	import WalletCardsIcon from "@lucide/svelte/icons/wallet-cards";
 
 	import {
 		AppService,
 		BackupService,
 		CodexService,
 		DoctorService,
-		ProfileService,
 		SwitchService,
 		UsageService,
 	} from "../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type {
 		CodexProfileCaptureRequest,
-		CodexProfileSetRequest,
 		DashboardResult,
 		DesktopError,
 	} from "../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type {
-		BackupDetail,
 		BackupSummary,
-		CodexAccount,
 		CodexDetectResult,
+		CodexProfileSummary,
 		DoctorResult,
-		PlanOperation,
-		Profile,
-		ProfileTarget,
 		SwitchPlan,
 		UsageSummaryResult,
 		UsageSyncResult,
 	} from "../bindings/github.com/strahe/profiledeck/internal/app/models";
 
-	import ConfirmAction from "$lib/components/app/ConfirmAction.svelte";
-	import EmptyState from "$lib/components/app/EmptyState.svelte";
-	import MetricCard from "$lib/components/app/MetricCard.svelte";
-	import OperationTable from "$lib/components/app/OperationTable.svelte";
-	import * as Alert from "$lib/components/ui/alert";
-	import { Badge } from "$lib/components/ui/badge";
-	import { Button } from "$lib/components/ui/button";
-	import * as Card from "$lib/components/ui/card";
+	import * as Dialog from "$lib/components/ui/dialog";
+	import * as Empty from "$lib/components/ui/empty";
 	import * as Field from "$lib/components/ui/field";
-	import { Input } from "$lib/components/ui/input";
-	import * as Select from "$lib/components/ui/select";
-	import { Separator } from "$lib/components/ui/separator";
-	import { Spinner } from "$lib/components/ui/spinner";
 	import * as Table from "$lib/components/ui/table";
 	import * as Tabs from "$lib/components/ui/tabs";
+	import { Badge } from "$lib/components/ui/badge";
+	import { Button } from "$lib/components/ui/button";
+	import { Input } from "$lib/components/ui/input";
+	import { Spinner } from "$lib/components/ui/spinner";
 	import { Toaster } from "$lib/components/ui/sonner";
+	import { cn } from "$lib/utils";
 
-	type Tab = "dashboard" | "codex" | "profiles" | "switch" | "recovery" | "usage" | "doctor";
+	type AgentID = "codex" | "claude" | "gemini" | "opencode";
+	type PlaceholderAgentID = Exclude<AgentID, "codex">;
+	type WorkspaceTab = "profiles" | "backups" | "health" | "usage";
+	type StatusVariant = "ok" | "warn" | "idle" | "muted";
+	type Platform = "macos" | "windows" | "linux";
 
 	type DesktopChangeEvent = {
 		kind: string;
@@ -77,80 +61,188 @@
 		error?: DesktopError | null;
 	};
 
+	type AgentProfile = {
+		id: string;
+		name: string;
+		desc: string;
+		updated: string;
+		model: string;
+		provider: string;
+		summary?: CodexProfileSummary;
+	};
+
+	type AgentBackup = {
+		id: string;
+		profile: string;
+		created: string;
+		status: "applied" | "created" | "restored" | "failed";
+		backup?: BackupSummary;
+	};
+
+	type AgentData = {
+		id: AgentID;
+		name: string;
+		detected: boolean;
+		current: string;
+		targets: string[];
+		profiles: AgentProfile[];
+		backups: AgentBackup[];
+		usage: {
+			events: string;
+			input: string;
+			output: string;
+			cost: string;
+		};
+		health: {
+			overall: string;
+			lock: string;
+			pending: number;
+			failed: number;
+			findings: Array<{ id: string; status: string; message: string }>;
+		};
+		placeholder: boolean;
+	};
+
+	type PendingUse = {
+		agentID: AgentID;
+		profileID: string;
+		profileName: string;
+		plan?: SwitchPlan | null;
+	};
+
 	const codexProviderID = "codex";
-	const desktopChangeStatus = {
-		failure: "failure",
-		canceled: "canceled",
-	} as const;
+	const tabs: Array<{ id: WorkspaceTab; label: string }> = [
+		{ id: "profiles", label: "Profiles" },
+		{ id: "backups", label: "Backups" },
+		{ id: "health", label: "Health" },
+		{ id: "usage", label: "Usage" },
+	];
+	const agentOrder: AgentID[] = ["codex", "claude", "gemini", "opencode"];
 	const desktopChangeKind = {
 		codexProfileCaptured: "codex-profile-captured",
-		codexProfileManaged: "codex-profile-managed",
 		switchApplied: "switch-applied",
 		rollbackApplied: "rollback-applied",
 		switchRecovered: "switch-recovered",
 		usageSynced: "usage-synced",
 	} as const;
 
-	const tabs: Array<{ id: Tab; label: string; icon: typeof ActivityIcon }> = [
-		{ id: "dashboard", label: "Status", icon: ActivityIcon },
-		{ id: "codex", label: "Codex", icon: TerminalIcon },
-		{ id: "profiles", label: "Profiles", icon: WalletCardsIcon },
-		{ id: "switch", label: "Switch", icon: RefreshCcwIcon },
-		{ id: "recovery", label: "Recovery", icon: RotateCcwIcon },
-		{ id: "usage", label: "Usage", icon: DatabaseIcon },
-		{ id: "doctor", label: "Doctor", icon: ShieldIcon },
-	];
+	const initialPlaceholders: Record<PlaceholderAgentID, AgentData> = {
+		claude: {
+			id: "claude",
+			name: "Claude",
+			detected: true,
+			current: "personal",
+			targets: ["~/.claude/settings.json", "~/.claude/auth.json"],
+			profiles: [
+				{
+					id: "personal",
+					name: "personal",
+					desc: "Personal account",
+					updated: "Yesterday 20:18",
+					model: "claude-sonnet-4-6",
+					provider: "anthropic",
+				},
+				{
+					id: "client-a",
+					name: "client-a",
+					desc: "Client A workspace",
+					updated: "Yesterday 19:42",
+					model: "claude-sonnet-4-6",
+					provider: "anthropic",
+				},
+			],
+			backups: [
+				{
+					id: "switch-178330112",
+					profile: "personal",
+					created: "2026-07-06 20:18:41",
+					status: "applied",
+				},
+			],
+			usage: { events: "8,914", input: "182M", output: "9.2M", cost: "—" },
+			health: { overall: "OK", lock: "OK", pending: 0, failed: 0, findings: [] },
+			placeholder: true,
+		},
+		gemini: {
+			id: "gemini",
+			name: "Gemini",
+			detected: false,
+			current: "",
+			targets: ["~/.gemini/config.json"],
+			profiles: [],
+			backups: [],
+			usage: { events: "—", input: "—", output: "—", cost: "—" },
+			health: { overall: "—", lock: "—", pending: 0, failed: 0, findings: [] },
+			placeholder: true,
+		},
+		opencode: {
+			id: "opencode",
+			name: "OpenCode",
+			detected: false,
+			current: "",
+			targets: ["~/.opencode/config.toml"],
+			profiles: [],
+			backups: [],
+			usage: { events: "—", input: "—", output: "—", cost: "—" },
+			health: { overall: "—", lock: "—", pending: 0, failed: 0, findings: [] },
+			placeholder: true,
+		},
+	};
 
 	const inFlight = new Map<string, CancellablePromise<unknown>>();
 
-	let activeTab: Tab = "dashboard";
+	let selectedAgent: AgentID = "codex";
+	let selectedTab: WorkspaceTab = "profiles";
+	let theme: "light" | "dark" = "light";
+	let platform: Platform = detectPlatform();
 	let loading = false;
+	let loadingProfiles = false;
 	let actionBusy = "";
-	let error = "";
-	let notice = "";
 	let lastToast = "";
 
 	let dashboard: DashboardResult | null = null;
 	let detectResult: CodexDetectResult | null = null;
-	let accounts: CodexAccount[] = [];
-	let targets: ProfileTarget[] = [];
-	let selectedProfileID = "";
-	let switchPlan: SwitchPlan | null = null;
+	let doctorResult: DoctorResult | null = null;
 	let backups: BackupSummary[] = [];
-	let selectedBackup: BackupDetail | null = null;
 	let usageSummary: UsageSummaryResult | null = null;
 	let usageSyncResult: UsageSyncResult | null = null;
-	let doctorResult: DoctorResult | null = null;
+	let codexProfileSummaries: CodexProfileSummary[] = [];
+	let profileError = "";
 
-	let codexProfileID = "";
-	let codexAccountID = "";
-	let codexProfileName = "";
-	let codexProfileDescription = "";
-	let managedModel = "gpt-5-codex";
-	let managedModelProvider = "openai";
-	let managedBaseURL = "";
+	let placeholderAgents: Record<PlaceholderAgentID, AgentData> = initialPlaceholders;
 
-	$: if (switchPlan && switchPlan.profile.id !== selectedProfileID) {
-		switchPlan = null;
-	}
+	let captureOpen = false;
+	let captureProfileID = "";
+	let captureProfileName = "";
+	let captureDescription = "";
+
+	let useConfirmOpen = false;
+	let pendingUse: PendingUse | null = null;
+
+	$: codexBackups = backups.filter((backup) => backup.provider_id === codexProviderID);
+	$: codexAgent = buildCodexAgent();
+	$: currentAgent = agentByID(selectedAgent);
 
 	onMount(() => {
+		applyTheme(theme);
 		void refreshAll();
 
 		const off = [
 			Events.On("profiledeck:open-switch", (event) => {
 				const payload = event.data ?? {};
-				if (payload.provider_id === codexProviderID && payload.profile_id) {
-					void openSwitch(payload.profile_id);
-				}
+				if (payload.provider_id !== codexProviderID || !payload.profile_id) return;
+				selectedAgent = "codex";
+				selectedTab = "profiles";
+				void openUseByProfileID(payload.profile_id);
 			}),
 			Events.On("profiledeck:open-doctor", () => {
-				activeTab = "doctor";
-				void runDoctor();
+				selectedAgent = "codex";
+				selectedTab = "health";
+				void runHealth();
 			}),
 			Events.On("profiledeck:usage-synced", (event) => {
 				usageSyncResult = event.data ?? null;
-				showNotice("Usage sync finished.");
+				showNotice("Usage synced", "Codex usage logs were parsed.");
 				void refreshUsage();
 			}),
 			Events.On("profiledeck:dashboard-updated", (event) => {
@@ -169,11 +261,16 @@
 
 	async function refreshAll() {
 		loading = true;
-		error = "";
 		try {
-			dashboard = await track("dashboard", AppService.Dashboard());
-			if (dashboard.doctor) doctorResult = dashboard.doctor;
-			await Promise.allSettled([refreshAccounts(), refreshBackups(), refreshUsage()]);
+			const nextDashboard = await track("dashboard", AppService.Dashboard());
+			dashboard = nextDashboard;
+			if (nextDashboard.doctor) doctorResult = nextDashboard.doctor;
+			await Promise.allSettled([
+				refreshDetect(),
+				refreshCodexProfiles(),
+				refreshBackups(),
+				refreshUsage(),
+			]);
 		} catch (err) {
 			if (!isCancelError(err)) showError(err);
 		} finally {
@@ -181,106 +278,28 @@
 		}
 	}
 
-	async function initialize() {
-		await runAction("initialize", async () => {
-			await track("initialize", AppService.Initialize());
-			showNotice("Runtime initialized.");
-		});
-	}
-
-	async function detectCodex() {
-		await runAction("detect", async () => {
-			detectResult = await track("detect", CodexService.Detect());
-			showNotice("Codex detection finished.");
-		});
-	}
-
-	async function refreshAccounts() {
+	async function refreshDetect() {
 		try {
-			accounts = (await track("accounts", CodexService.ListAccounts())) ?? [];
+			detectResult = await track("detect", CodexService.Detect());
 		} catch (err) {
-			if (!isCancelError(err)) accounts = [];
+			if (!isCancelError(err)) detectResult = null;
 		}
 	}
 
-	async function captureCodexProfile() {
-		await runAction("capture", async () => {
-			const req: CodexProfileCaptureRequest = {
-				profile_id: codexProfileID,
-				account_id: codexAccountID,
-				name: optional(codexProfileName),
-				description: optional(codexProfileDescription),
-			};
-			const result = await track("capture", CodexService.CaptureProfile(req));
-			setSelectedProfileID(result.profile.id);
-			switchPlan = null;
-			showNotice(`Captured ${result.profile.name || result.profile.id}.`);
-		});
-	}
-
-	async function setManagedCodexProfile() {
-		await runAction("managed", async () => {
-			const req: CodexProfileSetRequest = {
-				profile_id: codexProfileID,
-				account_id: codexAccountID,
-				name: optional(codexProfileName),
-				description: optional(codexProfileDescription),
-				model: managedModel,
-				model_provider: managedModelProvider,
-				openai_base_url: optional(managedBaseURL),
-			};
-			const result = await track("managed", CodexService.SetManagedProfile(req));
-			setSelectedProfileID(result.profile.id);
-			switchPlan = null;
-			showNotice(`Saved ${result.profile.name || result.profile.id}.`);
-		});
-	}
-
-	async function loadTargets(profileID: string) {
-		setSelectedProfileID(profileID);
-		targets = [];
-		await runAction("targets", async () => {
-			targets = (await track("targets", ProfileService.ListTargets(profileID, codexProviderID))) ?? [];
-		});
-	}
-
-	async function openSwitch(profileID: string) {
-		activeTab = "switch";
-		setSelectedProfileID(profileID);
-		switchPlan = null;
-		await buildSwitchPlan();
-	}
-
-	async function buildSwitchPlan() {
-		if (!selectedProfileID) {
-			showError("Select a profile first.");
-			return;
+	async function refreshCodexProfiles() {
+		loadingProfiles = true;
+		profileError = "";
+		try {
+			const result = await track("codex-profiles", CodexService.ListProfiles());
+			codexProfileSummaries = result.profiles ?? [];
+		} catch (err) {
+			if (!isCancelError(err)) {
+				codexProfileSummaries = [];
+				profileError = formatError(err);
+			}
+		} finally {
+			loadingProfiles = false;
 		}
-		await runAction("plan", async () => {
-			switchPlan = await track("plan", SwitchService.BuildPlan(codexProviderID, selectedProfileID));
-		});
-	}
-
-	async function applySwitch() {
-		if (!canApplyPlan(switchPlan)) {
-			showError("Build a fresh switch plan before applying.");
-			return;
-		}
-		await runAction("apply-switch", async () => {
-			const plan = switchPlan;
-			if (!plan) return;
-			const result = await track(
-				"apply-switch",
-				SwitchService.Apply({
-					provider_id: codexProviderID,
-					profile_id: selectedProfileID,
-					expected_plan_fingerprint: plan.plan_fingerprint,
-					confirm: true,
-				}),
-			);
-			switchPlan = null;
-			showNotice(`Applied ${result.profile.name || result.profile.id}.`);
-		});
 	}
 
 	async function refreshBackups() {
@@ -291,26 +310,6 @@
 		}
 	}
 
-	async function showBackup(backupID: string) {
-		await runAction("show-backup", async () => {
-			selectedBackup = await track("show-backup", BackupService.ShowBackup(backupID));
-		});
-	}
-
-	async function applyRollback(backupID: string) {
-		await runAction("rollback", async () => {
-			const result = await track("rollback", BackupService.ApplyRollback(backupID, true));
-			showNotice(`Rollback applied: ${result.operation_id}.`);
-		});
-	}
-
-	async function recoverFailedSwitch(operationID: string) {
-		await runAction("recover", async () => {
-			const result = await track("recover", BackupService.RecoverFailedSwitch(operationID, true));
-			showNotice(`Recovery applied: ${result.operation_id}.`);
-		});
-	}
-
 	async function refreshUsage() {
 		try {
 			usageSummary = await track("usage-summary", UsageService.Summary(codexProviderID));
@@ -319,32 +318,170 @@
 		}
 	}
 
-	async function syncUsage() {
-		await runAction("usage-sync", async () => {
-			usageSyncResult = await track("usage-sync", UsageService.SyncCodex());
-			await refreshUsage();
-			showNotice("Usage sync finished.");
+	async function detectSelectedAgent() {
+		if (selectedAgent !== "codex") {
+			showNotice("Detected", `${currentAgent.name} placeholder paths verified.`);
+			return;
+		}
+		await runAction("detect", async () => {
+			detectResult = await track("detect", CodexService.Detect());
+			showNotice("Detected", "Codex paths verified.");
 		});
 	}
 
-	async function runDoctor() {
+	async function refreshSelectedAgent() {
+		if (selectedAgent !== "codex") {
+			showNotice("Refreshed", `${currentAgent.name} placeholder state is up to date.`);
+			return;
+		}
+		await refreshAll();
+	}
+
+	function openCapture(profile?: AgentProfile) {
+		captureProfileID = profile?.id ?? "";
+		captureProfileName = profile?.name ?? "";
+		captureDescription = profile?.desc ?? "";
+		captureOpen = true;
+	}
+
+	async function saveCurrentProfile() {
+		if (selectedAgent !== "codex") {
+			savePlaceholderProfile(selectedAgent, captureProfileID, captureProfileName, captureDescription);
+			captureOpen = false;
+			showNotice("Snapshot saved", `${currentAgent.name} config saved as a reusable profile.`);
+			return;
+		}
+		await runAction("save-current", async () => {
+			const req: CodexProfileCaptureRequest = {
+				profile_id: captureProfileID,
+				account_id: "",
+				name: optional(captureProfileName),
+				description: optional(captureDescription),
+			};
+			const result = await track("save-current", CodexService.CaptureProfile(req));
+			captureOpen = false;
+			await refreshCodexProfiles();
+			showNotice("Snapshot saved", `Codex config saved as ${result.profile.name || result.profile.id}.`);
+		});
+	}
+
+	async function openUse(profile: AgentProfile) {
+		pendingUse = {
+			agentID: selectedAgent,
+			profileID: profile.id,
+			profileName: profile.name,
+			plan: null,
+		};
+		if (selectedAgent !== "codex") {
+			useConfirmOpen = true;
+			return;
+		}
+		await runAction("use-build", async () => {
+			const plan = await track("use-build", SwitchService.BuildPlan(codexProviderID, profile.id));
+			if (pendingUse) pendingUse = { ...pendingUse, plan };
+			useConfirmOpen = true;
+		});
+	}
+
+	async function openUseByProfileID(profileID: string) {
+		let summary = codexProfileSummaries.find((item) => item.profile.id === profileID);
+		if (!summary) {
+			await refreshCodexProfiles();
+			summary = codexProfileSummaries.find((item) => item.profile.id === profileID);
+		}
+		if (summary) await openUse(codexProfileFromSummary(summary));
+		else showError(`Codex profile not found: ${profileID}`);
+	}
+
+	async function confirmUse() {
+		if (!pendingUse) return;
+		if (pendingUse.agentID !== "codex") {
+			switchPlaceholderProfile(pendingUse.agentID, pendingUse.profileID);
+			const agentName = agentByID(pendingUse.agentID).name;
+			useConfirmOpen = false;
+			showNotice("Profile switched", `${agentName} now uses "${pendingUse.profileID}". Restart to take effect.`);
+			pendingUse = null;
+			return;
+		}
+		if (!pendingUse.plan?.plan_fingerprint) {
+			showError("The selected profile is not ready to use.");
+			return;
+		}
+		if (unsupportedOperationCount(pendingUse.plan) > 0) {
+			showError("This profile cannot be used until unsupported target changes are resolved.");
+			return;
+		}
+		await runAction("use-apply", async () => {
+			const current = pendingUse;
+			if (!current?.plan) return;
+			const result = await track(
+				"use-apply",
+				SwitchService.Apply({
+					provider_id: codexProviderID,
+					profile_id: current.profileID,
+					expected_plan_fingerprint: current.plan.plan_fingerprint,
+					confirm: true,
+				}),
+			);
+			useConfirmOpen = false;
+			pendingUse = null;
+			await Promise.allSettled([refreshCodexProfiles(), refreshBackups()]);
+			showNotice("Profile switched", `Codex now uses ${result.profile.name || result.profile.id}. Restart to take effect.`);
+		});
+	}
+
+	async function restoreBackup(backup: AgentBackup) {
+		if (selectedAgent !== "codex") {
+			showNotice("Backup restored", `Backup ${backup.id} restored. Restart ${currentAgent.name}.`);
+			return;
+		}
+		if (!backup.backup?.rollback_supported) {
+			showError(backup.backup?.unsupported_reason || "This backup cannot be restored.");
+			return;
+		}
+		await runAction("restore", async () => {
+			const result = await track("restore", BackupService.ApplyRollback(backup.id, true));
+			showNotice("Backup restored", `Backup restored: ${result.operation_id}. Restart Codex to load it.`);
+		});
+	}
+
+	async function syncUsage() {
+		if (selectedAgent !== "codex") {
+			showNotice("Usage synced", `${currentAgent.name} placeholder usage logs were parsed.`);
+			return;
+		}
+		await runAction("usage-sync", async () => {
+			usageSyncResult = await track("usage-sync", UsageService.SyncCodex());
+			await refreshUsage();
+			showNotice("Usage synced", "Codex usage logs were parsed.");
+		});
+	}
+
+	async function runHealth() {
+		if (selectedAgent !== "codex") {
+			showNotice("Health OK", `No incomplete ${currentAgent.name} operations found.`);
+			return;
+		}
 		await runAction("doctor", async () => {
 			doctorResult = await track("doctor", DoctorService.Run());
+			showNotice("Health OK", "Doctor check finished.");
 		});
 	}
 
 	async function repairLock() {
+		if (selectedAgent !== "codex") {
+			showNotice("Lock OK", "No repair was necessary.");
+			return;
+		}
 		await runAction("repair-lock", async () => {
 			await track("repair-lock", DoctorService.RepairLock(true));
-			showNotice("Lock repaired.");
+			showNotice("Lock OK", "Lock repair finished.");
 		});
 	}
 
 	async function runAction(name: string, fn: () => Promise<void>) {
 		if (actionBusy && actionBusy !== name) cancelAction(actionBusy);
 		actionBusy = name;
-		error = "";
-		notice = "";
 		try {
 			await fn();
 		} catch (err) {
@@ -370,11 +507,6 @@
 		inFlight.delete(key);
 	}
 
-	function cancelCurrentAction() {
-		if (actionBusy) cancelAction(actionBusy);
-		if (loading) cancelAction("dashboard");
-	}
-
 	function cancelAll() {
 		for (const promise of inFlight.values()) promise.cancel("unmount");
 		inFlight.clear();
@@ -387,13 +519,7 @@
 			if (payload.dashboard.doctor) doctorResult = payload.dashboard.doctor;
 		}
 		if (payload.error && !isCancelError(payload.error)) showError(payload.error);
-		if (
-			payload.event?.status === desktopChangeStatus.failure &&
-			payload.event.error &&
-			!isCancelError(payload.event.error)
-		) {
-			showError(payload.event.error);
-		}
+		if (payload.event?.error && !isCancelError(payload.event.error)) showError(payload.event.error);
 		void refreshLightForEvent(payload.event);
 	}
 
@@ -404,23 +530,31 @@
 			event.kind === desktopChangeKind.rollbackApplied ||
 			event.kind === desktopChangeKind.switchRecovered
 		) {
-			await refreshBackups();
+			await Promise.allSettled([refreshBackups(), refreshCodexProfiles()]);
 		}
 		if (event.kind === desktopChangeKind.usageSynced) await refreshUsage();
-		if (
-			event.kind === desktopChangeKind.codexProfileCaptured ||
-			event.kind === desktopChangeKind.codexProfileManaged
-		) {
-			await refreshAccounts();
-		}
+		if (event.kind === desktopChangeKind.codexProfileCaptured) await refreshCodexProfiles();
 	}
 
-	function profiles(): Profile[] {
-		return dashboard?.profiles ?? [];
+	function buildCodexAgent(): AgentData {
+		const profiles = codexProfileSummaries ?? [];
+		const operationBackups = codexBackups ?? [];
+		return {
+			id: "codex",
+			name: "Codex",
+			detected: codexDetected(),
+			current: activeCodexProfileID(),
+			targets: codexTargets(),
+			profiles: profiles.map(codexProfileFromSummary),
+			backups: operationBackups.map(codexBackupFromSummary),
+			usage: codexUsage(),
+			health: codexHealth(),
+			placeholder: false,
+		};
 	}
 
-	function setSelectedProfileID(profileID: string) {
-		selectedProfileID = profileID;
+	function agentByID(agentID: AgentID): AgentData {
+		return agentID === "codex" ? codexAgent : placeholderAgents[agentID];
 	}
 
 	function activeCodexState() {
@@ -428,56 +562,135 @@
 	}
 
 	function activeCodexProfileID(): string {
-		const state = activeCodexState();
-		return state?.profile_available ? (state.profile_id ?? "") : "";
+		return activeCodexState()?.profile_id ?? "";
 	}
 
 	function activeCodexProfileLabel(): string {
 		const state = activeCodexState();
-		if (!state?.profile_id) return "none";
+		if (!state?.profile_id) return "";
 		if (!state.profile_available) return `missing: ${state.profile_id}`;
 		return state.profile_name || state.profile_id;
 	}
 
-	function missingActiveCodexProfileID(): string {
-		const state = activeCodexState();
-		return state?.profile_id && !state.profile_available ? state.profile_id : "";
-	}
-
-	function selectedProfile(): Profile | undefined {
-		return profiles().find((profile) => profile.id === selectedProfileID);
-	}
-
-	function selectedProfileLabel(): string {
-		const profile = selectedProfile();
-		return profile?.name || profile?.id || "Select profile";
-	}
-
-	function planCounts(plan: SwitchPlan | null) {
-		const counts = { create: 0, update: 0, noop: 0, unsupported: 0 };
-		for (const op of plan?.operations ?? []) {
-			if (op.action === "create") counts.create += 1;
-			else if (op.action === "update") counts.update += 1;
-			else if (op.action === "noop") counts.noop += 1;
-			else counts.unsupported += 1;
+	function codexDetected(): boolean {
+		if (detectResult) {
+			return (
+				detectResult.codex_dir_exists ||
+				detectResult.config_status !== "missing" ||
+				detectResult.auth_status !== "missing" ||
+				detectResult.provider_exists
+			);
 		}
-		return counts;
+		return dashboard?.providers?.some((provider) => provider.id === codexProviderID) ?? false;
 	}
 
-	function canApplyPlan(plan: SwitchPlan | null): boolean {
-		return (
-			!!plan &&
-			!!selectedProfileID &&
-			plan.profile.id === selectedProfileID &&
-			!!plan.plan_fingerprint &&
-			(plan.operations ?? []).every((op) => op.action !== "unsupported")
-		);
+	function codexTargets(): string[] {
+		const targets = [detectResult?.config_path, detectResult?.auth_path].filter(Boolean) as string[];
+		if (targets.length > 0) return targets;
+		return ["~/.codex/config.toml", "~/.codex/auth.json"];
 	}
 
-	function operationPreview(op: PlanOperation): string {
-		const before = op.before_preview?.content || "<empty>";
-		const after = op.after_preview?.content || op.desired_preview?.content || "<empty>";
-		return `Before\n${before}\n\nAfter\n${after}`;
+	function codexProfileFromSummary(summary: CodexProfileSummary): AgentProfile {
+		return {
+			id: summary.profile.id,
+			name: summary.profile.name || summary.profile.id,
+			desc: summary.profile.description || "No description",
+			updated: formatRelativeTime(summary.updated_at_unix_ms),
+			model: summary.model || "—",
+			provider: summary.model_provider || "—",
+			summary,
+		};
+	}
+
+	function codexBackupFromSummary(backup: BackupSummary): AgentBackup {
+		return {
+			id: backup.backup_id,
+			profile: backup.profile_id,
+			created: formatDateTime(backup.created_at_unix_ms),
+			status: backup.operation_status === "failed" ? "failed" : backup.operation_status === "rolled_back" ? "restored" : "applied",
+			backup,
+		};
+	}
+
+	function codexUsage() {
+		return {
+			events: usageSummary ? formatInteger(usageSummary.event_count) : "—",
+			input: usageSummary ? formatCompact(usageSummary.input_tokens) : "—",
+			output: usageSummary ? formatCompact(usageSummary.output_tokens) : "—",
+			cost: usageSummary?.estimated_cost_usd ? `$${usageSummary.estimated_cost_usd}` : "—",
+		};
+	}
+
+	function codexHealth() {
+		const findings =
+			doctorResult?.findings?.map((finding) => ({
+				id: finding.id,
+				status: finding.level.toUpperCase(),
+				message: finding.message,
+			})) ?? [];
+		return {
+			overall: doctorResult?.overall_level ? doctorResult.overall_level.toUpperCase() : "—",
+			lock: doctorResult?.lock?.level ? doctorResult.lock.level.toUpperCase() : "—",
+			pending: dashboard?.status.pending_operations ?? 0,
+			failed: dashboard?.status.failed_operations ?? 0,
+			findings,
+		};
+	}
+
+	function savePlaceholderProfile(agentID: AgentID, profileID: string, name: string, description: string) {
+		if (agentID === "codex") return;
+		const id = profileID.trim() || "work";
+		const profile: AgentProfile = {
+			id,
+			name: name.trim() || id,
+			desc: description.trim() || "Saved placeholder config",
+			updated: "Just now",
+			model: placeholderAgents[agentID].profiles[0]?.model ?? "—",
+			provider: placeholderAgents[agentID].profiles[0]?.provider ?? "—",
+		};
+		updatePlaceholderAgent(agentID, (agent) => ({
+			...agent,
+			profiles: [profile, ...agent.profiles.filter((item) => item.id !== id)],
+		}));
+	}
+
+	function switchPlaceholderProfile(agentID: AgentID, profileID: string) {
+		if (agentID === "codex") return;
+		updatePlaceholderAgent(agentID, (agent) => ({ ...agent, current: profileID }));
+	}
+
+	function updatePlaceholderAgent(agentID: PlaceholderAgentID, update: (agent: AgentData) => AgentData) {
+		placeholderAgents = { ...placeholderAgents, [agentID]: update(placeholderAgents[agentID]) };
+	}
+
+	function toggleTheme() {
+		applyTheme(theme === "light" ? "dark" : "light");
+	}
+
+	function applyTheme(next: "light" | "dark") {
+		theme = next;
+		setMode(next);
+		document.documentElement.classList.toggle("dark", next === "dark");
+	}
+
+	function detectPlatform(): Platform {
+		if (typeof navigator === "undefined") return "macos";
+		const platformHint =
+			(navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
+			navigator.platform ||
+			navigator.userAgent;
+		const normalized = platformHint.toLowerCase();
+		if (normalized.includes("mac")) return "macos";
+		if (normalized.includes("win")) return "windows";
+		return "linux";
+	}
+
+	function sidebarTopPadding(): string {
+		return platform === "macos" ? "pt-[52px]" : "pt-3";
+	}
+
+	function unsupportedOperationCount(plan: SwitchPlan | null | undefined): number {
+		return (plan?.operations ?? []).filter((operation) => operation.action === "unsupported").length;
 	}
 
 	function optional(value: string): string | null {
@@ -485,15 +698,59 @@
 		return trimmed === "" ? null : trimmed;
 	}
 
-	function costLabel(summary: UsageSummaryResult | null): string {
-		if (!summary) return "unknown";
-		if (summary.estimated_cost_usd) return `$${summary.estimated_cost_usd}`;
-		return summary.cost_status || "unknown";
+	function formatInteger(value: number): string {
+		return new Intl.NumberFormat().format(value);
+	}
+
+	function formatCompact(value: number): string {
+		if (!value) return "0";
+		return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 2 }).format(value);
+	}
+
+	function formatDateTime(value: number | undefined): string {
+		if (!value) return "—";
+		return new Date(value).toLocaleString(undefined, {
+			year: "numeric",
+			month: "2-digit",
+			day: "2-digit",
+			hour: "2-digit",
+			minute: "2-digit",
+			second: "2-digit",
+		});
+	}
+
+	function formatRelativeTime(value: number | undefined): string {
+		if (!value) return "—";
+		const now = Date.now();
+		const delta = now - value;
+		if (delta < 60_000) return "Just now";
+		if (delta < 3_600_000) return `${Math.max(1, Math.floor(delta / 60_000))}m ago`;
+		if (delta < 86_400_000) return `Today ${new Date(value).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
+		return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+	}
+
+	function statusPillClass(variant: StatusVariant) {
+		return cn(
+			"h-auto gap-1 rounded px-1.5 py-px text-xs font-medium leading-none transition-none focus-visible:ring-0",
+			variant === "ok" && "border-success/25 bg-success/15 text-success",
+			variant === "warn" && "border-warning/25 bg-warning/15 text-warning",
+			(variant === "idle" || variant === "muted") && "border-border bg-muted text-muted-foreground",
+		);
+	}
+
+	function smallButtonClass() {
+		return "h-7 rounded-md px-2.5 text-xs";
+	}
+
+	function statusVariant(value: string): StatusVariant {
+		if (value === "applied" || value === "restored" || value === "OK") return "ok";
+		if (value === "failed" || value === "ERROR" || value === "WARN") return "warn";
+		return "muted";
 	}
 
 	function formatError(value: unknown): string {
 		if (!value) return "";
-		if (typeof value === "string") return value;
+		if (typeof value === "string") return value.trim() === "{}" ? "Desktop services are unavailable." : value;
 		if (Array.isArray(value)) return value.map(formatError).filter(Boolean).join("\n");
 		const typed = value as DesktopError & { message?: string; code?: string; name?: string; cause?: unknown };
 		if (typed.cause && typed.cause !== value) {
@@ -503,7 +760,8 @@
 		if (typed.code && typed.message) return `${typed.code}: ${typed.message}`;
 		if (typed.message) return typed.message;
 		try {
-			return JSON.stringify(value);
+			const json = JSON.stringify(value);
+			return json === "{}" ? "Desktop services are unavailable." : json;
 		} catch {
 			return String(value);
 		}
@@ -511,22 +769,16 @@
 
 	function showError(value: unknown) {
 		const message = formatError(value);
-		if (!message) return;
-		error = message;
-		notice = "";
-		if (lastToast !== message) {
-			lastToast = message;
-			toast.error(message);
-		}
+		if (!message || lastToast === message) return;
+		lastToast = message;
+		toast.error(message);
 	}
 
-	function showNotice(message: string) {
-		notice = message;
-		error = "";
-		if (lastToast !== message) {
-			lastToast = message;
-			toast.success(message);
-		}
+	function showNotice(title: string, description: string) {
+		const key = `${title}:${description}`;
+		if (lastToast === key) return;
+		lastToast = key;
+		toast.success(title, { description });
 	}
 
 	function isCancelError(value: unknown): boolean {
@@ -538,616 +790,410 @@
 		if (typed.cause && typed.cause !== value && isCancelError(typed.cause)) return true;
 		return typeof typed.message === "string" && typed.message.toLowerCase() === "context canceled";
 	}
-
-	function formatUnixMS(value: number | undefined): string {
-		if (!value) return "-";
-		return new Date(value).toLocaleString();
-	}
-
-	function activeTabLabel(): string {
-		return tabs.find((tab) => tab.id === activeTab)?.label ?? "Status";
-	}
-
-	function statusBadgeVariant(level: string | undefined): "default" | "secondary" | "destructive" | "outline" {
-		if (level === "ERROR" || level === "failed") return "destructive";
-		if (level === "WARN" || level === "pending") return "secondary";
-		return "outline";
-	}
-
-	function isBusy(name: string): boolean {
-		return actionBusy === name;
-	}
 </script>
 
 <Toaster richColors position="top-right" />
 
-<div class="min-h-screen bg-muted/40 text-foreground">
-	<div class="grid min-h-screen grid-cols-[240px_minmax(0,1fr)]">
-		<aside class="border-r bg-background px-3 py-4">
-			<div class="flex items-center gap-3 px-2">
-				<div class="grid size-9 place-items-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground">
-					P
-				</div>
-				<div class="min-w-0">
-					<div class="truncate text-sm font-semibold">ProfileDeck</div>
-					<div class="truncate text-xs text-muted-foreground">{dashboard?.info.Version ?? "dev"}</div>
+<div class="h-screen overflow-hidden bg-background text-foreground">
+	<div class="grid h-full min-h-0 grid-cols-[188px_minmax(0,1fr)]">
+		<aside class="drag-region flex min-h-0 flex-col border-r bg-muted/50">
+			<div class={cn("px-3 pb-3", sidebarTopPadding())}>
+				<div class="flex items-center gap-2 px-1">
+					<div class="grid size-5 shrink-0 select-none place-items-center rounded-[6px] bg-foreground text-[10px] font-bold text-background">
+						P
+					</div>
+					<span class="text-sm font-semibold tracking-tight">ProfileDeck</span>
+					<span class="ml-auto rounded-full border bg-background/80 px-1.5 py-px text-[10px] text-muted-foreground">
+						dev
+					</span>
 				</div>
 			</div>
 
-			<Separator class="my-4" />
-
-			<Tabs.Root bind:value={activeTab} orientation="vertical" class="min-h-[calc(100vh-9rem)]">
-				<Tabs.List variant="line" class="flex w-full flex-col items-stretch gap-1 bg-transparent p-0">
-					{#each tabs as tab}
-						<Tabs.Trigger value={tab.id} class="justify-start">
-							<svelte:component this={tab.icon} data-icon="inline-start" />
-							{tab.label}
-						</Tabs.Trigger>
-					{/each}
-				</Tabs.List>
-			</Tabs.Root>
-
-			<div class="mt-4 rounded-lg border bg-card p-3">
-				<div class="text-xs text-muted-foreground">Runtime</div>
-				<div class="mt-1 flex items-center gap-2">
-					<Badge variant={dashboard?.status.initialized ? "default" : "secondary"}>
-						{dashboard?.status.initialized ? "Ready" : "Not initialized"}
-					</Badge>
+			<nav class="no-drag flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2 pb-2">
+				<div class="px-2 pb-1.5 pt-0.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+					Agents
 				</div>
+				{#each agentOrder as agentID (agentID)}
+					{@const agent = agentByID(agentID)}
+					<button
+						type="button"
+						onclick={() => {
+							selectedAgent = agentID;
+							selectedTab = "profiles";
+						}}
+						class={cn(
+							"flex w-full flex-col gap-0.5 rounded-md px-2.5 py-2 text-left transition-colors",
+							selectedAgent === agentID
+								? "bg-background text-foreground shadow-sm ring-1 ring-border"
+								: "text-foreground hover:bg-accent",
+						)}
+					>
+						<div class="flex items-center justify-between gap-1">
+							<span class="text-sm font-medium">{agent.name}</span>
+							<Badge variant="outline" class={statusPillClass(agent.detected ? "ok" : "warn")}>
+								{agent.detected ? "Ready" : "Missing"}
+							</Badge>
+						</div>
+						<div class="truncate font-mono text-[11px] text-muted-foreground">
+							{agent.current || "—"}
+						</div>
+					</button>
+				{/each}
+			</nav>
+
+			<div class="no-drag flex flex-col gap-0.5 border-t px-2 py-2">
+				<button
+					type="button"
+					onclick={() => showNotice("Settings", "Data directory, pricing, and advanced diagnostics.")}
+					class="rounded-md px-2.5 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+				>
+					Settings
+				</button>
 			</div>
 		</aside>
 
-		<main class="min-w-0 p-5">
-			<header class="mb-4 flex items-start justify-between gap-4">
-				<div class="min-w-0">
-					<h1 class="text-2xl font-semibold">{activeTabLabel()}</h1>
-					<p class="mt-1 truncate text-sm text-muted-foreground">
-						{dashboard?.status.runtime_root || dashboard?.environment.config_dir || "ProfileDeck runtime"}
-					</p>
-				</div>
-				<div class="flex items-center gap-2">
-					{#if actionBusy || loading}
-						<Button variant="outline" onclick={cancelCurrentAction}>
-							<LoaderIcon data-icon="inline-start" class="animate-spin" />
-							Cancel
-						</Button>
+		<main class="flex min-h-0 min-w-0 flex-col bg-background">
+			<div class="drag-region flex h-[50px] shrink-0 items-center justify-between gap-3 border-b px-4">
+				<div class="flex min-w-0 items-center gap-2">
+					<h1 class="text-base font-bold leading-none tracking-tight">{currentAgent.name}</h1>
+					<Badge variant="outline" class={statusPillClass(currentAgent.detected ? "ok" : "warn")}>
+						{currentAgent.detected ? "Detected" : "Not detected"}
+					</Badge>
+					{#if currentAgent.current}
+						<Badge variant="outline" class={statusPillClass("muted")}>{currentAgent.current}</Badge>
 					{/if}
-					<Button variant="outline" onclick={initialize} disabled={!!actionBusy}>
-						Init
-					</Button>
-					<Button variant="outline" onclick={refreshAll} disabled={loading || !!actionBusy}>
-						{#if loading}
-							<Spinner data-icon="inline-start" />
-							Refreshing
-						{:else}
-							<RefreshCcwIcon data-icon="inline-start" />
-							Refresh
-						{/if}
-					</Button>
 				</div>
-			</header>
-
-			<div class="flex flex-col gap-3">
-				{#if error}
-					<Alert.Root variant="destructive">
-						<AlertTriangleIcon />
-						<Alert.Title>Operation failed</Alert.Title>
-						<Alert.Description>{error}</Alert.Description>
-					</Alert.Root>
-				{/if}
-				{#if notice}
-					<Alert.Root>
-						<CheckIcon />
-						<Alert.Title>Done</Alert.Title>
-						<Alert.Description>{notice}</Alert.Description>
-					</Alert.Root>
-				{/if}
-				{#if dashboard?.startup_error}
-					<Alert.Root variant="destructive">
-						<AlertTriangleIcon />
-						<Alert.Title>{dashboard.startup_error.code}</Alert.Title>
-						<Alert.Description>{dashboard.startup_error.message}</Alert.Description>
-					</Alert.Root>
-				{/if}
-				{#if missingActiveCodexProfileID()}
-					<Alert.Root>
-						<AlertTriangleIcon />
-						<Alert.Title>Active Codex profile is missing</Alert.Title>
-						<Alert.Description>
-							The active state points to {missingActiveCodexProfileID()}, but that profile no longer exists.
-						</Alert.Description>
-					</Alert.Root>
-				{/if}
-			</div>
-
-			<div class="mt-4">
-				{#if activeTab === "dashboard"}
-					<section class="grid grid-cols-4 gap-3">
-						<Card.Root>
-							<Card.Header>
-								<Card.Description>Database</Card.Description>
-								<Card.Title>{dashboard?.status.schema_healthy ? "Healthy" : "Unavailable"}</Card.Title>
-							</Card.Header>
-						</Card.Root>
-						<Card.Root>
-							<Card.Header>
-								<Card.Description>Doctor</Card.Description>
-								<Card.Title>{dashboard?.doctor?.overall_level ?? "unknown"}</Card.Title>
-							</Card.Header>
-						</Card.Root>
-						<Card.Root>
-							<Card.Header>
-								<Card.Description>Codex Profile</Card.Description>
-								<Card.Title>{activeCodexProfileLabel()}</Card.Title>
-							</Card.Header>
-						</Card.Root>
-						<Card.Root>
-							<Card.Header>
-								<Card.Description>Usage</Card.Description>
-								<Card.Title>{costLabel(dashboard?.usage ?? null)}</Card.Title>
-							</Card.Header>
-						</Card.Root>
-					</section>
-
-					<Card.Root class="mt-4">
-						<Card.Header>
-							<Card.Title>Operations</Card.Title>
-							<Card.Description>Pending and failed operation records from doctor.</Card.Description>
-							<Card.Action>
-								<Button variant="outline" onclick={runDoctor} disabled={!!actionBusy}>
-									Run Doctor
-								</Button>
-							</Card.Action>
-						</Card.Header>
-						<Card.Content>
-							<OperationTable operations={dashboard?.doctor?.operations ?? []} {actionBusy} onRecover={recoverFailedSwitch} />
-						</Card.Content>
-					</Card.Root>
-				{/if}
-
-				{#if activeTab === "codex"}
-					<div class="grid gap-4">
-						<Card.Root>
-							<Card.Header>
-								<Card.Title>Detection</Card.Title>
-								<Card.Description>Codex paths and compatibility checks.</Card.Description>
-								<Card.Action>
-									<Button variant="outline" onclick={detectCodex} disabled={!!actionBusy}>
-										{#if isBusy("detect")}<Spinner data-icon="inline-start" />{/if}
-										Detect
-									</Button>
-								</Card.Action>
-							</Card.Header>
-							<Card.Content>
-								{#if detectResult}
-									<dl class="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
-										<dt class="text-muted-foreground">Codex dir</dt><dd class="truncate">{detectResult.codex_dir}</dd>
-										<dt class="text-muted-foreground">Config</dt><dd>{detectResult.config_status}</dd>
-										<dt class="text-muted-foreground">Auth</dt><dd>{detectResult.auth_status}</dd>
-										<dt class="text-muted-foreground">Provider</dt>
-										<dd>{detectResult.provider_compatible ? "compatible" : "needs review"}</dd>
-									</dl>
-									<div class="mt-3 flex flex-col gap-2">
-										{#each detectResult.warnings ?? [] as warning}
-											<Alert.Root><AlertTriangleIcon /><Alert.Description>{warning}</Alert.Description></Alert.Root>
-										{/each}
-									</div>
-								{:else}
-									<EmptyState title="No detection result" description="Run detection to inspect local Codex configuration." />
-								{/if}
-							</Card.Content>
-						</Card.Root>
-
-						<Card.Root>
-							<Card.Header>
-								<Card.Title>Profile</Card.Title>
-								<Card.Description>Capture current Codex state or create a managed Codex profile.</Card.Description>
-								<Card.Action class="flex gap-2">
-									<Button variant="outline" onclick={captureCodexProfile} disabled={!!actionBusy}>
-										{#if isBusy("capture")}<Spinner data-icon="inline-start" />{/if}
-										Capture
-									</Button>
-									<Button onclick={setManagedCodexProfile} disabled={!!actionBusy}>
-										{#if isBusy("managed")}<Spinner data-icon="inline-start" />{/if}
-										Save Managed
-									</Button>
-								</Card.Action>
-							</Card.Header>
-							<Card.Content>
-								<Field.Group class="grid grid-cols-2 gap-3">
-									<Field.Field>
-										<Field.Label for="profile-id">Profile ID</Field.Label>
-										<Input id="profile-id" bind:value={codexProfileID} placeholder="work" />
-									</Field.Field>
-									<Field.Field>
-										<Field.Label for="account-id">Account ID</Field.Label>
-										<Input id="account-id" bind:value={codexAccountID} placeholder="work" />
-									</Field.Field>
-									<Field.Field>
-										<Field.Label for="profile-name">Name</Field.Label>
-										<Input id="profile-name" bind:value={codexProfileName} placeholder="Work" />
-									</Field.Field>
-									<Field.Field>
-										<Field.Label for="profile-description">Description</Field.Label>
-										<Input id="profile-description" bind:value={codexProfileDescription} />
-									</Field.Field>
-									<Field.Field>
-										<Field.Label for="model">Model</Field.Label>
-										<Input id="model" bind:value={managedModel} />
-									</Field.Field>
-									<Field.Field>
-										<Field.Label for="model-provider">Model provider</Field.Label>
-										<Input id="model-provider" bind:value={managedModelProvider} />
-									</Field.Field>
-									<Field.Field class="col-span-2">
-										<Field.Label for="base-url">Base URL</Field.Label>
-										<Input id="base-url" bind:value={managedBaseURL} placeholder="optional" />
-									</Field.Field>
-								</Field.Group>
-							</Card.Content>
-						</Card.Root>
-
-						<Card.Root>
-							<Card.Header>
-								<Card.Title>Accounts</Card.Title>
-								<Card.Action>
-									<Button variant="outline" onclick={refreshAccounts}>Refresh</Button>
-								</Card.Action>
-							</Card.Header>
-							<Card.Content>
-								{#if accounts.length}
-									<Table.Root>
-										<Table.Header>
-											<Table.Row>
-												<Table.Head>Account</Table.Head>
-												<Table.Head>Name</Table.Head>
-												<Table.Head>Kind</Table.Head>
-												<Table.Head>SHA256</Table.Head>
-											</Table.Row>
-										</Table.Header>
-										<Table.Body>
-											{#each accounts as account}
-												<Table.Row>
-													<Table.Cell>{account.account_id}</Table.Cell>
-													<Table.Cell>{account.display_name}</Table.Cell>
-													<Table.Cell>{account.secret_kind}</Table.Cell>
-													<Table.Cell>{account.payload_sha256.slice(0, 12)}</Table.Cell>
-												</Table.Row>
-											{/each}
-										</Table.Body>
-									</Table.Root>
-								{:else}
-									<EmptyState title="No accounts" description="Import or capture a Codex account first." />
-								{/if}
-							</Card.Content>
-						</Card.Root>
-					</div>
-				{/if}
-
-				{#if activeTab === "profiles"}
-					<div class="grid gap-4">
-						<Card.Root>
-							<Card.Header>
-								<Card.Title>Profiles</Card.Title>
-								<Card.Description>Codex-capable ProfileDeck profiles.</Card.Description>
-								<Card.Action>
-									<Button variant="outline" onclick={refreshAll}>Refresh</Button>
-								</Card.Action>
-							</Card.Header>
-							<Card.Content>
-								{#if profiles().length}
-									<Table.Root>
-										<Table.Header>
-											<Table.Row>
-												<Table.Head>ID</Table.Head>
-												<Table.Head>Name</Table.Head>
-												<Table.Head>Description</Table.Head>
-												<Table.Head>Status</Table.Head>
-												<Table.Head></Table.Head>
-											</Table.Row>
-										</Table.Header>
-										<Table.Body>
-											{#each profiles() as profile}
-												<Table.Row>
-													<Table.Cell>{profile.id}</Table.Cell>
-													<Table.Cell>{profile.name}</Table.Cell>
-													<Table.Cell>{profile.description || "-"}</Table.Cell>
-													<Table.Cell>
-														{#if profile.id === activeCodexProfileID()}
-															<Badge>Active</Badge>
-														{:else}
-															<Badge variant="outline">Idle</Badge>
-														{/if}
-													</Table.Cell>
-													<Table.Cell class="text-right">
-														<div class="flex justify-end gap-2">
-															<Button variant="outline" size="sm" onclick={() => loadTargets(profile.id)}>Targets</Button>
-															<Button size="sm" onclick={() => openSwitch(profile.id)}>Switch</Button>
-														</div>
-													</Table.Cell>
-												</Table.Row>
-											{/each}
-										</Table.Body>
-									</Table.Root>
-								{:else}
-									<EmptyState title="No profiles" description="Create or capture a Codex profile first." />
-								{/if}
-							</Card.Content>
-						</Card.Root>
-
-						<Card.Root>
-							<Card.Header>
-								<Card.Title>{selectedProfile()?.name ?? "Targets"}</Card.Title>
-							</Card.Header>
-							<Card.Content>
-								{#if targets.length}
-									<Table.Root>
-										<Table.Header>
-											<Table.Row>
-												<Table.Head>Target</Table.Head>
-												<Table.Head>Path</Table.Head>
-												<Table.Head>Strategy</Table.Head>
-												<Table.Head>Preview</Table.Head>
-											</Table.Row>
-										</Table.Header>
-										<Table.Body>
-											{#each targets as target}
-												<Table.Row>
-													<Table.Cell>{target.target_id}</Table.Cell>
-													<Table.Cell class="max-w-xs truncate">{target.path}</Table.Cell>
-													<Table.Cell>{target.format} / {target.strategy}</Table.Cell>
-													<Table.Cell><pre class="max-h-28 overflow-auto rounded-lg bg-muted p-2 text-xs">{target.value_preview.content}</pre></Table.Cell>
-												</Table.Row>
-											{/each}
-										</Table.Body>
-									</Table.Root>
-								{:else}
-									<EmptyState title="No target selected" description="Choose a profile to inspect its target config." />
-								{/if}
-							</Card.Content>
-						</Card.Root>
-					</div>
-				{/if}
-
-				{#if activeTab === "switch"}
-					<Card.Root>
-						<Card.Header>
-							<Card.Title>Plan</Card.Title>
-							<Card.Description>Preview the redacted target diff before applying a profile.</Card.Description>
-							<Card.Action class="flex min-w-[420px] gap-2">
-								<Select.Root type="single" bind:value={selectedProfileID}>
-									<Select.Trigger class="w-56">{selectedProfileLabel()}</Select.Trigger>
-									<Select.Content>
-										<Select.Group>
-											{#each profiles() as profile}
-												<Select.Item value={profile.id}>{profile.name || profile.id}</Select.Item>
-											{/each}
-										</Select.Group>
-									</Select.Content>
-								</Select.Root>
-								<Button variant="outline" onclick={buildSwitchPlan} disabled={!selectedProfileID || !!actionBusy}>
-									{#if isBusy("plan")}<Spinner data-icon="inline-start" />{/if}
-									Preview
-								</Button>
-								<Button onclick={applySwitch} disabled={!canApplyPlan(switchPlan) || !!actionBusy}>
-									{#if isBusy("apply-switch")}<Spinner data-icon="inline-start" />{/if}
-									Apply
-								</Button>
-							</Card.Action>
-						</Card.Header>
-						<Card.Content>
-							{#if switchPlan}
-								{@const counts = planCounts(switchPlan)}
-								<div class="mb-3 grid grid-cols-4 gap-3">
-									<MetricCard label="Create" value={counts.create} />
-									<MetricCard label="Update" value={counts.update} />
-									<MetricCard label="Noop" value={counts.noop} />
-									<MetricCard label="Unsupported" value={counts.unsupported} />
-								</div>
-								<div class="mb-3 rounded-lg border bg-muted/40 p-3 text-xs">
-									<span class="text-muted-foreground">Fingerprint</span>
-									<div class="mt-1 break-all font-mono">{switchPlan.plan_fingerprint}</div>
-								</div>
-								<div class="mb-3 flex flex-col gap-2">
-									{#each switchPlan.warnings ?? [] as warning}
-										<Alert.Root><AlertTriangleIcon /><Alert.Description>{warning}</Alert.Description></Alert.Root>
-									{/each}
-								</div>
-								<div class="grid gap-3">
-									{#each switchPlan.operations ?? [] as op}
-										<Card.Root>
-											<Card.Header>
-												<Card.Title class="text-base">{op.target_id}</Card.Title>
-												<Card.Description class="truncate">{op.path}</Card.Description>
-												<Card.Action>
-													<Badge variant={op.action === "unsupported" ? "destructive" : "secondary"}>{op.action}</Badge>
-												</Card.Action>
-											</Card.Header>
-											<Card.Content>
-												<pre class="max-h-72 overflow-auto rounded-lg bg-muted p-3 text-xs leading-relaxed">{operationPreview(op)}</pre>
-											</Card.Content>
-										</Card.Root>
-									{/each}
-								</div>
-							{:else}
-								<EmptyState title="No plan" description="Select a profile and preview the switch plan first." />
-							{/if}
-						</Card.Content>
-					</Card.Root>
-				{/if}
-
-				{#if activeTab === "recovery"}
-					<div class="grid gap-4">
-						<Card.Root>
-							<Card.Header>
-								<Card.Title>Backups</Card.Title>
-								<Card.Action><Button variant="outline" onclick={refreshBackups}>Refresh</Button></Card.Action>
-							</Card.Header>
-							<Card.Content>
-								{#if backups.length}
-									<Table.Root>
-										<Table.Header>
-											<Table.Row>
-												<Table.Head>ID</Table.Head>
-												<Table.Head>Profile</Table.Head>
-												<Table.Head>Status</Table.Head>
-												<Table.Head>Created</Table.Head>
-												<Table.Head></Table.Head>
-											</Table.Row>
-										</Table.Header>
-										<Table.Body>
-											{#each backups as backup}
-												<Table.Row>
-													<Table.Cell class="font-mono text-xs">{backup.backup_id}</Table.Cell>
-													<Table.Cell>{backup.profile_id}</Table.Cell>
-													<Table.Cell>
-														<Badge variant={backup.valid ? "secondary" : "destructive"}>
-															{backup.valid ? backup.operation_status : backup.invalid_reason}
-														</Badge>
-													</Table.Cell>
-													<Table.Cell>{formatUnixMS(backup.created_at_unix_ms)}</Table.Cell>
-													<Table.Cell class="text-right">
-														<div class="flex justify-end gap-2">
-															<Button variant="outline" size="sm" onclick={() => showBackup(backup.backup_id)}>Show</Button>
-															<ConfirmAction
-																label="Rollback"
-																title="Apply rollback?"
-																description="This restores target files through the transaction safety layer."
-																disabled={!backup.rollback_supported}
-																onConfirm={() => applyRollback(backup.backup_id)}
-															/>
-														</div>
-													</Table.Cell>
-												</Table.Row>
-											{/each}
-										</Table.Body>
-									</Table.Root>
-								{:else}
-									<EmptyState title="No backups" description="Backups are created by switch and rollback operations." />
-								{/if}
-							</Card.Content>
-						</Card.Root>
-
-						{#if selectedBackup}
-							<Card.Root>
-								<Card.Header>
-									<Card.Title>{selectedBackup.backup_id}</Card.Title>
-									<Card.Description>{selectedBackup.path}</Card.Description>
-								</Card.Header>
-								<Card.Content>
-									<Table.Root>
-										<Table.Header>
-											<Table.Row>
-												<Table.Head>Target</Table.Head>
-												<Table.Head>Action</Table.Head>
-												<Table.Head>Path</Table.Head>
-												<Table.Head>SHA256</Table.Head>
-											</Table.Row>
-										</Table.Header>
-										<Table.Body>
-											{#each selectedBackup.entries ?? [] as entry}
-												<Table.Row>
-													<Table.Cell>{entry.target_id}</Table.Cell>
-													<Table.Cell>{entry.action}</Table.Cell>
-													<Table.Cell class="max-w-xs truncate">{entry.path}</Table.Cell>
-													<Table.Cell>{entry.before_sha256.slice(0, 12)}</Table.Cell>
-												</Table.Row>
-											{/each}
-										</Table.Body>
-									</Table.Root>
-								</Card.Content>
-							</Card.Root>
+				<div class="no-drag flex shrink-0 items-center gap-2">
+					<Button class={smallButtonClass()} size="sm" variant="outline" disabled={loading} onclick={refreshSelectedAgent}>
+						{#if loading && selectedAgent === "codex"}
+							<Spinner data-icon="inline-start" />
 						{/if}
-					</div>
-				{/if}
-
-				{#if activeTab === "usage"}
-					<Card.Root>
-						<Card.Header>
-							<Card.Title>Codex Usage</Card.Title>
-							<Card.Description>Local usage and estimated cost from parseable session logs.</Card.Description>
-							<Card.Action>
-								<Button onclick={syncUsage} disabled={!!actionBusy}>
-									{#if isBusy("usage-sync")}<Spinner data-icon="inline-start" />{/if}
-									Sync
-								</Button>
-							</Card.Action>
-						</Card.Header>
-						<Card.Content>
-							<section class="grid grid-cols-4 gap-3">
-								<MetricCard label="Events" value={usageSummary?.event_count ?? 0} />
-								<MetricCard label="Input" value={usageSummary?.input_tokens ?? 0} />
-								<MetricCard label="Output" value={usageSummary?.output_tokens ?? 0} />
-								<MetricCard label="Cost" value={costLabel(usageSummary)} />
-							</section>
-							{#if usageSyncResult}
-								<div class="mt-4 grid grid-cols-4 gap-3">
-									<MetricCard label="Scanned" value={usageSyncResult.scanned_files} />
-									<MetricCard label="Imported" value={usageSyncResult.imported_events} />
-									<MetricCard label="Duplicates" value={usageSyncResult.skipped_duplicate_events} />
-									<MetricCard label="Invalid" value={usageSyncResult.invalid_lines} />
-								</div>
-							{/if}
-						</Card.Content>
-					</Card.Root>
-				{/if}
-
-				{#if activeTab === "doctor"}
-					<Card.Root>
-						<Card.Header>
-							<Card.Title>Doctor</Card.Title>
-							<Card.Action class="flex gap-2">
-								<Button variant="outline" onclick={runDoctor} disabled={!!actionBusy}>
-									{#if isBusy("doctor")}<Spinner data-icon="inline-start" />{/if}
-									Run
-								</Button>
-								<ConfirmAction
-									label="Repair Lock"
-									title="Repair stale lock?"
-									description="Only safe stale-lock repairs are allowed."
-									disabled={!doctorResult?.lock.repairable || !!actionBusy}
-									onConfirm={repairLock}
-								/>
-							</Card.Action>
-						</Card.Header>
-						<Card.Content>
-							{#if doctorResult}
-								<section class="mb-4 grid grid-cols-4 gap-3">
-									<MetricCard label="Overall" value={doctorResult.overall_level} />
-									<MetricCard label="Lock" value={doctorResult.lock.level} />
-									<MetricCard label="Pending" value={dashboard?.status.pending_operations ?? 0} />
-									<MetricCard label="Failed" value={dashboard?.status.failed_operations ?? 0} />
-								</section>
-								{#if doctorResult.findings?.length}
-									<Table.Root>
-										<Table.Header>
-											<Table.Row>
-												<Table.Head>Finding</Table.Head>
-												<Table.Head>Level</Table.Head>
-												<Table.Head>Message</Table.Head>
-											</Table.Row>
-										</Table.Header>
-										<Table.Body>
-											{#each doctorResult.findings ?? [] as finding}
-												<Table.Row>
-													<Table.Cell>{finding.id}</Table.Cell>
-													<Table.Cell><Badge variant={statusBadgeVariant(finding.level)}>{finding.level}</Badge></Table.Cell>
-													<Table.Cell>{finding.message}</Table.Cell>
-												</Table.Row>
-											{/each}
-										</Table.Body>
-									</Table.Root>
-								{/if}
-								<div class="mt-4">
-									<OperationTable operations={doctorResult.operations ?? []} {actionBusy} onRecover={recoverFailedSwitch} />
-								</div>
-							{:else}
-								<EmptyState title="No doctor result" description="Run doctor to inspect runtime health." />
-							{/if}
-						</Card.Content>
-					</Card.Root>
-				{/if}
+						Refresh
+					</Button>
+					<Button class={smallButtonClass()} size="sm" variant="outline" disabled={actionBusy === "detect"} onclick={detectSelectedAgent}>
+						{#if actionBusy === "detect"}
+							<Spinner data-icon="inline-start" />
+						{/if}
+						Detect
+					</Button>
+					<Button class={smallButtonClass()} size="sm" onclick={() => openCapture()}>Save Current</Button>
+					<div class="mx-0.5 h-4 w-px bg-border"></div>
+					<button
+						type="button"
+						onclick={toggleTheme}
+						title={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+						aria-label={theme === "light" ? "Switch to dark mode" : "Switch to light mode"}
+						class="flex size-7 items-center justify-center rounded-md text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+					>
+						{theme === "light" ? "☾" : "☀"}
+					</button>
+				</div>
 			</div>
+
+			<Tabs.Root bind:value={selectedTab} class="flex min-h-0 flex-1 flex-col">
+				<div class="shrink-0 border-b px-4">
+					<Tabs.List variant="line" class="h-auto gap-0 bg-transparent p-0">
+						{#each tabs as tab (tab.id)}
+							<Tabs.Trigger
+								value={tab.id}
+								class="h-auto rounded-none border-0 px-3 py-2.5 text-xs font-medium data-active:bg-transparent"
+							>
+								{tab.label}
+							</Tabs.Trigger>
+						{/each}
+					</Tabs.List>
+				</div>
+
+				<div class="min-h-0 flex-1 overflow-auto p-4">
+					<Tabs.Content value="profiles" class="m-0">
+						{#if selectedAgent === "codex" && loadingProfiles}
+							{@render EmptyState("Loading profiles", "Reading Codex profiles.")}
+						{:else if selectedAgent === "codex" && profileError}
+							{@render EmptyState("Unable to load profiles", profileError)}
+						{:else}
+							{@render ProfilesView(currentAgent)}
+						{/if}
+					</Tabs.Content>
+
+					<Tabs.Content value="backups" class="m-0">
+						{@render BackupsView(currentAgent)}
+					</Tabs.Content>
+
+					<Tabs.Content value="health" class="m-0">
+						{@render HealthView(currentAgent)}
+					</Tabs.Content>
+
+					<Tabs.Content value="usage" class="m-0">
+						{@render UsageView(currentAgent)}
+					</Tabs.Content>
+				</div>
+			</Tabs.Root>
 		</main>
 	</div>
 </div>
+
+<Dialog.Root bind:open={useConfirmOpen}>
+	<Dialog.Content class="gap-0 overflow-hidden p-0 sm:max-w-[400px]" showCloseButton={false}>
+		<Dialog.Header class="gap-1 px-4 pb-3 pt-4">
+			<Dialog.Title class="text-sm font-semibold">Use "{pendingUse?.profileName ?? pendingUse?.profileID}" for {agentByID(pendingUse?.agentID ?? selectedAgent).name}</Dialog.Title>
+			<Dialog.Description class="text-xs leading-relaxed">
+				Replaces {agentByID(pendingUse?.agentID ?? selectedAgent).name} config targets. A backup is created first. Restart {agentByID(pendingUse?.agentID ?? selectedAgent).name} after switching.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="border-t px-4 pb-2 pt-2.5 font-mono text-xs text-muted-foreground">
+			{agentByID(pendingUse?.agentID ?? selectedAgent).current || "—"}
+			<span class="mx-1.5 text-muted-foreground/50">→</span>
+			{pendingUse?.profileID ?? "—"}
+		</div>
+		{#if pendingUse?.agentID === "codex" && unsupportedOperationCount(pendingUse.plan) > 0}
+			<div class="mx-4 mb-3 rounded-md border border-warning/25 bg-warning/15 px-2.5 py-2 text-xs text-warning">
+				This profile contains unsupported target changes.
+			</div>
+		{/if}
+		<Dialog.Footer class="m-0 mx-0 mb-0 rounded-none border-t bg-transparent px-4 py-3">
+			<Button class="rounded-md px-3" variant="outline" onclick={() => (useConfirmOpen = false)}>Cancel</Button>
+			<Button
+				class="rounded-md px-3"
+				disabled={actionBusy === "use-apply" || (pendingUse?.agentID === "codex" && unsupportedOperationCount(pendingUse.plan) > 0)}
+				onclick={confirmUse}
+			>
+				{#if actionBusy === "use-apply"}
+					<Spinner data-icon="inline-start" />
+				{/if}
+				Use Profile
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={captureOpen}>
+	<Dialog.Content class="gap-0 overflow-hidden p-0 sm:max-w-[400px]" showCloseButton={false}>
+		<Dialog.Header class="gap-1 px-4 pb-3 pt-4">
+			<Dialog.Title class="text-sm font-semibold">Save current config</Dialog.Title>
+			<Dialog.Description class="text-xs">Snapshot the current {currentAgent.name} config on disk.</Dialog.Description>
+		</Dialog.Header>
+		<Field.FieldGroup class="border-t px-4 pb-3 pt-3">
+			<Field.Field>
+				<Field.FieldLabel for="capture-profile-id">Profile ID</Field.FieldLabel>
+				<Input class="rounded-md border-border bg-background text-sm" id="capture-profile-id" bind:value={captureProfileID} placeholder="e.g. work" />
+			</Field.Field>
+			<Field.Field>
+				<Field.FieldLabel for="capture-profile-name">Name</Field.FieldLabel>
+				<Input class="rounded-md border-border bg-background text-sm" id="capture-profile-name" bind:value={captureProfileName} placeholder="e.g. Work" />
+			</Field.Field>
+			<Field.Field>
+				<Field.FieldLabel for="capture-description">Description</Field.FieldLabel>
+				<Input class="rounded-md border-border bg-background text-sm" id="capture-description" bind:value={captureDescription} placeholder="Optional" />
+			</Field.Field>
+		</Field.FieldGroup>
+		<div class="mx-4 mb-3 rounded-md border bg-muted px-2.5 py-2">
+			<div class="mb-1 text-xs font-medium text-muted-foreground">Targets</div>
+			<div class="flex flex-col gap-0.5">
+				{#each currentAgent.targets as target (target)}
+					<div class="truncate font-mono text-xs">{target}</div>
+				{/each}
+			</div>
+		</div>
+		<Dialog.Footer class="m-0 mx-0 mb-0 rounded-none border-t bg-transparent px-4 py-3">
+			<Button class="rounded-md px-3" variant="outline" onclick={() => (captureOpen = false)}>Cancel</Button>
+			<Button class="rounded-md px-3" disabled={actionBusy === "save-current"} onclick={saveCurrentProfile}>
+				{#if actionBusy === "save-current"}
+					<Spinner data-icon="inline-start" />
+				{/if}
+				Save Snapshot
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+{#snippet EmptyState(title: string, description: string)}
+	<Empty.Root class="min-h-0 gap-2 border-0 px-0 py-16">
+		<Empty.Header>
+			<Empty.Media class="mb-0">
+				<span class="text-3xl opacity-40">○</span>
+			</Empty.Media>
+			<Empty.Title class="text-sm font-medium">{title}</Empty.Title>
+			<Empty.Description class="max-w-[220px] text-xs leading-snug">{description}</Empty.Description>
+		</Empty.Header>
+	</Empty.Root>
+{/snippet}
+
+{#snippet ProfilesView(agent: AgentData)}
+	{#if !agent.detected}
+		{@render EmptyState("Agent not detected", `Install or configure ${agent.name} to manage profiles.`)}
+	{:else if agent.profiles.length === 0}
+		{@render EmptyState("No profiles yet", `Use "Save Current" to snapshot the current ${agent.name} config.`)}
+	{:else}
+		<div class="overflow-hidden rounded-lg border bg-card">
+			{#each agent.profiles as profile, index (profile.id)}
+				{@const active = profile.id === agent.current}
+				<div
+					class={cn(
+						"grid grid-cols-[1fr_auto] items-center gap-4 px-3 py-3 transition-colors",
+						index < agent.profiles.length - 1 && "border-b",
+						active ? "bg-accent/50" : "hover:bg-muted/60",
+					)}
+				>
+					<div class="flex min-w-0 flex-col gap-1">
+						<div class="flex items-center gap-2">
+							{#if active}
+								<span class="size-1.5 shrink-0 rounded-full bg-success"></span>
+							{/if}
+							<span class="truncate text-sm font-semibold tracking-tight">{profile.name}</span>
+							{#if active}
+								<Badge variant="outline" class={statusPillClass("ok")}>Active</Badge>
+							{/if}
+						</div>
+						<div class="truncate text-xs text-muted-foreground">{profile.desc}</div>
+						<div class="truncate font-mono text-xs text-muted-foreground">
+							{profile.provider} · {profile.model} · {profile.updated}
+						</div>
+					</div>
+					<div class="flex shrink-0 items-center gap-1.5">
+						{#if active}
+							<Button class={smallButtonClass()} size="sm" variant="outline" onclick={() => openCapture(profile)}>Save Current</Button>
+						{:else}
+							<Button class={smallButtonClass()} size="sm" disabled={!!actionBusy} onclick={() => openUse(profile)}>Use</Button>
+						{/if}
+					</div>
+				</div>
+			{/each}
+		</div>
+	{/if}
+{/snippet}
+
+{#snippet BackupsView(agent: AgentData)}
+	<div class="overflow-hidden rounded-lg border bg-card">
+		{#if agent.backups.length === 0}
+			{@render EmptyState("No backups", "Backups are created automatically before each profile switch.")}
+		{:else}
+			<Table.Root>
+				<Table.Header>
+					<Table.Row>
+						<Table.Head class="h-auto px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">ID</Table.Head>
+						<Table.Head class="h-auto px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Profile</Table.Head>
+						<Table.Head class="h-auto px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</Table.Head>
+						<Table.Head class="h-auto px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Created</Table.Head>
+						<Table.Head class="h-auto px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground"></Table.Head>
+					</Table.Row>
+				</Table.Header>
+				<Table.Body>
+					{#each agent.backups as backup (backup.id)}
+						<Table.Row class="last:border-0">
+							<Table.Cell class="px-3 py-2.5 font-mono text-xs text-muted-foreground">{backup.id}</Table.Cell>
+							<Table.Cell class="px-3 py-2.5 text-sm font-medium">{backup.profile}</Table.Cell>
+							<Table.Cell class="px-3 py-2.5">
+								<Badge variant="outline" class={statusPillClass(statusVariant(backup.status))}>{backup.status}</Badge>
+							</Table.Cell>
+							<Table.Cell class="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{backup.created}</Table.Cell>
+							<Table.Cell class="px-3 py-2.5 text-right">
+								<Button
+									class={smallButtonClass()}
+									size="sm"
+									variant="outline"
+									disabled={selectedAgent === "codex" && !backup.backup?.rollback_supported}
+									onclick={() => restoreBackup(backup)}
+								>
+									Restore
+								</Button>
+							</Table.Cell>
+						</Table.Row>
+					{/each}
+				</Table.Body>
+			</Table.Root>
+		{/if}
+	</div>
+{/snippet}
+
+{#snippet HealthView(agent: AgentData)}
+	<div class="flex flex-col gap-3">
+		<div class="grid grid-cols-4 gap-3">
+			{@render Metric("Overall", agent.health.overall)}
+			{@render Metric("Lock", agent.health.lock)}
+			{@render Metric("Pending", String(agent.health.pending))}
+			{@render Metric("Failed", String(agent.health.failed))}
+		</div>
+		<div class="overflow-hidden rounded-lg border bg-card">
+			<div class="flex items-center justify-end gap-2 border-b px-3 py-2">
+				<Button class={smallButtonClass()} size="sm" variant="outline" disabled={actionBusy === "doctor"} onclick={runHealth}>
+					{#if actionBusy === "doctor"}
+						<Spinner data-icon="inline-start" />
+					{/if}
+					Check Health
+				</Button>
+				<Button class={smallButtonClass()} size="sm" variant="outline" disabled={actionBusy === "repair-lock"} onclick={repairLock}>
+					{#if actionBusy === "repair-lock"}
+						<Spinner data-icon="inline-start" />
+					{/if}
+					Repair Lock
+				</Button>
+			</div>
+			{#if agent.health.findings.length === 0 && agent.health.pending === 0 && agent.health.failed === 0}
+				<Empty.Root class="min-h-0 gap-2 border-0 px-0 py-16">
+					<Empty.Header>
+						<Empty.Media class="mb-0">
+							<span class="text-3xl opacity-60">✓</span>
+						</Empty.Media>
+						<Empty.Title class="text-sm font-medium">All checks passed</Empty.Title>
+						<Empty.Description class="text-xs leading-snug">No pending or failed operations.</Empty.Description>
+					</Empty.Header>
+				</Empty.Root>
+			{:else}
+				<Table.Root>
+					<Table.Header>
+						<Table.Row>
+							<Table.Head class="h-auto px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Finding</Table.Head>
+							<Table.Head class="h-auto px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Status</Table.Head>
+							<Table.Head class="h-auto px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Message</Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body>
+						{#each agent.health.findings as finding (finding.id)}
+							<Table.Row class="last:border-0">
+								<Table.Cell class="px-3 py-2.5 font-mono text-xs">{finding.id}</Table.Cell>
+								<Table.Cell class="px-3 py-2.5">
+									<Badge variant="outline" class={statusPillClass(statusVariant(finding.status))}>{finding.status}</Badge>
+								</Table.Cell>
+								<Table.Cell class="px-3 py-2.5 text-xs text-muted-foreground">{finding.message}</Table.Cell>
+							</Table.Row>
+						{/each}
+					</Table.Body>
+				</Table.Root>
+			{/if}
+		</div>
+	</div>
+{/snippet}
+
+{#snippet UsageView(agent: AgentData)}
+	<div class="flex flex-col gap-3">
+		<div class="flex justify-end">
+			<Button class={smallButtonClass()} size="sm" variant="outline" disabled={actionBusy === "usage-sync"} onclick={syncUsage}>
+				{#if actionBusy === "usage-sync"}
+					<Spinner data-icon="inline-start" />
+				{/if}
+				Sync
+			</Button>
+		</div>
+		<div class="grid grid-cols-2 gap-3">
+			{@render Metric("Events", agent.usage.events)}
+			{@render Metric("Input tokens", agent.usage.input)}
+			{@render Metric("Output tokens", agent.usage.output)}
+			{@render Metric("Cost", agent.usage.cost, agent.usage.cost === "—" ? "Configure pricing to estimate" : undefined)}
+		</div>
+		{#if selectedAgent === "codex" && usageSyncResult?.errors?.length}
+			<div class="rounded-lg border bg-card px-3 py-2 text-xs text-muted-foreground">
+				{usageSyncResult.errors.length} usage import errors were skipped.
+			</div>
+		{/if}
+	</div>
+{/snippet}
+
+{#snippet Metric(label: string, value: string, sub?: string)}
+	<div class="flex min-w-0 flex-col gap-1 rounded-lg border bg-card p-3">
+		<div class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+		<div class="truncate text-xl font-bold tracking-tight">{value}</div>
+		{#if sub}
+			<div class="text-xs text-muted-foreground">{sub}</div>
+		{/if}
+	</div>
+{/snippet}

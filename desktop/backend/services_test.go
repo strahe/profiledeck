@@ -295,3 +295,42 @@ func TestCodexCaptureProfileDoesNotExposeRawAuthPayload(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexProfileListAndShowUseSharedAppSemantics(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if err := Bootstrap(ctx, Environment{ConfigDir: configDir, CodexDir: codexDir}); err != nil {
+		t.Fatalf("expected bootstrap to succeed, got %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.ConfigFileName), []byte(`model = "gpt-5-codex"`+"\n"), 0o600); err != nil {
+		t.Fatalf("expected config fixture to write, got %v", err)
+	}
+	accessToken := "desktop-list-access-token"
+	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.AuthFileName), []byte(`{"tokens":{"account_id":"work-account","access_token":"`+accessToken+`"}}`), 0o600); err != nil {
+		t.Fatalf("expected auth fixture to write, got %v", err)
+	}
+	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
+	if _, err := services.Codex.CaptureProfile(ctx, CodexProfileCaptureRequest{ProfileID: "work", AccountID: "local-work"}); err != nil {
+		t.Fatalf("expected capture to succeed, got %v", err)
+	}
+
+	list, err := services.Codex.ListProfiles(ctx)
+	if err != nil {
+		t.Fatalf("expected profile list to succeed, got %v", err)
+	}
+	if len(list.Profiles) != 1 || list.Profiles[0].Profile.ID != "work" || list.Profiles[0].SaveKind != app.CodexProfileSaveKindSnapshot {
+		t.Fatalf("unexpected profile list: %#v", list)
+	}
+	detail, err := services.Codex.ShowProfile(ctx, "work")
+	if err != nil {
+		t.Fatalf("expected profile show to succeed, got %v", err)
+	}
+	raw, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatalf("expected detail to marshal, got %v", err)
+	}
+	if strings.Contains(string(raw), accessToken) || strings.Contains(string(raw), "access_token") {
+		t.Fatalf("expected desktop profile detail to omit raw auth, got %s", raw)
+	}
+}

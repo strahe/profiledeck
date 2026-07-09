@@ -65,6 +65,7 @@ ProfileDeck creates runtime, backup, export, log, and lock directories with rest
 ```bash
 profiledeck codex detect
 profiledeck codex profile capture work
+profiledeck codex profile list
 profiledeck plan codex work
 profiledeck switch codex work --yes
 ```

@@ -65,6 +65,7 @@ profiledeck --config-dir /tmp/profiledeck-dev init
 ```bash
 profiledeck codex detect
 profiledeck codex profile capture work
+profiledeck codex profile list
 profiledeck plan codex work
 profiledeck switch codex work --yes
 ```
