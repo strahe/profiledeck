@@ -16,8 +16,7 @@ import (
 const maxAccountIDLength = 512
 
 type Snapshot struct {
-	Payload        string
-	CodexAccountID string
+	Payload string
 }
 
 type FieldError struct {
@@ -51,11 +50,10 @@ func ReadSnapshot(path string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	accountID, err := accountIDFromObject(object)
-	if err != nil {
+	if _, err := accountIDFromObject(object); err != nil {
 		return Snapshot{}, err
 	}
-	return Snapshot{Payload: payload, CodexAccountID: accountID}, nil
+	return Snapshot{Payload: payload}, nil
 }
 
 func NormalizePayload(raw []byte) (string, error) {

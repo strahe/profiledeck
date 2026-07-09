@@ -5,21 +5,12 @@
 // @ts-ignore: Unused imports
 import * as app$0 from "../../internal/app/models.js";
 
-export interface CodexProfileCaptureRequest {
+export interface CreateCodexProfileRequest {
     "profile_id": string;
-    "account_id": string;
     "name"?: string | null;
     "description"?: string | null;
-}
-
-export interface CodexProfileSetRequest {
-    "profile_id": string;
-    "model": string;
-    "model_provider": string;
-    "openai_base_url"?: string | null;
-    "account_id": string;
-    "name"?: string | null;
-    "description"?: string | null;
+    "config_content"?: string | null;
+    "auth_content"?: string | null;
 }
 
 export interface DashboardResult {
@@ -30,6 +21,7 @@ export interface DashboardResult {
     "providers": app$0.Provider[] | null;
     "profiles": app$0.Profile[] | null;
     "active_states": app$0.ActiveProviderState[] | null;
+    "codex_profiles"?: app$0.CodexProfileListResult | null;
     "usage"?: app$0.UsageSummaryResult | null;
     "startup_error"?: DesktopError | null;
     "generated_at_unix_ms": number;
@@ -46,9 +38,24 @@ export interface Environment {
     "codex_dir": string;
 }
 
+export interface ForkCodexProfileRequest {
+    "source_profile_id": string;
+    "profile_id": string;
+    "auth_binding": string;
+    "name"?: string | null;
+    "description"?: string | null;
+}
+
 export interface SwitchApplyRequest {
     "provider_id": string;
     "profile_id": string;
     "expected_plan_fingerprint": string;
     "confirm": boolean;
+}
+
+export interface SyncCodexProfileRequest {
+    "profile_id": string;
+    "auth_update"?: string;
+    "config_content"?: string | null;
+    "auth_content"?: string | null;
 }

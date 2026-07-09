@@ -65,7 +65,7 @@ func TestReadSnapshotPreservesMissingFileError(t *testing.T) {
 	}
 }
 
-func TestReadSnapshotReturnsPayloadAndCodexAccountID(t *testing.T) {
+func TestReadSnapshotReturnsPayload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.json")
 	raw := `{"tokens":{"account_id":"work-account","access_token":"secret"}}`
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
@@ -76,7 +76,7 @@ func TestReadSnapshotReturnsPayloadAndCodexAccountID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected auth snapshot to read, got %v", err)
 	}
-	if snapshot.Payload != raw || snapshot.CodexAccountID != "work-account" {
+	if snapshot.Payload != raw {
 		t.Fatalf("unexpected snapshot: %#v", snapshot)
 	}
 }

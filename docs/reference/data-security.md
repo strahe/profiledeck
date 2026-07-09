@@ -22,7 +22,7 @@ It contains:
 
 ## SQLite database
 
-`profiledeck.db` stores ProfileDeck application data. For Codex, it also stores raw `auth.json` payloads in a dedicated account secret table so ProfileDeck can restore accounts during switches.
+`profiledeck.db` stores ProfileDeck application data. For Codex, it also stores raw `auth.json` payloads in hidden credential records so ProfileDeck can restore profile auth during switches.
 
 The database is not encrypted at rest. File permissions are tightened on POSIX systems when possible, but local filesystem access remains the security boundary.
 
@@ -39,22 +39,12 @@ ProfileDeck redacts sensitive-looking values in previews and command output. Cod
 The following commands are metadata-only and do not print raw auth:
 
 ```bash
-profiledeck codex account list
-profiledeck codex account show <account-id>
+profiledeck codex profile list
+profiledeck codex profile show <profile-id>
 profiledeck plan codex <profile-id>
 profiledeck backup show <backup-id>
 profiledeck doctor
 ```
-
-## Explicit auth export
-
-This command intentionally writes raw auth JSON:
-
-```bash
-profiledeck codex account export <account-id> --output ./auth.json
-```
-
-The exported file is a secret. Review, edit, move, and delete it with the same care as Codex's original `auth.json`.
 
 ## What ProfileDeck does not store
 

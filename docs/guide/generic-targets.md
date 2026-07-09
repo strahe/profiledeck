@@ -1,6 +1,6 @@
 # Generic Targets
 
-Generic targets are lower-level building blocks for advanced local workflows. Most Codex users should start with `profiledeck codex profile capture` or `profiledeck codex profile set`.
+Generic targets are lower-level building blocks for advanced local workflows. Most Codex users should start with `profiledeck codex profile create`.
 
 ## Create provider and profile
 

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -607,7 +608,7 @@ func profileTargetFromStore(target store.ProfileTarget) (ProfileTarget, error) {
 		Strategy:        target.Strategy,
 		Enabled:         target.Enabled,
 		ValuePreview:    preview,
-		Metadata:        redactMetadata(metadata).(map[string]any),
+		Metadata:        redactedMetadataMap(metadata),
 		CreatedAtUnixMS: target.CreatedAtUnixMS,
 		UpdatedAtUnixMS: target.UpdatedAtUnixMS,
 	}, nil
@@ -633,15 +634,11 @@ func targetValuePreview(providerID string, targetID string, format string, strat
 }
 
 func codexAuthTargetValuePreview(value map[string]any) (TextPreview, error) {
-	accountID, ok := value["account_id"].(string)
-	if !ok || strings.TrimSpace(accountID) == "" || len(value) != 1 {
-		return TextPreview{}, NewError(ErrorStoreSchemaInvalid, `stored Codex auth target value_json must be {"account_id": string}`)
+	credentialID, ok := value["credential_id"].(string)
+	if !ok || strings.TrimSpace(credentialID) == "" || len(value) != 1 {
+		return TextPreview{}, NewError(ErrorStoreSchemaInvalid, `stored Codex auth target value_json must be {"credential_id": string}`)
 	}
-	rawPreview, err := marshalJSONNoEscape(map[string]any{"account_id": accountID})
-	if err != nil {
-		return TextPreview{}, WrapError(ErrorStoreSchemaInvalid, "failed to encode Codex auth target value preview", err)
-	}
-	return truncatePreview(string(rawPreview)), nil
+	return TextPreview{Content: codexpreset.AuthPreviewContent}, nil
 }
 
 func replaceFileTargetValuePreview(value map[string]any) (TextPreview, error) {

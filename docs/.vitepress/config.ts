@@ -15,8 +15,7 @@ const enGuide = [
 ]
 
 const enCodex = [
-  { text: 'Account Switching', link: '/codex/account-switching' },
-  { text: 'Managed Config', link: '/codex/managed-config' },
+  { text: 'Profiles', link: '/codex/profiles' },
   { text: 'Usage and Cost', link: '/codex/usage-cost' }
 ]
 
@@ -37,8 +36,7 @@ const zhGuide = [
 ]
 
 const zhCodex = [
-  { text: '账号切换', link: '/zh/codex/account-switching' },
-  { text: '托管配置', link: '/zh/codex/managed-config' },
+  { text: 'Profile', link: '/zh/codex/profiles' },
   { text: '用量与成本', link: '/zh/codex/usage-cost' }
 ]
 
@@ -85,7 +83,7 @@ export default defineConfig({
     },
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
-      { text: 'Codex', link: '/codex/account-switching' },
+      { text: 'Codex', link: '/codex/profiles' },
       { text: 'Operations', link: '/operations/switching' },
       { text: 'Reference', link: '/reference/cli' }
     ],
@@ -112,7 +110,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: '指南', link: '/zh/guide/getting-started' },
-          { text: 'Codex', link: '/zh/codex/account-switching' },
+          { text: 'Codex', link: '/zh/codex/profiles' },
           { text: '操作', link: '/zh/operations/switching' },
           { text: '参考', link: '/zh/reference/cli' }
         ],

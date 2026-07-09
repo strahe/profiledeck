@@ -48,28 +48,34 @@ type UsageService struct {
 	changes *ChangeNotifier
 }
 
+type SettingsService struct {
+	env Environment
+}
+
 type Services struct {
-	App     *AppService
-	Codex   *CodexService
-	Profile *ProfileService
-	Switch  *SwitchService
-	Doctor  *DoctorService
-	Backup  *BackupService
-	Usage   *UsageService
-	changes *ChangeNotifier
+	App      *AppService
+	Codex    *CodexService
+	Profile  *ProfileService
+	Switch   *SwitchService
+	Doctor   *DoctorService
+	Backup   *BackupService
+	Usage    *UsageService
+	Settings *SettingsService
+	changes  *ChangeNotifier
 }
 
 type DashboardResult struct {
-	Info         app.Info                  `json:"info"`
-	Environment  Environment               `json:"environment"`
-	Status       app.StatusResult          `json:"status"`
-	Doctor       *app.DoctorResult         `json:"doctor,omitempty"`
-	Providers    []app.Provider            `json:"providers"`
-	Profiles     []app.Profile             `json:"profiles"`
-	ActiveStates []app.ActiveProviderState `json:"active_states"`
-	Usage        *app.UsageSummaryResult   `json:"usage,omitempty"`
-	StartupError *DesktopError             `json:"startup_error,omitempty"`
-	GeneratedAt  int64                     `json:"generated_at_unix_ms"`
+	Info          app.Info                    `json:"info"`
+	Environment   Environment                 `json:"environment"`
+	Status        app.StatusResult            `json:"status"`
+	Doctor        *app.DoctorResult           `json:"doctor,omitempty"`
+	Providers     []app.Provider              `json:"providers"`
+	Profiles      []app.Profile               `json:"profiles"`
+	ActiveStates  []app.ActiveProviderState   `json:"active_states"`
+	CodexProfiles *app.CodexProfileListResult `json:"codex_profiles,omitempty"`
+	Usage         *app.UsageSummaryResult     `json:"usage,omitempty"`
+	StartupError  *DesktopError               `json:"startup_error,omitempty"`
+	GeneratedAt   int64                       `json:"generated_at_unix_ms"`
 }
 
 type DesktopError struct {
@@ -85,34 +91,41 @@ type SwitchApplyRequest struct {
 	Confirm                 bool   `json:"confirm"`
 }
 
-type CodexProfileCaptureRequest struct {
-	ProfileID   string  `json:"profile_id"`
-	AccountID   string  `json:"account_id"`
-	Name        *string `json:"name,omitempty"`
-	Description *string `json:"description,omitempty"`
-}
-
-type CodexProfileSetRequest struct {
+type CreateCodexProfileRequest struct {
 	ProfileID     string  `json:"profile_id"`
-	Model         string  `json:"model"`
-	ModelProvider string  `json:"model_provider"`
-	OpenAIBaseURL *string `json:"openai_base_url,omitempty"`
-	AccountID     string  `json:"account_id"`
 	Name          *string `json:"name,omitempty"`
 	Description   *string `json:"description,omitempty"`
+	ConfigContent *string `json:"config_content,omitempty"`
+	AuthContent   *string `json:"auth_content,omitempty"`
+}
+
+type ForkCodexProfileRequest struct {
+	SourceProfileID string  `json:"source_profile_id"`
+	ProfileID       string  `json:"profile_id"`
+	AuthBinding     string  `json:"auth_binding"`
+	Name            *string `json:"name,omitempty"`
+	Description     *string `json:"description,omitempty"`
+}
+
+type SyncCodexProfileRequest struct {
+	ProfileID     string  `json:"profile_id"`
+	AuthUpdate    string  `json:"auth_update,omitempty"`
+	ConfigContent *string `json:"config_content,omitempty"`
+	AuthContent   *string `json:"auth_content,omitempty"`
 }
 
 func NewServices(info app.Info, env Environment, startupErr error) Services {
 	changes := NewChangeNotifier()
 	return Services{
-		App:     &AppService{info: info, env: env, startupErr: startupErr, changes: changes},
-		Codex:   &CodexService{env: env, changes: changes},
-		Profile: &ProfileService{env: env},
-		Switch:  &SwitchService{env: env, changes: changes},
-		Doctor:  &DoctorService{env: env, changes: changes},
-		Backup:  &BackupService{env: env, changes: changes},
-		Usage:   &UsageService{env: env, changes: changes},
-		changes: changes,
+		App:      &AppService{info: info, env: env, startupErr: startupErr, changes: changes},
+		Codex:    &CodexService{env: env, changes: changes},
+		Profile:  &ProfileService{env: env},
+		Switch:   &SwitchService{env: env, changes: changes},
+		Doctor:   &DoctorService{env: env, changes: changes},
+		Backup:   &BackupService{env: env, changes: changes},
+		Usage:    &UsageService{env: env, changes: changes},
+		Settings: &SettingsService{env: env},
+		changes:  changes,
 	}
 }
 
@@ -195,6 +208,10 @@ func (s *AppService) Dashboard(ctx context.Context) (DashboardResult, error) {
 	}
 	result.ActiveStates = activeStates
 
+	if codexProfiles, err := app.ListCodexProfiles(ctx, app.ListCodexProfilesRequest{ConfigDir: s.env.ConfigDir}); err == nil {
+		result.CodexProfiles = &codexProfiles
+	}
+
 	usage, err := app.UsageSummary(ctx, app.UsageSummaryRequest{ConfigDir: s.env.ConfigDir, ProviderID: codexconfig.ProviderID})
 	if err == nil {
 		result.Usage = &usage
@@ -214,45 +231,65 @@ func (s *CodexService) ShowProfile(ctx context.Context, profileID string) (app.C
 	return app.GetCodexProfile(ctx, app.GetCodexProfileRequest{ConfigDir: s.env.ConfigDir, ProfileID: profileID})
 }
 
-func (s *CodexService) CaptureProfile(ctx context.Context, req CodexProfileCaptureRequest) (app.CodexProfileCaptureResult, error) {
-	result, err := app.CodexProfileCapture(ctx, app.CodexProfileCaptureRequest{
-		ConfigDir:   s.env.ConfigDir,
-		CodexDir:    s.env.CodexDir,
-		ProfileID:   req.ProfileID,
-		AccountID:   req.AccountID,
-		Name:        req.Name,
-		Description: req.Description,
-	})
-	profileID := result.Profile.ID
-	if profileID == "" {
-		profileID = strings.TrimSpace(req.ProfileID)
-	}
-	s.notifyMutationResult(DesktopChangeCodexProfileCaptured, "codex.captureProfile", codexconfig.ProviderID, profileID, "", err)
-	return result, err
+func (s *CodexService) LoadProfileDraft(ctx context.Context) (app.CodexProfileDraft, error) {
+	return app.LoadCodexProfileDraft(ctx, app.LoadCodexProfileDraftRequest{ConfigDir: s.env.ConfigDir, CodexDir: s.env.CodexDir})
 }
 
-func (s *CodexService) SetManagedProfile(ctx context.Context, req CodexProfileSetRequest) (app.CodexProfileSetResult, error) {
-	result, err := app.CodexProfileSet(ctx, app.CodexProfileSetRequest{
+func (s *CodexService) LoadStoredProfileDraft(ctx context.Context, profileID string) (app.CodexProfileDraft, error) {
+	return app.LoadStoredCodexProfileDraft(ctx, app.LoadStoredCodexProfileDraftRequest{ConfigDir: s.env.ConfigDir, ProfileID: profileID})
+}
+
+func (s *CodexService) CreateProfile(ctx context.Context, req CreateCodexProfileRequest) (app.CodexProfileSaveResult, error) {
+	result, err := app.CreateCodexProfile(ctx, app.CreateCodexProfileRequest{
 		ConfigDir:     s.env.ConfigDir,
 		CodexDir:      s.env.CodexDir,
 		ProfileID:     req.ProfileID,
-		Model:         req.Model,
-		ModelProvider: req.ModelProvider,
-		OpenAIBaseURL: req.OpenAIBaseURL,
-		AccountID:     req.AccountID,
 		Name:          req.Name,
 		Description:   req.Description,
+		ConfigContent: req.ConfigContent,
+		AuthContent:   req.AuthContent,
 	})
 	profileID := result.Profile.ID
 	if profileID == "" {
 		profileID = strings.TrimSpace(req.ProfileID)
 	}
-	s.notifyMutationResult(DesktopChangeCodexProfileManaged, "codex.setManagedProfile", codexconfig.ProviderID, profileID, "", err)
+	s.notifyMutationResult(DesktopChangeCodexProfileChanged, "codex.createProfile", codexconfig.ProviderID, profileID, "", err)
 	return result, err
 }
 
-func (s *CodexService) ListAccounts(ctx context.Context) ([]app.CodexAccount, error) {
-	return app.CodexAccountList(ctx, app.CodexAccountListRequest{ConfigDir: s.env.ConfigDir})
+func (s *CodexService) ForkProfile(ctx context.Context, req ForkCodexProfileRequest) (app.CodexProfileSaveResult, error) {
+	result, err := app.ForkCodexProfile(ctx, app.ForkCodexProfileRequest{
+		ConfigDir:       s.env.ConfigDir,
+		CodexDir:        s.env.CodexDir,
+		SourceProfileID: req.SourceProfileID,
+		ProfileID:       req.ProfileID,
+		AuthBinding:     req.AuthBinding,
+		Name:            req.Name,
+		Description:     req.Description,
+	})
+	profileID := result.Profile.ID
+	if profileID == "" {
+		profileID = strings.TrimSpace(req.ProfileID)
+	}
+	s.notifyMutationResult(DesktopChangeCodexProfileChanged, "codex.forkProfile", codexconfig.ProviderID, profileID, "", err)
+	return result, err
+}
+
+func (s *CodexService) SyncProfile(ctx context.Context, req SyncCodexProfileRequest) (app.CodexProfileSaveResult, error) {
+	result, err := app.SyncCodexProfile(ctx, app.SyncCodexProfileRequest{
+		ConfigDir:     s.env.ConfigDir,
+		CodexDir:      s.env.CodexDir,
+		ProfileID:     req.ProfileID,
+		AuthUpdate:    req.AuthUpdate,
+		ConfigContent: req.ConfigContent,
+		AuthContent:   req.AuthContent,
+	})
+	profileID := result.Profile.ID
+	if profileID == "" {
+		profileID = strings.TrimSpace(req.ProfileID)
+	}
+	s.notifyMutationResult(DesktopChangeCodexProfileChanged, "codex.syncProfile", codexconfig.ProviderID, profileID, "", err)
+	return result, err
 }
 
 func (s *ProfileService) ListProviders(ctx context.Context) ([]app.Provider, error) {
@@ -363,6 +400,15 @@ func (s *UsageService) Summary(ctx context.Context, providerID string) (app.Usag
 		providerID = codexconfig.ProviderID
 	}
 	return app.UsageSummary(ctx, app.UsageSummaryRequest{ConfigDir: s.env.ConfigDir, ProviderID: providerID})
+}
+
+func (s *SettingsService) Get(ctx context.Context) (app.DesktopSettings, error) {
+	return app.GetDesktopSettings(ctx, app.DesktopSettingsRequest{ConfigDir: s.env.ConfigDir})
+}
+
+func (s *SettingsService) Update(ctx context.Context, req app.UpdateDesktopSettingsRequest) (app.DesktopSettings, error) {
+	req.ConfigDir = s.env.ConfigDir
+	return app.UpdateDesktopSettings(ctx, req)
 }
 
 func (s *AppService) notifyMutationResult(kind string, source string, providerID string, profileID string, operationID string, err error) {

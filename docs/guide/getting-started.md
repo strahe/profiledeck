@@ -64,16 +64,16 @@ ProfileDeck creates runtime, backup, export, log, and lock directories with rest
 
 ```bash
 profiledeck codex detect
-profiledeck codex profile capture work
+profiledeck codex profile create work
 profiledeck codex profile list
 profiledeck plan codex work
 profiledeck switch codex work --yes
 ```
 
-`codex profile capture` reads the current Codex home. Resolution order is:
+`codex profile create` reads the current Codex home and requires both `config.toml` and `auth.json`. Resolution order is:
 
 1. `--codex-dir`
 2. `CODEX_HOME`
 3. `~/.codex`
 
-For full account switching, Codex must have `$CODEX_HOME/auth.json`.
+For Codex profile switching, Codex must have `$CODEX_HOME/auth.json`.

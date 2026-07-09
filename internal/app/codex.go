@@ -14,7 +14,6 @@ import (
 var codexTargetFormatStrategyNames = codexpreset.TargetFormatStrategyNames{
 	JSONFormat:          targetFormatJSON,
 	TOMLFormat:          targetFormatTOML,
-	TOMLMergeStrategy:   targetStrategyTOMLMerge,
 	ReplaceFileStrategy: targetStrategyReplaceFile,
 }
 
@@ -37,30 +36,6 @@ type CodexDetectResult struct {
 	ProviderAdapterID      string   `json:"provider_adapter_id"`
 	ProviderCompatible     bool     `json:"provider_compatible"`
 	Warnings               []string `json:"warnings"`
-}
-
-type CodexProfileSetRequest struct {
-	ConfigDir     string
-	CodexDir      string
-	ProfileID     string
-	Model         string
-	ModelProvider string
-	OpenAIBaseURL *string
-	AccountID     string
-	Name          *string
-	Description   *string
-}
-
-type CodexProfileSetResult struct {
-	Provider    Provider       `json:"provider"`
-	Profile     Profile        `json:"profile"`
-	Target      ProfileTarget  `json:"target"`
-	AuthTarget  *ProfileTarget `json:"auth_target,omitempty"`
-	CodexDir    string         `json:"codex_dir"`
-	ConfigPath  string         `json:"config_path"`
-	AuthPath    string         `json:"auth_path"`
-	ManagedKeys []string       `json:"managed_keys"`
-	Warnings    []string       `json:"warnings"`
 }
 
 type codexExistingTargets struct {
@@ -172,249 +147,6 @@ func CodexDetect(ctx context.Context, req CodexDetectRequest) (CodexDetectResult
 		result.Warnings = append(result.Warnings, warnings...)
 	}
 	return result, nil
-}
-
-func CodexProfileSet(ctx context.Context, req CodexProfileSetRequest) (CodexProfileSetResult, error) {
-	profileID, appErr := validateID(req.ProfileID, ErrorProfileInvalid)
-	if appErr != nil {
-		return CodexProfileSetResult{}, appErr
-	}
-	home, err := codexconfig.ResolveHome(req.CodexDir)
-	if err != nil {
-		return CodexProfileSetResult{}, WrapError(ErrorCodexInvalid, "failed to resolve Codex home", err)
-	}
-	if appErr := requireExistingCodexHome(home); appErr != nil {
-		return CodexProfileSetResult{}, appErr
-	}
-	profileFields, appErr := normalizeCodexProfileFields(profileID, req.Name, req.Description)
-	if appErr != nil {
-		return CodexProfileSetResult{}, appErr
-	}
-	accountID, appErr := normalizeOptionalCodexAccountID(req.AccountID)
-	if appErr != nil {
-		return CodexProfileSetResult{}, appErr
-	}
-	managed, err := codexconfig.NormalizeManaged(req.Model, req.ModelProvider, req.OpenAIBaseURL)
-	if err != nil {
-		return CodexProfileSetResult{}, WrapError(ErrorCodexInvalid, "Codex profile config is invalid", err)
-	}
-	valueJSON, err := codexconfig.ValueJSON(managed)
-	if err != nil {
-		return CodexProfileSetResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex target value", err)
-	}
-	providerMetadata, err := codexpreset.ProviderMetadataJSON(home)
-	if err != nil {
-		return CodexProfileSetResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex provider metadata", err)
-	}
-	targetMetadata, err := codexpreset.TargetMetadataJSON(codexconfig.TargetID, codexpreset.TargetModeManagedKeys)
-	if err != nil {
-		return CodexProfileSetResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex preset metadata", err)
-	}
-	authTargetMetadata, err := codexpreset.TargetMetadataJSON(codexconfig.AuthTargetID, codexpreset.TargetModeFullFile)
-	if err != nil {
-		return CodexProfileSetResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex auth target metadata", err)
-	}
-	authValueJSON, err := codexpreset.AuthTargetValueJSON(accountID)
-	if err != nil {
-		return CodexProfileSetResult{}, WrapError(ErrorCodexInvalid, "failed to encode Codex auth target value", err)
-	}
-
-	db, err := openHealthyStore(ctx, req.ConfigDir, false)
-	if err != nil {
-		return CodexProfileSetResult{}, err
-	}
-	defer db.Close()
-
-	var provider store.Provider
-	var profile store.Profile
-	var target store.ProfileTarget
-	var authTarget *store.ProfileTarget
-	if err := db.WithTransaction(ctx, func(txStore *store.Store) error {
-		var hasProvider bool
-		var hasProfile bool
-		var targets codexExistingTargets
-		var err error
-
-		provider, hasProvider, err = codexPreflightProvider(ctx, txStore, home)
-		if err != nil {
-			return err
-		}
-		profile, hasProfile, err = codexPreflightProfile(ctx, txStore, profileID)
-		if err != nil {
-			return err
-		}
-		targets, err = codexPreflightTargets(ctx, txStore, home, profileID)
-		if err != nil {
-			return err
-		}
-		if accountID != "" {
-			if _, err := txStore.GetProviderAccountSecret(ctx, codexconfig.ProviderID, accountID); err != nil {
-				if errors.Is(err, store.ErrNotFound) {
-					return NewError(ErrorCodexInvalid, "Codex account does not exist").WithDetail("account_id", accountID)
-				}
-				return WrapError(ErrorStoreStatusFailed, "failed to read Codex account", err)
-			}
-		}
-
-		if !hasProvider {
-			provider, err = txStore.CreateProvider(ctx, store.CreateProviderParams{
-				ID:           codexconfig.ProviderID,
-				Name:         codexpreset.ProviderName,
-				AdapterID:    codexconfig.AdapterID,
-				Enabled:      true,
-				MetadataJSON: providerMetadata,
-			})
-		} else {
-			enabled := true
-			name := codexpreset.ProviderName
-			provider, err = txStore.UpdateProvider(ctx, store.UpdateProviderParams{
-				ID:           codexconfig.ProviderID,
-				Name:         &name,
-				Enabled:      &enabled,
-				MetadataJSON: &providerMetadata,
-			})
-		}
-		if err != nil {
-			return mapProviderStoreError(err)
-		}
-
-		if !hasProfile {
-			profile, err = txStore.CreateProfile(ctx, store.CreateProfileParams{
-				ID:           profileID,
-				Name:         profileFields.CreateName,
-				Description:  profileFields.CreateDescription,
-				MetadataJSON: "{}",
-			})
-		} else if profileFields.UpdateName != nil || profileFields.UpdateDescription != nil {
-			profile, err = txStore.UpdateProfile(ctx, store.UpdateProfileParams{
-				ID:          profileID,
-				Name:        profileFields.UpdateName,
-				Description: profileFields.UpdateDescription,
-			})
-		}
-		if err != nil {
-			return mapProfileStoreError(err)
-		}
-
-		enabled := true
-		if !targets.HasConfig {
-			target, err = txStore.CreateProfileTarget(ctx, store.CreateProfileTargetParams{
-				ProfileID:    profileID,
-				ProviderID:   codexconfig.ProviderID,
-				TargetID:     codexconfig.TargetID,
-				Path:         home.ConfigPath,
-				PathKey:      targetPathOwnershipKey(home.ConfigPath),
-				Format:       targetFormatTOML,
-				Strategy:     targetStrategyTOMLMerge,
-				ValueJSON:    valueJSON,
-				Enabled:      true,
-				MetadataJSON: targetMetadata,
-			})
-		} else {
-			path := home.ConfigPath
-			pathKey := targetPathOwnershipKey(home.ConfigPath)
-			format := targetFormatTOML
-			strategy := targetStrategyTOMLMerge
-			target, err = txStore.UpdateProfileTarget(ctx, store.UpdateProfileTargetParams{
-				ProfileID:    profileID,
-				ProviderID:   codexconfig.ProviderID,
-				TargetID:     codexconfig.TargetID,
-				Path:         &path,
-				PathKey:      &pathKey,
-				Format:       &format,
-				Strategy:     &strategy,
-				ValueJSON:    &valueJSON,
-				Enabled:      &enabled,
-				MetadataJSON: &targetMetadata,
-			})
-		}
-		if err != nil {
-			return mapTargetStoreError(err)
-		}
-		if accountID != "" {
-			if !targets.HasAuth {
-				created, err := txStore.CreateProfileTarget(ctx, store.CreateProfileTargetParams{
-					ProfileID:    profileID,
-					ProviderID:   codexconfig.ProviderID,
-					TargetID:     codexconfig.AuthTargetID,
-					Path:         home.AuthPath,
-					PathKey:      targetPathOwnershipKey(home.AuthPath),
-					Format:       targetFormatJSON,
-					Strategy:     targetStrategyReplaceFile,
-					ValueJSON:    authValueJSON,
-					Enabled:      true,
-					MetadataJSON: authTargetMetadata,
-				})
-				if err != nil {
-					return mapTargetStoreError(err)
-				}
-				authTarget = &created
-			} else {
-				path := home.AuthPath
-				pathKey := targetPathOwnershipKey(home.AuthPath)
-				format := targetFormatJSON
-				strategy := targetStrategyReplaceFile
-				updated, err := txStore.UpdateProfileTarget(ctx, store.UpdateProfileTargetParams{
-					ProfileID:    profileID,
-					ProviderID:   codexconfig.ProviderID,
-					TargetID:     codexconfig.AuthTargetID,
-					Path:         &path,
-					PathKey:      &pathKey,
-					Format:       &format,
-					Strategy:     &strategy,
-					ValueJSON:    &authValueJSON,
-					Enabled:      &enabled,
-					MetadataJSON: &authTargetMetadata,
-				})
-				if err != nil {
-					return mapTargetStoreError(err)
-				}
-				authTarget = &updated
-			}
-		} else if targets.HasAuth {
-			existing := targets.Auth
-			authTarget = &existing
-		}
-		return nil
-	}); err != nil {
-		var appErr *AppError
-		if errors.As(err, &appErr) {
-			return CodexProfileSetResult{}, appErr
-		}
-		return CodexProfileSetResult{}, WrapError(ErrorStoreStatusFailed, "Codex profile set transaction failed", err)
-	}
-
-	publicProvider, err := providerFromStore(provider)
-	if err != nil {
-		return CodexProfileSetResult{}, err
-	}
-	publicProfile, err := profileFromStore(profile)
-	if err != nil {
-		return CodexProfileSetResult{}, err
-	}
-	publicTarget, err := profileTargetFromStore(target)
-	if err != nil {
-		return CodexProfileSetResult{}, err
-	}
-	var publicAuthTarget *ProfileTarget
-	if authTarget != nil {
-		value, err := profileTargetFromStore(*authTarget)
-		if err != nil {
-			return CodexProfileSetResult{}, err
-		}
-		publicAuthTarget = &value
-	}
-
-	return CodexProfileSetResult{
-		Provider:    publicProvider,
-		Profile:     publicProfile,
-		Target:      publicTarget,
-		AuthTarget:  publicAuthTarget,
-		CodexDir:    home.Dir,
-		ConfigPath:  home.ConfigPath,
-		AuthPath:    home.AuthPath,
-		ManagedKeys: codexconfig.ManagedKeys(),
-	}, nil
 }
 
 func requireExistingCodexHome(home codexconfig.Home) *AppError {
@@ -580,29 +312,16 @@ func requireCodexTargetForHome(target store.ProfileTarget, home codexconfig.Home
 				WithDetail("existing_config_path", target.Path).
 				WithDetail("requested_config_path", home.ConfigPath)
 		}
-		if !codexConfigTargetFormatValid(target) {
-			return codexTargetInvalid(target, "existing codex config target uses an unsupported format").
-				WithDetail("format", target.Format)
-		}
-		if !codexConfigTargetStrategyValid(target) {
-			return codexTargetInvalid(target, "existing codex config target uses an unsupported strategy").
-				WithDetail("strategy", target.Strategy)
-		}
 	case codexconfig.AuthTargetID:
 		if target.Path != home.AuthPath {
 			return codexTargetInvalid(target, "existing codex auth target uses a different auth path").
 				WithDetail("existing_auth_path", target.Path).
 				WithDetail("requested_auth_path", home.AuthPath)
 		}
-		if !codexAuthTargetFormatStrategyValid(target) {
-			return codexTargetInvalid(target, "existing codex auth target uses an unsupported format or strategy").
-				WithDetail("format", target.Format).
-				WithDetail("strategy", target.Strategy)
-		}
 	default:
 		return codexTargetInvalid(target, "existing codex provider has an unsupported target")
 	}
-	return requireCodexTargetMetadata(target)
+	return nil
 }
 
 func codexTargetInvalid(target store.ProfileTarget, message string) *AppError {

@@ -11,7 +11,7 @@ All commands accept the global option:
 | Command | Purpose |
 | --- | --- |
 | `backup` | Inspect ProfileDeck backups. |
-| `codex` | Manage Codex provider profiles and stored accounts. |
+| `codex` | Manage Codex provider profiles. |
 | `doctor` | Diagnose ProfileDeck runtime state. |
 | `init` | Initialize the application store. |
 | `plan` | Build a read-only switch plan. |
@@ -38,20 +38,12 @@ profiledeck version
 profiledeck codex detect [--codex-dir PATH] [--json]
 profiledeck codex profile list [--json]
 profiledeck codex profile show <profile-id> [--json]
-profiledeck codex profile capture <profile-id> [--account ID] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
-profiledeck codex profile set <profile-id> --model MODEL [--model-provider ID] [--openai-base-url URL] [--account ID] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
+profiledeck codex profile create <profile-id> [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
+profiledeck codex profile fork <source-profile-id> <new-profile-id> --auth-binding share-parent|copy-new [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
+profiledeck codex profile sync <profile-id> [--auth-update update-shared|fork-new] [--codex-dir PATH] [--json]
 ```
 
-Account commands:
-
-```bash
-profiledeck codex account list [--json]
-profiledeck codex account show <account-id> [--json]
-profiledeck codex account export <account-id> --output PATH [--force] [--json]
-profiledeck codex account import <account-id> --auth-file PATH [--name NAME] [--json]
-```
-
-`account list` and `account show` do not print raw auth. `account export` intentionally writes raw auth JSON to the requested file.
+`create` reads the current Codex `config.toml` and `auth.json` and creates a profile with a new hidden credential. `fork` copies an existing profile and requires an explicit auth binding choice. `sync` updates an existing profile from current Codex files; use `--auth-update` when changing a shared credential or intentionally forking it.
 
 ## Switching
 

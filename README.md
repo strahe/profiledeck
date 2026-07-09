@@ -2,7 +2,7 @@
 
 Safe profile switching for AI coding tools.
 
-ProfileDeck is currently a Go CLI and macOS desktop MVP with a Codex-first workflow. It can capture Codex user config and file-based auth, switch profiles through a guarded transaction pipeline, import local Codex token usage, and recover interrupted switch operations.
+ProfileDeck is currently a Go CLI and macOS desktop MVP with a Codex-first workflow. It can create full-file Codex profiles from user config and file-based auth, switch profiles through a guarded transaction pipeline, import local Codex token usage, and recover interrupted switch operations.
 
 ## Documentation
 
@@ -49,17 +49,19 @@ macOS desktop builds target macOS 14.0 by default. Override it with `MACOS_MIN_V
 
 During desktop development, set `PROFILEDECK_CONFIG_DIR` to a temporary directory when you need to avoid touching the normal ProfileDeck runtime.
 
+The desktop app persists its language preference in ProfileDeck settings and currently supports Auto, Simplified Chinese, and English.
+
 ## Codex Quick Start
 
 ```bash
 profiledeck init
 profiledeck codex detect
-profiledeck codex profile capture work
+profiledeck codex profile create work
 profiledeck codex profile list
 profiledeck plan codex work
 profiledeck switch codex work --yes
 ```
 
-Full Codex account switching requires file credentials. If `$CODEX_HOME/auth.json` is missing, set `cli_auth_credentials_store = "file"` in `$CODEX_HOME/config.toml` and run `codex login` again.
+Codex profile switching requires file credentials. If `$CODEX_HOME/auth.json` is missing, set `cli_auth_credentials_store = "file"` in `$CODEX_HOME/config.toml` and run `codex login` again.
 
-Stored Codex auth is sensitive. ProfileDeck stores it locally in `profiledeck.db`, and switch backups may contain previous `auth.json` content.
+Stored Codex auth is sensitive. ProfileDeck stores it locally in hidden credential records inside `profiledeck.db`, and switch backups may contain previous `auth.json` content.

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pelletier/go-toml/v2"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/store"
@@ -49,13 +48,13 @@ func TestCodexDetectReportsPresetHomeConflict(t *testing.T) {
 	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	if _, err := CodexProfileSet(ctx, CodexProfileSetRequest{
+	writeCodexProfileFixture(t, codexDirA, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"remote-work","access_token":"secret"}}`)
+	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
 		ConfigDir: configDir,
 		CodexDir:  codexDirA,
 		ProfileID: "work",
-		Model:     "gpt-5.3-codex",
 	}); err != nil {
-		t.Fatalf("expected Codex profile set to succeed, got %v", err)
+		t.Fatalf("expected Codex profile create to succeed, got %v", err)
 	}
 
 	result, err := CodexDetect(ctx, CodexDetectRequest{
@@ -73,78 +72,20 @@ func TestCodexDetectReportsPresetHomeConflict(t *testing.T) {
 	}
 }
 
-func TestCodexProfileSetCreatesAndUpdatesPresetRecords(t *testing.T) {
+func TestCodexProfileCreateRejectsInvalidProviderMetadata(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
 	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-
-	result, err := CodexProfileSet(ctx, CodexProfileSetRequest{
+	writeCodexProfileFixture(t, codexDir, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"remote-work","access_token":"secret"}}`)
+	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
 		ConfigDir: configDir,
 		CodexDir:  codexDir,
 		ProfileID: "work",
-		Model:     "gpt-5.3-codex",
-		Name:      stringPtr("  Work  "),
-	})
-	if err != nil {
-		t.Fatalf("expected Codex profile set to succeed, got %v", err)
-	}
-	if result.Provider.ID != codexconfig.ProviderID || result.Provider.AdapterID != codexconfig.AdapterID {
-		t.Fatalf("unexpected provider: %#v", result.Provider)
-	}
-	if result.Profile.ID != "work" || result.Profile.Name != "Work" {
-		t.Fatalf("unexpected profile: %#v", result.Profile)
-	}
-	if result.Target.TargetID != codexconfig.TargetID || result.Target.Path != filepath.Join(codexDir, codexconfig.ConfigFileName) {
-		t.Fatalf("unexpected target: %#v", result.Target)
-	}
-
-	result, err = CodexProfileSet(ctx, CodexProfileSetRequest{
-		ConfigDir:     configDir,
-		CodexDir:      codexDir,
-		ProfileID:     "work",
-		Model:         "gpt-5.4-codex",
-		ModelProvider: "openai",
-		Description:   stringPtr("  Updated  "),
-	})
-	if err != nil {
-		t.Fatalf("expected repeated Codex profile set to succeed, got %v", err)
-	}
-	if result.Profile.Name != "Work" || result.Profile.Description != "Updated" {
-		t.Fatalf("expected repeated set to update only explicit profile fields, got %#v", result.Profile)
-	}
-
-	db := openHealthyAppTestStore(t, ctx, configDir)
-	defer db.Close()
-	target, err := db.GetProfileTarget(ctx, "work", codexconfig.ProviderID, codexconfig.TargetID)
-	if err != nil {
-		t.Fatalf("expected stored Codex target, got %v", err)
-	}
-	managed, err := codexconfig.ParseValueJSON(target.ValueJSON)
-	if err != nil {
-		t.Fatalf("expected stored value_json to parse, got %v", err)
-	}
-	if managed.Model != "gpt-5.4-codex" || managed.ModelProvider != "openai" || managed.HasOpenAIBaseURL {
-		t.Fatalf("unexpected stored managed config: %#v", managed)
-	}
-}
-
-func TestCodexProfileSetRejectsInvalidProviderMetadata(t *testing.T) {
-	ctx := context.Background()
-	configDir := t.TempDir()
-	codexDir := t.TempDir()
-	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
-		t.Fatalf("expected init to succeed, got %v", err)
-	}
-	if _, err := CodexProfileSet(ctx, CodexProfileSetRequest{
-		ConfigDir: configDir,
-		CodexDir:  codexDir,
-		ProfileID: "work",
-		Model:     "gpt-5.3-codex",
 	}); err != nil {
-		t.Fatalf("expected Codex profile set to succeed, got %v", err)
+		t.Fatalf("expected Codex profile create to succeed, got %v", err)
 	}
 
 	db, err := openHealthyStore(ctx, configDir, false)
@@ -174,11 +115,10 @@ func TestCodexProfileSetRejectsInvalidProviderMetadata(t *testing.T) {
 		t.Fatalf("expected invalid metadata warning and incompatible provider, got %#v", result)
 	}
 
-	_, err = CodexProfileSet(ctx, CodexProfileSetRequest{
+	_, err = CreateCodexProfile(ctx, CreateCodexProfileRequest{
 		ConfigDir: configDir,
 		CodexDir:  codexDir,
 		ProfileID: "work",
-		Model:     "gpt-5.4-codex",
 	})
 	assertAppErrorCode(t, err, ErrorStoreSchemaInvalid)
 }
@@ -190,13 +130,13 @@ func TestCodexPlanRejectsMutatedPresetTargetPath(t *testing.T) {
 	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	if _, err := CodexProfileSet(ctx, CodexProfileSetRequest{
+	writeCodexProfileFixture(t, codexDir, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"remote-work","access_token":"secret"}}`)
+	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
 		ConfigDir: configDir,
 		CodexDir:  codexDir,
 		ProfileID: "work",
-		Model:     "gpt-5.3-codex",
 	}); err != nil {
-		t.Fatalf("expected Codex profile set to succeed, got %v", err)
+		t.Fatalf("expected Codex profile create to succeed, got %v", err)
 	}
 
 	mutatedPath := filepath.Join(t.TempDir(), "other.toml")
@@ -218,7 +158,7 @@ func TestCodexPlanRejectsMutatedPresetTargetPath(t *testing.T) {
 	assertAppErrorCode(t, err, ErrorCodexInvalid)
 }
 
-func TestCodexProfileSetRejectsConflictingProviderAndHome(t *testing.T) {
+func TestCodexProfileCreateRejectsConflictingProviderAndHome(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDirA := t.TempDir()
@@ -234,11 +174,11 @@ func TestCodexProfileSetRejectsConflictingProviderAndHome(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("expected conflicting provider setup to succeed, got %v", err)
 	}
-	_, err := CodexProfileSet(ctx, CodexProfileSetRequest{
+	writeCodexProfileFixture(t, codexDirA, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"remote-work","access_token":"secret"}}`)
+	_, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
 		ConfigDir: configDir,
 		CodexDir:  codexDirA,
 		ProfileID: "work",
-		Model:     "gpt-5.3-codex",
 	})
 	assertAppErrorCode(t, err, ErrorCodexInvalid)
 
@@ -246,116 +186,188 @@ func TestCodexProfileSetRejectsConflictingProviderAndHome(t *testing.T) {
 	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
 		t.Fatalf("expected second init to succeed, got %v", err)
 	}
-	if _, err := CodexProfileSet(ctx, CodexProfileSetRequest{
+	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
 		ConfigDir: configDir,
 		CodexDir:  codexDirA,
 		ProfileID: "work",
-		Model:     "gpt-5.3-codex",
 	}); err != nil {
-		t.Fatalf("expected first Codex home setup to succeed, got %v", err)
+		t.Fatalf("expected first Codex home create to succeed, got %v", err)
 	}
-	_, err = CodexProfileSet(ctx, CodexProfileSetRequest{
+	writeCodexProfileFixture(t, codexDirB, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"remote-personal","access_token":"secret"}}`)
+	_, err = CreateCodexProfile(ctx, CreateCodexProfileRequest{
 		ConfigDir: configDir,
 		CodexDir:  codexDirB,
 		ProfileID: "personal",
-		Model:     "gpt-5.3-codex",
 	})
 	assertAppErrorCode(t, err, ErrorCodexInvalid)
 }
 
-func TestCodexSwitchWritesManagedConfigThroughPipeline(t *testing.T) {
+func TestCodexLegacyManagedProfileIsHiddenAndRejected(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
-	configPath := filepath.Join(codexDir, codexconfig.ConfigFileName)
-	existing := strings.Join([]string{
-		`model = "old-model"`,
-		`model_provider = "old-provider"`,
-		`openai_base_url = "https://old.example.test/v1"`,
-		`approval_policy = "never"`,
-		`api_key = "raw-secret"`,
-		``,
-		`[tools]`,
-		`web_search = true`,
-	}, "\n")
-	if err := os.WriteFile(configPath, []byte(existing), 0o600); err != nil {
-		t.Fatalf("expected Codex config setup to succeed, got %v", err)
-	}
 	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-
-	baseURL := "https://api.example.test/v1"
-	if _, err := CodexProfileSet(ctx, CodexProfileSetRequest{
-		ConfigDir:     configDir,
-		CodexDir:      codexDir,
-		ProfileID:     "work",
-		Model:         "gpt-5.3-codex",
-		OpenAIBaseURL: &baseURL,
-	}); err != nil {
-		t.Fatalf("expected Codex profile set to succeed, got %v", err)
-	}
-
-	plan, err := BuildPlan(ctx, BuildPlanRequest{
-		ConfigDir:  configDir,
-		ProviderID: codexconfig.ProviderID,
-		ProfileID:  "work",
-	})
+	home, err := codexconfig.ResolveHome(codexDir)
 	if err != nil {
-		t.Fatalf("expected Codex plan to succeed, got %v", err)
+		t.Fatalf("expected Codex home to resolve, got %v", err)
 	}
-	if len(plan.Operations) != 1 || plan.Operations[0].Action != planActionUpdate {
-		t.Fatalf("unexpected Codex plan: %#v", plan)
+	providerMetadata, err := codexpreset.ProviderMetadataJSON(home)
+	if err != nil {
+		t.Fatalf("expected provider metadata to encode, got %v", err)
 	}
-	if strings.Contains(plan.Operations[0].BeforePreview.Content, "raw-secret") || strings.Contains(plan.Operations[0].DesiredPreview.Content, "raw-secret") {
-		t.Fatalf("expected Codex plan previews to redact existing secret-looking values, got %#v", plan.Operations[0])
+	db, err := openHealthyStore(ctx, configDir, false)
+	if err != nil {
+		t.Fatalf("expected writable store to open, got %v", err)
+	}
+	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
+		ID:           codexconfig.ProviderID,
+		Name:         codexpreset.ProviderName,
+		AdapterID:    codexconfig.AdapterID,
+		Enabled:      true,
+		MetadataJSON: providerMetadata,
+	}); err != nil {
+		t.Fatalf("expected provider setup to succeed, got %v", err)
+	}
+	if _, err := db.CreateProfile(ctx, store.CreateProfileParams{
+		ID:           "legacy",
+		Name:         "Legacy",
+		MetadataJSON: "{}",
+	}); err != nil {
+		t.Fatalf("expected legacy profile setup to succeed, got %v", err)
+	}
+	legacyMetadata := `{"preset":"codex","preset_version":1,"target_kind":"config","mode":"managed-keys","managed_keys":["model","model_provider","openai_base_url"]}`
+	if _, err := db.CreateProfileTarget(ctx, store.CreateProfileTargetParams{
+		ProfileID:    "legacy",
+		ProviderID:   codexconfig.ProviderID,
+		TargetID:     codexconfig.TargetID,
+		Path:         home.ConfigPath,
+		PathKey:      targetPathOwnershipKey(home.ConfigPath),
+		Format:       targetFormatTOML,
+		Strategy:     targetStrategyTOMLMerge,
+		ValueJSON:    `{"model":"gpt-5-codex","model_provider":"openai"}`,
+		Enabled:      true,
+		MetadataJSON: legacyMetadata,
+	}); err != nil {
+		t.Fatalf("expected legacy target setup to succeed, got %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("expected store close to succeed, got %v", err)
 	}
 
-	if _, err := ApplySwitch(ctx, ApplySwitchRequest{
-		ConfigDir:  configDir,
-		ProviderID: codexconfig.ProviderID,
-		ProfileID:  "work",
-		Confirm:    true,
-	}); err != nil {
-		t.Fatalf("expected Codex switch to succeed, got %v", err)
+	list, err := ListCodexProfiles(ctx, ListCodexProfilesRequest{ConfigDir: configDir})
+	if err != nil {
+		t.Fatalf("expected profile list to succeed, got %v", err)
 	}
-	assertCodexConfig(t, configPath, map[string]any{
-		"model":           "gpt-5.3-codex",
-		"model_provider":  "openai",
-		"openai_base_url": baseURL,
-		"approval_policy": "never",
-		"api_key":         "raw-secret",
-	})
+	if len(list.Profiles) != 0 {
+		t.Fatalf("expected legacy managed profile to be hidden, got %#v", list.Profiles)
+	}
 
-	if _, err := CodexProfileSet(ctx, CodexProfileSetRequest{
-		ConfigDir: configDir,
-		CodexDir:  codexDir,
-		ProfileID: "work",
-		Model:     "gpt-5.4-codex",
-	}); err != nil {
-		t.Fatalf("expected Codex profile update without base URL to succeed, got %v", err)
-	}
-	if _, err := ApplySwitch(ctx, ApplySwitchRequest{
+	_, err = BuildPlan(ctx, BuildPlanRequest{
 		ConfigDir:  configDir,
 		ProviderID: codexconfig.ProviderID,
-		ProfileID:  "work",
-		Confirm:    true,
-	}); err != nil {
-		t.Fatalf("expected second Codex switch to succeed, got %v", err)
-	}
-	raw := readFileString(t, configPath)
-	if strings.Contains(raw, "openai_base_url") || strings.Contains(raw, "old.example.test") {
-		t.Fatalf("expected stale openai_base_url to be removed, got %q", raw)
-	}
-	assertCodexConfig(t, configPath, map[string]any{
-		"model":           "gpt-5.4-codex",
-		"model_provider":  "openai",
-		"approval_policy": "never",
-		"api_key":         "raw-secret",
+		ProfileID:  "legacy",
 	})
+	assertAppErrorCode(t, err, ErrorCodexInvalid)
 }
 
-func TestCodexProfileCaptureSwitchesFullConfigAndAuthThroughPipeline(t *testing.T) {
+func TestCodexLegacyAccountRefAuthProfileIsHiddenAndRejected(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	home, err := codexconfig.ResolveHome(codexDir)
+	if err != nil {
+		t.Fatalf("expected Codex home to resolve, got %v", err)
+	}
+	providerMetadata, err := codexpreset.ProviderMetadataJSON(home)
+	if err != nil {
+		t.Fatalf("expected provider metadata to encode, got %v", err)
+	}
+	configMetadata, err := codexpreset.TargetMetadataJSON(codexconfig.TargetID, codexpreset.TargetModeFullFile)
+	if err != nil {
+		t.Fatalf("expected config metadata to encode, got %v", err)
+	}
+	configValue, err := codexpreset.ReplaceFileValueJSON(`model = "gpt-5-codex"` + "\n")
+	if err != nil {
+		t.Fatalf("expected config value to encode, got %v", err)
+	}
+	legacyAuthMetadata, err := codexpreset.TargetMetadataJSON(codexconfig.AuthTargetID, codexpreset.TargetModeFullFile)
+	if err != nil {
+		t.Fatalf("expected legacy auth metadata to encode, got %v", err)
+	}
+	db, err := openHealthyStore(ctx, configDir, false)
+	if err != nil {
+		t.Fatalf("expected writable store to open, got %v", err)
+	}
+	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
+		ID:           codexconfig.ProviderID,
+		Name:         codexpreset.ProviderName,
+		AdapterID:    codexconfig.AdapterID,
+		Enabled:      true,
+		MetadataJSON: providerMetadata,
+	}); err != nil {
+		t.Fatalf("expected provider setup to succeed, got %v", err)
+	}
+	if _, err := db.CreateProfile(ctx, store.CreateProfileParams{
+		ID:           "legacy-auth",
+		Name:         "Legacy Auth",
+		MetadataJSON: "{}",
+	}); err != nil {
+		t.Fatalf("expected legacy profile setup to succeed, got %v", err)
+	}
+	if _, err := db.CreateProfileTarget(ctx, store.CreateProfileTargetParams{
+		ProfileID:    "legacy-auth",
+		ProviderID:   codexconfig.ProviderID,
+		TargetID:     codexconfig.TargetID,
+		Path:         home.ConfigPath,
+		PathKey:      targetPathOwnershipKey(home.ConfigPath),
+		Format:       targetFormatTOML,
+		Strategy:     targetStrategyReplaceFile,
+		ValueJSON:    configValue,
+		Enabled:      true,
+		MetadataJSON: configMetadata,
+	}); err != nil {
+		t.Fatalf("expected config target setup to succeed, got %v", err)
+	}
+	if _, err := db.CreateProfileTarget(ctx, store.CreateProfileTargetParams{
+		ProfileID:    "legacy-auth",
+		ProviderID:   codexconfig.ProviderID,
+		TargetID:     codexconfig.AuthTargetID,
+		Path:         home.AuthPath,
+		PathKey:      targetPathOwnershipKey(home.AuthPath),
+		Format:       targetFormatJSON,
+		Strategy:     targetStrategyReplaceFile,
+		ValueJSON:    `{"account_id":"local-work"}`,
+		Enabled:      true,
+		MetadataJSON: legacyAuthMetadata,
+	}); err != nil {
+		t.Fatalf("expected legacy auth target setup to succeed, got %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("expected store close to succeed, got %v", err)
+	}
+
+	list, err := ListCodexProfiles(ctx, ListCodexProfilesRequest{ConfigDir: configDir})
+	if err != nil {
+		t.Fatalf("expected profile list to succeed, got %v", err)
+	}
+	if len(list.Profiles) != 0 {
+		t.Fatalf("expected legacy account-ref auth profile to be hidden, got %#v", list.Profiles)
+	}
+
+	_, err = BuildPlan(ctx, BuildPlanRequest{
+		ConfigDir:  configDir,
+		ProviderID: codexconfig.ProviderID,
+		ProfileID:  "legacy-auth",
+	})
+	assertAppErrorCode(t, err, ErrorCodexInvalid)
+}
+
+func TestCodexProfileCreateSwitchesFullConfigAndAuthThroughPipeline(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
@@ -363,19 +375,20 @@ func TestCodexProfileCaptureSwitchesFullConfigAndAuthThroughPipeline(t *testing.
 	authPath := filepath.Join(codexDir, codexconfig.AuthFileName)
 	sessionPath := filepath.Join(codexDir, "sessions", "session.jsonl")
 
-	capturedConfig := strings.Join([]string{
+	desiredConfig := strings.Join([]string{
 		`model = "gpt-5.3-codex"`,
 		`approval_policy = "never"`,
+		`api_key = "desired-config-secret"`,
 		``,
 		`[tools]`,
 		`web_search = true`,
 		``,
 	}, "\n")
-	capturedAuth := `{"tokens":{"account_id":"work-account","access_token":"captured-secret","refresh_token":"captured-refresh"}}`
-	if err := os.WriteFile(configPath, []byte(capturedConfig), 0o600); err != nil {
+	desiredAuth := `{"tokens":{"account_id":"work-account","access_token":"desired-secret","refresh_token":"desired-refresh"}}`
+	if err := os.WriteFile(configPath, []byte(desiredConfig), 0o600); err != nil {
 		t.Fatalf("expected config setup to succeed, got %v", err)
 	}
-	if err := os.WriteFile(authPath, []byte(capturedAuth), 0o644); err != nil {
+	if err := os.WriteFile(authPath, []byte(desiredAuth), 0o644); err != nil {
 		t.Fatalf("expected auth setup to succeed, got %v", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(sessionPath), 0o700); err != nil {
@@ -388,27 +401,23 @@ func TestCodexProfileCaptureSwitchesFullConfigAndAuthThroughPipeline(t *testing.
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 
-	capture, err := CodexProfileCapture(ctx, CodexProfileCaptureRequest{
+	created, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
 		ConfigDir: configDir,
 		CodexDir:  codexDir,
 		ProfileID: "work",
-		AccountID: "work-account",
 		Name:      stringPtr("Work"),
 	})
 	if err != nil {
-		t.Fatalf("expected Codex profile capture to succeed, got %v", err)
+		t.Fatalf("expected Codex profile create to succeed, got %v", err)
 	}
-	if capture.ConfigTarget.TargetID != codexconfig.TargetID || capture.AuthTarget.TargetID != codexconfig.AuthTargetID {
-		t.Fatalf("unexpected captured targets: %#v", capture)
+	if created.ConfigTarget.TargetID != codexconfig.TargetID || created.AuthTarget.TargetID != codexconfig.AuthTargetID {
+		t.Fatalf("unexpected created targets: %#v", created)
 	}
-	if capture.Account.PayloadSHA256 == "" {
-		t.Fatalf("expected captured account hash")
-	}
-	if capture.Account.DisplayName != "Work" {
-		t.Fatalf("expected captured account display name to use validated name, got %#v", capture.Account)
+	if created.AuthTarget.ValuePreview.Content != codexpreset.AuthPreviewContent {
+		t.Fatalf("expected created auth target preview to be redacted, got %#v", created.AuthTarget.ValuePreview)
 	}
 
-	if err := os.WriteFile(configPath, []byte(`model = "other"`+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(`model = "other"`+"\n"+`api_key = "live-config-secret"`+"\n"), 0o600); err != nil {
 		t.Fatalf("expected config mutation to succeed, got %v", err)
 	}
 	if err := os.WriteFile(authPath, []byte(`{"unknown_auth_shape":"live-secret"}`), 0o644); err != nil {
@@ -426,7 +435,7 @@ func TestCodexProfileCaptureSwitchesFullConfigAndAuthThroughPipeline(t *testing.
 	if len(plan.Operations) != 2 {
 		t.Fatalf("expected config and auth operations, got %#v", plan)
 	}
-	for _, leaked := range []string{"captured-secret", "captured-refresh", "live-secret"} {
+	for _, leaked := range []string{"desired-secret", "desired-refresh", "live-secret", "desired-config-secret", "live-config-secret"} {
 		if strings.Contains(planPreviewText(plan.Operations), leaked) {
 			t.Fatalf("expected plan previews to redact %q, got %#v", leaked, plan.Operations)
 		}
@@ -443,10 +452,10 @@ func TestCodexProfileCaptureSwitchesFullConfigAndAuthThroughPipeline(t *testing.
 	}); err != nil {
 		t.Fatalf("expected Codex switch to succeed, got %v", err)
 	}
-	if got := readFileString(t, configPath); got != capturedConfig {
+	if got := readFileString(t, configPath); got != desiredConfig {
 		t.Fatalf("expected full config snapshot to be restored, got %q", got)
 	}
-	assertJSONFile(t, authPath, "captured-secret")
+	assertJSONFile(t, authPath, "desired-secret")
 	if runtime.GOOS != "windows" {
 		info, err := os.Stat(authPath)
 		if err != nil {
@@ -461,7 +470,7 @@ func TestCodexProfileCaptureSwitchesFullConfigAndAuthThroughPipeline(t *testing.
 	}
 }
 
-func TestCodexProfileCaptureHandlesMissingFiles(t *testing.T) {
+func TestCodexProfileCreateHandlesMissingFiles(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
@@ -470,32 +479,25 @@ func TestCodexProfileCaptureHandlesMissingFiles(t *testing.T) {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 
-	_, err := CodexProfileCapture(ctx, CodexProfileCaptureRequest{
+	_, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
 		ConfigDir: configDir,
 		CodexDir:  codexDir,
 		ProfileID: "work",
-		AccountID: "work-account",
 	})
 	assertAppErrorCode(t, err, ErrorCodexInvalid)
-	if !strings.Contains(err.Error(), "auth.json") {
-		t.Fatalf("expected missing auth error to mention auth.json, got %v", err)
+	if !strings.Contains(err.Error(), "config.toml") {
+		t.Fatalf("expected missing config error to mention config.toml, got %v", err)
 	}
 
 	if err := os.WriteFile(authPath, []byte(`{"tokens":{"account_id":"work-account","access_token":"secret"}}`), 0o600); err != nil {
 		t.Fatalf("expected auth setup to succeed, got %v", err)
 	}
-	result, err := CodexProfileCapture(ctx, CodexProfileCaptureRequest{
+	_, err = CreateCodexProfile(ctx, CreateCodexProfileRequest{
 		ConfigDir: configDir,
 		CodexDir:  codexDir,
 		ProfileID: "work",
-		AccountID: "work-account",
 	})
-	if err != nil {
-		t.Fatalf("expected capture without config to succeed, got %v", err)
-	}
-	if !hasWarning(result.Warnings, "config.toml is missing") {
-		t.Fatalf("expected missing config warning, got %#v", result.Warnings)
-	}
+	assertAppErrorCode(t, err, ErrorCodexInvalid)
 
 	emptyConfigDir := t.TempDir()
 	emptyCodexDir := t.TempDir()
@@ -508,21 +510,20 @@ func TestCodexProfileCaptureHandlesMissingFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(emptyCodexDir, codexconfig.AuthFileName), []byte(`{"tokens":{"account_id":"work-account","access_token":"secret"}}`), 0o600); err != nil {
 		t.Fatalf("expected empty config auth setup to succeed, got %v", err)
 	}
-	emptyResult, err := CodexProfileCapture(ctx, CodexProfileCaptureRequest{
+	emptyResult, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
 		ConfigDir: emptyConfigDir,
 		CodexDir:  emptyCodexDir,
 		ProfileID: "work",
-		AccountID: "work-account",
 	})
 	if err != nil {
-		t.Fatalf("expected capture with existing empty config to succeed, got %v", err)
+		t.Fatalf("expected create with existing empty config to succeed, got %v", err)
 	}
 	if hasWarning(emptyResult.Warnings, "config.toml is missing") {
 		t.Fatalf("expected existing empty config not to be reported missing, got %#v", emptyResult.Warnings)
 	}
 }
 
-func TestCodexProfileCaptureUsesProfileIDAsLocalAccountByDefault(t *testing.T) {
+func TestCodexProfileCreateStoresHiddenCredentialAndSummarizesCodexAccountID(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
@@ -536,262 +537,32 @@ func TestCodexProfileCaptureUsesProfileIDAsLocalAccountByDefault(t *testing.T) {
 		t.Fatalf("expected auth setup to succeed, got %v", err)
 	}
 
-	result, err := CodexProfileCapture(ctx, CodexProfileCaptureRequest{
+	result, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
 		ConfigDir: configDir,
 		CodexDir:  codexDir,
 		ProfileID: "team-zhu",
 	})
 	if err != nil {
-		t.Fatalf("expected capture with default account to succeed, got %v", err)
+		t.Fatalf("expected create to succeed, got %v", err)
 	}
-	if result.Profile.ID != "team-zhu" || result.Account.AccountID != "team-zhu" {
-		t.Fatalf("expected profile id to be the default local account id, got %#v", result)
+	if result.Profile.ID != "team-zhu" {
+		t.Fatalf("unexpected create result: %#v", result)
 	}
-	if result.Account.Metadata["codex_account_id"] != "auth-account" {
-		t.Fatalf("expected Codex account id to be stored as metadata, got %#v", result.Account.Metadata)
-	}
-}
-
-func TestCodexProfileCaptureAllowsLocalAccountAliasDistinctFromCodexAccountID(t *testing.T) {
-	ctx := context.Background()
-	configDir := t.TempDir()
-	codexDir := t.TempDir()
-	authPath := filepath.Join(codexDir, codexconfig.AuthFileName)
-	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
-		t.Fatalf("expected init to succeed, got %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.ConfigFileName), []byte(`model = "gpt-5.3-codex"`+"\n"), 0o600); err != nil {
-		t.Fatalf("expected config setup to succeed, got %v", err)
-	}
-	if err := os.WriteFile(authPath, []byte(`{"tokens":{"account_id":"Team/Shared","access_token":"secret"}}`), 0o600); err != nil {
-		t.Fatalf("expected auth setup to succeed, got %v", err)
-	}
-
-	result, err := CodexProfileCapture(ctx, CodexProfileCaptureRequest{
-		ConfigDir: configDir,
-		CodexDir:  codexDir,
-		ProfileID: "work",
-		AccountID: "local-work",
-	})
+	list, err := ListCodexProfiles(ctx, ListCodexProfilesRequest{ConfigDir: configDir})
 	if err != nil {
-		t.Fatalf("expected local account alias to be independent from Codex account id, got %v", err)
+		t.Fatalf("expected Codex profile list to succeed, got %v", err)
 	}
-	if result.Account.AccountID != "local-work" || result.Account.Metadata["codex_account_id"] != "Team/Shared" {
-		t.Fatalf("unexpected captured local account metadata: %#v", result.Account)
+	if len(list.Profiles) != 1 || list.Profiles[0].CodexAccountID != "auth-account" {
+		t.Fatalf("expected Codex account id to be summarized from credential payload, got %#v", list.Profiles)
 	}
-
-	recapture, err := CodexProfileCapture(ctx, CodexProfileCaptureRequest{
-		ConfigDir: configDir,
-		CodexDir:  codexDir,
-		ProfileID: "work",
-	})
+	db := openHealthyAppTestStore(t, ctx, configDir)
+	defer db.Close()
+	credentials, err := db.ListProviderCredentials(ctx, codexconfig.ProviderID)
 	if err != nil {
-		t.Fatalf("expected recapture to reuse the existing local account binding, got %v", err)
+		t.Fatalf("expected credentials to list, got %v", err)
 	}
-	if recapture.Account.AccountID != "local-work" {
-		t.Fatalf("expected recapture to keep existing local account binding, got %#v", recapture.Account)
-	}
-
-	_, err = CodexProfileCapture(ctx, CodexProfileCaptureRequest{
-		ConfigDir: configDir,
-		CodexDir:  codexDir,
-		ProfileID: "work",
-		AccountID: "other-local",
-	})
-	assertAppErrorCode(t, err, ErrorCodexInvalid)
-}
-
-func TestCodexProfileSetWithAccountRequiresExistingSecret(t *testing.T) {
-	ctx := context.Background()
-	configDir := t.TempDir()
-	codexDir := t.TempDir()
-	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
-		t.Fatalf("expected init to succeed, got %v", err)
-	}
-
-	_, err := CodexProfileSet(ctx, CodexProfileSetRequest{
-		ConfigDir: configDir,
-		CodexDir:  codexDir,
-		ProfileID: "work",
-		AccountID: "missing",
-		Model:     "gpt-5.3-codex",
-	})
-	assertAppErrorCode(t, err, ErrorCodexInvalid)
-
-	authFile := filepath.Join(t.TempDir(), codexconfig.AuthFileName)
-	if err := os.WriteFile(authFile, []byte(`{"tokens":{"account_id":"work-account","access_token":"secret"}}`), 0o600); err != nil {
-		t.Fatalf("expected auth file setup to succeed, got %v", err)
-	}
-	if _, err := CodexAccountImport(ctx, CodexAccountImportRequest{
-		ConfigDir: configDir,
-		AccountID: "work-account",
-		AuthFile:  authFile,
-	}); err != nil {
-		t.Fatalf("expected account import to succeed, got %v", err)
-	}
-	result, err := CodexProfileSet(ctx, CodexProfileSetRequest{
-		ConfigDir: configDir,
-		CodexDir:  codexDir,
-		ProfileID: "work",
-		AccountID: "work-account",
-		Model:     "gpt-5.3-codex",
-	})
-	if err != nil {
-		t.Fatalf("expected profile set with existing account to succeed, got %v", err)
-	}
-	if result.AuthTarget == nil || result.AuthTarget.TargetID != codexconfig.AuthTargetID {
-		t.Fatalf("expected profile set to bind auth target, got %#v", result)
-	}
-}
-
-func TestCodexAccountImportAllowsLocalAliasDistinctFromCodexAccountID(t *testing.T) {
-	ctx := context.Background()
-	configDir := t.TempDir()
-	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
-		t.Fatalf("expected init to succeed, got %v", err)
-	}
-	authFile := filepath.Join(t.TempDir(), codexconfig.AuthFileName)
-	if err := os.WriteFile(authFile, []byte(`{"tokens":{"account_id":"Team/Shared","access_token":"secret"}}`), 0o600); err != nil {
-		t.Fatalf("expected auth file setup to succeed, got %v", err)
-	}
-
-	account, err := CodexAccountImport(ctx, CodexAccountImportRequest{
-		ConfigDir: configDir,
-		AccountID: "local-work",
-		AuthFile:  authFile,
-	})
-	if err != nil {
-		t.Fatalf("expected account import to accept a local alias, got %v", err)
-	}
-	if account.AccountID != "local-work" || account.Metadata["codex_account_id"] != "Team/Shared" {
-		t.Fatalf("unexpected imported account metadata: %#v", account)
-	}
-}
-
-func TestCodexAccountExportRejectsSymlinkOutput(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink permissions vary on Windows")
-	}
-	ctx := context.Background()
-	configDir := t.TempDir()
-	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
-		t.Fatalf("expected init to succeed, got %v", err)
-	}
-	authFile := filepath.Join(t.TempDir(), codexconfig.AuthFileName)
-	if err := os.WriteFile(authFile, []byte(`{"tokens":{"account_id":"work-account","access_token":"secret"}}`), 0o600); err != nil {
-		t.Fatalf("expected auth file setup to succeed, got %v", err)
-	}
-	if _, err := CodexAccountImport(ctx, CodexAccountImportRequest{
-		ConfigDir: configDir,
-		AccountID: "work-account",
-		AuthFile:  authFile,
-	}); err != nil {
-		t.Fatalf("expected account import to succeed, got %v", err)
-	}
-	target := filepath.Join(t.TempDir(), "target-auth.json")
-	link := filepath.Join(t.TempDir(), "auth-link.json")
-	if err := os.WriteFile(target, []byte(`{"tokens":{"account_id":"work-account","access_token":"old"}}`), 0o600); err != nil {
-		t.Fatalf("expected export target setup to succeed, got %v", err)
-	}
-	if err := os.Symlink(target, link); err != nil {
-		t.Fatalf("expected symlink setup to succeed, got %v", err)
-	}
-
-	_, err := CodexAccountExport(ctx, CodexAccountExportRequest{
-		ConfigDir: configDir,
-		AccountID: "work-account",
-		Output:    link,
-		Force:     true,
-	})
-	assertAppErrorCode(t, err, ErrorCodexInvalid)
-	if got := readFileString(t, target); strings.Contains(got, "secret") {
-		t.Fatalf("expected symlink target not to receive exported auth, got %q", got)
-	}
-}
-
-func TestCodexAccountExportExistingFileForceSemantics(t *testing.T) {
-	ctx := context.Background()
-	configDir := t.TempDir()
-	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
-		t.Fatalf("expected init to succeed, got %v", err)
-	}
-	authPayload := `{"tokens":{"account_id":"work-account","access_token":"secret"}}`
-	authFile := filepath.Join(t.TempDir(), codexconfig.AuthFileName)
-	if err := os.WriteFile(authFile, []byte(authPayload), 0o600); err != nil {
-		t.Fatalf("expected auth file setup to succeed, got %v", err)
-	}
-	if _, err := CodexAccountImport(ctx, CodexAccountImportRequest{
-		ConfigDir: configDir,
-		AccountID: "work-account",
-		AuthFile:  authFile,
-	}); err != nil {
-		t.Fatalf("expected account import to succeed, got %v", err)
-	}
-
-	output := filepath.Join(t.TempDir(), "auth.json")
-	parent := filepath.Dir(output)
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(parent, 0o755); err != nil {
-			t.Fatalf("expected output parent chmod setup to succeed, got %v", err)
-		}
-	}
-	oldPayload := `{"tokens":{"account_id":"old-account","access_token":"old"}}`
-	if err := os.WriteFile(output, []byte(oldPayload), 0o644); err != nil {
-		t.Fatalf("expected existing output setup to succeed, got %v", err)
-	}
-	_, err := CodexAccountExport(ctx, CodexAccountExportRequest{
-		ConfigDir: configDir,
-		AccountID: "work-account",
-		Output:    output,
-	})
-	assertAppErrorCode(t, err, ErrorCodexInvalid)
-	if got := readFileString(t, output); got != oldPayload {
-		t.Fatalf("expected non-force export to preserve existing file, got %q", got)
-	}
-
-	if _, err := CodexAccountExport(ctx, CodexAccountExportRequest{
-		ConfigDir: configDir,
-		AccountID: "work-account",
-		Output:    output,
-		Force:     true,
-	}); err != nil {
-		t.Fatalf("expected force export to succeed, got %v", err)
-	}
-	if got := readFileString(t, output); got != authPayload {
-		t.Fatalf("expected force export to write auth payload, got %q", got)
-	}
-	if runtime.GOOS != "windows" {
-		info, err := os.Stat(output)
-		if err != nil {
-			t.Fatalf("expected output stat to succeed, got %v", err)
-		}
-		if info.Mode().Perm() != 0o600 {
-			t.Fatalf("expected exported auth mode 0600, got %#o", info.Mode().Perm())
-		}
-		parentInfo, err := os.Stat(parent)
-		if err != nil {
-			t.Fatalf("expected output parent stat to succeed, got %v", err)
-		}
-		if parentInfo.Mode().Perm() != 0o755 {
-			t.Fatalf("expected export not to chmod existing output parent, got %#o", parentInfo.Mode().Perm())
-		}
-	}
-}
-
-func assertCodexConfig(t *testing.T, path string, want map[string]any) {
-	t.Helper()
-
-	var decoded map[string]any
-	if err := toml.Unmarshal([]byte(readFileString(t, path)), &decoded); err != nil {
-		t.Fatalf("expected Codex config TOML to parse, got %v", err)
-	}
-	for key, value := range want {
-		if decoded[key] != value {
-			t.Fatalf("expected %s=%#v, got %#v in %#v", key, value, decoded[key], decoded)
-		}
-	}
-	if tools, ok := decoded["tools"].(map[string]any); !ok || tools["web_search"] != true {
-		t.Fatalf("expected tools section to be preserved, got %#v", decoded)
+	if len(credentials) != 1 || strings.Contains(credentials[0].MetadataJSON, "auth-account") {
+		t.Fatalf("expected one opaque credential without Codex account id metadata, got %#v", credentials)
 	}
 }
 

@@ -91,33 +91,16 @@ func buildCodexConfigPlanOperation(op applyPlanOperation, before targetPlanRead,
 		return applyPlanOperation{}, WrapError(ErrorStoreSchemaInvalid, "stored Codex target metadata is invalid", err)
 	}
 
-	var content string
-	switch metadata.ModeOrDefault() {
-	case codexpreset.TargetModeManagedKeys:
-		if before.FileExists {
-			op.Warnings = append(op.Warnings, tomlSemanticRewriteWarning)
-		}
-		desired, err := codexconfig.ParseValueJSON(target.ValueJSON)
-		if err != nil {
-			return applyPlanOperation{}, targetContentInvalidError(target, "stored Codex target value_json is invalid", err)
-		}
-		built, err := codexconfig.ApplyManagedTOML(before.Content, before.FileExists, desired)
-		if err != nil {
-			return applyPlanOperation{}, targetContentInvalidError(target, "failed to build Codex config content", err)
-		}
-		content = built
-	case codexpreset.TargetModeFullFile:
-		built, err := replaceFileContentFromValueJSON(target.ValueJSON)
-		if err != nil {
-			return applyPlanOperation{}, targetContentInvalidError(target, "stored Codex config target value_json is invalid", err)
-		}
-		if err := codexconfig.ValidateTOML(built); err != nil {
-			return applyPlanOperation{}, targetContentInvalidError(target, "stored Codex config snapshot is invalid TOML", err)
-		}
-		content = built
-	default:
+	if metadata.Mode != codexpreset.TargetModeFullFile {
 		return applyPlanOperation{}, codexTargetInvalid(target, "Codex config target mode is unsupported").
 			WithDetail("mode", metadata.Mode)
+	}
+	content, err := replaceFileContentFromValueJSON(target.ValueJSON)
+	if err != nil {
+		return applyPlanOperation{}, targetContentInvalidError(target, "stored Codex config target value_json is invalid", err)
+	}
+	if err := codexconfig.ValidateTOML(content); err != nil {
+		return applyPlanOperation{}, targetContentInvalidError(target, "stored Codex config profile is invalid TOML", err)
 	}
 	return finishCodexPlanOperation(op, before, target, content, previewSensitiveText(content))
 }
@@ -129,25 +112,25 @@ func buildCodexAuthPlanOperation(ctx context.Context, input planAdapterInput, op
 	if before.FileExists {
 		op.BeforePreview = TextPreview{Content: codexpreset.AuthPreviewContent, Truncated: before.Preview.Truncated}
 	}
-	accountID, err := codexpreset.ParseAuthTargetValueJSON(target.ValueJSON)
+	credentialID, err := codexpreset.ParseCredentialBindingValueJSON(target.ValueJSON)
 	if err != nil {
 		return applyPlanOperation{}, targetContentInvalidError(target, "stored Codex auth target value_json is invalid", err)
 	}
-	secret, err := input.Store.GetProviderAccountSecret(ctx, codexconfig.ProviderID, accountID)
+	credential, err := input.Store.GetProviderCredential(ctx, credentialID)
 	if err != nil {
-		return applyPlanOperation{}, mapCodexAccountStoreError(err)
+		return applyPlanOperation{}, mapCodexCredentialStoreError(err)
 	}
-	if secret.SecretKind != codexpreset.SecretKindAuthJSON {
-		return applyPlanOperation{}, NewError(ErrorCodexInvalid, "Codex account secret has unsupported kind").
-			WithDetail("account_id", accountID).
-			WithDetail("secret_kind", secret.SecretKind)
+	if credential.ProviderID != codexconfig.ProviderID || credential.CredentialKind != codexpreset.CredentialKindAuthJSON {
+		return applyPlanOperation{}, NewError(ErrorCodexInvalid, "Codex auth credential has unsupported kind").
+			WithDetail("credential_id", credentialID).
+			WithDetail("credential_kind", credential.CredentialKind)
 	}
-	if _, err := codexauth.NormalizePayload([]byte(secret.PayloadJSON)); err != nil {
-		return applyPlanOperation{}, codexAuthPayloadAppError(err).WithDetail("account_id", accountID)
+	if _, err := codexauth.NormalizePayload([]byte(credential.PayloadJSON)); err != nil {
+		return applyPlanOperation{}, codexAuthPayloadAppError(err).WithDetail("credential_id", credentialID)
 	}
 	op.UseDesiredMode = true
 	op.DesiredMode = 0o600
-	return finishCodexPlanOperation(op, before, target, secret.PayloadJSON, TextPreview{Content: codexpreset.AuthPreviewContent})
+	return finishCodexPlanOperation(op, before, target, credential.PayloadJSON, TextPreview{Content: codexpreset.AuthPreviewContent})
 }
 
 func finishCodexPlanOperation(op applyPlanOperation, before targetPlanRead, target store.ProfileTarget, content string, preview TextPreview) (applyPlanOperation, error) {
@@ -197,7 +180,7 @@ func validateCodexPlanTarget(provider store.Provider, target store.ProfileTarget
 	switch target.TargetID {
 	case codexconfig.TargetID:
 		if !codexConfigTargetFormatValid(target) || !codexConfigTargetStrategyValid(target) {
-			return codexTargetInvalid(target, "Codex config target must use toml with toml-merge or replace-file strategy")
+			return codexTargetInvalid(target, "Codex config target must use toml with replace-file strategy")
 		}
 		if target.Path != metadata.ConfigPath {
 			return codexTargetInvalid(target, "Codex config target path does not match provider config path").

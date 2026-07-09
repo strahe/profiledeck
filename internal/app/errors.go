@@ -45,6 +45,7 @@ const (
 	ErrorUsageInvalid          ErrorCode = "USAGE_INVALID"
 	ErrorUsageImportFailed     ErrorCode = "USAGE_IMPORT_FAILED"
 	ErrorCodexInvalid          ErrorCode = "CODEX_INVALID"
+	ErrorSettingInvalid        ErrorCode = "SETTING_INVALID"
 )
 
 type AppError struct {

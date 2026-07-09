@@ -22,7 +22,7 @@ runtime root 是：
 
 ## SQLite 数据库
 
-`profiledeck.db` 保存 ProfileDeck 应用数据。对 Codex 来说，它还会在专用 account secret 表中保存 raw `auth.json` payload，以便在 switch 时恢复账号。
+`profiledeck.db` 保存 ProfileDeck 应用数据。对 Codex 来说，它还会在隐藏 credential 记录中保存 raw `auth.json` payload，以便在 switch 时恢复 profile auth。
 
 数据库不会做静态加密。在 POSIX 系统上，ProfileDeck 会尽力收紧文件权限，但本地文件系统访问权限仍然是安全边界。
 
@@ -39,22 +39,12 @@ ProfileDeck 会在 preview 和命令输出中脱敏看起来敏感的值。Codex
 以下命令只输出 metadata，不打印 raw auth：
 
 ```bash
-profiledeck codex account list
-profiledeck codex account show <account-id>
+profiledeck codex profile list
+profiledeck codex profile show <profile-id>
 profiledeck plan codex <profile-id>
 profiledeck backup show <backup-id>
 profiledeck doctor
 ```
-
-## 显式 auth export
-
-这个命令会有意写出 raw auth JSON：
-
-```bash
-profiledeck codex account export <account-id> --output ./auth.json
-```
-
-导出的文件是 secret。查看、编辑、移动和删除它时，应采用与 Codex 原始 `auth.json` 相同的处理标准。
 
 ## ProfileDeck 不保存什么
 

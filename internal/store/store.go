@@ -36,10 +36,7 @@ const (
 	UsageCostStatusEstimated = "estimated"
 	UsageCostStatusUnknown   = "unknown"
 
-	// provider_account_secrets intentionally constrains secret_kind in v1;
-	// adding another kind requires a schema migration and explicit validation.
-	providerAccountSecretKindCodexAuthJSON = "codex-auth-json"
-	maxProviderAccountSecretPayloadBytes   = 16 * 1024 * 1024
+	maxProviderCredentialPayloadBytes = 16 * 1024 * 1024
 )
 
 var (
@@ -166,15 +163,20 @@ type UsageImportCursor struct {
 	UpdatedAtUnixMS  int64
 }
 
-type ProviderAccountSecret struct {
+type ProviderCredential struct {
+	ID              string
 	ProviderID      string
-	AccountID       string
-	SecretKind      string
+	CredentialKind  string
 	PayloadJSON     string
 	PayloadSHA256   string
-	DisplayName     string
 	MetadataJSON    string
 	CreatedAtUnixMS int64
+	UpdatedAtUnixMS int64
+}
+
+type Setting struct {
+	Key             string
+	ValueJSON       string
 	UpdatedAtUnixMS int64
 }
 
@@ -291,14 +293,18 @@ type UpsertUsageImportCursorParams struct {
 	MetadataJSON     string
 }
 
-type UpsertProviderAccountSecretParams struct {
-	ProviderID    string
-	AccountID     string
-	SecretKind    string
-	PayloadJSON   string
-	PayloadSHA256 string
-	DisplayName   string
-	MetadataJSON  string
+type UpsertProviderCredentialParams struct {
+	ID             string
+	ProviderID     string
+	CredentialKind string
+	PayloadJSON    string
+	PayloadSHA256  string
+	MetadataJSON   string
+}
+
+type UpsertSettingParams struct {
+	Key       string
+	ValueJSON string
 }
 
 type UsageSummary struct {
@@ -497,20 +503,16 @@ var initialTableSpecs = []tableSpec{
 		},
 	},
 	{
-		name: "provider_account_secrets",
+		name: "provider_credentials",
 		columns: []columnSpec{
-			{name: "provider_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "account_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "secret_kind", columnType: "TEXT", notNull: true},
+			{name: "id", columnType: "TEXT", primaryKey: true},
+			{name: "provider_id", columnType: "TEXT", notNull: true},
+			{name: "credential_kind", columnType: "TEXT", notNull: true},
 			{name: "payload_json", columnType: "TEXT", notNull: true},
 			{name: "payload_sha256", columnType: "TEXT", notNull: true},
-			{name: "display_name", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
 			{name: "metadata_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
 			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
 			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
-		},
-		checks: []string{
-			"CHECK (secret_kind IN ('codex-auth-json'))",
 		},
 	},
 }
@@ -531,7 +533,8 @@ var initialIndexSpecs = []indexSpec{
 	{name: "idx_usage_events_occurred_at", table: "usage_events", columns: []string{"occurred_at_unix_ms"}},
 	{name: "idx_usage_events_cost_status", table: "usage_events", columns: []string{"cost_status"}},
 	{name: "idx_usage_import_cursors_source", table: "usage_import_cursors", columns: []string{"source"}},
-	{name: "idx_provider_account_secrets_secret_kind", table: "provider_account_secrets", columns: []string{"secret_kind"}},
+	{name: "idx_provider_credentials_provider_id", table: "provider_credentials", columns: []string{"provider_id"}},
+	{name: "idx_provider_credentials_kind", table: "provider_credentials", columns: []string{"credential_kind"}},
 }
 
 var initialTriggerSpecs = []triggerSpec{
@@ -1179,11 +1182,68 @@ func (s *Store) DeleteProfileTarget(ctx context.Context, profileID string, provi
 	return nil
 }
 
-func (s *Store) UpsertProviderAccountSecret(ctx context.Context, params UpsertProviderAccountSecretParams) (ProviderAccountSecret, error) {
-	if err := validateProviderAccountSecretParams(params); err != nil {
-		return ProviderAccountSecret{}, err
+func (s *Store) GetSetting(ctx context.Context, key string) (Setting, error) {
+	row := s.executor().QueryRowContext(
+		ctx,
+		`SELECT key, value_json, updated_at_unix_ms
+		FROM settings
+		WHERE key = ?`,
+		strings.TrimSpace(key),
+	)
+	setting, err := scanSetting(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Setting{}, ErrNotFound
 	}
-	accountID := strings.TrimSpace(params.AccountID)
+	return setting, err
+}
+
+func (s *Store) UpsertSetting(ctx context.Context, params UpsertSettingParams) (Setting, error) {
+	if err := validateSettingParams(params); err != nil {
+		return Setting{}, err
+	}
+	key := strings.TrimSpace(params.Key)
+	now := time.Now().UnixMilli()
+	_, err := s.executor().ExecContext(
+		ctx,
+		`INSERT INTO settings (key, value_json, updated_at_unix_ms)
+		VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET
+			value_json = excluded.value_json,
+			updated_at_unix_ms = excluded.updated_at_unix_ms`,
+		key,
+		params.ValueJSON,
+		now,
+	)
+	if err != nil {
+		return Setting{}, err
+	}
+	return s.GetSetting(ctx, key)
+}
+
+func validateSettingParams(params UpsertSettingParams) error {
+	if strings.TrimSpace(params.Key) == "" {
+		return fmt.Errorf("setting key is required")
+	}
+	decoder := json.NewDecoder(strings.NewReader(params.ValueJSON))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err == nil {
+		return fmt.Errorf("setting value must contain one JSON value")
+	} else if !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) UpsertProviderCredential(ctx context.Context, params UpsertProviderCredentialParams) (ProviderCredential, error) {
+	if err := validateProviderCredentialParams(params); err != nil {
+		return ProviderCredential{}, err
+	}
+	id := strings.TrimSpace(params.ID)
 	now := time.Now().UnixMilli()
 	metadataJSON := params.MetadataJSON
 	if metadataJSON == "" {
@@ -1191,41 +1251,43 @@ func (s *Store) UpsertProviderAccountSecret(ctx context.Context, params UpsertPr
 	}
 	_, err := s.executor().ExecContext(
 		ctx,
-		`INSERT INTO provider_account_secrets
-			(provider_id, account_id, secret_kind, payload_json, payload_sha256, display_name, metadata_json, created_at_unix_ms, updated_at_unix_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(provider_id, account_id) DO UPDATE SET
-			secret_kind = excluded.secret_kind,
+		`INSERT INTO provider_credentials
+			(id, provider_id, credential_kind, payload_json, payload_sha256, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			provider_id = excluded.provider_id,
+			credential_kind = excluded.credential_kind,
 			payload_json = excluded.payload_json,
 			payload_sha256 = excluded.payload_sha256,
-			display_name = excluded.display_name,
 			metadata_json = excluded.metadata_json,
 			updated_at_unix_ms = excluded.updated_at_unix_ms`,
+		id,
 		params.ProviderID,
-		accountID,
-		params.SecretKind,
+		params.CredentialKind,
 		params.PayloadJSON,
 		params.PayloadSHA256,
-		params.DisplayName,
 		metadataJSON,
 		now,
 		now,
 	)
 	if err != nil {
-		return ProviderAccountSecret{}, err
+		return ProviderCredential{}, err
 	}
-	return s.GetProviderAccountSecret(ctx, params.ProviderID, accountID)
+	return s.GetProviderCredential(ctx, id)
 }
 
-func validateProviderAccountSecretParams(params UpsertProviderAccountSecretParams) error {
-	if strings.TrimSpace(params.AccountID) == "" {
-		return fmt.Errorf("provider account secret account_id is required")
+func validateProviderCredentialParams(params UpsertProviderCredentialParams) error {
+	if strings.TrimSpace(params.ID) == "" {
+		return fmt.Errorf("provider credential id is required")
 	}
-	if params.SecretKind != providerAccountSecretKindCodexAuthJSON {
-		return fmt.Errorf("unsupported provider account secret kind: %s", params.SecretKind)
+	if strings.TrimSpace(params.ProviderID) == "" {
+		return fmt.Errorf("provider credential provider_id is required")
 	}
-	if len(params.PayloadJSON) > maxProviderAccountSecretPayloadBytes {
-		return fmt.Errorf("provider account secret payload is too large")
+	if strings.TrimSpace(params.CredentialKind) == "" {
+		return fmt.Errorf("provider credential kind is required")
+	}
+	if len(params.PayloadJSON) > maxProviderCredentialPayloadBytes {
+		return fmt.Errorf("provider credential payload is too large")
 	}
 	decoder := json.NewDecoder(strings.NewReader(params.PayloadJSON))
 	decoder.UseNumber()
@@ -1233,50 +1295,40 @@ func validateProviderAccountSecretParams(params UpsertProviderAccountSecretParam
 	if err := decoder.Decode(&value); err != nil {
 		return err
 	}
-	object, ok := value.(map[string]any)
-	if !ok {
-		return fmt.Errorf("provider account secret payload must be a JSON object")
-	}
-	tokens, ok := object["tokens"].(map[string]any)
-	if !ok {
-		return fmt.Errorf("provider account secret payload must contain tokens.account_id")
-	}
-	payloadAccountID, ok := tokens["account_id"].(string)
-	if !ok || strings.TrimSpace(payloadAccountID) == "" {
-		return fmt.Errorf("provider account secret payload must contain tokens.account_id")
+	if _, ok := value.(map[string]any); !ok {
+		return fmt.Errorf("provider credential payload must be a JSON object")
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err == nil {
-		return fmt.Errorf("provider account secret payload must contain one JSON object")
+		return fmt.Errorf("provider credential payload must contain one JSON object")
 	} else if !errors.Is(err, io.EOF) {
 		return err
 	}
 	return nil
 }
 
-func (s *Store) GetProviderAccountSecret(ctx context.Context, providerID string, accountID string) (ProviderAccountSecret, error) {
+func (s *Store) GetProviderCredential(ctx context.Context, id string) (ProviderCredential, error) {
 	row := s.executor().QueryRowContext(
 		ctx,
-		`SELECT provider_id, account_id, secret_kind, payload_json, payload_sha256, display_name, metadata_json, created_at_unix_ms, updated_at_unix_ms
-		FROM provider_account_secrets
-		WHERE provider_id = ? AND account_id = ?`,
-		providerID,
-		accountID,
+		`SELECT id, provider_id, credential_kind, payload_json, payload_sha256, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		FROM provider_credentials
+		WHERE id = ?`,
+		id,
 	)
-	secret, err := scanProviderAccountSecret(row)
+	credential, err := scanProviderCredential(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ProviderAccountSecret{}, ErrNotFound
+		return ProviderCredential{}, ErrNotFound
 	}
-	return secret, err
+	return credential, err
 }
 
-func (s *Store) ListProviderAccountSecrets(ctx context.Context, providerID string) ([]ProviderAccountSecret, error) {
+func (s *Store) ListProviderCredentials(ctx context.Context, providerID string) ([]ProviderCredential, error) {
 	rows, err := s.executor().QueryContext(
 		ctx,
-		`SELECT provider_id, account_id, secret_kind, payload_json, payload_sha256, display_name, metadata_json, created_at_unix_ms, updated_at_unix_ms
-		FROM provider_account_secrets
+		`SELECT id, provider_id, credential_kind, payload_json, payload_sha256, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		FROM provider_credentials
 		WHERE provider_id = ?
-		ORDER BY account_id ASC`,
+		ORDER BY id ASC`,
 		providerID,
 	)
 	if err != nil {
@@ -1284,18 +1336,18 @@ func (s *Store) ListProviderAccountSecrets(ctx context.Context, providerID strin
 	}
 	defer rows.Close()
 
-	secrets := []ProviderAccountSecret{}
+	credentials := []ProviderCredential{}
 	for rows.Next() {
-		secret, err := scanProviderAccountSecret(rows)
+		credential, err := scanProviderCredential(rows)
 		if err != nil {
 			return nil, err
 		}
-		secrets = append(secrets, secret)
+		credentials = append(credentials, credential)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return secrets, nil
+	return credentials, nil
 }
 
 func (s *Store) CreatePendingSwitchOperation(ctx context.Context, params CreateSwitchOperationParams) (Operation, error) {
@@ -2236,22 +2288,33 @@ func scanProfileTarget(row rowScanner) (ProfileTarget, error) {
 	return target, nil
 }
 
-func scanProviderAccountSecret(row rowScanner) (ProviderAccountSecret, error) {
-	var secret ProviderAccountSecret
+func scanProviderCredential(row rowScanner) (ProviderCredential, error) {
+	var credential ProviderCredential
 	if err := row.Scan(
-		&secret.ProviderID,
-		&secret.AccountID,
-		&secret.SecretKind,
-		&secret.PayloadJSON,
-		&secret.PayloadSHA256,
-		&secret.DisplayName,
-		&secret.MetadataJSON,
-		&secret.CreatedAtUnixMS,
-		&secret.UpdatedAtUnixMS,
+		&credential.ID,
+		&credential.ProviderID,
+		&credential.CredentialKind,
+		&credential.PayloadJSON,
+		&credential.PayloadSHA256,
+		&credential.MetadataJSON,
+		&credential.CreatedAtUnixMS,
+		&credential.UpdatedAtUnixMS,
 	); err != nil {
-		return ProviderAccountSecret{}, err
+		return ProviderCredential{}, err
 	}
-	return secret, nil
+	return credential, nil
+}
+
+func scanSetting(row rowScanner) (Setting, error) {
+	var setting Setting
+	if err := row.Scan(
+		&setting.Key,
+		&setting.ValueJSON,
+		&setting.UpdatedAtUnixMS,
+	); err != nil {
+		return Setting{}, err
+	}
+	return setting, nil
 }
 
 func scanOperation(row rowScanner) (Operation, error) {

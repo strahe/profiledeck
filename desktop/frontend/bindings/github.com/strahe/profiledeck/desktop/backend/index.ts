@@ -6,6 +6,7 @@ import * as BackupService from "./backupservice.js";
 import * as CodexService from "./codexservice.js";
 import * as DoctorService from "./doctorservice.js";
 import * as ProfileService from "./profileservice.js";
+import * as SettingsService from "./settingsservice.js";
 import * as SwitchService from "./switchservice.js";
 import * as UsageService from "./usageservice.js";
 export {
@@ -14,15 +15,17 @@ export {
     CodexService,
     DoctorService,
     ProfileService,
+    SettingsService,
     SwitchService,
     UsageService
 };
 
 export type {
-    CodexProfileCaptureRequest,
-    CodexProfileSetRequest,
+    CreateCodexProfileRequest,
     DashboardResult,
     DesktopError,
     Environment,
-    SwitchApplyRequest
+    ForkCodexProfileRequest,
+    SwitchApplyRequest,
+    SyncCodexProfileRequest
 } from "./models.js";

@@ -78,17 +78,6 @@ export interface BackupSummary {
     "unsupported_reason"?: string;
 }
 
-export interface CodexAccount {
-    "provider_id": string;
-    "account_id": string;
-    "secret_kind": string;
-    "payload_sha256": string;
-    "display_name": string;
-    "metadata": { [_ in string]?: any } | null;
-    "created_at_unix_ms": number;
-    "updated_at_unix_ms": number;
-}
-
 export interface CodexDetectResult {
     "provider_id": string;
     "adapter_id": string;
@@ -105,10 +94,32 @@ export interface CodexDetectResult {
     "warnings": string[] | null;
 }
 
-export interface CodexProfileCaptureResult {
+export interface CodexProfileDetail {
+    "summary": CodexProfileSummary;
+    "targets": ProfileTarget[] | null;
+}
+
+export interface CodexProfileDraft {
+    "codex_dir": string;
+    "config_path": string;
+    "auth_path": string;
+    "config_content": string;
+    "auth_content": string;
+    "config_sha256": string;
+    "auth_sha256": string;
+    "codex_account_id"?: string;
+    "model"?: string;
+    "model_provider"?: string;
+    "openai_base_url"?: string;
+}
+
+export interface CodexProfileListResult {
+    "profiles": CodexProfileSummary[] | null;
+}
+
+export interface CodexProfileSaveResult {
     "provider": Provider;
     "profile": Profile;
-    "account": CodexAccount;
     "config_target": ProfileTarget;
     "auth_target": ProfileTarget;
     "codex_dir": string;
@@ -117,39 +128,22 @@ export interface CodexProfileCaptureResult {
     "warnings": string[] | null;
 }
 
-export interface CodexProfileDetail {
-    "summary": CodexProfileSummary;
-    "targets": ProfileTarget[] | null;
-}
-
-export interface CodexProfileListResult {
-    "profiles": CodexProfileSummary[] | null;
-}
-
-export interface CodexProfileSetResult {
-    "provider": Provider;
-    "profile": Profile;
-    "target": ProfileTarget;
-    "auth_target"?: ProfileTarget | null;
-    "codex_dir": string;
-    "config_path": string;
-    "auth_path": string;
-    "managed_keys": string[] | null;
-    "warnings": string[] | null;
-}
-
 export interface CodexProfileSummary {
     "profile": Profile;
     "provider_id": string;
-    "save_kind": string;
-    "account_id"?: string;
+    "codex_account_id"?: string;
     "model"?: string;
     "model_provider"?: string;
+    "openai_base_url"?: string;
     "target_count": number;
     "active": boolean;
     "active_operation_id"?: string;
     "updated_at_unix_ms": number;
     "warnings"?: string[] | null;
+}
+
+export interface DesktopSettings {
+    "language": string;
 }
 
 export interface DoctorFinding {
@@ -345,6 +339,11 @@ export interface SwitchPlan {
 export interface TextPreview {
     "content": string;
     "truncated": boolean;
+}
+
+export interface UpdateDesktopSettingsRequest {
+    "config_dir": string;
+    "language": string;
 }
 
 export interface UsageImportError {

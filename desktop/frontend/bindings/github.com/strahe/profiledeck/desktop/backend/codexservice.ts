@@ -13,26 +13,34 @@ import * as app$0 from "../../internal/app/models.js";
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
-export function CaptureProfile(req: $models.CodexProfileCaptureRequest): $CancellablePromise<app$0.CodexProfileCaptureResult> {
-    return $Call.ByID(3161362617, req);
+export function CreateProfile(req: $models.CreateCodexProfileRequest): $CancellablePromise<app$0.CodexProfileSaveResult> {
+    return $Call.ByID(2556578151, req);
 }
 
 export function Detect(): $CancellablePromise<app$0.CodexDetectResult> {
     return $Call.ByID(1422541865);
 }
 
-export function ListAccounts(): $CancellablePromise<app$0.CodexAccount[] | null> {
-    return $Call.ByID(3697642322);
+export function ForkProfile(req: $models.ForkCodexProfileRequest): $CancellablePromise<app$0.CodexProfileSaveResult> {
+    return $Call.ByID(2400690215, req);
 }
 
 export function ListProfiles(): $CancellablePromise<app$0.CodexProfileListResult> {
     return $Call.ByID(2936238732);
 }
 
-export function SetManagedProfile(req: $models.CodexProfileSetRequest): $CancellablePromise<app$0.CodexProfileSetResult> {
-    return $Call.ByID(2783517948, req);
+export function LoadProfileDraft(): $CancellablePromise<app$0.CodexProfileDraft> {
+    return $Call.ByID(281181918);
+}
+
+export function LoadStoredProfileDraft(profileID: string): $CancellablePromise<app$0.CodexProfileDraft> {
+    return $Call.ByID(1516641873, profileID);
 }
 
 export function ShowProfile(profileID: string): $CancellablePromise<app$0.CodexProfileDetail> {
     return $Call.ByID(1381065948, profileID);
+}
+
+export function SyncProfile(req: $models.SyncCodexProfileRequest): $CancellablePromise<app$0.CodexProfileSaveResult> {
+    return $Call.ByID(3826250294, req);
 }

@@ -11,7 +11,7 @@ ProfileDeck 将应用状态和目标工具文件分开管理。
 - 当前激活状态 (active state)
 - 配置目标 (profile targets)
 - 切换与回滚操作记录 (switch/rollback records)
-- Codex 账号密钥 (account secrets)
+- Codex 隐藏 auth credential
 - 已导入的用量事件 (usage events) 和游标 (cursors)
 
 目标工具文件仍归对应工具所有。ProfileDeck 只会通过 switch 和 rollback 流程写入这些文件。
@@ -20,22 +20,22 @@ ProfileDeck 将应用状态和目标工具文件分开管理。
 
 provider 表示一个 AI 工具集成。当前实现的 adapter 是：
 
-- `codex`：用于 Codex preset profile。
+- `codex`：用于 Codex profile 切换。
 - `generic`：用于手动配置的目标文件。
 
 provider 可以启用或禁用。
 
 ## Profile
 
-profile 是一个命名的期望状态。一个 profile 可以包含一个或多个 provider target。对 Codex 来说，常见 profile id 是 `work` 或 `team-zhu` 这样的本地账号别名。
+profile 是一个命名的期望状态。一个 profile 可以包含一个或多个 provider target。对 Codex 来说，profile 保存完整 `config.toml` 期望 target，并绑定一个隐藏 auth credential。
 
 ## Target
 
 target 将某个 profile 映射到文件路径、格式、策略和期望值。plan 从 target 构建，但 target 不会被直接写入。`switch` 会在锁内重建 plan，校验文件 hash，创建备份，然后原子写入目标文件。
 
-## Codex 账号别名
+## Codex 隐藏 credential
 
-ProfileDeck account id 是保存 Codex `auth.json` payload 的本地别名。Codex `tokens.account_id` 只作为 metadata 保存，因为它不能保证唯一标识每一次本地登录。
+Codex auth credential 是内部生命周期对象，不是用户管理的账号。隐藏 credential 保存最新的 `auth.json` 期望 payload，并可被多个 profile 共享。Codex `tokens.account_id` 只解析为展示 metadata，绝不作为 ProfileDeck identity 或合并依据。
 
 ## 目标文件
 

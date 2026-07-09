@@ -707,6 +707,14 @@ func redactMetadata(value any) any {
 	}
 }
 
+func redactedMetadataMap(metadata map[string]any) map[string]any {
+	redacted, ok := redactMetadata(metadata).(map[string]any)
+	if !ok {
+		return map[string]any{}
+	}
+	return redacted
+}
+
 func providerFromStore(provider store.Provider) (Provider, error) {
 	metadata, err := metadataFromJSON(provider.MetadataJSON)
 	if err != nil {
@@ -717,7 +725,7 @@ func providerFromStore(provider store.Provider) (Provider, error) {
 		Name:            provider.Name,
 		AdapterID:       provider.AdapterID,
 		Enabled:         provider.Enabled,
-		Metadata:        redactMetadata(metadata).(map[string]any),
+		Metadata:        redactedMetadataMap(metadata),
 		CreatedAtUnixMS: provider.CreatedAtUnixMS,
 		UpdatedAtUnixMS: provider.UpdatedAtUnixMS,
 	}, nil
@@ -732,7 +740,7 @@ func profileFromStore(profile store.Profile) (Profile, error) {
 		ID:              profile.ID,
 		Name:            profile.Name,
 		Description:     profile.Description,
-		Metadata:        redactMetadata(metadata).(map[string]any),
+		Metadata:        redactedMetadataMap(metadata),
 		CreatedAtUnixMS: profile.CreatedAtUnixMS,
 		UpdatedAtUnixMS: profile.UpdatedAtUnixMS,
 	}, nil

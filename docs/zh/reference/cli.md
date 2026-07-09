@@ -11,7 +11,7 @@
 | 命令 | 用途 |
 | --- | --- |
 | `backup` | 查看 ProfileDeck 备份。 |
-| `codex` | 管理 Codex provider 的 profile 和已保存账号。 |
+| `codex` | 管理 Codex provider 的 profile。 |
 | `doctor` | 诊断 ProfileDeck 运行状态。 |
 | `init` | 初始化应用数据库。 |
 | `plan` | 构建只读切换计划。 |
@@ -38,20 +38,12 @@ profiledeck version
 profiledeck codex detect [--codex-dir PATH] [--json]
 profiledeck codex profile list [--json]
 profiledeck codex profile show <profile-id> [--json]
-profiledeck codex profile capture <profile-id> [--account ID] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
-profiledeck codex profile set <profile-id> --model MODEL [--model-provider ID] [--openai-base-url URL] [--account ID] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
+profiledeck codex profile create <profile-id> [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
+profiledeck codex profile fork <source-profile-id> <new-profile-id> --auth-binding share-parent|copy-new [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
+profiledeck codex profile sync <profile-id> [--auth-update update-shared|fork-new] [--codex-dir PATH] [--json]
 ```
 
-账号命令：
-
-```bash
-profiledeck codex account list [--json]
-profiledeck codex account show <account-id> [--json]
-profiledeck codex account export <account-id> --output PATH [--force] [--json]
-profiledeck codex account import <account-id> --auth-file PATH [--name NAME] [--json]
-```
-
-`account list` 和 `account show` 不打印 raw auth。`account export` 会有意把 raw auth JSON 写到指定文件。
+`create` 从当前 Codex `config.toml` 和 `auth.json` 创建 profile，并创建新的隐藏 credential。`fork` 复制已有 profile，且必须显式选择 auth 绑定方式。`sync` 从当前 Codex 文件更新已有 profile；当更新共享 credential 或刻意分叉 credential 时使用 `--auth-update`。
 
 ## 切换
 

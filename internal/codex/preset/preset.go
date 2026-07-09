@@ -11,9 +11,9 @@ import (
 
 const (
 	ProviderName            = "Codex"
-	SecretKindAuthJSON      = "codex-auth-json"
-	TargetModeManagedKeys   = "managed-keys"
+	CredentialKindAuthJSON  = "codex-auth-json"
 	TargetModeFullFile      = "full-file"
+	TargetModeCredential    = "credential-binding"
 	AuthPreviewContent      = "[REDACTED_Codex_AUTH]"
 	FileCredentialStoreHint = `Codex auth.json is required; set cli_auth_credentials_store = "file" in config.toml and run codex login again`
 )
@@ -27,17 +27,15 @@ type ProviderMetadata struct {
 }
 
 type TargetMetadata struct {
-	Preset        string   `json:"preset"`
-	PresetVersion int      `json:"preset_version"`
-	TargetKind    string   `json:"target_kind"`
-	Mode          string   `json:"mode,omitempty"`
-	ManagedKeys   []string `json:"managed_keys"`
+	Preset        string `json:"preset"`
+	PresetVersion int    `json:"preset_version"`
+	TargetKind    string `json:"target_kind"`
+	Mode          string `json:"mode,omitempty"`
 }
 
 type TargetFormatStrategyNames struct {
 	JSONFormat          string
 	TOMLFormat          string
-	TOMLMergeStrategy   string
 	ReplaceFileStrategy string
 }
 
@@ -77,9 +75,6 @@ func TargetMetadataJSON(targetKind string, mode string) (string, error) {
 		TargetKind:    targetKind,
 		Mode:          mode,
 	}
-	if targetKind == codexconfig.TargetID && mode == TargetModeManagedKeys {
-		metadata.ManagedKeys = codexconfig.ManagedKeys()
-	}
 	raw, err := json.Marshal(metadata)
 	if err != nil {
 		return "", err
@@ -101,45 +96,12 @@ func (metadata TargetMetadata) Compatible() bool {
 	}
 	switch metadata.TargetKind {
 	case codexconfig.TargetID:
-		switch metadata.ModeOrDefault() {
-		case TargetModeManagedKeys:
-			return sameStringSet(metadata.ManagedKeys, codexconfig.ManagedKeys())
-		case TargetModeFullFile:
-			return len(metadata.ManagedKeys) == 0
-		default:
-			return false
-		}
+		return metadata.Mode == TargetModeFullFile
 	case codexconfig.AuthTargetID:
-		return metadata.Mode == TargetModeFullFile && len(metadata.ManagedKeys) == 0
+		return metadata.Mode == TargetModeCredential
 	default:
 		return false
 	}
-}
-
-func (metadata TargetMetadata) ModeOrDefault() string {
-	if metadata.Mode == "" && metadata.TargetKind == codexconfig.TargetID {
-		return TargetModeManagedKeys
-	}
-	return metadata.Mode
-}
-
-func AccountMetadataJSON(home codexconfig.Home, codexAccountID string) (string, error) {
-	metadata := map[string]any{
-		"preset":           codexconfig.PresetName,
-		"preset_version":   codexconfig.PresetVersion,
-		"codex_account_id": codexAccountID,
-	}
-	if home.Dir != "" {
-		metadata["codex_dir"] = home.Dir
-	}
-	if home.AuthPath != "" {
-		metadata["auth_path"] = home.AuthPath
-	}
-	raw, err := json.Marshal(metadata)
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
 }
 
 func ReplaceFileValueJSON(content string) (string, error) {
@@ -150,15 +112,15 @@ func ReplaceFileValueJSON(content string) (string, error) {
 	return string(raw), nil
 }
 
-func AuthTargetValueJSON(accountID string) (string, error) {
-	raw, err := json.Marshal(map[string]string{"account_id": accountID})
+func CredentialBindingValueJSON(credentialID string) (string, error) {
+	raw, err := json.Marshal(map[string]string{"credential_id": strings.TrimSpace(credentialID)})
 	if err != nil {
 		return "", err
 	}
 	return string(raw), nil
 }
 
-func ParseAuthTargetValueJSON(raw string) (string, error) {
+func ParseCredentialBindingValueJSON(raw string) (string, error) {
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	var value map[string]string
 	if err := decoder.Decode(&value); err != nil {
@@ -171,11 +133,11 @@ func ParseAuthTargetValueJSON(raw string) (string, error) {
 		}
 		return "", errors.New("auth target value_json must contain one JSON object")
 	}
-	accountID := strings.TrimSpace(value["account_id"])
-	if accountID == "" || len(value) != 1 {
-		return "", errors.New(`auth target value_json must be {"account_id": string}`)
+	credentialID := strings.TrimSpace(value["credential_id"])
+	if credentialID == "" || len(value) != 1 {
+		return "", errors.New(`auth target value_json must be {"credential_id": string}`)
 	}
-	return accountID, nil
+	return credentialID, nil
 }
 
 func ConfigTargetFormatValid(format string, names TargetFormatStrategyNames) bool {
@@ -183,29 +145,9 @@ func ConfigTargetFormatValid(format string, names TargetFormatStrategyNames) boo
 }
 
 func ConfigTargetStrategyValid(strategy string, names TargetFormatStrategyNames) bool {
-	return strategy == names.TOMLMergeStrategy || strategy == names.ReplaceFileStrategy
+	return strategy == names.ReplaceFileStrategy
 }
 
 func AuthTargetFormatStrategyValid(format string, strategy string, names TargetFormatStrategyNames) bool {
 	return format == names.JSONFormat && strategy == names.ReplaceFileStrategy
-}
-
-func sameStringSet(left []string, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	seen := make(map[string]int, len(left))
-	for _, value := range left {
-		seen[value]++
-	}
-	for _, value := range right {
-		if seen[value] == 0 {
-			return false
-		}
-		seen[value]--
-		if seen[value] == 0 {
-			delete(seen, value)
-		}
-	}
-	return len(seen) == 0
 }

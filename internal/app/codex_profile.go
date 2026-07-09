@@ -4,19 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"sort"
 
 	"github.com/pelletier/go-toml/v2"
+	codexauth "github.com/strahe/profiledeck/internal/codex/auth"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/store"
-)
-
-const (
-	CodexProfileSaveKindSnapshot     = "snapshot"
-	CodexProfileSaveKindConfigPreset = "config-preset"
-	CodexProfileSaveKindAuthOnly     = "auth-only"
-	CodexProfileSaveKindUnknown      = "unknown"
 )
 
 type ListCodexProfilesRequest struct {
@@ -28,6 +23,11 @@ type GetCodexProfileRequest struct {
 	ProfileID string
 }
 
+type LoadStoredCodexProfileDraftRequest struct {
+	ConfigDir string
+	ProfileID string
+}
+
 type CodexProfileListResult struct {
 	Profiles []CodexProfileSummary `json:"profiles"`
 }
@@ -35,10 +35,10 @@ type CodexProfileListResult struct {
 type CodexProfileSummary struct {
 	Profile           Profile  `json:"profile"`
 	ProviderID        string   `json:"provider_id"`
-	SaveKind          string   `json:"save_kind"`
-	AccountID         string   `json:"account_id,omitempty"`
+	CodexAccountID    string   `json:"codex_account_id,omitempty"`
 	Model             string   `json:"model,omitempty"`
 	ModelProvider     string   `json:"model_provider,omitempty"`
+	OpenAIBaseURL     string   `json:"openai_base_url,omitempty"`
 	TargetCount       int      `json:"target_count"`
 	Active            bool     `json:"active"`
 	ActiveOperationID string   `json:"active_operation_id,omitempty"`
@@ -93,9 +93,13 @@ func GetCodexProfile(ctx context.Context, req GetCodexProfileRequest) (CodexProf
 	if err != nil {
 		return CodexProfileDetail{}, err
 	}
-	summary, err := codexProfileSummaryFromStore(profile, targets, active, activeExists)
+	summary, fullProfile, err := codexProfileSummaryFromStore(ctx, db, profile, targets, active, activeExists)
 	if err != nil {
 		return CodexProfileDetail{}, err
+	}
+	if !fullProfile {
+		return CodexProfileDetail{}, NewError(ErrorCodexInvalid, "Codex profile is not a valid full profile").
+			WithDetail("profile_id", profileID)
 	}
 
 	publicTargets := make([]ProfileTarget, 0, len(targets))
@@ -106,6 +110,59 @@ func GetCodexProfile(ctx context.Context, req GetCodexProfileRequest) (CodexProf
 	}
 	summary.Warnings = uniqueStrings(summary.Warnings)
 	return CodexProfileDetail{Summary: summary, Targets: publicTargets}, nil
+}
+
+func LoadStoredCodexProfileDraft(ctx context.Context, req LoadStoredCodexProfileDraftRequest) (CodexProfileDraft, error) {
+	profileID, appErr := validateID(req.ProfileID, ErrorProfileInvalid)
+	if appErr != nil {
+		return CodexProfileDraft{}, appErr
+	}
+
+	db, err := openHealthyStore(ctx, req.ConfigDir, true)
+	if err != nil {
+		return CodexProfileDraft{}, err
+	}
+	defer db.Close()
+
+	targets, err := db.ListProfileTargets(ctx, profileID, codexconfig.ProviderID, true)
+	if err != nil {
+		return CodexProfileDraft{}, WrapError(ErrorStoreStatusFailed, "failed to list Codex profile targets", err)
+	}
+	if len(targets) == 0 {
+		return CodexProfileDraft{}, NewError(ErrorProfileNotFound, "Codex profile not found").WithDetail("profile_id", profileID)
+	}
+	configTarget, authTarget, err := requireCodexFullProfileTargets(profileID, targets)
+	if err != nil {
+		return CodexProfileDraft{}, err
+	}
+	configContent, err := replaceFileContentFromValueJSON(configTarget.ValueJSON)
+	if err != nil {
+		return CodexProfileDraft{}, err
+	}
+	credentialID, err := codexCredentialIDFromTarget(authTarget)
+	if err != nil {
+		return CodexProfileDraft{}, err
+	}
+	credential, err := db.GetProviderCredential(ctx, credentialID)
+	if err != nil {
+		return CodexProfileDraft{}, mapCodexCredentialStoreError(err)
+	}
+	home := storedCodexProfileHome(ctx, db, configTarget, authTarget)
+	accountID, _ := codexauth.ExtractAccountID([]byte(credential.PayloadJSON))
+	model, provider, baseURL := codexConfigSummaryFromContent(configContent)
+	return CodexProfileDraft{
+		CodexDir:       home.Dir,
+		ConfigPath:     home.ConfigPath,
+		AuthPath:       home.AuthPath,
+		ConfigContent:  configContent,
+		AuthContent:    credential.PayloadJSON,
+		ConfigSHA256:   sha256HexString(configContent),
+		AuthSHA256:     credential.PayloadSHA256,
+		CodexAccountID: accountID,
+		Model:          model,
+		ModelProvider:  provider,
+		OpenAIBaseURL:  baseURL,
+	}, nil
 }
 
 func listCodexProfileSummaries(ctx context.Context, db *store.Store) ([]CodexProfileSummary, error) {
@@ -141,13 +198,34 @@ func listCodexProfileSummaries(ctx context.Context, db *store.Store) ([]CodexPro
 		if err != nil {
 			return nil, mapProfileStoreError(err)
 		}
-		summary, err := codexProfileSummaryFromStore(profile, grouped[profileID], active, activeExists)
+		summary, fullProfile, err := codexProfileSummaryFromStore(ctx, db, profile, grouped[profileID], active, activeExists)
 		if err != nil {
 			return nil, err
+		}
+		if !fullProfile {
+			continue
 		}
 		result = append(result, summary)
 	}
 	return result, nil
+}
+
+func storedCodexProfileHome(ctx context.Context, db *store.Store, configTarget store.ProfileTarget, authTarget store.ProfileTarget) codexconfig.Home {
+	if provider, err := db.GetProvider(ctx, codexconfig.ProviderID); err == nil {
+		if metadata, err := codexpreset.DecodeProviderMetadata(provider.MetadataJSON); err == nil && metadata.Compatible() {
+			return codexconfig.Home{
+				Dir:        metadata.CodexDir,
+				ConfigPath: metadata.ConfigPath,
+				AuthPath:   metadata.AuthPath,
+			}
+		}
+	}
+	dir := filepath.Dir(configTarget.Path)
+	return codexconfig.Home{
+		Dir:        dir,
+		ConfigPath: configTarget.Path,
+		AuthPath:   authTarget.Path,
+	}
 }
 
 func codexActiveState(ctx context.Context, db *store.Store) (store.ActiveState, bool, error) {
@@ -161,15 +239,14 @@ func codexActiveState(ctx context.Context, db *store.Store) (store.ActiveState, 
 	return active, true, nil
 }
 
-func codexProfileSummaryFromStore(profile store.Profile, targets []store.ProfileTarget, active store.ActiveState, activeExists bool) (CodexProfileSummary, error) {
+func codexProfileSummaryFromStore(ctx context.Context, db *store.Store, profile store.Profile, targets []store.ProfileTarget, active store.ActiveState, activeExists bool) (CodexProfileSummary, bool, error) {
 	publicProfile, err := profileFromStore(profile)
 	if err != nil {
-		return CodexProfileSummary{}, err
+		return CodexProfileSummary{}, false, err
 	}
 	summary := CodexProfileSummary{
 		Profile:         publicProfile,
 		ProviderID:      codexconfig.ProviderID,
-		SaveKind:        CodexProfileSaveKindUnknown,
 		TargetCount:     len(targets),
 		UpdatedAtUnixMS: profile.UpdatedAtUnixMS,
 		Warnings:        []string{},
@@ -180,8 +257,9 @@ func codexProfileSummaryFromStore(profile store.Profile, targets []store.Profile
 	}
 
 	hasConfig := false
-	configMode := ""
+	hasFullConfig := false
 	hasAuth := false
+	hasCredentialAuth := false
 	for _, target := range targets {
 		if target.UpdatedAtUnixMS > summary.UpdatedAtUnixMS {
 			summary.UpdatedAtUnixMS = target.UpdatedAtUnixMS
@@ -194,68 +272,93 @@ func codexProfileSummaryFromStore(profile store.Profile, targets []store.Profile
 				summary.Warnings = append(summary.Warnings, warning)
 				continue
 			}
-			configMode = metadata.ModeOrDefault()
-			summary.Model, summary.ModelProvider = codexConfigModelSummary(target.ValueJSON, configMode)
+			if metadata.Mode != codexpreset.TargetModeFullFile {
+				summary.Warnings = append(summary.Warnings, "Codex config target mode is unsupported")
+				continue
+			}
+			hasFullConfig = true
+			summary.Model, summary.ModelProvider, summary.OpenAIBaseURL = codexConfigModelSummary(target.ValueJSON)
 		case codexconfig.AuthTargetID:
 			hasAuth = true
-			if _, warning := codexTargetMetadataForSummary(target); warning != "" {
-				summary.Warnings = append(summary.Warnings, warning)
-			}
-			accountID, err := codexpreset.ParseAuthTargetValueJSON(target.ValueJSON)
+			codexAccountID, valid, warning, err := codexProfileAuthSummary(ctx, db, target)
 			if err != nil {
-				summary.Warnings = append(summary.Warnings, "Codex auth account binding is invalid")
-			} else {
-				summary.AccountID = accountID
+				return CodexProfileSummary{}, false, err
+			}
+			if warning != "" {
+				summary.Warnings = append(summary.Warnings, warning)
+				continue
+			}
+			if valid {
+				hasCredentialAuth = true
+				summary.CodexAccountID = codexAccountID
 			}
 		default:
 			summary.Warnings = append(summary.Warnings, "Codex profile contains an unsupported target: "+target.TargetID)
 		}
 	}
 
-	switch {
-	case hasConfig && configMode == codexpreset.TargetModeFullFile:
-		summary.SaveKind = CodexProfileSaveKindSnapshot
-	case hasConfig && configMode == codexpreset.TargetModeManagedKeys:
-		summary.SaveKind = CodexProfileSaveKindConfigPreset
-	case !hasConfig && hasAuth:
-		summary.SaveKind = CodexProfileSaveKindAuthOnly
-	default:
-		summary.SaveKind = CodexProfileSaveKindUnknown
+	if hasConfig && !hasFullConfig {
+		summary.Warnings = append(summary.Warnings, "Codex profile config is not a full-file profile")
+	}
+	if !hasConfig && hasAuth {
+		summary.Warnings = append(summary.Warnings, "Codex profile has auth without config")
+	}
+	if hasConfig && !hasAuth {
+		summary.Warnings = append(summary.Warnings, "Codex profile has config without auth")
 	}
 	summary.Warnings = uniqueStrings(summary.Warnings)
-	return summary, nil
+	return summary, hasFullConfig && hasCredentialAuth, nil
 }
 
-func codexConfigModelSummary(valueJSON string, mode string) (string, string) {
-	switch mode {
-	case codexpreset.TargetModeManagedKeys:
-		managed, err := codexconfig.ParseValueJSON(valueJSON)
-		if err != nil {
-			return "", ""
-		}
-		return managed.Model, managed.ModelProvider
-	case codexpreset.TargetModeFullFile:
-		var value map[string]string
-		if err := json.Unmarshal([]byte(valueJSON), &value); err != nil {
-			return "", ""
-		}
-		content := value["content"]
-		if content == "" {
-			return "", ""
-		}
-		var decoded map[string]any
-		if err := toml.Unmarshal([]byte(content), &decoded); err != nil {
-			return "", ""
-		}
-		model, _ := decoded["model"].(string)
-		modelProvider, _ := decoded["model_provider"].(string)
-		if model != "" && modelProvider == "" {
-			modelProvider = codexconfig.DefaultModelProvider
-		}
-		return model, modelProvider
-	default:
-		return "", ""
+func codexProfileAuthSummary(ctx context.Context, db *store.Store, target store.ProfileTarget) (string, bool, string, error) {
+	metadata, warning := codexTargetMetadataForSummary(target)
+	if warning != "" {
+		return "", false, warning, nil
 	}
+	if metadata.Mode != codexpreset.TargetModeCredential {
+		return "", false, "Codex auth target mode is unsupported", nil
+	}
+	credentialID, err := codexpreset.ParseCredentialBindingValueJSON(target.ValueJSON)
+	if err != nil {
+		return "", false, "Codex auth credential binding is invalid", nil
+	}
+	credential, err := db.GetProviderCredential(ctx, credentialID)
+	if errors.Is(err, store.ErrNotFound) {
+		return "", false, "Codex auth credential is missing", nil
+	}
+	if err != nil {
+		return "", false, "", mapCodexCredentialStoreError(err)
+	}
+	if credential.ProviderID != codexconfig.ProviderID || credential.CredentialKind != codexpreset.CredentialKindAuthJSON {
+		return "", false, "Codex auth credential kind is unsupported", nil
+	}
+	codexAccountID, err := codexauth.ExtractAccountID([]byte(credential.PayloadJSON))
+	if err != nil {
+		return "", false, "Codex auth credential payload is invalid", nil
+	}
+	return codexAccountID, true, "", nil
+}
+
+func codexConfigModelSummary(valueJSON string) (string, string, string) {
+	var value map[string]string
+	if err := json.Unmarshal([]byte(valueJSON), &value); err != nil {
+		return "", "", ""
+	}
+	content := value["content"]
+	if content == "" {
+		return "", "", ""
+	}
+	var decoded map[string]any
+	if err := toml.Unmarshal([]byte(content), &decoded); err != nil {
+		return "", "", ""
+	}
+	model, _ := decoded["model"].(string)
+	modelProvider, _ := decoded["model_provider"].(string)
+	if model != "" && modelProvider == "" {
+		modelProvider = codexconfig.DefaultModelProvider
+	}
+	openAIBaseURL, _ := decoded["openai_base_url"].(string)
+	return model, modelProvider, openAIBaseURL
 }
 
 func codexTargetMetadataForSummary(target store.ProfileTarget) (codexpreset.TargetMetadata, string) {
@@ -293,7 +396,7 @@ func tolerantCodexProfileTargetFromStore(target store.ProfileTarget) (ProfileTar
 		Strategy:        target.Strategy,
 		Enabled:         target.Enabled,
 		ValuePreview:    preview,
-		Metadata:        redactMetadata(metadata).(map[string]any),
+		Metadata:        redactedMetadataMap(metadata),
 		CreatedAtUnixMS: target.CreatedAtUnixMS,
 		UpdatedAtUnixMS: target.UpdatedAtUnixMS,
 	}, warnings

@@ -40,8 +40,8 @@ func TestInitCreatesRuntimeAndDatabase(t *testing.T) {
 	if !result.Initialized || !result.SchemaHealthy {
 		t.Fatalf("expected initialized healthy result, got %#v", result)
 	}
-	if result.MigrationsApplied != 4 {
-		t.Fatalf("expected first init to apply four migrations, got %d", result.MigrationsApplied)
+	if result.MigrationsApplied != 3 {
+		t.Fatalf("expected first init to apply three migrations, got %d", result.MigrationsApplied)
 	}
 
 	for _, path := range []string{
@@ -308,6 +308,23 @@ func TestMetadataOutputRedactsSensitiveKeys(t *testing.T) {
 	first := items[0].(map[string]any)
 	if got := first["refreshToken"]; got != redactedValue {
 		t.Fatalf("expected array refreshToken to be redacted, got %#v", got)
+	}
+}
+
+func TestRedactedMetadataMapReturnsSafeMap(t *testing.T) {
+	metadata := map[string]any{"safe": "ok", "nested": map[string]any{"authorization": "Bearer raw"}}
+
+	redacted := redactedMetadataMap(metadata)
+
+	if redacted == nil {
+		t.Fatalf("expected redacted metadata map")
+	}
+	if got := redacted["safe"]; got != "ok" {
+		t.Fatalf("expected safe metadata to remain visible, got %#v", got)
+	}
+	nested := redacted["nested"].(map[string]any)
+	if got := nested["authorization"]; got != redactedValue {
+		t.Fatalf("expected nested authorization to be redacted, got %#v", got)
 	}
 }
 

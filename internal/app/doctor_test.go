@@ -663,13 +663,12 @@ func TestDoctorWarnsAboutWeakCodexAuthPermissions(t *testing.T) {
 	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	if _, err := CodexProfileCapture(ctx, CodexProfileCaptureRequest{
+	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
 		ConfigDir: configDir,
 		CodexDir:  codexDir,
 		ProfileID: "work",
-		AccountID: "work-account",
 	}); err != nil {
-		t.Fatalf("expected Codex capture to succeed, got %v", err)
+		t.Fatalf("expected Codex create to succeed, got %v", err)
 	}
 
 	result, err := Doctor(ctx, DoctorRequest{ConfigDir: configDir})

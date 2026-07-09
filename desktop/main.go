@@ -9,6 +9,7 @@ import (
 	"image/color"
 	"image/png"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/strahe/profiledeck/desktop/backend"
@@ -52,9 +53,11 @@ func main() {
 			application.NewService(services.Doctor),
 			application.NewService(services.Backup),
 			application.NewService(services.Usage),
+			application.NewService(services.Settings),
 		},
 		Assets: application.AssetOptions{
 			Handler:        application.AssetFileServerFS(assets),
+			Middleware:     noStoreAssetMiddleware,
 			DisableLogging: true,
 		},
 		MarshalError: marshalWailsError,
@@ -83,6 +86,17 @@ func main() {
 	if err := wailsApp.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func noStoreAssetMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Embedded assets change with each build; WebViews can otherwise reuse
+		// stale fixed-path JS/CSS across desktop restarts.
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func marshalWailsError(err error) []byte {

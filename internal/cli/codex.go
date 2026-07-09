@@ -11,13 +11,8 @@ import (
 )
 
 const (
-	modelFlagName         = "model"
-	modelProviderFlagName = "model-provider"
-	openAIBaseURLFlagName = "openai-base-url"
-	accountFlagName       = "account"
-	authFileFlagName      = "auth-file"
-	outputFlagName        = "output"
-	forceFlagName         = "force"
+	authBindingFlagName = "auth-binding"
+	authUpdateFlagName  = "auth-update"
 )
 
 func newCodexCommand() *urfavecli.Command {
@@ -25,7 +20,6 @@ func newCodexCommand() *urfavecli.Command {
 		Name:  "codex",
 		Usage: "Manage Codex provider profiles",
 		Commands: []*urfavecli.Command{
-			newCodexAccountCommand(),
 			newCodexDetectCommand(),
 			newCodexProfileCommand(),
 		},
@@ -64,8 +58,9 @@ func newCodexProfileCommand() *urfavecli.Command {
 		Commands: []*urfavecli.Command{
 			newCodexProfileListCommand(),
 			newCodexProfileShowCommand(),
-			newCodexProfileCaptureCommand(),
-			newCodexProfileSetCommand(),
+			newCodexProfileCreateCommand(),
+			newCodexProfileForkCommand(),
+			newCodexProfileSyncCommand(),
 		},
 	}
 }
@@ -122,13 +117,12 @@ func newCodexProfileShowCommand() *urfavecli.Command {
 	}
 }
 
-func newCodexProfileCaptureCommand() *urfavecli.Command {
+func newCodexProfileCreateCommand() *urfavecli.Command {
 	return &urfavecli.Command{
-		Name:      "capture",
-		Usage:     "Capture full Codex config and file auth for a profile",
+		Name:      "create",
+		Usage:     "Create a Codex profile from the current Codex config and file auth",
 		ArgsUsage: "<profile-id>",
 		Flags: []urfavecli.Flag{
-			stringFlag(accountFlagName, "Local ProfileDeck Codex account id; defaults to profile id"),
 			stringFlag(codexDirFlagName, "Codex config directory"),
 			stringFlag(nameFlagName, "Profile display name"),
 			stringFlag(descriptionFlagName, "Profile description"),
@@ -139,11 +133,10 @@ func newCodexProfileCaptureCommand() *urfavecli.Command {
 			if err != nil {
 				return err
 			}
-			result, err := app.CodexProfileCapture(ctx, app.CodexProfileCaptureRequest{
+			result, err := app.CreateCodexProfile(ctx, app.CreateCodexProfileRequest{
 				ConfigDir:   configDirValue(cmd),
 				CodexDir:    cmd.String(codexDirFlagName),
 				ProfileID:   profileID,
-				AccountID:   cmd.String(accountFlagName),
 				Name:        stringFlagPtr(cmd, nameFlagName),
 				Description: stringFlagPtr(cmd, descriptionFlagName),
 			})
@@ -154,26 +147,64 @@ func newCodexProfileCaptureCommand() *urfavecli.Command {
 			if cmd.Bool(jsonFlagName) {
 				return writeJSON(w, result)
 			}
-			return writeCodexProfileCapture(w, result)
+			return writeCodexProfileSave(w, "Codex profile created", result)
 		},
 	}
 }
 
-func newCodexProfileSetCommand() *urfavecli.Command {
+func newCodexProfileForkCommand() *urfavecli.Command {
 	return &urfavecli.Command{
-		Name:  "set",
-		Usage: "Set the full managed Codex config for a profile",
-		Description: "Writes a complete ProfileDeck desired state for the managed Codex keys. " +
-			"Omitting --openai-base-url removes ProfileDeck's managed base URL from Codex config on switch.",
-		ArgsUsage: "<profile-id>",
+		Name:      "fork",
+		Usage:     "Fork a stored Codex profile",
+		ArgsUsage: "<source-profile-id> <new-profile-id>",
 		Flags: []urfavecli.Flag{
-			stringFlag(modelFlagName, "Codex model"),
-			stringFlag(modelProviderFlagName, "Codex model provider ID"),
-			stringFlag(openAIBaseURLFlagName, "OpenAI-compatible API base URL; omit to remove managed value"),
-			stringFlag(accountFlagName, "Existing local ProfileDeck Codex account id to bind"),
+			stringFlag(authBindingFlagName, "Auth binding for the fork: share-parent or copy-new"),
 			stringFlag(codexDirFlagName, "Codex config directory"),
 			stringFlag(nameFlagName, "Profile display name"),
 			stringFlag(descriptionFlagName, "Profile description"),
+			boolFlag(jsonFlagName, "Write JSON output"),
+		},
+		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
+			if cmd.Args().Len() != 2 {
+				return app.NewError(app.ErrorProfileInvalid, "expected source profile id and new profile id")
+			}
+			sourceID, appErr := appValidateCLIID(cmd.Args().Get(0), app.ErrorProfileInvalid)
+			if appErr != nil {
+				return appErr
+			}
+			profileID, appErr := appValidateCLIID(cmd.Args().Get(1), app.ErrorProfileInvalid)
+			if appErr != nil {
+				return appErr
+			}
+			result, err := app.ForkCodexProfile(ctx, app.ForkCodexProfileRequest{
+				ConfigDir:       configDirValue(cmd),
+				CodexDir:        cmd.String(codexDirFlagName),
+				SourceProfileID: sourceID,
+				ProfileID:       profileID,
+				AuthBinding:     cmd.String(authBindingFlagName),
+				Name:            stringFlagPtr(cmd, nameFlagName),
+				Description:     stringFlagPtr(cmd, descriptionFlagName),
+			})
+			if err != nil {
+				return err
+			}
+			w := outputWriter(cmd)
+			if cmd.Bool(jsonFlagName) {
+				return writeJSON(w, result)
+			}
+			return writeCodexProfileSave(w, "Codex profile forked", result)
+		},
+	}
+}
+
+func newCodexProfileSyncCommand() *urfavecli.Command {
+	return &urfavecli.Command{
+		Name:      "sync",
+		Usage:     "Sync a stored Codex profile from the current Codex config and file auth",
+		ArgsUsage: "<profile-id>",
+		Flags: []urfavecli.Flag{
+			stringFlag(authUpdateFlagName, "Auth update mode for changed shared credentials: update-shared or fork-new"),
+			stringFlag(codexDirFlagName, "Codex config directory"),
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
@@ -181,16 +212,11 @@ func newCodexProfileSetCommand() *urfavecli.Command {
 			if err != nil {
 				return err
 			}
-			result, err := app.CodexProfileSet(ctx, app.CodexProfileSetRequest{
-				ConfigDir:     configDirValue(cmd),
-				CodexDir:      cmd.String(codexDirFlagName),
-				ProfileID:     profileID,
-				Model:         cmd.String(modelFlagName),
-				ModelProvider: cmd.String(modelProviderFlagName),
-				OpenAIBaseURL: stringFlagPtr(cmd, openAIBaseURLFlagName),
-				AccountID:     cmd.String(accountFlagName),
-				Name:          stringFlagPtr(cmd, nameFlagName),
-				Description:   stringFlagPtr(cmd, descriptionFlagName),
+			result, err := app.SyncCodexProfile(ctx, app.SyncCodexProfileRequest{
+				ConfigDir:  configDirValue(cmd),
+				CodexDir:   cmd.String(codexDirFlagName),
+				ProfileID:  profileID,
+				AuthUpdate: cmd.String(authUpdateFlagName),
 			})
 			if err != nil {
 				return err
@@ -199,140 +225,16 @@ func newCodexProfileSetCommand() *urfavecli.Command {
 			if cmd.Bool(jsonFlagName) {
 				return writeJSON(w, result)
 			}
-			return writeCodexProfileSet(w, result)
+			return writeCodexProfileSave(w, "Codex profile synced", result)
 		},
 	}
 }
 
-func newCodexAccountCommand() *urfavecli.Command {
-	return &urfavecli.Command{
-		Name:  "account",
-		Usage: "Manage stored Codex file-auth accounts",
-		Commands: []*urfavecli.Command{
-			newCodexAccountListCommand(),
-			newCodexAccountShowCommand(),
-			newCodexAccountExportCommand(),
-			newCodexAccountImportCommand(),
-		},
+func appValidateCLIID(value string, code app.ErrorCode) (string, *app.AppError) {
+	if strings.TrimSpace(value) == "" {
+		return "", app.NewError(code, "id is required")
 	}
-}
-
-func newCodexAccountListCommand() *urfavecli.Command {
-	return &urfavecli.Command{
-		Name:  "list",
-		Usage: "List stored Codex accounts without raw auth",
-		Flags: []urfavecli.Flag{
-			boolFlag(jsonFlagName, "Write JSON output"),
-		},
-		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.CodexAccountList(ctx, app.CodexAccountListRequest{
-				ConfigDir: configDirValue(cmd),
-			})
-			if err != nil {
-				return err
-			}
-			w := outputWriter(cmd)
-			if cmd.Bool(jsonFlagName) {
-				return writeJSON(w, result)
-			}
-			return writeCodexAccountList(w, result)
-		},
-	}
-}
-
-func newCodexAccountShowCommand() *urfavecli.Command {
-	return &urfavecli.Command{
-		Name:      "show",
-		Usage:     "Show stored Codex account metadata without raw auth",
-		ArgsUsage: "<account-id>",
-		Flags: []urfavecli.Flag{
-			boolFlag(jsonFlagName, "Write JSON output"),
-		},
-		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			accountID, err := singleIDArg(cmd, app.ErrorCodexInvalid)
-			if err != nil {
-				return err
-			}
-			result, err := app.CodexAccountShow(ctx, app.CodexAccountShowRequest{
-				ConfigDir: configDirValue(cmd),
-				AccountID: accountID,
-			})
-			if err != nil {
-				return err
-			}
-			w := outputWriter(cmd)
-			if cmd.Bool(jsonFlagName) {
-				return writeJSON(w, result)
-			}
-			return writeCodexAccount(w, result)
-		},
-	}
-}
-
-func newCodexAccountExportCommand() *urfavecli.Command {
-	return &urfavecli.Command{
-		Name:      "export",
-		Usage:     "Export raw Codex auth JSON to a 0600 file",
-		ArgsUsage: "<account-id>",
-		Flags: []urfavecli.Flag{
-			stringFlag(outputFlagName, "Output auth JSON path"),
-			boolFlag(forceFlagName, "Overwrite output path if it exists"),
-			boolFlag(jsonFlagName, "Write JSON output"),
-		},
-		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			accountID, err := singleIDArg(cmd, app.ErrorCodexInvalid)
-			if err != nil {
-				return err
-			}
-			result, err := app.CodexAccountExport(ctx, app.CodexAccountExportRequest{
-				ConfigDir: configDirValue(cmd),
-				AccountID: accountID,
-				Output:    cmd.String(outputFlagName),
-				Force:     cmd.Bool(forceFlagName),
-			})
-			if err != nil {
-				return err
-			}
-			w := outputWriter(cmd)
-			if cmd.Bool(jsonFlagName) {
-				return writeJSON(w, result)
-			}
-			return writeCodexAccountExport(w, result)
-		},
-	}
-}
-
-func newCodexAccountImportCommand() *urfavecli.Command {
-	return &urfavecli.Command{
-		Name:      "import",
-		Usage:     "Import raw Codex auth JSON from a file",
-		ArgsUsage: "<account-id>",
-		Flags: []urfavecli.Flag{
-			stringFlag(authFileFlagName, "Input auth JSON path"),
-			stringFlag(nameFlagName, "Account display name"),
-			boolFlag(jsonFlagName, "Write JSON output"),
-		},
-		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			accountID, err := singleIDArg(cmd, app.ErrorCodexInvalid)
-			if err != nil {
-				return err
-			}
-			result, err := app.CodexAccountImport(ctx, app.CodexAccountImportRequest{
-				ConfigDir: configDirValue(cmd),
-				AccountID: accountID,
-				AuthFile:  cmd.String(authFileFlagName),
-				Name:      stringFlagPtr(cmd, nameFlagName),
-			})
-			if err != nil {
-				return err
-			}
-			w := outputWriter(cmd)
-			if cmd.Bool(jsonFlagName) {
-				return writeJSON(w, result)
-			}
-			return writeCodexAccount(w, result)
-		},
-	}
+	return strings.TrimSpace(value), nil
 }
 
 func writeCodexDetect(w io.Writer, result app.CodexDetectResult) error {
@@ -372,13 +274,12 @@ func writeCodexProfileList(w io.Writer, result app.CodexProfileListResult) error
 		}
 		if _, err := fmt.Fprintf(
 			w,
-			"- %s name: %s kind: %s status: %s targets: %d account: %s updated: %d\n",
+			"- %s name: %s status: %s targets: %d codex_account_id: %s updated: %d\n",
 			profile.Profile.ID,
 			profile.Profile.Name,
-			profile.SaveKind,
 			active,
 			profile.TargetCount,
-			profile.AccountID,
+			profile.CodexAccountID,
 			profile.UpdatedAtUnixMS,
 		); err != nil {
 			return err
@@ -400,14 +301,13 @@ func writeCodexProfileDetail(w io.Writer, detail app.CodexProfileDetail) error {
 	}
 	if _, err := fmt.Fprintf(
 		w,
-		"Codex profile\nprofile: %s\nname: %s\nkind: %s\nactive: %s\nactive operation: %s\ntargets: %d\naccount: %s\nupdated: %d\n",
+		"Codex profile\nprofile: %s\nname: %s\nactive: %s\nactive operation: %s\ntargets: %d\ncodex_account_id: %s\nupdated: %d\n",
 		summary.Profile.ID,
 		summary.Profile.Name,
-		summary.SaveKind,
 		active,
 		summary.ActiveOperationID,
 		summary.TargetCount,
-		summary.AccountID,
+		summary.CodexAccountID,
 		summary.UpdatedAtUnixMS,
 	); err != nil {
 		return err
@@ -433,87 +333,22 @@ func writeCodexProfileDetail(w io.Writer, detail app.CodexProfileDetail) error {
 	return nil
 }
 
-func writeCodexProfileSet(w io.Writer, result app.CodexProfileSetResult) error {
+func writeCodexProfileSave(w io.Writer, title string, result app.CodexProfileSaveResult) error {
 	if _, err := fmt.Fprintf(
 		w,
-		"Codex profile set\nprovider: %s\nprofile: %s\ntarget: %s\nauth target: %s\ncodex dir: %s\nconfig: %s\nauth: %s\nmanaged keys: %s\n",
+		"%s\nprovider: %s\nprofile: %s\nconfig target: %s\nauth target: %s\ncodex dir: %s\nconfig: %s\nauth: %s\n",
+		title,
 		result.Provider.ID,
 		result.Profile.ID,
-		result.Target.TargetID,
-		optionalTargetID(result.AuthTarget),
-		result.CodexDir,
-		result.ConfigPath,
-		result.AuthPath,
-		strings.Join(result.ManagedKeys, ","),
-	); err != nil {
-		return err
-	}
-	return writeWarnings(w, result.Warnings)
-}
-
-func writeCodexProfileCapture(w io.Writer, result app.CodexProfileCaptureResult) error {
-	if _, err := fmt.Fprintf(
-		w,
-		"Codex profile captured\nprovider: %s\nprofile: %s\naccount: %s\nconfig target: %s\nauth target: %s\ncodex dir: %s\nconfig: %s\nauth: %s\nauth sha256: %s\n",
-		result.Provider.ID,
-		result.Profile.ID,
-		result.Account.AccountID,
 		result.ConfigTarget.TargetID,
 		result.AuthTarget.TargetID,
 		result.CodexDir,
 		result.ConfigPath,
 		result.AuthPath,
-		result.Account.PayloadSHA256,
 	); err != nil {
 		return err
 	}
 	return writeWarnings(w, result.Warnings)
-}
-
-func writeCodexAccountList(w io.Writer, accounts []app.CodexAccount) error {
-	if _, err := fmt.Fprintf(w, "Codex accounts\ncount: %d\n", len(accounts)); err != nil {
-		return err
-	}
-	for _, account := range accounts {
-		if _, err := fmt.Fprintf(w, "- %s name: %s sha256: %s updated: %d\n", account.AccountID, account.DisplayName, account.PayloadSHA256, account.UpdatedAtUnixMS); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func writeCodexAccount(w io.Writer, account app.CodexAccount) error {
-	_, err := fmt.Fprintf(
-		w,
-		"Codex account\nprovider: %s\naccount: %s\nkind: %s\nname: %s\nsha256: %s\ncreated: %d\nupdated: %d\n",
-		account.ProviderID,
-		account.AccountID,
-		account.SecretKind,
-		account.DisplayName,
-		account.PayloadSHA256,
-		account.CreatedAtUnixMS,
-		account.UpdatedAtUnixMS,
-	)
-	return err
-}
-
-func writeCodexAccountExport(w io.Writer, result app.CodexAccountExportResult) error {
-	_, err := fmt.Fprintf(
-		w,
-		"Codex account exported\nprovider: %s\naccount: %s\noutput: %s\nsha256: %s\n",
-		result.ProviderID,
-		result.AccountID,
-		result.Output,
-		result.PayloadSHA256,
-	)
-	return err
-}
-
-func optionalTargetID(target *app.ProfileTarget) string {
-	if target == nil {
-		return ""
-	}
-	return target.TargetID
 }
 
 func writeWarnings(w io.Writer, warnings []string) error {

@@ -1,6 +1,6 @@
 # 通用目标文件
 
-generic targets 是高级本地流程的底层构建块。大多数 Codex 用户应该优先使用 `profiledeck codex profile capture` 或 `profiledeck codex profile set`。
+generic targets 是高级本地流程的底层构建块。大多数 Codex 用户应该优先使用 `profiledeck codex profile create`。
 
 ## 创建 provider 和 profile
 

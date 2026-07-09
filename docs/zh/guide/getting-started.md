@@ -64,16 +64,16 @@ profiledeck --config-dir /tmp/profiledeck-dev init
 
 ```bash
 profiledeck codex detect
-profiledeck codex profile capture work
+profiledeck codex profile create work
 profiledeck codex profile list
 profiledeck plan codex work
 profiledeck switch codex work --yes
 ```
 
-`codex profile capture` 读取当前 Codex home。解析顺序是：
+`codex profile create` 读取当前 Codex home，并要求 `config.toml` 与 `auth.json` 同时存在。解析顺序是：
 
 1. `--codex-dir`
 2. `CODEX_HOME`
 3. `~/.codex`
 
-完整账号切换要求 Codex home 中存在 `$CODEX_HOME/auth.json`。
+Codex profile 切换要求 Codex home 中存在 `$CODEX_HOME/auth.json`。
