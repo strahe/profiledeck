@@ -29,18 +29,14 @@ export function ListProfiles(): $CancellablePromise<app$0.CodexProfileListResult
     return $Call.ByID(2936238732);
 }
 
-export function LoadProfileDraft(): $CancellablePromise<app$0.CodexProfileDraft> {
-    return $Call.ByID(281181918);
-}
-
-export function LoadStoredProfileDraft(profileID: string): $CancellablePromise<app$0.CodexProfileDraft> {
-    return $Call.ByID(1516641873, profileID);
-}
-
 export function ShowProfile(profileID: string): $CancellablePromise<app$0.CodexProfileDetail> {
     return $Call.ByID(1381065948, profileID);
 }
 
 export function SyncProfile(req: $models.SyncCodexProfileRequest): $CancellablePromise<app$0.CodexProfileSaveResult> {
     return $Call.ByID(3826250294, req);
+}
+
+export function UpdateProfileMetadata(req: $models.UpdateCodexProfileMetadataRequest): $CancellablePromise<app$0.Profile> {
+    return $Call.ByID(1493912893, req);
 }

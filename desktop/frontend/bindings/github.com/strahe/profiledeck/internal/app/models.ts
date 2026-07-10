@@ -99,20 +99,6 @@ export interface CodexProfileDetail {
     "targets": ProfileTarget[] | null;
 }
 
-export interface CodexProfileDraft {
-    "codex_dir": string;
-    "config_path": string;
-    "auth_path": string;
-    "config_content": string;
-    "auth_content": string;
-    "config_sha256": string;
-    "auth_sha256": string;
-    "codex_account_id"?: string;
-    "model"?: string;
-    "model_provider"?: string;
-    "openai_base_url"?: string;
-}
-
 export interface CodexProfileListResult {
     "profiles": CodexProfileSummary[] | null;
 }

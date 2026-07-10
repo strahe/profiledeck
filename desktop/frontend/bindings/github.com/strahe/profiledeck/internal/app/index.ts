@@ -10,7 +10,6 @@ export type {
     BackupSummary,
     CodexDetectResult,
     CodexProfileDetail,
-    CodexProfileDraft,
     CodexProfileListResult,
     CodexProfileSaveResult,
     CodexProfileSummary,

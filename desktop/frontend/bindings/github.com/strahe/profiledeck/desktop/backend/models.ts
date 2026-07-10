@@ -9,8 +9,6 @@ export interface CreateCodexProfileRequest {
     "profile_id": string;
     "name"?: string | null;
     "description"?: string | null;
-    "config_content"?: string | null;
-    "auth_content"?: string | null;
 }
 
 export interface DashboardResult {
@@ -56,6 +54,10 @@ export interface SwitchApplyRequest {
 export interface SyncCodexProfileRequest {
     "profile_id": string;
     "auth_update"?: string;
-    "config_content"?: string | null;
-    "auth_content"?: string | null;
+}
+
+export interface UpdateCodexProfileMetadataRequest {
+    "profile_id": string;
+    "name"?: string | null;
+    "description"?: string | null;
 }

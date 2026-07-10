@@ -27,5 +27,6 @@ export type {
     Environment,
     ForkCodexProfileRequest,
     SwitchApplyRequest,
-    SyncCodexProfileRequest
+    SyncCodexProfileRequest,
+    UpdateCodexProfileMetadataRequest
 } from "./models.js";

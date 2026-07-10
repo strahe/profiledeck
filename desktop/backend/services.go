@@ -92,11 +92,9 @@ type SwitchApplyRequest struct {
 }
 
 type CreateCodexProfileRequest struct {
-	ProfileID     string  `json:"profile_id"`
-	Name          *string `json:"name,omitempty"`
-	Description   *string `json:"description,omitempty"`
-	ConfigContent *string `json:"config_content,omitempty"`
-	AuthContent   *string `json:"auth_content,omitempty"`
+	ProfileID   string  `json:"profile_id"`
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
 }
 
 type ForkCodexProfileRequest struct {
@@ -108,10 +106,14 @@ type ForkCodexProfileRequest struct {
 }
 
 type SyncCodexProfileRequest struct {
-	ProfileID     string  `json:"profile_id"`
-	AuthUpdate    string  `json:"auth_update,omitempty"`
-	ConfigContent *string `json:"config_content,omitempty"`
-	AuthContent   *string `json:"auth_content,omitempty"`
+	ProfileID  string `json:"profile_id"`
+	AuthUpdate string `json:"auth_update,omitempty"`
+}
+
+type UpdateCodexProfileMetadataRequest struct {
+	ProfileID   string  `json:"profile_id"`
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
 }
 
 func NewServices(info app.Info, env Environment, startupErr error) Services {
@@ -231,23 +233,14 @@ func (s *CodexService) ShowProfile(ctx context.Context, profileID string) (app.C
 	return app.GetCodexProfile(ctx, app.GetCodexProfileRequest{ConfigDir: s.env.ConfigDir, ProfileID: profileID})
 }
 
-func (s *CodexService) LoadProfileDraft(ctx context.Context) (app.CodexProfileDraft, error) {
-	return app.LoadCodexProfileDraft(ctx, app.LoadCodexProfileDraftRequest{ConfigDir: s.env.ConfigDir, CodexDir: s.env.CodexDir})
-}
-
-func (s *CodexService) LoadStoredProfileDraft(ctx context.Context, profileID string) (app.CodexProfileDraft, error) {
-	return app.LoadStoredCodexProfileDraft(ctx, app.LoadStoredCodexProfileDraftRequest{ConfigDir: s.env.ConfigDir, ProfileID: profileID})
-}
-
 func (s *CodexService) CreateProfile(ctx context.Context, req CreateCodexProfileRequest) (app.CodexProfileSaveResult, error) {
+	// Raw desired files and hidden credentials must stay behind the Desktop service boundary.
 	result, err := app.CreateCodexProfile(ctx, app.CreateCodexProfileRequest{
-		ConfigDir:     s.env.ConfigDir,
-		CodexDir:      s.env.CodexDir,
-		ProfileID:     req.ProfileID,
-		Name:          req.Name,
-		Description:   req.Description,
-		ConfigContent: req.ConfigContent,
-		AuthContent:   req.AuthContent,
+		ConfigDir:   s.env.ConfigDir,
+		CodexDir:    s.env.CodexDir,
+		ProfileID:   req.ProfileID,
+		Name:        req.Name,
+		Description: req.Description,
 	})
 	profileID := result.Profile.ID
 	if profileID == "" {
@@ -276,19 +269,35 @@ func (s *CodexService) ForkProfile(ctx context.Context, req ForkCodexProfileRequ
 }
 
 func (s *CodexService) SyncProfile(ctx context.Context, req SyncCodexProfileRequest) (app.CodexProfileSaveResult, error) {
+	// Sync reads the current Codex files in Go so raw contents never cross into the UI.
 	result, err := app.SyncCodexProfile(ctx, app.SyncCodexProfileRequest{
-		ConfigDir:     s.env.ConfigDir,
-		CodexDir:      s.env.CodexDir,
-		ProfileID:     req.ProfileID,
-		AuthUpdate:    req.AuthUpdate,
-		ConfigContent: req.ConfigContent,
-		AuthContent:   req.AuthContent,
+		ConfigDir:  s.env.ConfigDir,
+		CodexDir:   s.env.CodexDir,
+		ProfileID:  req.ProfileID,
+		AuthUpdate: req.AuthUpdate,
 	})
 	profileID := result.Profile.ID
 	if profileID == "" {
 		profileID = strings.TrimSpace(req.ProfileID)
 	}
 	s.notifyMutationResult(DesktopChangeCodexProfileChanged, "codex.syncProfile", codexconfig.ProviderID, profileID, "", err)
+	return result, err
+}
+
+func (s *CodexService) UpdateProfileMetadata(ctx context.Context, req UpdateCodexProfileMetadataRequest) (app.Profile, error) {
+	profileID := strings.TrimSpace(req.ProfileID)
+	if _, err := app.GetCodexProfile(ctx, app.GetCodexProfileRequest{ConfigDir: s.env.ConfigDir, ProfileID: profileID}); err != nil {
+		s.notifyMutationResult(DesktopChangeCodexProfileChanged, "codex.updateProfileMetadata", codexconfig.ProviderID, profileID, "", err)
+		return app.Profile{}, err
+	}
+
+	result, err := app.UpdateProfile(ctx, app.UpdateProfileRequest{
+		ConfigDir:   s.env.ConfigDir,
+		ID:          profileID,
+		Name:        req.Name,
+		Description: req.Description,
+	})
+	s.notifyMutationResult(DesktopChangeCodexProfileChanged, "codex.updateProfileMetadata", codexconfig.ProviderID, profileID, "", err)
 	return result, err
 }
 

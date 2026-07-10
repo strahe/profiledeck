@@ -301,7 +301,8 @@ func TestCodexCreateProfileDoesNotExposeRawAuthPayload(t *testing.T) {
 	}
 
 	name := "Work"
-	result, err := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil).Codex.CreateProfile(context.Background(), CreateCodexProfileRequest{
+	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
+	result, err := services.Codex.CreateProfile(context.Background(), CreateCodexProfileRequest{
 		ProfileID: "work",
 		Name:      &name,
 	})
@@ -316,6 +317,13 @@ func TestCodexCreateProfileDoesNotExposeRawAuthPayload(t *testing.T) {
 		if strings.Contains(string(raw), leaked) {
 			t.Fatalf("expected desktop create DTO to omit raw auth payload %q, got %s", leaked, raw)
 		}
+	}
+	detail, err := services.Codex.ShowProfile(context.Background(), "work")
+	if err != nil {
+		t.Fatalf("expected created disk-backed profile detail, got %v", err)
+	}
+	if detail.Summary.Model != "gpt-5-codex" || detail.Summary.CodexAccountID != "work-account" {
+		t.Fatalf("expected create to read current Codex files, got %#v", detail.Summary)
 	}
 }
 
@@ -362,5 +370,122 @@ func TestCodexProfileListAndShowUseSharedAppSemantics(t *testing.T) {
 	}
 	if strings.Contains(string(raw), accessToken) || strings.Contains(string(raw), "access_token") {
 		t.Fatalf("expected desktop profile detail to omit raw auth, got %s", raw)
+	}
+}
+
+func TestCodexSyncProfileReadsCurrentFilesBehindDesktopBoundary(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if err := Bootstrap(ctx, Environment{ConfigDir: configDir, CodexDir: codexDir}); err != nil {
+		t.Fatalf("expected bootstrap to succeed, got %v", err)
+	}
+	writeDesktopCodexFiles(t, codexDir, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"work","access_token":"initial"}}`)
+
+	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
+	if _, err := services.Codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
+		t.Fatalf("expected create to succeed, got %v", err)
+	}
+
+	writeDesktopCodexFiles(t, codexDir, `model = "gpt-5.1-codex"`+"\n", `{"tokens":{"account_id":"updated","access_token":"changed"}}`)
+	if _, err := services.Codex.SyncProfile(ctx, SyncCodexProfileRequest{ProfileID: "work"}); err != nil {
+		t.Fatalf("expected sync to read current Codex files, got %v", err)
+	}
+
+	detail, err := services.Codex.ShowProfile(ctx, "work")
+	if err != nil {
+		t.Fatalf("expected synced profile detail, got %v", err)
+	}
+	if detail.Summary.Model != "gpt-5.1-codex" || detail.Summary.CodexAccountID != "updated" {
+		t.Fatalf("expected disk state to be synced, got %#v", detail.Summary)
+	}
+}
+
+func TestCodexUpdateProfileMetadataPersistsAndNotifies(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if err := Bootstrap(ctx, Environment{ConfigDir: configDir, CodexDir: codexDir}); err != nil {
+		t.Fatalf("expected bootstrap to succeed, got %v", err)
+	}
+	writeDesktopCodexFiles(t, codexDir, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"work","access_token":"initial"}}`)
+
+	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
+	if _, err := services.Codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
+		t.Fatalf("expected create to succeed, got %v", err)
+	}
+	events := []DesktopChangeEvent{}
+	services.SubscribeChanges(func(event DesktopChangeEvent) {
+		events = append(events, event)
+	})
+
+	name := "Work account"
+	description := "Primary Codex profile"
+	updated, err := services.Codex.UpdateProfileMetadata(ctx, UpdateCodexProfileMetadataRequest{
+		ProfileID:   "work",
+		Name:        &name,
+		Description: &description,
+	})
+	if err != nil {
+		t.Fatalf("expected metadata update to succeed, got %v", err)
+	}
+	if updated.Name != name || updated.Description != description {
+		t.Fatalf("unexpected updated profile: %#v", updated)
+	}
+	if len(events) != 1 || events[0].Kind != DesktopChangeCodexProfileChanged || events[0].Source != "codex.updateProfileMetadata" || events[0].ProfileID != "work" {
+		t.Fatalf("expected Codex profile change notification, got %#v", events)
+	}
+
+	emptyName := " "
+	_, err = services.Codex.UpdateProfileMetadata(ctx, UpdateCodexProfileMetadataRequest{ProfileID: "work", Name: &emptyName})
+	var appErr *app.AppError
+	if !errors.As(err, &appErr) || appErr.Code != app.ErrorProfileInvalid {
+		t.Fatalf("expected metadata validation error, got %v", err)
+	}
+	if len(events) != 2 || events[1].Status != DesktopChangeStatusFailure || events[1].Error == nil || events[1].Error.Code != string(app.ErrorProfileInvalid) {
+		t.Fatalf("expected failed metadata notification, got %#v", events)
+	}
+}
+
+func TestCodexSyncSharedCredentialConflictKeepsSupportedUpdates(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if err := Bootstrap(ctx, Environment{ConfigDir: configDir, CodexDir: codexDir}); err != nil {
+		t.Fatalf("expected bootstrap to succeed, got %v", err)
+	}
+	writeDesktopCodexFiles(t, codexDir, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"shared","access_token":"initial"}}`)
+
+	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
+	if _, err := services.Codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
+		t.Fatalf("expected create to succeed, got %v", err)
+	}
+	if _, err := services.Codex.ForkProfile(ctx, ForkCodexProfileRequest{
+		SourceProfileID: "work",
+		ProfileID:       "work-copy",
+		AuthBinding:     app.CodexForkAuthBindingShareParent,
+	}); err != nil {
+		t.Fatalf("expected shared fork to succeed, got %v", err)
+	}
+
+	writeDesktopCodexFiles(t, codexDir, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"shared","access_token":"changed"}}`)
+	_, err := services.Codex.SyncProfile(ctx, SyncCodexProfileRequest{ProfileID: "work"})
+	if err == nil {
+		t.Fatalf("expected shared credential conflict")
+	}
+	desktopErr := FormatDesktopError(err)
+	updates, ok := desktopErr.Details["supported_auth_updates"].([]string)
+	if desktopErr.Code != string(app.ErrorCodexInvalid) || !ok || len(updates) != 2 || updates[0] != app.CodexSyncAuthUpdateShared || updates[1] != app.CodexSyncAuthUpdateForkNew {
+		t.Fatalf("expected supported auth updates in desktop error, got %#v", desktopErr)
+	}
+}
+
+func writeDesktopCodexFiles(t *testing.T, codexDir string, config string, auth string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.ConfigFileName), []byte(config), 0o600); err != nil {
+		t.Fatalf("expected config fixture to write, got %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.AuthFileName), []byte(auth), 0o600); err != nil {
+		t.Fatalf("expected auth fixture to write, got %v", err)
 	}
 }
