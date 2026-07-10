@@ -3,6 +3,7 @@ package usage
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -188,12 +189,12 @@ func TestParseCodexSessionFileUsesTokenCountInfoModel(t *testing.T) {
 		ProviderCodex,
 		SourceCodexSessionJSONL,
 		1,
-		eventIdentitySessionID("session", sourceKey, false),
-		"gpt-5.3-codex",
+		storedSessionID(eventIdentitySessionID("session", sourceKey, false)),
+		event.Model,
 		TokenCounts{InputTokens: 10, CachedInputTokens: 2, OutputTokens: 3, TotalTokens: 13},
 	)
 	if event.ID != wantID {
-		t.Fatalf("expected exact model storage not to change legacy event identity, got %q want %q", event.ID, wantID)
+		t.Fatalf("expected exact model storage not to change stable event identity, got %q want %q", event.ID, wantID)
 	}
 	if event.OccurredAtUnixMS != 1751846400000 {
 		t.Fatalf("expected microsecond timestamp to convert to millis, got %d", event.OccurredAtUnixMS)
@@ -262,6 +263,78 @@ func TestParseCodexSessionFileEventIDIgnoresSourcePath(t *testing.T) {
 	}
 }
 
+func TestParseCodexSessionFileStableIDMatchesForkedHistory(t *testing.T) {
+	root := t.TempDir()
+	parentPath := filepath.Join(root, "parent", "session.jsonl")
+	forkPath := filepath.Join(root, "fork", "session.jsonl")
+	writeTestFile(t, parentPath, strings.Join([]string{
+		`{"type":"session_meta","payload":{"id":"session-parent"}}`,
+		`{"type":"turn_context","model":"openai/gpt-5.3-codex-2026-07-01"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}},"timestamp":"2026-07-01T00:00:00Z"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":25,"output_tokens":15,"total_tokens":165}}},"timestamp":"2026-07-01T00:01:00Z"}`,
+	}, "\n"))
+	writeTestFile(t, forkPath, strings.Join([]string{
+		`{"type":"session_meta","payload":{"id":"session-child","forked_from_id":"session-parent"}}`,
+		`{"type":"session_meta","payload":{"id":"session-parent"}}`,
+		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
+		`{"type":"response_item","payload":{"type":"message"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}},"timestamp":"2026-07-02T00:00:00Z"}`,
+		`{"type":"session_meta","payload":{"id":"session-parent"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":25,"output_tokens":15,"total_tokens":165}}},"timestamp":"2026-07-02T00:00:00Z"}`,
+		`{"type":"session_meta","payload":{"id":"session-child","forked_from_id":"session-parent"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":30,"cached_input_tokens":5,"output_tokens":3,"total_tokens":33}}},"timestamp":"2026-07-02T00:02:00Z"}`,
+	}, "\n"))
+
+	parent := parseUsageFixture(t, parentPath)
+	fork := parseUsageFixture(t, forkPath)
+	if len(parent.Events) != 2 || len(fork.Events) != 3 {
+		t.Fatalf("unexpected parent/fork event counts: parent=%d fork=%d", len(parent.Events), len(fork.Events))
+	}
+	for index := range parent.Events {
+		if parent.Events[index].ID == "" || parent.Events[index].ID != fork.Events[index].ID {
+			t.Fatalf("expected fork history event %d to retain its stable ID, parent=%#v fork=%#v", index, parent.Events[index], fork.Events[index])
+		}
+	}
+	if fork.Events[2].SessionID != "session-child" || fork.Events[2].ID == parent.Events[0].ID {
+		t.Fatalf("expected post-fork child usage to remain distinct, got %#v", fork.Events[2])
+	}
+
+	var metadata struct {
+		ParserVersion string `json:"parser_version"`
+		UsageOrdinal  int64  `json:"usage_ordinal"`
+	}
+	if err := json.Unmarshal([]byte(fork.Events[1].MetadataJSON), &metadata); err != nil {
+		t.Fatalf("expected safe usage metadata, got %v", err)
+	}
+	if metadata.ParserVersion != CodexSessionParserVersion || metadata.UsageOrdinal != 2 {
+		t.Fatalf("expected repeated session metadata not to reset the ordinal, got %#v", metadata)
+	}
+}
+
+func TestParseCodexSessionFileStableIDSeparatesIndependentSessions(t *testing.T) {
+	root := t.TempDir()
+	content := func(sessionID string) string {
+		return strings.Join([]string{
+			`{"type":"session_meta","payload":{"id":"` + sessionID + `"}}`,
+			`{"type":"turn_context","model":"gpt-5.3-codex"}`,
+			`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3,"total_tokens":13}}},"timestamp":"2026-07-01T00:00:00Z"}`,
+		}, "\n")
+	}
+	firstPath := filepath.Join(root, "first", "session.jsonl")
+	secondPath := filepath.Join(root, "second", "session.jsonl")
+	writeTestFile(t, firstPath, content("session-first"))
+	writeTestFile(t, secondPath, content("session-second"))
+
+	first := parseUsageFixture(t, firstPath)
+	second := parseUsageFixture(t, secondPath)
+	if len(first.Events) != 1 || len(second.Events) != 1 {
+		t.Fatalf("expected one event per independent session")
+	}
+	if first.Events[0].ID == second.Events[0].ID {
+		t.Fatalf("expected independent sessions with identical timestamps and tokens to stay distinct")
+	}
+}
+
 func TestParseCodexSessionFileFallbackSessionIDIncludesSourceKey(t *testing.T) {
 	content := `{"type":"event_msg","payload":{"type":"token_count","info":{"model":"gpt-5.3-codex","total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3,"total_tokens":13}}}}`
 	firstPath := filepath.Join(t.TempDir(), "2026", "07", "06", "session.jsonl")
@@ -295,6 +368,19 @@ func TestParseCodexSessionFileFallbackSessionIDIncludesSourceKey(t *testing.T) {
 	if first.Events[0].ID == second.Events[0].ID {
 		t.Fatalf("expected missing-session fallback events from different files not to collide")
 	}
+}
+
+func parseUsageFixture(t *testing.T, path string) FileParseResult {
+	t.Helper()
+	sourceKey, err := SourceKey(path)
+	if err != nil {
+		t.Fatalf("expected fixture source key, got %v", err)
+	}
+	result, err := ParseCodexSessionFile(SourceFile{Path: path, SourceKey: sourceKey})
+	if err != nil {
+		t.Fatalf("expected fixture parse, got %v", err)
+	}
+	return result
 }
 
 func TestParseCodexSessionFileCountsInvalidAndUnsupportedLines(t *testing.T) {

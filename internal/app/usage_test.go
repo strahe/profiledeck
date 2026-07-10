@@ -180,7 +180,6 @@ func TestUsageSyncCodexImportsOnlyAppendedEvents(t *testing.T) {
 	if first.ImportedEvents != 2 || first.SkippedDuplicateEvents != 0 {
 		t.Fatalf("unexpected first sync result: %#v", first)
 	}
-
 	appendAppUsageFixture(t, path, `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":180,"cached_input_tokens":28,"output_tokens":18,"total_tokens":198}}}}`)
 	second, err := UsageSyncCodex(ctx, UsageSyncCodexRequest{ConfigDir: configDir, CodexDir: codexDir})
 	if err != nil {
@@ -241,13 +240,121 @@ func TestUsageSyncCodexDoesNotDoubleCountCopiedSessionFiles(t *testing.T) {
 	}
 }
 
-func TestUsageSyncCodexConcurrentRunsRemainIdempotent(t *testing.T) {
+func TestUsageSyncCodexDoesNotDoubleCountMultiLevelForkHistory(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
-	writeAppUsageFixture(t, codexDir, strings.Join([]string{
+	writeAppUsageFile(t, filepath.Join(codexDir, "sessions", "2026", "07", "01", "parent.jsonl"), strings.Join([]string{
+		`{"type":"session_meta","payload":{"id":"session-parent"}}`,
+		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}},"timestamp":"2026-07-01T00:00:00Z"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":25,"output_tokens":15,"total_tokens":165}}},"timestamp":"2026-07-01T00:01:00Z"}`,
+	}, "\n"))
+	writeAppUsageFile(t, filepath.Join(codexDir, "sessions", "2026", "07", "02", "child.jsonl"), strings.Join([]string{
+		`{"type":"session_meta","payload":{"id":"session-child","forked_from_id":"session-parent"}}`,
+		`{"type":"session_meta","payload":{"id":"session-parent"}}`,
+		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
+		`{"type":"response_item","payload":{"type":"message"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}},"timestamp":"2026-07-02T00:00:00Z"}`,
+		`{"type":"session_meta","payload":{"id":"session-parent"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":25,"output_tokens":15,"total_tokens":165}}},"timestamp":"2026-07-02T00:00:00Z"}`,
+		`{"type":"session_meta","payload":{"id":"session-child","forked_from_id":"session-parent"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":30,"cached_input_tokens":5,"output_tokens":3,"total_tokens":33}}},"timestamp":"2026-07-02T00:02:00Z"}`,
+	}, "\n"))
+	writeAppUsageFile(t, filepath.Join(codexDir, "sessions", "2026", "07", "03", "grandchild.jsonl"), strings.Join([]string{
+		`{"type":"session_meta","payload":{"id":"session-grandchild","forked_from_id":"session-child"}}`,
+		`{"type":"session_meta","payload":{"id":"session-child","forked_from_id":"session-parent"}}`,
+		`{"type":"session_meta","payload":{"id":"session-parent"}}`,
+		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}},"timestamp":"2026-07-03T00:00:00Z"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":25,"output_tokens":15,"total_tokens":165}}},"timestamp":"2026-07-03T00:00:00Z"}`,
+		`{"type":"session_meta","payload":{"id":"session-child","forked_from_id":"session-parent"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":30,"cached_input_tokens":5,"output_tokens":3,"total_tokens":33}}},"timestamp":"2026-07-03T00:00:00Z"}`,
+		`{"type":"session_meta","payload":{"id":"session-grandchild","forked_from_id":"session-child"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":40,"cached_input_tokens":6,"output_tokens":4,"total_tokens":44}}},"timestamp":"2026-07-03T00:03:00Z"}`,
+	}, "\n"))
+
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	result, err := UsageSyncCodex(ctx, UsageSyncCodexRequest{ConfigDir: configDir, CodexDir: codexDir})
+	if err != nil {
+		t.Fatalf("expected fork usage sync, got %v", err)
+	}
+	if result.ScannedFiles != 3 || result.ImportedEvents != 4 || result.SkippedDuplicateEvents != 5 {
+		t.Fatalf("expected only post-fork usage to be added, got %#v", result)
+	}
+	report, err := UsageReport(ctx, UsageReportRequest{ConfigDir: configDir, Range: UsageRangeAll})
+	if err != nil {
+		t.Fatalf("expected fork usage report, got %v", err)
+	}
+	if report.Summary.EventCount != 4 || report.Summary.SessionCount != 3 || report.Summary.InputTokens != 220 ||
+		report.Summary.CachedInputTokens != 36 || report.Summary.OutputTokens != 22 || report.Summary.TotalTokens != 242 {
+		t.Fatalf("unexpected deduplicated fork summary: %#v", report.Summary)
+	}
+}
+
+func TestUsageSyncCodexKeepsParentTimestampWhenParentArrivesAfterFork(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	childDir := t.TempDir()
+	parentDir := t.TempDir()
+	writeAppUsageFixture(t, childDir, strings.Join([]string{
+		`{"type":"session_meta","payload":{"id":"session-child","forked_from_id":"session-parent"}}`,
+		`{"type":"session_meta","payload":{"id":"session-parent"}}`,
+		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}},"timestamp":"2026-07-02T00:00:00Z"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":25,"output_tokens":15,"total_tokens":165}}},"timestamp":"2026-07-02T00:00:00Z"}`,
+		`{"type":"session_meta","payload":{"id":"session-child","forked_from_id":"session-parent"}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":30,"cached_input_tokens":5,"output_tokens":3,"total_tokens":33}}},"timestamp":"2026-07-02T00:02:00Z"}`,
+	}, "\n"))
+	writeAppUsageFixture(t, parentDir, strings.Join([]string{
+		`{"type":"session_meta","payload":{"id":"session-parent"}}`,
+		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}},"timestamp":"2026-07-01T00:00:00Z"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":25,"output_tokens":15,"total_tokens":165}}},"timestamp":"2026-07-01T00:01:00Z"}`,
+	}, "\n"))
+
+	initialized, err := Init(ctx, InitRequest{ConfigDir: configDir})
+	if err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	if result, err := UsageSyncCodex(ctx, UsageSyncCodexRequest{ConfigDir: configDir, CodexDir: childDir}); err != nil || result.ImportedEvents != 3 {
+		t.Fatalf("expected child-first import, result=%#v err=%v", result, err)
+	}
+	if result, err := UsageSyncCodex(ctx, UsageSyncCodexRequest{ConfigDir: configDir, CodexDir: parentDir}); err != nil || result.ImportedEvents != 0 || result.SkippedDuplicateEvents != 2 {
+		t.Fatalf("expected later parent import to deduplicate, result=%#v err=%v", result, err)
+	}
+	rawDB, err := sql.Open("sqlite", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("expected usage database open, got %v", err)
+	}
+	defer rawDB.Close()
+	var earliest int64
+	var latest int64
+	if err := rawDB.QueryRowContext(ctx, `SELECT MIN(occurred_at_unix_ms), MAX(occurred_at_unix_ms)
+		FROM usage_events WHERE session_id = 'session-parent'`).Scan(&earliest, &latest); err != nil {
+		t.Fatalf("expected parent timestamp query, got %v", err)
+	}
+	if earliest != time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC).UnixMilli() || latest != time.Date(2026, 7, 1, 0, 1, 0, 0, time.UTC).UnixMilli() {
+		t.Fatalf("expected original parent timestamps, earliest=%d latest=%d", earliest, latest)
+	}
+}
+
+func TestUsageSyncCodexConcurrentRunsRemainIdempotent(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	firstCodexDir := t.TempDir()
+	secondCodexDir := t.TempDir()
+	writeAppUsageFixture(t, firstCodexDir, strings.Join([]string{
 		`{"type":"session_meta","session_id":"session-concurrent"}`,
 		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}}}`,
+	}, "\n"))
+	writeAppUsageFixture(t, secondCodexDir, strings.Join([]string{
+		`{"type":"session_meta","session_id":"session-concurrent"}`,
+		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
+		`{"type":"response_item","payload":{"type":"message"}}`,
 		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}}}`,
 	}, "\n"))
 	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
@@ -257,14 +364,14 @@ func TestUsageSyncCodexConcurrentRunsRemainIdempotent(t *testing.T) {
 	start := make(chan struct{})
 	errorsByRun := make(chan error, 2)
 	var wg sync.WaitGroup
-	for range 2 {
+	for _, codexDir := range []string{firstCodexDir, secondCodexDir} {
 		wg.Add(1)
-		go func() {
+		go func(codexDir string) {
 			defer wg.Done()
 			<-start
 			_, err := UsageSyncCodex(ctx, UsageSyncCodexRequest{ConfigDir: configDir, CodexDir: codexDir})
 			errorsByRun <- err
-		}()
+		}(codexDir)
 	}
 	close(start)
 	wg.Wait()
@@ -441,13 +548,18 @@ func TestSummarySourceReflectsAggregatedSources(t *testing.T) {
 func writeAppUsageFixture(t *testing.T, codexDir string, content string) string {
 	t.Helper()
 	path := filepath.Join(codexDir, "sessions", "2026", "07", "06", "session.jsonl")
+	writeAppUsageFile(t, path, content)
+	return path
+}
+
+func writeAppUsageFile(t *testing.T, path string, content string) {
+	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("expected fixture dir setup to succeed, got %v", err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("expected fixture write to succeed, got %v", err)
 	}
-	return path
 }
 
 func appendAppUsageFixture(t *testing.T, path string, line string) {

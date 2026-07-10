@@ -13,9 +13,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	storemigrations "github.com/strahe/profiledeck/internal/store/migrations"
-	"github.com/uptrace/bun/migrate"
 )
 
 func TestMigrateCreatesInitialSchema(t *testing.T) {
@@ -29,8 +26,8 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
-	if result.Applied != 4 {
-		t.Fatalf("expected 4 migrations to apply, got %d", result.Applied)
+	if result.Applied != 3 {
+		t.Fatalf("expected 3 migrations to apply, got %d", result.Applied)
 	}
 
 	for _, table := range []string{
@@ -101,54 +98,12 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestUsagePartialCostMigrationPreservesExistingEvents(t *testing.T) {
+func TestUsageSchemaSupportsPartialCost(t *testing.T) {
 	ctx := context.Background()
 	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
 	defer closeTestStore(t, db)
-
-	allMigrations := storemigrations.Migrations.Sorted()
-	if len(allMigrations) != 4 {
-		t.Fatalf("expected four registered migrations, got %d", len(allMigrations))
-	}
-	legacyMigrations := migrate.NewMigrations()
-	for _, migration := range allMigrations[:3] {
-		legacyMigrations.Add(migration)
-	}
-	legacyMigrator := migrate.NewMigrator(
-		db.db,
-		legacyMigrations,
-		migrate.WithMarkAppliedOnSuccess(true),
-		migrate.WithUpsert(true),
-	)
-	if err := legacyMigrator.Init(ctx); err != nil {
-		t.Fatalf("expected legacy migrator init, got %v", err)
-	}
-	if _, err := legacyMigrator.Migrate(ctx); err != nil {
-		t.Fatalf("expected legacy migrations, got %v", err)
-	}
-	if _, err := db.executor().ExecContext(ctx, `INSERT INTO usage_events (
-		id, provider_id, source, source_key, session_id, model,
-		input_tokens, cached_input_tokens, output_tokens, total_tokens,
-		estimated_cost_micros, cost_status, created_at_unix_ms, updated_at_unix_ms
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
-		"legacy-usage", "codex", "codex-session-jsonl", "source", "session", "gpt-5.6-sol",
-		100, 20, 10, 110, UsageCostStatusUnknown, 1, 1,
-	); err != nil {
-		t.Fatalf("expected legacy usage fixture, got %v", err)
-	}
-
-	result, err := db.Migrate(ctx)
-	if err != nil || result.Applied != 1 {
-		t.Fatalf("expected partial-cost migration, result=%#v err=%v", result, err)
-	}
-	var model string
-	var status string
-	var cost sql.NullInt64
-	if err := db.executor().QueryRowContext(ctx, "SELECT model, cost_status, estimated_cost_micros FROM usage_events WHERE id = ?", "legacy-usage").Scan(&model, &status, &cost); err != nil {
-		t.Fatalf("expected migrated usage event, got %v", err)
-	}
-	if model != "gpt-5.6-sol" || status != UsageCostStatusUnknown || cost.Valid {
-		t.Fatalf("expected legacy event to remain unchanged, model=%q status=%q cost=%#v", model, status, cost)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
 	partialCost := int64(42)
 	if result, err := db.InsertUsageEvents(ctx, []CreateUsageEventParams{{
@@ -156,11 +111,11 @@ func TestUsagePartialCostMigrationPreservesExistingEvents(t *testing.T) {
 		SessionID: "session", Model: "gpt-5.6-sol", TotalTokens: 1,
 		EstimatedCostMicros: &partialCost, CostStatus: UsageCostStatusPartial,
 	}}); err != nil || result.Inserted != 1 {
-		t.Fatalf("expected migrated schema to accept partial cost, result=%#v err=%v", result, err)
+		t.Fatalf("expected base usage schema to accept partial cost, result=%#v err=%v", result, err)
 	}
 	storeStatus, err := db.Status(ctx)
 	if err != nil || !storeStatus.SchemaHealthy {
-		t.Fatalf("expected migrated schema to remain healthy, status=%#v err=%v", storeStatus, err)
+		t.Fatalf("expected usage schema to remain healthy, status=%#v err=%v", storeStatus, err)
 	}
 }
 
@@ -215,8 +170,8 @@ func TestConcurrentMigrateIsIdempotent(t *testing.T) {
 	if err := db.db.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM bun_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("expected migration count query to succeed, got %v", err)
 	}
-	if migrationCount != 4 {
-		t.Fatalf("expected four migration rows after concurrent migration, got %d", migrationCount)
+	if migrationCount != 3 {
+		t.Fatalf("expected three migration rows after concurrent migration, got %d", migrationCount)
 	}
 }
 
@@ -702,6 +657,60 @@ func TestUsageEventsAreIdempotentAndSummarized(t *testing.T) {
 	}
 }
 
+func TestUsageEventsDeduplicateStableIDAndKeepEarlierObservation(t *testing.T) {
+	ctx := context.Background()
+	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
+	defer closeTestStore(t, db)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+
+	cost := int64(123)
+	forkCopy := CreateUsageEventParams{
+		ID:         "stable-event",
+		ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source-fork",
+		SessionID: "session-parent", Model: "gpt-5.3-codex", OccurredAtUnixMS: 2_000,
+		InputTokens: 10, CachedInputTokens: 2, OutputTokens: 3, TotalTokens: 13,
+		EstimatedCostMicros: &cost, CostStatus: UsageCostStatusEstimated,
+		MetadataJSON: `{"line_index":20}`,
+	}
+	if result, err := db.InsertUsageEvents(ctx, []CreateUsageEventParams{forkCopy}); err != nil || result.Inserted != 1 {
+		t.Fatalf("expected fork observation insert, result=%#v err=%v", result, err)
+	}
+	parent := forkCopy
+	parent.SourceKey = "source-parent"
+	parent.Model = "openai/gpt-5.3-codex-2026-07-01"
+	parent.OccurredAtUnixMS = 1_000
+	parent.EstimatedCostMicros = nil
+	parent.CostStatus = UsageCostStatusUnknown
+	parent.MetadataJSON = `{"line_index":3}`
+	if result, err := db.InsertUsageEvents(ctx, []CreateUsageEventParams{parent}); err != nil || result.Inserted != 0 || result.Duplicates != 1 {
+		t.Fatalf("expected parent observation to share the stable event ID, result=%#v err=%v", result, err)
+	}
+
+	var id string
+	var sourceKey string
+	var model string
+	var occurredAt int64
+	var estimatedCost sql.NullInt64
+	var costStatus string
+	var metadataJSON string
+	if err := db.executor().QueryRowContext(ctx, `SELECT id, source_key, model, occurred_at_unix_ms,
+		estimated_cost_micros, cost_status, metadata_json
+		FROM usage_events WHERE id = ?`, forkCopy.ID,
+	).Scan(&id, &sourceKey, &model, &occurredAt, &estimatedCost, &costStatus, &metadataJSON); err != nil {
+		t.Fatalf("expected canonical usage event, got %v", err)
+	}
+	if id != forkCopy.ID || sourceKey != "source-parent" || model != parent.Model || occurredAt != 1_000 || estimatedCost.Valid ||
+		costStatus != UsageCostStatusUnknown || metadataJSON != `{"line_index":3}` {
+		t.Fatalf("expected earliest observation fields on the existing event, id=%q source=%q model=%q occurred=%d cost=%#v status=%q metadata=%s", id, sourceKey, model, occurredAt, estimatedCost, costStatus, metadataJSON)
+	}
+	summary, err := db.UsageSummary(ctx, "codex")
+	if err != nil || summary.EventCount != 1 || summary.TotalTokens != 13 {
+		t.Fatalf("expected one counted stable event, summary=%#v err=%v", summary, err)
+	}
+}
+
 func TestUsageSummaryReportsDistinctSources(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
@@ -855,6 +864,27 @@ func TestCommitUsageImportIsAtomicAndIdempotent(t *testing.T) {
 	if err != nil || second.Inserted != 0 || second.Duplicates != 1 {
 		t.Fatalf("expected repeated atomic import to deduplicate, result=%#v err=%v", second, err)
 	}
+	earlierDuplicate := event
+	earlierDuplicate.SourceKey = "source-earlier-duplicate"
+	earlierDuplicate.OccurredAtUnixMS = 500
+	rollbackCursor := cursor
+	rollbackCursor.SourceKey = "source-canonical-rollback"
+	rollbackCursor.SizeBytes = -1
+	if _, err := db.CommitUsageImport(ctx, CommitUsageImportParams{
+		Events: []CreateUsageEventParams{earlierDuplicate},
+		Cursor: rollbackCursor,
+	}); err == nil {
+		t.Fatalf("expected invalid cursor to roll back canonical observation update")
+	}
+	var canonicalSourceKey string
+	var canonicalOccurredAt int64
+	if err := db.executor().QueryRowContext(ctx, `SELECT source_key, occurred_at_unix_ms
+		FROM usage_events WHERE id = ?`, event.ID).Scan(&canonicalSourceKey, &canonicalOccurredAt); err != nil {
+		t.Fatalf("expected canonical event after rollback, got %v", err)
+	}
+	if canonicalSourceKey != event.SourceKey || canonicalOccurredAt != event.OccurredAtUnixMS {
+		t.Fatalf("expected failed cursor to roll back canonical update, source=%q occurred=%d", canonicalSourceKey, canonicalOccurredAt)
+	}
 
 	failingEvent := event
 	failingEvent.ID = "event-rolled-back"
@@ -877,6 +907,14 @@ func TestCommitUsageImportIsAtomicAndIdempotent(t *testing.T) {
 	}
 	if _, err := db.GetUsageImportCursor(ctx, "codex", "codex-session-jsonl", "source-rolled-back"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected failed import cursor not to advance, got %v", err)
+	}
+	failingCursor.SizeBytes = 1
+	retry, err := db.CommitUsageImport(ctx, CommitUsageImportParams{
+		Events: []CreateUsageEventParams{failingEvent},
+		Cursor: failingCursor,
+	})
+	if err != nil || retry.Inserted != 1 || retry.Duplicates != 0 {
+		t.Fatalf("expected rolled-back event ID to remain insertable, result=%#v err=%v", retry, err)
 	}
 }
 

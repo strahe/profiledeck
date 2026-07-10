@@ -27,9 +27,9 @@ $CODEX_HOME/archived_sessions/*.jsonl
 profiledeck usage sync codex --codex-dir /path/to/codex-home
 ```
 
-每个文件的派生事件和 import cursor 在同一事务中提交。重复导入保持幂等；把 session 移动或复制到 `archived_sessions` 不会重复计数。无效、超长或不支持的行只记录数量，不保存 raw 内容。
+每个文件的派生事件和 import cursor 在同一事务中提交。重复导入保持幂等；把 session 移动或复制到 `archived_sessions` 不会重复计数。分叉 session 可能包含路径、行位置和时间戳均已变化的祖先用量副本；ProfileDeck 使用稳定的 session event identity 只计算一次祖先用量，同时保留分叉后的新用量。无效、超长或不支持的行只记录数量，不保存 raw 内容。
 
-parser 变化后不会自动重扫未变化的文件。未来必须先为 rebuild 设计稳定 event identity，才能安全地按 parser version 重建。
+parser 变化后不会自动重扫未变化的文件。
 
 ## 汇总
 

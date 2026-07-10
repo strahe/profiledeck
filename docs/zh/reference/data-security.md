@@ -52,7 +52,7 @@ profiledeck doctor
 
 ## ProfileDeck 不保存什么
 
-ProfileDeck usage import 保存派生的 token 与 cost 记录、校验后的模型标签、用于唯一计数的安全或派生 session 标识，以及基于路径 hash 的 cursor key。它不会把 raw Codex JSONL events、prompts、completions、完整来源路径或 API keys 作为 usage metadata 或报告输出持久化。导入错误最多暴露 basename、hash 后的 source key 和已清理的文件系统错误。
+ProfileDeck usage import 保存派生的 token 与 cost 记录、校验后的模型标签、用于唯一计数的安全或派生 session 标识、稳定的 event identity hash，以及基于路径 hash 的 cursor key。稳定 event identity 先按 provider 和 source 隔离，再由安全 session 标识、session 内用量顺序、模型和 token 数派生；它不包含路径、时间戳、prompt 或 completion。ProfileDeck 不会把 raw Codex JSONL events、prompts、completions、完整来源路径或 API keys 作为 usage metadata 或报告输出持久化。导入错误最多暴露 basename、hash 后的 source key 和已清理的文件系统错误。
 
 用量报告只暴露聚合结果。本地日志无法可靠识别实际服务请求的 Profile、隐藏 credential 或 ChatGPT account，因此 ProfileDeck 不推断或发布账号级用量。
 

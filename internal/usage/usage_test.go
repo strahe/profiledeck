@@ -6,6 +6,27 @@ import (
 	"testing"
 )
 
+func TestEventIDUsesStableLogicalDimensions(t *testing.T) {
+	tokens := TokenCounts{InputTokens: 10, CachedInputTokens: 2, OutputTokens: 3, TotalTokens: 13}
+	base := EventID(ProviderCodex, SourceCodexSessionJSONL, 1, "session-a", "openai/gpt-5.3-codex-2026-07-01", tokens)
+	if base == "" {
+		t.Fatalf("expected a stable event ID")
+	}
+	if normalized := EventID(ProviderCodex, SourceCodexSessionJSONL, 1, "session-a", "gpt-5.3-codex", tokens); normalized != base {
+		t.Fatalf("expected equivalent model labels to keep the same event ID")
+	}
+	for name, candidate := range map[string]string{
+		"provider": EventID("other", SourceCodexSessionJSONL, 1, "session-a", "gpt-5.3-codex", tokens),
+		"source":   EventID(ProviderCodex, "other-source", 1, "session-a", "gpt-5.3-codex", tokens),
+		"session":  EventID(ProviderCodex, SourceCodexSessionJSONL, 1, "session-b", "gpt-5.3-codex", tokens),
+		"ordinal":  EventID(ProviderCodex, SourceCodexSessionJSONL, 2, "session-a", "gpt-5.3-codex", tokens),
+	} {
+		if candidate == base {
+			t.Fatalf("expected %s to scope event identity", name)
+		}
+	}
+}
+
 func TestEstimateCostMicrosCoversCurrentOpenAIAndCodexModels(t *testing.T) {
 	tokens := TokenCounts{
 		InputTokens:       1_000_000,

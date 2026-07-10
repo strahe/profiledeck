@@ -2097,7 +2097,6 @@ func (s *Store) InsertUsageEvents(ctx context.Context, events []CreateUsageEvent
 }
 
 func (s *Store) insertUsageEvents(ctx context.Context, events []CreateUsageEventParams) (UsageInsertResult, error) {
-
 	now := time.Now().UnixMilli()
 	stmt, err := s.executor().PrepareContext(
 		ctx,
@@ -2112,6 +2111,19 @@ func (s *Store) insertUsageEvents(ctx context.Context, events []CreateUsageEvent
 		return UsageInsertResult{}, err
 	}
 	defer stmt.Close()
+	canonicalStmt, err := s.executor().PrepareContext(
+		ctx,
+		`UPDATE usage_events
+		SET source_key = ?, model = ?, occurred_at_unix_ms = ?, estimated_cost_micros = ?,
+			cost_status = ?, metadata_json = ?, updated_at_unix_ms = ?
+		WHERE id = ? AND provider_id = ? AND source = ?
+			AND ? > 0
+			AND (occurred_at_unix_ms = 0 OR occurred_at_unix_ms > ?)`,
+	)
+	if err != nil {
+		return UsageInsertResult{}, err
+	}
+	defer canonicalStmt.Close()
 
 	result := UsageInsertResult{}
 	for _, event := range events {
@@ -2123,7 +2135,6 @@ func (s *Store) insertUsageEvents(ctx context.Context, events []CreateUsageEvent
 		if event.EstimatedCostMicros != nil {
 			estimatedCost = *event.EstimatedCostMicros
 		}
-
 		insert, err := stmt.ExecContext(
 			ctx,
 			event.ID,
@@ -2146,8 +2157,37 @@ func (s *Store) insertUsageEvents(ctx context.Context, events []CreateUsageEvent
 		if err != nil {
 			return UsageInsertResult{}, err
 		}
-		if rows, err := insert.RowsAffected(); err == nil && rows > 0 {
+		rows, err := insert.RowsAffected()
+		if err != nil {
+			return UsageInsertResult{}, err
+		}
+		if rows > 0 {
 			result.Inserted++
+			continue
+		}
+
+		// Fork copies can rewrite timestamps and model labels. Keep fields from the
+		// earliest dated observation without inserting another usage event.
+		update, err := canonicalStmt.ExecContext(
+			ctx,
+			event.SourceKey,
+			event.Model,
+			event.OccurredAtUnixMS,
+			estimatedCost,
+			event.CostStatus,
+			metadataJSON,
+			now,
+			event.ID,
+			event.ProviderID,
+			event.Source,
+			event.OccurredAtUnixMS,
+			event.OccurredAtUnixMS,
+		)
+		if err != nil {
+			return UsageInsertResult{}, err
+		}
+		if _, err := update.RowsAffected(); err != nil {
+			return UsageInsertResult{}, err
 		}
 	}
 	result.Duplicates = len(events) - result.Inserted

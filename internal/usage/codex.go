@@ -164,10 +164,10 @@ func parseCodexSessionFile(ctx context.Context, file SourceFile, maxLineBytes in
 
 	sessionID := strings.TrimSuffix(filepath.Base(file.Path), filepath.Ext(file.Path))
 	hasLogSessionID := false
-	modelIdentity := ""
 	modelForStorage := ""
 	modelForPricing := ""
 	previousTotals := map[string]TokenCounts{}
+	usageOrdinals := map[string]int64{}
 	var lineIndex int64
 	for {
 		// Background imports must remain cancellable while scanning large local
@@ -211,8 +211,7 @@ func parseCodexSessionFile(ctx context.Context, file SourceFile, maxLineBytes in
 			sessionID = found
 			hasLogSessionID = true
 		}
-		if found := modelFromObject(object); found.Identity != "" {
-			modelIdentity = found.Identity
+		if found := modelFromObject(object); found.Stored != "" {
 			modelForStorage = found.Stored
 			modelForPricing = found.Pricing
 		}
@@ -243,13 +242,16 @@ func parseCodexSessionFile(ctx context.Context, file SourceFile, maxLineBytes in
 		}
 
 		sessionIdentity := eventIdentitySessionID(sessionID, file.SourceKey, hasLogSessionID)
+		storedSessionIdentity := storedSessionID(sessionIdentity)
+		usageOrdinals[storedSessionIdentity]++
+		usageOrdinal := usageOrdinals[storedSessionIdentity]
 		costMicros, costStatus := EstimateCostMicros(modelForPricing, delta)
 		result.Events = append(result.Events, Event{
-			ID:                  EventID(ProviderCodex, SourceCodexSessionJSONL, lineIndex, sessionIdentity, modelIdentity, delta),
+			ID:                  EventID(ProviderCodex, SourceCodexSessionJSONL, usageOrdinal, storedSessionIdentity, modelForStorage, delta),
 			ProviderID:          ProviderCodex,
 			Source:              SourceCodexSessionJSONL,
 			SourceKey:           file.SourceKey,
-			SessionID:           storedSessionID(sessionIdentity),
+			SessionID:           storedSessionIdentity,
 			Model:               modelForStorage,
 			OccurredAtUnixMS:    occurredAtUnixMS(object),
 			InputTokens:         delta.InputTokens,
@@ -258,7 +260,7 @@ func parseCodexSessionFile(ctx context.Context, file SourceFile, maxLineBytes in
 			TotalTokens:         delta.TotalTokens,
 			EstimatedCostMicros: costMicros,
 			CostStatus:          costStatus,
-			MetadataJSON:        MetadataJSON(lineIndex, eventType, usageKind),
+			MetadataJSON:        MetadataJSON(lineIndex, usageOrdinal, eventType, usageKind),
 		})
 	}
 	return result, nil
@@ -443,9 +445,8 @@ func sessionIDFromObject(object map[string]any, eventType string) string {
 }
 
 type codexModel struct {
-	Identity string
-	Stored   string
-	Pricing  string
+	Stored  string
+	Pricing string
 }
 
 func modelFromObject(object map[string]any) codexModel {
@@ -476,15 +477,12 @@ func modelFromObject(object map[string]any) codexModel {
 
 func codexModelFromValue(value string) codexModel {
 	exact := pricingModelID(value)
-	// Event identity retains the v1 normalization rules so tightening pricing or
-	// display labels never changes existing IDs and duplicates appended files.
-	identity := normalizeCodexModel(value)
 	stored := storedModelName(exact)
 	pricing := exact
 	if stored == "unknown" {
 		pricing = ""
 	}
-	return codexModel{Identity: identity, Stored: stored, Pricing: pricing}
+	return codexModel{Stored: stored, Pricing: pricing}
 }
 
 func modelFromMap(object map[string]any) string {

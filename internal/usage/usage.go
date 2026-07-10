@@ -18,7 +18,7 @@ const (
 	CostStatusEstimated       = "estimated"
 	CostStatusPartial         = "partial"
 	CostStatusUnknown         = "unknown"
-	CodexSessionParserVersion = "codex-session-jsonl-v1"
+	CodexSessionParserVersion = "codex-session-jsonl-v2"
 	PricingBasis              = "openai-standard-api"
 	PricingSourceURL          = "https://developers.openai.com/api/docs/pricing"
 	PricingVerifiedAt         = "2026-07-10"
@@ -185,15 +185,20 @@ func SourceKey(path string) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func EventID(providerID string, source string, lineIndex int64, sessionID string, model string, tokens TokenCounts) string {
-	// File identity is intentionally excluded so copied or moved Codex session
-	// logs remain idempotent; SourceKey is only a file cursor key.
+func EventID(providerID string, source string, usageOrdinal int64, sessionID string, model string, tokens TokenCounts) string {
+	if providerID == "" || source == "" || usageOrdinal <= 0 || sessionID == "" {
+		return ""
+	}
+	// Fork persistence rewrites paths, line positions, and timestamps. The
+	// primary identity excludes them while provider/source scope and session
+	// usage order keep independent events distinct.
+	model = normalizeCodexModel(model)
 	payload := fmt.Sprintf(
-		"%s\x00%s\x00%d\x00%s\x00%s\x00%d\x00%d\x00%d\x00%d",
+		"profiledeck-usage-event-v2\x00%s\x00%s\x00%s\x00%d\x00%s\x00%d\x00%d\x00%d\x00%d",
 		providerID,
 		source,
-		lineIndex,
 		sessionID,
+		usageOrdinal,
 		model,
 		tokens.InputTokens,
 		tokens.CachedInputTokens,
@@ -216,12 +221,13 @@ func EventDigest(events []Event, limit int64) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-func MetadataJSON(lineIndex int64, eventType string, usageKind string) string {
+func MetadataJSON(lineIndex int64, usageOrdinal int64, eventType string, usageKind string) string {
 	// Codex session events can contain prompts, completions, and credentials; only
 	// derived audit fields are persisted.
 	raw, err := json.Marshal(map[string]any{
 		"parser_version": CodexSessionParserVersion,
 		"line_index":     lineIndex,
+		"usage_ordinal":  usageOrdinal,
 		"event_type":     safeUsageMetadataLabel(eventType),
 		"usage_kind":     safeUsageMetadataLabel(usageKind),
 	})

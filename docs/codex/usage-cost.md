@@ -27,9 +27,9 @@ If `CODEX_HOME` is not set, it falls back to `~/.codex`. Use `--codex-dir` for a
 profiledeck usage sync codex --codex-dir /path/to/codex-home
 ```
 
-Each file's derived events and import cursor are committed together. Repeated imports are idempotent, and moving or copying a session into `archived_sessions` does not count it twice. Invalid, oversized, and unsupported lines are counted without storing their raw content.
+Each file's derived events and import cursor are committed together. Repeated imports are idempotent, and moving or copying a session into `archived_sessions` does not count it twice. Forked sessions can contain copied ancestor usage with different paths, line positions, and timestamps; ProfileDeck counts that ancestry once by stable session event identity while keeping post-fork usage distinct. Invalid, oversized, and unsupported lines are counted without storing their raw content.
 
-The importer does not automatically reprocess unchanged files after parser changes. A future rebuild workflow needs stable event identity before parser-version rescans can be safe.
+The importer does not automatically reprocess unchanged files after parser changes.
 
 ## Summary
 

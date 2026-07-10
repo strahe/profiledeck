@@ -25,12 +25,12 @@ func upUsage(ctx context.Context, db *bun.DB) error {
 			output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
 			total_tokens INTEGER NOT NULL DEFAULT 0 CHECK (total_tokens >= 0),
 			estimated_cost_micros INTEGER CHECK (estimated_cost_micros IS NULL OR estimated_cost_micros >= 0),
-			cost_status TEXT NOT NULL CHECK (cost_status IN ('estimated', 'unknown')),
+			cost_status TEXT NOT NULL CHECK (cost_status IN ('estimated', 'partial', 'unknown')),
 			metadata_json TEXT NOT NULL DEFAULT '{}',
 			created_at_unix_ms INTEGER NOT NULL,
 			updated_at_unix_ms INTEGER NOT NULL,
 			CHECK (
-				(cost_status = 'estimated' AND estimated_cost_micros IS NOT NULL)
+				(cost_status IN ('estimated', 'partial') AND estimated_cost_micros IS NOT NULL)
 				OR (cost_status = 'unknown' AND estimated_cost_micros IS NULL)
 			)
 		)`,
@@ -40,6 +40,7 @@ func upUsage(ctx context.Context, db *bun.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_usage_events_model ON usage_events(model)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_events_occurred_at ON usage_events(occurred_at_unix_ms)`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_events_cost_status ON usage_events(cost_status)`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_events_provider_cost_model_id ON usage_events(provider_id, cost_status, model, id)`,
 		`CREATE TABLE IF NOT EXISTS usage_import_cursors (
 			provider_id TEXT NOT NULL,
 			source TEXT NOT NULL,
@@ -62,6 +63,7 @@ func downUsage(ctx context.Context, db *bun.DB) error {
 	return execStatements(ctx, db, []string{
 		`DROP INDEX IF EXISTS idx_usage_import_cursors_source`,
 		`DROP TABLE IF EXISTS usage_import_cursors`,
+		`DROP INDEX IF EXISTS idx_usage_events_provider_cost_model_id`,
 		`DROP INDEX IF EXISTS idx_usage_events_cost_status`,
 		`DROP INDEX IF EXISTS idx_usage_events_occurred_at`,
 		`DROP INDEX IF EXISTS idx_usage_events_model`,
