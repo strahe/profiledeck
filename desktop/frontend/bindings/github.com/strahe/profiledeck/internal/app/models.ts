@@ -170,6 +170,7 @@ export interface CodexProfileSummary {
 
 export interface DesktopSettings {
     "language": string;
+    "usage_sync_interval_seconds": number;
 }
 
 export interface DoctorFinding {
@@ -386,13 +387,82 @@ export interface TextPreview {
 
 export interface UpdateDesktopSettingsRequest {
     "config_dir": string;
-    "language": string;
+    "language"?: string | null;
+    "usage_sync_interval_seconds"?: number | null;
 }
 
-export interface UsageImportError {
-    "source_key": string;
-    "file_name"?: string;
-    "message": string;
+export interface UsageAggregateSummary {
+    "event_count": number;
+    "session_count": number;
+    "fresh_input_tokens": number;
+    "input_tokens": number;
+    "cached_input_tokens": number;
+    "output_tokens": number;
+    "total_tokens": number;
+    "cache_hit_rate": number;
+    "known_estimated_cost_usd": string;
+    "cost_status": string;
+    "estimated_cost_event_count": number;
+    "partial_cost_event_count": number;
+    "unknown_cost_event_count": number;
+    "estimated_token_count": number;
+    "pricing_coverage": number;
+    "undated_event_count": number;
+}
+
+export interface UsageImportSummary {
+    "tracked_files": number;
+    "last_synced_at_unix_ms": number;
+    "invalid_lines": number;
+    "unsupported_lines": number;
+}
+
+export interface UsageModelSummary {
+    "model": string;
+    "summary": UsageAggregateSummary;
+}
+
+export interface UsagePricingInfo {
+    "basis": string;
+    "source_url": string;
+    "verified_at": string;
+    "historical_repricing": boolean;
+}
+
+export enum UsageRangePreset {
+    /**
+     * The Go zero value for the underlying type of the enum.
+     */
+    $zero = "",
+
+    UsageRangeToday = "today",
+    UsageRange7Days = "7d",
+    UsageRange30Days = "30d",
+    UsageRangeAll = "all",
+};
+
+/**
+ * Codex session logs do not prove which stored credential served a request;
+ * reports intentionally stop at provider, model, time, and session aggregates.
+ */
+export interface UsageReportResult {
+    "provider_id": string;
+    "source": string;
+    "sources": string[] | null;
+    "range": UsageResolvedRange;
+    "summary": UsageAggregateSummary;
+    "trend": UsageTrendPoint[] | null;
+    "models": UsageModelSummary[] | null;
+    "import": UsageImportSummary;
+    "pricing": UsagePricingInfo;
+}
+
+export interface UsageResolvedRange {
+    "preset": UsageRangePreset;
+    "start_unix_ms": number;
+    "end_exclusive_unix_ms": number;
+    "bucket_unit": string;
+    "time_zone": string;
 }
 
 export interface UsageSummaryResult {
@@ -410,14 +480,8 @@ export interface UsageSummaryResult {
     "estimated_cost_event_count": number;
 }
 
-export interface UsageSyncResult {
-    "provider_id": string;
-    "source": string;
-    "scanned_files": number;
-    "skipped_unchanged_files": number;
-    "imported_events": number;
-    "skipped_duplicate_events": number;
-    "unsupported_lines": number;
-    "invalid_lines": number;
-    "errors": UsageImportError[] | null;
+export interface UsageTrendPoint {
+    "start_unix_ms": number;
+    "end_unix_ms": number;
+    "summary": UsageAggregateSummary;
 }

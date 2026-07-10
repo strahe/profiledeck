@@ -2,12 +2,39 @@ package usage
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestParseCodexSessionFileHonorsCanceledContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	writeTestFile(t, path, `{"type":"event_msg","payload":{"type":"token_count"}}`)
+	sourceKey, err := SourceKey(path)
+	if err != nil {
+		t.Fatalf("expected source key, got %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = ParseCodexSessionFileContext(ctx, SourceFile{Path: path, SourceKey: sourceKey})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled parse, got %v", err)
+	}
+}
+
+func TestListCodexSessionFilesHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := ListCodexSessionFilesContext(ctx, t.TempDir())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled discovery, got %v", err)
+	}
+}
 
 func TestParseCodexSessionFileComputesCumulativeDeltas(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
@@ -50,6 +77,31 @@ func TestParseCodexSessionFileComputesCumulativeDeltas(t *testing.T) {
 	second := result.Events[1]
 	if second.InputTokens != 50 || second.CachedInputTokens != 5 || second.OutputTokens != 5 || second.TotalTokens != 55 {
 		t.Fatalf("unexpected second delta counts: %#v", second)
+	}
+}
+
+func TestParseCodexSessionFileStoresGPT56BaseCostAsPartial(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	writeTestFile(t, path, strings.Join([]string{
+		`{"type":"session_meta","session_id":"session-1"}`,
+		`{"type":"turn_context","model":"gpt-5.6-sol"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000000,"cached_input_tokens":100000,"output_tokens":1000000,"total_tokens":2000000}}}}`,
+	}, "\n"))
+
+	sourceKey, err := SourceKey(path)
+	if err != nil {
+		t.Fatalf("expected source key, got %v", err)
+	}
+	result, err := ParseCodexSessionFile(SourceFile{Path: path, SourceKey: sourceKey})
+	if err != nil {
+		t.Fatalf("expected parse to succeed, got %v", err)
+	}
+	if len(result.Events) != 1 {
+		t.Fatalf("expected one usage event, got %d", len(result.Events))
+	}
+	event := result.Events[0]
+	if event.CostStatus != CostStatusPartial || event.EstimatedCostMicros == nil || *event.EstimatedCostMicros != 34_550_000 {
+		t.Fatalf("expected GPT-5.6 base cost to remain explicitly partial, got %#v", event)
 	}
 }
 
@@ -126,11 +178,22 @@ func TestParseCodexSessionFileUsesTokenCountInfoModel(t *testing.T) {
 	}
 
 	event := result.Events[0]
-	if event.Model != "gpt-5.3-codex" {
-		t.Fatalf("expected normalized model, got %q", event.Model)
+	if event.Model != "openai/gpt-5.3-codex-2026-07-06" {
+		t.Fatalf("expected exact safe model name for analysis, got %q", event.Model)
 	}
-	if event.CostStatus != CostStatusEstimated || event.EstimatedCostMicros == nil {
-		t.Fatalf("expected estimated cost from payload.info model, got %#v", event)
+	if event.CostStatus != CostStatusUnknown || event.EstimatedCostMicros != nil {
+		t.Fatalf("expected unknown cost for an unlisted model alias, got %#v", event)
+	}
+	wantID := EventID(
+		ProviderCodex,
+		SourceCodexSessionJSONL,
+		1,
+		eventIdentitySessionID("session", sourceKey, false),
+		"gpt-5.3-codex",
+		TokenCounts{InputTokens: 10, CachedInputTokens: 2, OutputTokens: 3, TotalTokens: 13},
+	)
+	if event.ID != wantID {
+		t.Fatalf("expected exact model storage not to change legacy event identity, got %q want %q", event.ID, wantID)
 	}
 	if event.OccurredAtUnixMS != 1751846400000 {
 		t.Fatalf("expected microsecond timestamp to convert to millis, got %d", event.OccurredAtUnixMS)
@@ -226,8 +289,8 @@ func TestParseCodexSessionFileFallbackSessionIDIncludesSourceKey(t *testing.T) {
 	if len(first.Events) != 1 || len(second.Events) != 1 {
 		t.Fatalf("expected one event from each file, got first=%d second=%d", len(first.Events), len(second.Events))
 	}
-	if first.Events[0].SessionID != "session" || second.Events[0].SessionID != "session" {
-		t.Fatalf("expected stored fallback session ids to stay readable, got first=%q second=%q", first.Events[0].SessionID, second.Events[0].SessionID)
+	if !strings.HasPrefix(first.Events[0].SessionID, "derived-") || !strings.HasPrefix(second.Events[0].SessionID, "derived-") || first.Events[0].SessionID == second.Events[0].SessionID {
+		t.Fatalf("expected distinct derived fallback session ids, got first=%q second=%q", first.Events[0].SessionID, second.Events[0].SessionID)
 	}
 	if first.Events[0].ID == second.Events[0].ID {
 		t.Fatalf("expected missing-session fallback events from different files not to collide")
@@ -241,6 +304,7 @@ func TestParseCodexSessionFileCountsInvalidAndUnsupportedLines(t *testing.T) {
 		`not-json`,
 		`[]`,
 		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":-1,"output_tokens":1}}}}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1,"cached_input_tokens":2,"output_tokens":1}}}}`,
 	}, "\n"))
 
 	sourceKey, err := SourceKey(path)
@@ -254,8 +318,34 @@ func TestParseCodexSessionFileCountsInvalidAndUnsupportedLines(t *testing.T) {
 	if len(result.Events) != 1 {
 		t.Fatalf("expected one valid event, got %d", len(result.Events))
 	}
-	if result.InvalidLines != 1 || result.UnsupportedLines != 2 {
-		t.Fatalf("expected invalid=1 unsupported=2, got invalid=%d unsupported=%d", result.InvalidLines, result.UnsupportedLines)
+	if result.InvalidLines != 1 || result.UnsupportedLines != 3 {
+		t.Fatalf("expected invalid=1 unsupported=3, got invalid=%d unsupported=%d", result.InvalidLines, result.UnsupportedLines)
+	}
+}
+
+func TestParseCodexSessionFileSanitizesPersistedLabelsWithoutChangingUsage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	writeTestFile(t, path, strings.Join([]string{
+		`{"type":"session_meta","session_id":"SECRET SESSION VALUE"}`,
+		`{"type":"turn_context","model":"SECRET MODEL VALUE"}`,
+		`{"type":"SECRET EVENT VALUE","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":2}}}}`,
+	}, "\n"))
+	sourceKey, err := SourceKey(path)
+	if err != nil {
+		t.Fatalf("expected source key, got %v", err)
+	}
+	result, err := ParseCodexSessionFile(SourceFile{Path: path, SourceKey: sourceKey})
+	if err != nil || len(result.Events) != 1 {
+		t.Fatalf("expected one sanitized usage event, result=%#v err=%v", result, err)
+	}
+	event := result.Events[0]
+	if !strings.HasPrefix(event.SessionID, "derived-") || event.Model != "unknown" || event.InputTokens != 10 || event.OutputTokens != 2 {
+		t.Fatalf("unexpected sanitized usage event: %#v", event)
+	}
+	for _, value := range []string{event.SessionID, event.Model, event.MetadataJSON} {
+		if strings.Contains(strings.ToLower(value), "secret") {
+			t.Fatalf("expected persisted labels to exclude raw unsafe content, got %q", value)
+		}
 	}
 }
 
@@ -309,7 +399,7 @@ func TestParseCodexSessionFileSkipsOversizedLinesAndContinues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected source key, got %v", err)
 	}
-	result, err := parseCodexSessionFile(SourceFile{Path: path, SourceKey: sourceKey}, 128)
+	result, err := parseCodexSessionFile(context.Background(), SourceFile{Path: path, SourceKey: sourceKey}, 128)
 	if err != nil {
 		t.Fatalf("expected parse to skip oversized line and continue, got %v", err)
 	}
@@ -332,7 +422,7 @@ func TestReadCodexSessionLineReturnsUnderlyingErrorOnOversizedRead(t *testing.T)
 		err:  wantErr,
 	}, 256)
 
-	_, tooLong, err := readCodexSessionLine(reader, 128)
+	_, tooLong, err := readCodexSessionLine(context.Background(), reader, 128)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected underlying read error, got %v", err)
 	}
@@ -349,6 +439,11 @@ func TestListCodexSessionFilesReturnsJSONLFiles(t *testing.T) {
 	}
 	writeTestFile(t, filepath.Join(sessionDir, "a.jsonl"), "{}")
 	writeTestFile(t, filepath.Join(sessionDir, "ignored.txt"), "{}")
+	outside := filepath.Join(t.TempDir(), "outside.jsonl")
+	writeTestFile(t, outside, "{}")
+	if err := os.Symlink(outside, filepath.Join(sessionDir, "ignored-link.jsonl")); err != nil {
+		t.Logf("symlink fixture unavailable: %v", err)
+	}
 
 	files, err := ListCodexSessionFiles(root)
 	if err != nil {
@@ -359,6 +454,25 @@ func TestListCodexSessionFilesReturnsJSONLFiles(t *testing.T) {
 	}
 	if files[0].SourceKey == "" || files[0].SizeBytes == 0 {
 		t.Fatalf("expected source metadata, got %#v", files[0])
+	}
+}
+
+func TestListCodexSessionFilesIncludesOnlyFlatArchivedJSONL(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, "sessions", "2026", "07", "06", "active.jsonl"), "{}")
+	writeTestFile(t, filepath.Join(root, "archived_sessions", "archived.jsonl"), "{}")
+	writeTestFile(t, filepath.Join(root, "archived_sessions", "ignored.txt"), "{}")
+	writeTestFile(t, filepath.Join(root, "archived_sessions", "nested", "ignored.jsonl"), "{}")
+
+	files, err := ListCodexSessionFiles(root)
+	if err != nil {
+		t.Fatalf("expected active and archived file discovery, got %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("expected one active and one flat archived JSONL file, got %#v", files)
+	}
+	if filepath.Base(files[0].Path) != "archived.jsonl" || filepath.Base(files[1].Path) != "active.jsonl" {
+		t.Fatalf("expected stable path ordering across roots, got %#v", files)
 	}
 }
 

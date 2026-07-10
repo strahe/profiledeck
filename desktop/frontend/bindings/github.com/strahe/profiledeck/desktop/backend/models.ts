@@ -88,3 +88,19 @@ export interface UpdateCodexProfileMetadataRequest {
     "name"?: string | null;
     "description"?: string | null;
 }
+
+export interface UsageAutoSyncError {
+    "code": string;
+    "message": string;
+}
+
+export interface UsageAutoSyncStatus {
+    "interval_seconds": number;
+    "syncing": boolean;
+    "outcome": string;
+    "last_started_at_unix_ms": number;
+    "last_completed_at_unix_ms": number;
+    "last_success_at_unix_ms": number;
+    "import_error_count": number;
+    "error"?: UsageAutoSyncError | null;
+}

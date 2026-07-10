@@ -11,7 +11,6 @@
 		CodexService,
 		DoctorService,
 		SettingsService,
-		UsageService,
 	} from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type { DashboardResult, DesktopError } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type {
@@ -19,8 +18,6 @@
 		CodexDetectResult,
 		CodexProfileSummary,
 		DoctorResult,
-		UsageSummaryResult,
-		UsageSyncResult,
 	} from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
 
 	import * as Empty from "$lib/components/ui/empty";
@@ -34,7 +31,6 @@
 	import { desktopErrorMessage, isCancelError } from "$lib/desktop-errors";
 	import {
 		applyDesktopLanguagePreference,
-		currentDesktopLocale,
 		normalizeDesktopLanguage,
 		translate,
 		type DesktopLanguage,
@@ -42,6 +38,7 @@
 	import { cn } from "$lib/utils";
 	import CodexProfiles from "../profiles/CodexProfiles.svelte";
 	import type { CodexProfileRoute, ProfileUseRequest } from "../profiles/types";
+	import UsagePage from "../usage/UsagePage.svelte";
 
 	type AgentID = "codex" | "claude" | "gemini" | "opencode";
 	type PlaceholderAgentID = Exclude<AgentID, "codex">;
@@ -87,7 +84,6 @@
 		detected: boolean;
 		current: string;
 		profiles: AgentProfile[];
-		usage: { events: string; input: string; output: string; cost: string };
 		health: {
 			overall: string;
 			lock: string;
@@ -118,7 +114,6 @@
 				{ id: "personal", name: "personal", description: "Personal account", model: "claude-sonnet-4-6", provider: "anthropic", account: "" },
 				{ id: "client-a", name: "client-a", description: "Client A workspace", model: "claude-sonnet-4-6", provider: "anthropic", account: "" },
 			],
-			usage: { events: "8,914", input: "182M", output: "9.2M", cost: "—" },
 			health: { overall: "OK", lock: "OK", pending: 0, failed: 0, findings: [] },
 			placeholder: true,
 		},
@@ -128,7 +123,6 @@
 			detected: false,
 			current: "",
 			profiles: [],
-			usage: { events: "—", input: "—", output: "—", cost: "—" },
 			health: { overall: "—", lock: "—", pending: 0, failed: 0, findings: [] },
 			placeholder: true,
 		},
@@ -138,7 +132,6 @@
 			detected: false,
 			current: "",
 			profiles: [],
-			usage: { events: "—", input: "—", output: "—", cost: "—" },
 			health: { overall: "—", lock: "—", pending: 0, failed: 0, findings: [] },
 			placeholder: true,
 		},
@@ -153,21 +146,20 @@
 	let loadingProfiles = $state(false);
 	let actionBusy = $state("");
 	let languageBusy = $state(false);
+	let usageSyncIntervalBusy = $state(false);
 	let languagePreference = $state<DesktopLanguage>("auto");
+	let usageSyncInterval = $state(15);
 	let lastToast = "";
 	let invalidRoute = "";
 
 	let dashboard = $state<DashboardResult | null>(null);
 	let detectResult = $state<CodexDetectResult | null>(null);
 	let doctorResult = $state<DoctorResult | null>(null);
-	let usageSummary = $state<UsageSummaryResult | null>(null);
-	let usageSyncResult = $state<UsageSyncResult | null>(null);
 	let codexProfileSummaries = $state<CodexProfileSummary[]>([]);
 	let codexConfigSets = $state<CodexConfigSet[]>([]);
 	let dashboardError = $state("");
 	let detectError = $state("");
 	let profileError = $state("");
-	let usageError = $state("");
 	let lastRefreshSummary = $state("");
 	let placeholderAgents = $state<Record<PlaceholderAgentID, AgentData>>(initialPlaceholders);
 	let useRequest = $state<ProfileUseRequest | null>(null);
@@ -214,10 +206,6 @@
 				void push("/codex/health");
 				void runHealth();
 			}),
-			Events.On("profiledeck:usage-synced", (event) => {
-				usageSyncResult = event.data ?? null;
-				showNotice(translate("notice.usageSynced.title"), translate("notice.usageSynced.codexDescription"));
-			}),
 			Events.On("profiledeck:dashboard-updated", (event) => handleDashboardUpdate(event.data as DashboardUpdatePayload)),
 			Events.On("profiledeck:operation-error", (event) => {
 				if (!isCancelError(event.data)) showError(event.data);
@@ -244,7 +232,7 @@
 					showError(error);
 				}
 			}
-			await Promise.allSettled([refreshDetect(), refreshCodexProfiles(), refreshUsage()]);
+			await Promise.allSettled([refreshDetect(), refreshCodexProfiles()]);
 		} finally {
 			updateRefreshSummary();
 			loading = false;
@@ -255,10 +243,34 @@
 		try {
 			const settings = await track("settings", SettingsService.Get());
 			languagePreference = applyDesktopLanguagePreference(settings.language);
+			usageSyncInterval = settings.usage_sync_interval_seconds;
 			updateRefreshSummary();
 		} catch (error) {
 			if (!isCancelError(error)) showError(error);
 		}
+	}
+
+	async function changeUsageSyncInterval(value: string) {
+		const next = normalizeUsageSyncInterval(value);
+		if (next === null || (next === usageSyncInterval && !usageSyncIntervalBusy)) return;
+		const previous = usageSyncInterval;
+		usageSyncInterval = next;
+		usageSyncIntervalBusy = true;
+		try {
+			const settings = await track("settings-usage-sync", SettingsService.Update({ config_dir: "", usage_sync_interval_seconds: next }));
+			usageSyncInterval = settings.usage_sync_interval_seconds;
+			showNotice(translate("notice.settingsSaved.title"), translate("notice.settingsSaved.description"));
+		} catch (error) {
+			usageSyncInterval = previous;
+			if (!isCancelError(error)) showError(error);
+		} finally {
+			usageSyncIntervalBusy = false;
+		}
+	}
+
+	function normalizeUsageSyncInterval(value: string): number | null {
+		const parsed = Number(value);
+		return parsed === 5 || parsed === 15 || parsed === 30 || parsed === 60 ? parsed : null;
 	}
 
 	async function changeLanguage(value: string) {
@@ -316,18 +328,6 @@
 		}
 	}
 
-	async function refreshUsage() {
-		try {
-			usageSummary = await track("usage-summary", UsageService.Summary(codexProviderID));
-			usageError = "";
-		} catch (error) {
-			if (!isCancelError(error)) {
-				usageSummary = null;
-				usageError = formatError(error);
-			}
-		}
-	}
-
 	async function detectSelectedAgent() {
 		if (selectedAgent !== "codex") {
 			showNotice(translate("notice.detected.title"), translate("notice.detected.placeholderDescription", { agent: currentAgent.name }));
@@ -345,18 +345,6 @@
 			return;
 		}
 		await refreshAll();
-	}
-
-	async function syncUsage() {
-		if (selectedAgent !== "codex") {
-			showNotice(translate("notice.usageSynced.title"), translate("notice.usageSynced.placeholderDescription", { agent: currentAgent.name }));
-			return;
-		}
-		await runAction("usage-sync", async () => {
-			usageSyncResult = await track("usage-sync", UsageService.SyncCodex());
-			await refreshUsage();
-			showNotice(translate("notice.usageSynced.title"), translate("notice.usageSynced.codexDescription"));
-		});
 	}
 
 	async function runHealth() {
@@ -433,10 +421,6 @@
 			profileError = "";
 		}
 		if (next.codex_config_sets?.config_sets) codexConfigSets = next.codex_config_sets.config_sets;
-		if (next.usage) {
-			usageSummary = next.usage;
-			usageError = "";
-		}
 		updateRefreshSummary();
 	}
 
@@ -454,7 +438,6 @@
 				provider: summary.model_provider || "",
 				account: summary.codex_account_id || "",
 			})),
-			usage: codexUsage(),
 			health: codexHealth(),
 			placeholder: false,
 		};
@@ -473,15 +456,6 @@
 			return detectResult.codex_dir_exists || detectResult.config_status !== "missing" || detectResult.auth_status !== "missing" || detectResult.provider_exists;
 		}
 		return codexProfileSummaries.length > 0 || (dashboard?.providers?.some((provider) => provider.id === codexProviderID) ?? false);
-	}
-
-	function codexUsage() {
-		return {
-			events: usageSummary ? formatInteger(usageSummary.event_count) : "—",
-			input: usageSummary ? formatCompact(usageSummary.input_tokens) : "—",
-			output: usageSummary ? formatCompact(usageSummary.output_tokens) : "—",
-			cost: usageSummary?.estimated_cost_usd ? formatCurrency(usageSummary.estimated_cost_usd) : "—",
-		};
 	}
 
 	function codexHealth() {
@@ -509,12 +483,11 @@
 		if (dashboardError) items.push(translate("diagnostics.dashboardError", { message: dashboardError }));
 		if (detectError) items.push(translate("diagnostics.detectError", { message: detectError }));
 		if (profileError) items.push(translate("diagnostics.profilesError", { message: profileError }));
-		if (usageError) items.push(translate("diagnostics.usageError", { message: usageError }));
 		return items;
 	}
 
 	function showDiagnostics(): boolean {
-		return selectedAgent === "codex" && (!currentAgent.detected || currentAgent.profiles.length === 0 || !!dashboardError || !!detectError || !!profileError || !!usageError);
+		return selectedAgent === "codex" && (!currentAgent.detected || currentAgent.profiles.length === 0 || !!dashboardError || !!detectError || !!profileError);
 	}
 
 	function switchPlaceholderProfile(agentID: PlaceholderAgentID, profileID: string) {
@@ -576,20 +549,6 @@
 
 	function sidebarTopPadding(): string {
 		return platform === "macos" ? "pt-[52px]" : "pt-3";
-	}
-
-	function formatInteger(value: number): string {
-		return new Intl.NumberFormat(currentDesktopLocale()).format(value);
-	}
-
-	function formatCompact(value: number): string {
-		return new Intl.NumberFormat(currentDesktopLocale(), { notation: "compact", maximumFractionDigits: 2 }).format(value);
-	}
-
-	function formatCurrency(value: string): string {
-		const parsed = Number(value);
-		if (!Number.isFinite(parsed)) return value;
-		return new Intl.NumberFormat(currentDesktopLocale(), { style: "currency", currency: "USD" }).format(parsed);
 	}
 
 	function formatError(value: unknown): string {
@@ -739,7 +698,13 @@
 							{/if}
 						</Tabs.Content>
 						<Tabs.Content value="health" class="m-0">{@render HealthView(currentAgent)}</Tabs.Content>
-						<Tabs.Content value="usage" class="m-0">{@render UsageView(currentAgent)}</Tabs.Content>
+						<Tabs.Content value="usage" class="m-0">
+							{#if selectedAgent === "codex"}
+								<UsagePage {showError} />
+							{:else}
+								{@render EmptyState($_("usage.unsupportedProviderTitle"), $_("usage.unsupportedProviderDescription", { values: { agent: currentAgent.name } }))}
+							{/if}
+						</Tabs.Content>
 					</div>
 				</Tabs.Root>
 			{/if}
@@ -770,6 +735,23 @@
 					{#if languageBusy}<Spinner />{/if}
 				</div>
 				<Field.FieldDescription>{$_("settings.language.description")}</Field.FieldDescription>
+			</Field.Field>
+			<Field.Field>
+				<Field.FieldLabel for="usage-sync-interval">{$_("settings.usageSync.label")}</Field.FieldLabel>
+				<div class="flex items-center gap-2">
+					<Select.Root type="single" value={String(usageSyncInterval)} onValueChange={changeUsageSyncInterval}>
+						<Select.Trigger id="usage-sync-interval" disabled={usageSyncIntervalBusy}>{$_("settings.usageSync.seconds", { values: { count: usageSyncInterval } })}</Select.Trigger>
+						<Select.Content>
+							<Select.Group>
+								{#each [5, 15, 30, 60] as seconds (seconds)}
+									<Select.Item value={String(seconds)} label={$_("settings.usageSync.seconds", { values: { count: seconds } })} />
+								{/each}
+							</Select.Group>
+						</Select.Content>
+					</Select.Root>
+					{#if usageSyncIntervalBusy}<Spinner />{/if}
+				</div>
+				<Field.FieldDescription>{$_("settings.usageSync.description")}</Field.FieldDescription>
 			</Field.Field>
 		</Field.FieldGroup>
 	</div>
@@ -828,21 +810,6 @@
 				</Table.Root>
 			{/if}
 		</div>
-	</div>
-{/snippet}
-
-{#snippet UsageView(agent: AgentData)}
-	<div class="flex flex-col gap-3">
-		<div class="flex justify-end"><Button size="sm" variant="outline" disabled={actionBusy === "usage-sync"} onclick={syncUsage}>{#if actionBusy === "usage-sync"}<Spinner data-icon="inline-start" />{/if}{$_("actions.sync")}</Button></div>
-		<div class="grid grid-cols-2 gap-3">
-			{@render Metric($_("usage.events"), agent.usage.events)}
-			{@render Metric($_("usage.inputTokens"), agent.usage.input)}
-			{@render Metric($_("usage.outputTokens"), agent.usage.output)}
-			{@render Metric($_("usage.cost"), agent.usage.cost, agent.usage.cost === "—" ? $_("usage.configurePricing") : undefined)}
-		</div>
-		{#if selectedAgent === "codex" && usageSyncResult?.errors?.length}
-			<div class="rounded-lg border bg-card px-3 py-2 text-xs text-muted-foreground">{$_("usage.importErrors", { values: { count: usageSyncResult.errors.length } })}</div>
-		{/if}
 	</div>
 {/snippet}
 

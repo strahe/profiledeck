@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"text/tabwriter"
+	"time"
 
 	"github.com/strahe/profiledeck/internal/app"
 	urfavecli "github.com/urfave/cli/v3"
 )
 
 const codexDirFlagName = "codex-dir"
+const usageRangeFlagName = "range"
 
 func newUsageCommand() *urfavecli.Command {
 	return &urfavecli.Command{
@@ -19,6 +22,34 @@ func newUsageCommand() *urfavecli.Command {
 		Commands: []*urfavecli.Command{
 			newUsageSyncCommand(),
 			newUsageSummaryCommand(),
+			newUsageReportCommand(),
+		},
+	}
+}
+
+func newUsageReportCommand() *urfavecli.Command {
+	return &urfavecli.Command{
+		Name:  "report",
+		Usage: "Analyze local token usage by time and model",
+		Flags: []urfavecli.Flag{
+			stringFlag(providerFlagName, "Usage provider id"),
+			&urfavecli.StringFlag{Name: usageRangeFlagName, Value: string(app.UsageRange7Days), Usage: "Time range: today, 7d, 30d, or all"},
+			boolFlag(jsonFlagName, "Write JSON output"),
+		},
+		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
+			result, err := app.UsageReport(ctx, app.UsageReportRequest{
+				ConfigDir:  configDirValue(cmd),
+				ProviderID: cmd.String(providerFlagName),
+				Range:      app.UsageRangePreset(cmd.String(usageRangeFlagName)),
+			})
+			if err != nil {
+				return err
+			}
+			w := outputWriter(cmd)
+			if cmd.Bool(jsonFlagName) {
+				return writeJSON(w, result)
+			}
+			return writeUsageReport(w, result)
 		},
 	}
 }
@@ -139,4 +170,99 @@ func writeUsageSummary(w io.Writer, result app.UsageSummaryResult) error {
 		result.UnknownCostEventCount,
 	)
 	return err
+}
+
+func writeUsageReport(w io.Writer, result app.UsageReportResult) error {
+	lastSync := "never"
+	if result.Import.LastSyncedAtUnixMS > 0 {
+		lastSync = time.UnixMilli(result.Import.LastSyncedAtUnixMS).Format(time.RFC3339)
+	}
+	if _, err := fmt.Fprintf(
+		w,
+		"Usage report\nprovider: %s\nrange: %s\ntime zone: %s\nevents: %d\nsessions: %d\nfresh input tokens: %d\ncached input tokens: %d\noutput tokens: %d\ntotal tokens: %d\ncache hit rate: %.1f%%\nknown API-equivalent estimated cost usd: %s\ncost status: %s\npricing coverage: %.1f%%\nundated events: %d\ntracked files: %d\nlast sync: %s\ninvalid lines: %d\nunsupported lines: %d\npricing basis: %s\n\nTrend\n",
+		result.ProviderID,
+		result.Range.Preset,
+		result.Range.TimeZone,
+		result.Summary.EventCount,
+		result.Summary.SessionCount,
+		result.Summary.FreshInputTokens,
+		result.Summary.CachedInputTokens,
+		result.Summary.OutputTokens,
+		result.Summary.TotalTokens,
+		result.Summary.CacheHitRate*100,
+		result.Summary.KnownEstimatedCostUSD,
+		result.Summary.CostStatus,
+		result.Summary.PricingCoverage*100,
+		result.Summary.UndatedEventCount,
+		result.Import.TrackedFiles,
+		lastSync,
+		result.Import.InvalidLines,
+		result.Import.UnsupportedLines,
+		result.Pricing.Basis,
+	); err != nil {
+		return err
+	}
+
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	if _, err := fmt.Fprintln(table, "bucket\tfresh input\tcached input\toutput\ttotal"); err != nil {
+		return err
+	}
+	for _, point := range result.Trend {
+		if _, err := fmt.Fprintf(
+			table,
+			"%s\t%d\t%d\t%d\t%d\n",
+			usageBucketLabel(result.Range, point.StartUnixMS),
+			point.Summary.FreshInputTokens,
+			point.Summary.CachedInputTokens,
+			point.Summary.OutputTokens,
+			point.Summary.TotalTokens,
+		); err != nil {
+			return err
+		}
+	}
+	if err := table.Flush(); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "\nModels"); err != nil {
+		return err
+	}
+	table = tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	if _, err := fmt.Fprintln(table, "model\tsessions\ttokens\tcache hit\tknown cost usd\tstatus"); err != nil {
+		return err
+	}
+	for _, model := range result.Models {
+		if _, err := fmt.Fprintf(
+			table,
+			"%s\t%d\t%d\t%.1f%%\t%s\t%s\n",
+			model.Model,
+			model.Summary.SessionCount,
+			model.Summary.TotalTokens,
+			model.Summary.CacheHitRate*100,
+			model.Summary.KnownEstimatedCostUSD,
+			model.Summary.CostStatus,
+		); err != nil {
+			return err
+		}
+	}
+	return table.Flush()
+}
+
+func usageBucketLabel(resolved app.UsageResolvedRange, unixMS int64) string {
+	location := time.Local
+	if resolved.TimeZone != "" {
+		if parsed, err := time.LoadLocation(resolved.TimeZone); err == nil {
+			location = parsed
+		}
+	}
+	value := time.UnixMilli(unixMS).In(location)
+	switch resolved.BucketUnit {
+	case "hour":
+		return value.Format("2006-01-02 15:04 MST")
+	case "month":
+		return value.Format("2006-01")
+	case "year":
+		return value.Format("2006")
+	default:
+		return value.Format("2006-01-02")
+	}
 }

@@ -2,6 +2,7 @@ package usage
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +23,14 @@ func TestEstimateCostMicrosCoversCurrentOpenAIAndCodexModels(t *testing.T) {
 		{model: "gpt-5.4-nano", want: 1_432_000},
 		{model: "chat-latest", want: 34_550_000},
 		{model: "gpt-5.3-codex", want: 15_592_500},
+		{model: "gpt-5.2", want: 15_592_500},
+		{model: "gpt-5.1", want: 11_137_500},
+		{model: "gpt-5", want: 11_137_500},
+		{model: "gpt-5-mini", want: 2_227_500},
+		{model: "gpt-5-nano", want: 445_500},
+		{model: "gpt-4.1", want: 9_850_000},
+		{model: "gpt-4.1-mini", want: 1_970_000},
+		{model: "gpt-4.1-nano", want: 492_500},
 	}
 
 	for _, tt := range tests {
@@ -34,6 +43,44 @@ func TestEstimateCostMicrosCoversCurrentOpenAIAndCodexModels(t *testing.T) {
 				t.Fatalf("expected cost %d, got %d", tt.want, *got)
 			}
 		})
+	}
+}
+
+func TestEstimateCostMicrosReportsGPT56BaseCostAsPartial(t *testing.T) {
+	tokens := TokenCounts{
+		InputTokens:       1_000_000,
+		CachedInputTokens: 100_000,
+		OutputTokens:      1_000_000,
+		TotalTokens:       2_000_000,
+	}
+	tests := []struct {
+		model string
+		want  int64
+	}{
+		{model: "gpt-5.6-sol", want: 34_550_000},
+		{model: "gpt-5.6-terra", want: 17_275_000},
+		{model: "gpt-5.6-luna", want: 6_910_000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			got, status := EstimateCostMicros(tt.model, tokens)
+			if status != CostStatusPartial || got == nil || *got != tt.want {
+				t.Fatalf("expected partial base cost %d, got status=%q cost=%v", tt.want, status, got)
+			}
+		})
+	}
+	if got := strings.Join(PartialCostModelIDs(), ","); got != "gpt-5.6-luna,gpt-5.6-sol,gpt-5.6-terra" {
+		t.Fatalf("unexpected partial cost models: %s", got)
+	}
+}
+
+func TestEstimateCostMicrosDoesNotGuessModelAliases(t *testing.T) {
+	tokens := TokenCounts{InputTokens: 10, CachedInputTokens: 2, OutputTokens: 3, TotalTokens: 13}
+	for _, model := range []string{"openai/gpt-5.3-codex", "gpt-5.3-codex-2026-07-06"} {
+		cost, status := EstimateCostMicros(model, tokens)
+		if cost != nil || status != CostStatusUnknown {
+			t.Fatalf("expected unlisted model %q to remain unknown, status=%q cost=%v", model, status, cost)
+		}
 	}
 }
 

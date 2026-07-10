@@ -61,7 +61,7 @@ func UsageSyncCodex(ctx context.Context, req UsageSyncCodexRequest) (UsageSyncRe
 	}
 	defer db.Close()
 
-	files, err := usage.ListCodexSessionFiles(req.CodexDir)
+	files, err := usage.ListCodexSessionFilesContext(ctx, req.CodexDir)
 	if err != nil {
 		return UsageSyncResult{}, WrapError(ErrorUsageImportFailed, "failed to list Codex session files", err)
 	}
@@ -70,19 +70,32 @@ func UsageSyncCodex(ctx context.Context, req UsageSyncCodexRequest) (UsageSyncRe
 		ProviderID: usage.ProviderCodex,
 		Source:     usage.SourceCodexSessionJSONL,
 	}
+	var freshnessCursor store.UsageImportCursor
+	hasFreshnessCursor := false
+	cursorCommitted := false
 	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return UsageSyncResult{}, WrapError(ErrorUsageImportFailed, "usage import canceled", err)
+		}
 		result.ScannedFiles++
 		cursor, hasCursor, unchanged, err := usageSourceCursor(ctx, db, file)
 		if err != nil {
 			return UsageSyncResult{}, WrapError(ErrorUsageImportFailed, "failed to inspect usage import cursor", err)
 		}
 		if unchanged {
+			if !hasFreshnessCursor {
+				freshnessCursor = cursor
+				hasFreshnessCursor = true
+			}
 			result.SkippedUnchangedFiles++
 			continue
 		}
 
-		parsed, err := usage.ParseCodexSessionFile(file)
+		parsed, err := usage.ParseCodexSessionFileContext(ctx, file)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return UsageSyncResult{}, WrapError(ErrorUsageImportFailed, "usage import canceled", ctxErr)
+			}
 			result.Errors = append(result.Errors, UsageImportError{
 				SourceKey: file.SourceKey,
 				FileName:  filepath.Base(file.Path),
@@ -92,31 +105,85 @@ func UsageSyncCodex(ctx context.Context, req UsageSyncCodexRequest) (UsageSyncRe
 		}
 
 		eventsToStore := usageEventsAfterCursor(parsed.Events, cursor, hasCursor, file)
-		insertResult, err := db.InsertUsageEvents(ctx, usageEventsToStoreParams(eventsToStore))
+		insertResult, err := db.CommitUsageImport(ctx, store.CommitUsageImportParams{
+			Events: usageEventsToStoreParams(eventsToStore),
+			Cursor: store.UpsertUsageImportCursorParams{
+				ProviderID:       usage.ProviderCodex,
+				Source:           usage.SourceCodexSessionJSONL,
+				SourceKey:        file.SourceKey,
+				ModifiedUnixMS:   file.ModifiedUnixMS,
+				SizeBytes:        file.SizeBytes,
+				ImportedEvents:   int64(len(parsed.Events)),
+				InvalidLines:     parsed.InvalidLines,
+				UnsupportedLines: parsed.UnsupportedLines,
+				MetadataJSON:     usageCursorMetadataJSON(parsed.Events),
+			},
+		})
 		if err != nil {
-			return UsageSyncResult{}, WrapError(ErrorUsageImportFailed, "failed to store usage events", err)
+			return UsageSyncResult{}, WrapError(ErrorUsageImportFailed, "failed to commit usage import", err)
 		}
-		if err := db.UpsertUsageImportCursor(ctx, store.UpsertUsageImportCursorParams{
-			ProviderID:       usage.ProviderCodex,
-			Source:           usage.SourceCodexSessionJSONL,
-			SourceKey:        file.SourceKey,
-			ModifiedUnixMS:   file.ModifiedUnixMS,
-			SizeBytes:        file.SizeBytes,
-			ImportedEvents:   int64(len(parsed.Events)),
-			InvalidLines:     parsed.InvalidLines,
-			UnsupportedLines: parsed.UnsupportedLines,
-			MetadataJSON:     usageCursorMetadataJSON(parsed.Events),
-		}); err != nil {
-			return UsageSyncResult{}, WrapError(ErrorUsageImportFailed, "failed to update usage import cursor", err)
-		}
+		cursorCommitted = true
 
 		result.ImportedEvents += int64(insertResult.Inserted)
 		result.SkippedDuplicateEvents += int64(insertResult.Duplicates)
 		result.InvalidLines += parsed.InvalidLines
 		result.UnsupportedLines += parsed.UnsupportedLines
 	}
+	if !cursorCommitted && hasFreshnessCursor {
+		// A completed no-op scan needs one freshness write for report status, not
+		// one write per unchanged session file. Touch updates no cursor identity or
+		// import progress, so a concurrent importer cannot be moved backwards.
+		if err := db.TouchUsageImportCursor(ctx, freshnessCursor.ProviderID, freshnessCursor.Source, freshnessCursor.SourceKey); err != nil {
+			return UsageSyncResult{}, WrapError(ErrorUsageImportFailed, "failed to refresh usage import cursor", err)
+		}
+	}
+	if err := backfillPartialUsageCosts(ctx, db); err != nil {
+		return UsageSyncResult{}, WrapError(ErrorUsageImportFailed, "failed to update usage pricing", err)
+	}
 
 	return result, nil
+}
+
+func backfillPartialUsageCosts(ctx context.Context, db *store.Store) error {
+	const batchSize = 256
+	models := usage.PartialCostModelIDs()
+	afterID := ""
+	for {
+		candidates, err := db.ListUnknownUsageCostCandidates(ctx, usage.ProviderCodex, models, afterID, batchSize)
+		if err != nil {
+			return err
+		}
+		if len(candidates) == 0 {
+			return nil
+		}
+
+		updates := make([]store.UpdateUsageEventCostParams, 0, len(candidates))
+		for _, candidate := range candidates {
+			cost, status := usage.EstimateCostMicros(candidate.Model, usage.TokenCounts{
+				InputTokens:       candidate.InputTokens,
+				CachedInputTokens: candidate.CachedInputTokens,
+				OutputTokens:      candidate.OutputTokens,
+				TotalTokens:       candidate.TotalTokens,
+			})
+			if cost == nil || status == usage.CostStatusUnknown {
+				continue
+			}
+			updates = append(updates, store.UpdateUsageEventCostParams{
+				ID:                  candidate.ID,
+				EstimatedCostMicros: *cost,
+				CostStatus:          status,
+			})
+		}
+		// Only unknown rows are eligible, so concurrent import/backfill runs are
+		// idempotent and never overwrite an already classified historical event.
+		if _, err := db.UpdateUnknownUsageEventCosts(ctx, updates); err != nil {
+			return err
+		}
+		afterID = candidates[len(candidates)-1].ID
+		if len(candidates) < batchSize {
+			return nil
+		}
+	}
 }
 
 func UsageSummary(ctx context.Context, req UsageSummaryRequest) (UsageSummaryResult, error) {
@@ -146,10 +213,12 @@ func UsageSummary(ctx context.Context, req UsageSummaryRequest) (UsageSummaryRes
 		OutputTokens:            summary.OutputTokens,
 		TotalTokens:             summary.TotalTokens,
 		CostStatus:              usage.CostStatusEstimated,
-		UnknownCostEventCount:   summary.UnknownCostEvents,
+		UnknownCostEventCount:   summary.UnknownCostEvents + summary.PartialCostEvents,
 		EstimatedCostEventCount: summary.EstimatedCostEventCount,
 	}
-	if summary.UnknownCostEvents > 0 {
+	// The legacy summary contract has no partial-cost state. Keep treating any
+	// incomplete subtotal as unknown instead of silently overstating precision.
+	if result.UnknownCostEventCount > 0 {
 		result.CostStatus = usage.CostStatusUnknown
 		return result, nil
 	}

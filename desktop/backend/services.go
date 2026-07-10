@@ -44,12 +44,14 @@ type BackupService struct {
 }
 
 type UsageService struct {
-	env     Environment
-	changes *ChangeNotifier
+	env      Environment
+	autoSync *usageAutoSyncRuntime
 }
 
 type SettingsService struct {
-	env Environment
+	env      Environment
+	autoSync *usageAutoSyncRuntime
+	mu       sync.Mutex
 }
 
 type Services struct {
@@ -62,6 +64,7 @@ type Services struct {
 	Usage    *UsageService
 	Settings *SettingsService
 	changes  *ChangeNotifier
+	autoSync *usageAutoSyncRuntime
 }
 
 type DashboardResult struct {
@@ -145,6 +148,7 @@ type UpdateCodexProfileMetadataRequest struct {
 
 func NewServices(info app.Info, env Environment, startupErr error) Services {
 	changes := NewChangeNotifier()
+	autoSync := newUsageAutoSyncRuntime(env)
 	return Services{
 		App:      &AppService{info: info, env: env, startupErr: startupErr, changes: changes},
 		Codex:    &CodexService{env: env, changes: changes},
@@ -152,14 +156,23 @@ func NewServices(info app.Info, env Environment, startupErr error) Services {
 		Switch:   &SwitchService{env: env, changes: changes},
 		Doctor:   &DoctorService{env: env, changes: changes},
 		Backup:   &BackupService{env: env, changes: changes},
-		Usage:    &UsageService{env: env, changes: changes},
-		Settings: &SettingsService{env: env},
+		Usage:    &UsageService{env: env, autoSync: autoSync},
+		Settings: &SettingsService{env: env, autoSync: autoSync},
 		changes:  changes,
+		autoSync: autoSync,
 	}
 }
 
 func (s Services) SubscribeChanges(listener func(DesktopChangeEvent)) func() {
 	return s.changes.Subscribe(listener)
+}
+
+func (s Services) StartUsageAutoSync(ctx context.Context, emitter func(UsageAutoSyncStatus)) {
+	s.autoSync.Start(ctx, emitter)
+}
+
+func (s Services) StopUsageAutoSync() {
+	s.autoSync.Stop()
 }
 
 func Bootstrap(ctx context.Context, env Environment) error {
@@ -459,16 +472,6 @@ func (s *BackupService) RecoverFailedSwitch(ctx context.Context, operationID str
 	return result, err
 }
 
-func (s *UsageService) SyncCodex(ctx context.Context) (app.UsageSyncResult, error) {
-	result, err := app.UsageSyncCodex(ctx, app.UsageSyncCodexRequest{ConfigDir: s.env.ConfigDir, CodexDir: s.env.CodexDir})
-	providerID := result.ProviderID
-	if providerID == "" {
-		providerID = codexconfig.ProviderID
-	}
-	s.notifyMutationResult(DesktopChangeUsageSynced, "usage.syncCodex", providerID, "", "", err)
-	return result, err
-}
-
 func (s *UsageService) Summary(ctx context.Context, providerID string) (app.UsageSummaryResult, error) {
 	if providerID == "" {
 		providerID = codexconfig.ProviderID
@@ -476,13 +479,39 @@ func (s *UsageService) Summary(ctx context.Context, providerID string) (app.Usag
 	return app.UsageSummary(ctx, app.UsageSummaryRequest{ConfigDir: s.env.ConfigDir, ProviderID: providerID})
 }
 
+func (s *UsageService) AutoSyncStatus(ctx context.Context) UsageAutoSyncStatus {
+	return s.autoSync.Status()
+}
+
+func (s *UsageService) Report(ctx context.Context, providerID string, rangeValue string) (app.UsageReportResult, error) {
+	if providerID == "" {
+		providerID = codexconfig.ProviderID
+	}
+	return app.UsageReport(ctx, app.UsageReportRequest{
+		ConfigDir:  s.env.ConfigDir,
+		ProviderID: providerID,
+		Range:      app.UsageRangePreset(rangeValue),
+	})
+}
+
 func (s *SettingsService) Get(ctx context.Context) (app.DesktopSettings, error) {
 	return app.GetDesktopSettings(ctx, app.DesktopSettingsRequest{ConfigDir: s.env.ConfigDir})
 }
 
 func (s *SettingsService) Update(ctx context.Context, req app.UpdateDesktopSettingsRequest) (app.DesktopSettings, error) {
+	// Serialize persistence with the runtime timer update so concurrent Wails
+	// requests cannot apply an older interval after a newer transaction commits.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	req.ConfigDir = s.env.ConfigDir
-	return app.UpdateDesktopSettings(ctx, req)
+	settings, err := app.UpdateDesktopSettings(ctx, req)
+	if err != nil {
+		return app.DesktopSettings{}, err
+	}
+	if req.UsageSyncIntervalSeconds != nil {
+		s.autoSync.SetInterval(settings.UsageSyncIntervalSeconds)
+	}
+	return settings, nil
 }
 
 func (s *AppService) notifyMutationResult(kind string, source string, providerID string, profileID string, operationID string, err error) {
@@ -502,10 +531,6 @@ func (s *DoctorService) notifyMutationResult(kind string, source string, provide
 }
 
 func (s *BackupService) notifyMutationResult(kind string, source string, providerID string, profileID string, operationID string, err error) {
-	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
-}
-
-func (s *UsageService) notifyMutationResult(kind string, source string, providerID string, profileID string, operationID string, err error) {
 	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
 }
 

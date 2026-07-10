@@ -80,10 +80,25 @@ func main() {
 	})
 	hideMainWindowOnUserClose(mainWindow)
 	setupTray(desktopCtx, wailsApp, mainWindow, services)
+	setupUsageAutoSync(desktopCtx, wailsApp, services)
 
 	if err := wailsApp.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func setupUsageAutoSync(ctx context.Context, wailsApp *application.App, services backend.Services) {
+	removeStartedHandler := wailsApp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		// The scheduler starts only after Wails can safely deliver backend events;
+		// it remains active while the main window is hidden in the tray.
+		services.StartUsageAutoSync(ctx, func(status backend.UsageAutoSyncStatus) {
+			wailsApp.Event.Emit(backend.UsageAutoSyncEventName, status)
+		})
+	})
+	wailsApp.OnShutdown(func() {
+		removeStartedHandler()
+		services.StopUsageAutoSync()
+	})
 }
 
 func noStoreAssetMiddleware(next http.Handler) http.Handler {

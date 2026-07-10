@@ -21,7 +21,7 @@
 | `rollback` | 回滚已应用的 switch 备份。 |
 | `status` | 打印应用数据库状态。 |
 | `switch` | 应用 profile 切换。 |
-| `usage` | 导入并汇总本地 token 用量。 |
+| `usage` | 导入并分析本地 token 用量。 |
 | `version` | 打印版本信息。 |
 
 ## Runtime 基础命令
@@ -69,9 +69,10 @@ profiledeck switch [--yes] [--plan-fingerprint FINGERPRINT] [--json] <provider-i
 ```bash
 profiledeck usage sync codex [--codex-dir PATH] [--json]
 profiledeck usage summary [--provider codex] [--json]
+profiledeck usage report [--provider codex] [--range today|7d|30d|all] [--json]
 ```
 
-当前只支持 Codex 本地 session 用量。
+当前只支持 Codex 本地 session 用量。`sync codex` 继续作为纯 CLI 场景的手动入口；Desktop 会按设置的间隔自动同步。`report` 默认使用 `7d`；人类可读输出依次显示总体摘要、时间趋势和模型统计。JSON 输出还包含解析后的本地时间范围、导入健康状态和静态定价来源。原有 `summary` 输出继续作为轻量全量契约。
 
 ## Provider 与 profile CRUD
 

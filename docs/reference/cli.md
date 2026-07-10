@@ -21,7 +21,7 @@ All commands accept the global option:
 | `rollback` | Roll back an applied switch backup. |
 | `status` | Print application store status. |
 | `switch` | Apply a profile switch. |
-| `usage` | Import and summarize local token usage. |
+| `usage` | Import and analyze local token usage. |
 | `version` | Print version information. |
 
 ## Core runtime
@@ -69,9 +69,10 @@ profiledeck switch [--yes] [--plan-fingerprint FINGERPRINT] [--json] <provider-i
 ```bash
 profiledeck usage sync codex [--codex-dir PATH] [--json]
 profiledeck usage summary [--provider codex] [--json]
+profiledeck usage report [--provider codex] [--range today|7d|30d|all] [--json]
 ```
 
-Only Codex local session usage is supported currently.
+Only Codex local session usage is supported currently. `sync codex` remains the manual entry point for CLI-only workflows; the Desktop app syncs automatically at its configured interval. `report` defaults to `7d`; human output prints the aggregate summary, time trend, and model statistics in that order. JSON output includes the resolved local-time range, import health, and static pricing provenance. Existing `summary` output remains the lightweight all-time contract.
 
 ## Provider and profile CRUD
 

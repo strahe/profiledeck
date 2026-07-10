@@ -10,7 +10,6 @@ const (
 	DesktopChangeLockRepaired          = "lock-repaired"
 	DesktopChangeRollbackApplied       = "rollback-applied"
 	DesktopChangeSwitchRecovered       = "switch-recovered"
-	DesktopChangeUsageSynced           = "usage-synced"
 
 	DesktopChangeStatusSuccess  = "success"
 	DesktopChangeStatusFailure  = "failure"

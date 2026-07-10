@@ -6,12 +6,9 @@ import (
 	"time"
 
 	"github.com/strahe/profiledeck/desktop/backend"
-	"github.com/strahe/profiledeck/internal/app"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
-
-const trayUsageSyncTimeout = 30 * time.Second
 
 type trayUI interface {
 	SetMenu(*application.Menu)
@@ -48,14 +45,12 @@ func (ui wailsTrayUI) Quit() {
 }
 
 type dashboardLoader func(context.Context) (backend.DashboardResult, error)
-type usageSyncer func(context.Context) (app.UsageSyncResult, error)
 
 type trayController struct {
 	ctx             context.Context
 	services        backend.Services
 	ui              trayUI
 	loadDashboard   dashboardLoader
-	syncUsageCodex  usageSyncer
 	menuGeneration  atomic.Uint64
 	eventGeneration atomic.Uint64
 }
@@ -68,7 +63,6 @@ func newTrayController(ctx context.Context, services backend.Services, ui trayUI
 		loadDashboard: func(ctx context.Context) (backend.DashboardResult, error) {
 			return services.App.Dashboard(ctx)
 		},
-		syncUsageCodex: services.Usage.SyncCodex,
 	}
 }
 
@@ -100,7 +94,6 @@ func (c *trayController) refresh(menuGeneration uint64, eventGeneration uint64, 
 		menu := buildTrayMenu(dashboard, dashboardErr, trayMenuActions{
 			openMainWindow: c.openMainWindow,
 			runDoctor:      c.runDoctor,
-			syncUsage:      c.syncUsage,
 			refresh:        func() { c.Refresh(nil, false) },
 			openSwitch:     c.openSwitch,
 			quit:           c.quit,
@@ -130,23 +123,6 @@ func (c *trayController) runDoctor() {
 	c.ui.Emit("profiledeck:open-doctor")
 }
 
-func (c *trayController) syncUsage() {
-	// Bound tray-triggered syncs so a stalled scan cannot retain the action
-	// goroutine indefinitely while preserving desktop shutdown cancellation.
-	ctx, cancel := context.WithTimeout(c.ctx, trayUsageSyncTimeout)
-	defer cancel()
-	result, syncErr := c.syncUsageCodex(ctx)
-	if c.ctx.Err() != nil {
-		return
-	}
-	if syncErr != nil {
-		c.ui.Emit("profiledeck:operation-error", backend.FormatDesktopError(syncErr))
-		c.ui.ShowMainWindow()
-		return
-	}
-	c.ui.Emit("profiledeck:usage-synced", result)
-}
-
 func (c *trayController) openSwitch(profileID string) {
 	c.ui.ShowMainWindow()
 	c.ui.Emit("profiledeck:open-switch", map[string]string{
@@ -163,7 +139,6 @@ func (c *trayController) quit() {
 type trayMenuActions struct {
 	openMainWindow func()
 	runDoctor      func()
-	syncUsage      func()
 	refresh        func()
 	openSwitch     func(profileID string)
 	quit           func()
@@ -187,10 +162,6 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 	menu.Add("Run Doctor").OnClick(func(*application.Context) {
 		runTrayAction(actions.runDoctor)
 	})
-	menu.Add("Sync Usage").OnClick(func(*application.Context) {
-		runTrayAction(actions.syncUsage)
-	})
-
 	profilesMenu := menu.AddSubmenu("Codex Profiles")
 	if dashboard.CodexProfiles == nil {
 		profilesMenu.Add(trayCodexProfilesUnavailableLabel).SetEnabled(false)

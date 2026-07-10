@@ -58,6 +58,10 @@ func TestDesktopChangeDebouncerStopCancelsPendingEvent(t *testing.T) {
 }
 
 func TestBuildTrayMenuUsesDashboardCodexProfiles(t *testing.T) {
+	if item := buildTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{}).FindByLabel("Sync Usage"); item != nil {
+		t.Fatalf("expected tray menu to omit manual usage sync")
+	}
+
 	t.Run("unavailable", func(t *testing.T) {
 		menu := buildTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{})
 
@@ -171,7 +175,7 @@ func TestTrayControllerMenuRefreshDoesNotDropPendingDashboardEvent(t *testing.T)
 		}
 	}
 
-	event := backend.DesktopChangeEvent{Kind: backend.DesktopChangeUsageSynced}
+	event := backend.DesktopChangeEvent{Kind: backend.DesktopChangeCodexProfileChanged}
 	controller.Refresh(&event, true)
 	select {
 	case <-eventStarted:
@@ -198,8 +202,8 @@ func TestTrayControllerMenuRefreshDoesNotDropPendingDashboardEvent(t *testing.T)
 	if !ok {
 		t.Fatalf("expected dashboard update payload, got %#v", emitted.data)
 	}
-	if payload.Event.Kind != backend.DesktopChangeUsageSynced {
-		t.Fatalf("expected usage event payload, got %q", payload.Event.Kind)
+	if payload.Event.Kind != backend.DesktopChangeCodexProfileChanged {
+		t.Fatalf("expected profile event payload, got %q", payload.Event.Kind)
 	}
 	if got := payload.Dashboard.CodexProfiles.Profiles[0].Profile.Name; got != "Event" {
 		t.Fatalf("expected event dashboard payload, got %q", got)
@@ -229,39 +233,6 @@ func TestTrayControllerRefreshSetsMenuBeforeDashboardEvent(t *testing.T) {
 	}
 	if got := waitForTrayUICall(t, ui); got != "emit:profiledeck:dashboard-updated" {
 		t.Fatalf("expected dashboard update emit after SetMenu, got %q", got)
-	}
-}
-
-func TestTrayControllerSyncUsageUsesActionTimeout(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	services := backend.NewServices(app.DefaultInfo(), backend.Environment{ConfigDir: t.TempDir()}, nil)
-	ui := newFakeTrayUI()
-	controller := newTrayController(ctx, services, ui)
-	checked := make(chan struct{})
-
-	controller.syncUsageCodex = func(ctx context.Context) (app.UsageSyncResult, error) {
-		deadline, ok := ctx.Deadline()
-		if !ok {
-			t.Fatalf("expected usage sync context to have a deadline")
-		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 || remaining > trayUsageSyncTimeout {
-			t.Fatalf("expected deadline within %s, got %s", trayUsageSyncTimeout, remaining)
-		}
-		close(checked)
-		return app.UsageSyncResult{ProviderID: codexconfig.ProviderID}, nil
-	}
-
-	controller.syncUsage()
-	select {
-	case <-checked:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatalf("expected usage sync to run")
-	}
-	event := waitForEvent(t, ui)
-	if event.name != "profiledeck:usage-synced" {
-		t.Fatalf("expected usage synced event, got %q", event.name)
 	}
 }
 

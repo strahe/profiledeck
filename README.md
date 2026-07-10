@@ -2,7 +2,7 @@
 
 Safe profile switching for AI coding tools.
 
-ProfileDeck is currently a Go CLI and macOS desktop MVP with a Codex-first workflow. A Codex Profile combines a hidden login credential with a reusable Config Set, while guarded transactions switch their on-disk working copies, preserve valid local changes, and support recovery. ProfileDeck also imports local Codex token usage.
+ProfileDeck is currently a Go CLI and macOS desktop MVP with a Codex-first workflow. A Codex Profile combines a hidden login credential with a reusable Config Set, while guarded transactions switch their on-disk working copies, preserve valid local changes, and support recovery. ProfileDeck also imports local Codex session logs for offline time, model, session, and API-equivalent cost analysis.
 
 ## Documentation
 
@@ -49,7 +49,7 @@ macOS desktop builds target macOS 14.0 by default. Override it with `MACOS_MIN_V
 
 During desktop development, set `PROFILEDECK_CONFIG_DIR` to a temporary directory when you need to avoid touching the normal ProfileDeck runtime.
 
-The desktop app persists its language preference in ProfileDeck settings and currently supports Auto, Simplified Chinese, and English.
+The desktop app persists its language and usage-sync preferences. Language supports Auto, Simplified Chinese, and English. Usage sync runs while ProfileDeck is open or hidden in the tray; the available intervals are 5, 15, 30, and 60 seconds, with 15 seconds as the default.
 
 ## Codex Quick Start
 
@@ -61,8 +61,12 @@ profiledeck codex profile list
 profiledeck codex config-set list
 profiledeck plan codex work
 profiledeck switch codex work --yes
+profiledeck usage sync codex
+profiledeck usage report --range 7d
 ```
 
 Codex profile switching requires file credentials. If `$CODEX_HOME/auth.json` is missing, set `cli_auth_credentials_store = "file"` in `$CODEX_HOME/config.toml` and run `codex login` again.
 
 Stored Codex auth and complete Config Set payloads are sensitive. ProfileDeck stores them locally in `profiledeck.db`; switch backups may contain previous `auth.json` and `config.toml` content.
+
+Usage analysis stays local and aggregate-only. The Desktop Usage page defaults to an API-equivalent cost trend and can switch to token trends. It does not query account quotas or infer which Profile, credential, or ChatGPT account produced a session.

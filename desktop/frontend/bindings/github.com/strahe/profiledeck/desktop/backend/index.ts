@@ -31,5 +31,7 @@ export type {
     SwitchApplyRequest,
     UpdateCodexConfigSetRequest,
     UpdateCodexProfileConfigSetRequest,
-    UpdateCodexProfileMetadataRequest
+    UpdateCodexProfileMetadataRequest,
+    UsageAutoSyncError,
+    UsageAutoSyncStatus
 } from "./models.js";

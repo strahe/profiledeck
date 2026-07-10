@@ -52,6 +52,10 @@ profiledeck doctor
 
 ## What ProfileDeck does not store
 
-ProfileDeck usage import stores derived token and cost records. It does not persist raw Codex JSONL events, prompts, completions, or API keys as usage metadata.
+ProfileDeck usage import stores derived token and cost records, validated model labels, safe or derived session identifiers for distinct counts, and hashed path-based cursor keys. It does not persist raw Codex JSONL events, prompts, completions, full source paths, or API keys as usage metadata or report output. Import errors expose at most a basename, hashed source key, and sanitized filesystem error.
+
+Usage reports expose aggregates only. Local logs cannot reliably identify the Profile, hidden credential, or ChatGPT account that served a request, so ProfileDeck does not infer or publish account-level usage.
+
+Desktop automatic-sync status contains the configured interval, timestamps, an outcome, aggregate error counts, and a redacted error code/message when needed. It does not emit session paths, cursor keys, or raw importer errors to the UI event stream.
 
 Config Set v1 does not capture skills, plugin installation caches, project `.codex/config.toml` files, or system policy.

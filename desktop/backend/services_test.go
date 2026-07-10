@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/app"
@@ -80,7 +81,7 @@ func TestSwitchApplyRequiresExpectedPlanFingerprint(t *testing.T) {
 	}
 }
 
-func TestSettingsServicePersistsLanguage(t *testing.T) {
+func TestSettingsServicePersistsDesktopPreferences(t *testing.T) {
 	ctx := context.Background()
 	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil)
 	if _, err := services.App.Initialize(ctx); err != nil {
@@ -91,16 +92,67 @@ func TestSettingsServicePersistsLanguage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected settings get to succeed, got %v", err)
 	}
-	if initial.Language != app.DesktopLanguageAuto {
-		t.Fatalf("expected default language auto, got %q", initial.Language)
+	if initial.Language != app.DesktopLanguageAuto || initial.UsageSyncIntervalSeconds != app.DesktopUsageSyncIntervalDefault {
+		t.Fatalf("unexpected default settings: %#v", initial)
 	}
 
-	updated, err := services.Settings.Update(ctx, app.UpdateDesktopSettingsRequest{Language: app.DesktopLanguageEnUS})
+	language := app.DesktopLanguageEnUS
+	updated, err := services.Settings.Update(ctx, app.UpdateDesktopSettingsRequest{Language: &language})
 	if err != nil {
 		t.Fatalf("expected settings update to succeed, got %v", err)
 	}
-	if updated.Language != app.DesktopLanguageEnUS {
-		t.Fatalf("expected en-US, got %q", updated.Language)
+	if updated.Language != app.DesktopLanguageEnUS || updated.UsageSyncIntervalSeconds != app.DesktopUsageSyncIntervalDefault {
+		t.Fatalf("unexpected language update: %#v", updated)
+	}
+
+	interval := 30
+	updated, err = services.Settings.Update(ctx, app.UpdateDesktopSettingsRequest{UsageSyncIntervalSeconds: &interval})
+	if err != nil {
+		t.Fatalf("expected interval update to succeed, got %v", err)
+	}
+	if updated.Language != app.DesktopLanguageEnUS || updated.UsageSyncIntervalSeconds != interval {
+		t.Fatalf("unexpected interval update: %#v", updated)
+	}
+	if status := services.Usage.AutoSyncStatus(ctx); status.IntervalSeconds != interval || status.Outcome != UsageAutoSyncOutcomeIdle {
+		t.Fatalf("expected runtime interval update, got %#v", status)
+	}
+}
+
+func TestSettingsServiceKeepsConcurrentIntervalUpdatesConsistent(t *testing.T) {
+	ctx := context.Background()
+	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil)
+	if _, err := services.App.Initialize(ctx); err != nil {
+		t.Fatalf("expected initialize to succeed, got %v", err)
+	}
+
+	start := make(chan struct{})
+	errorsByUpdate := make(chan error, 4)
+	var wg sync.WaitGroup
+	for _, interval := range []int{5, 15, 30, 60} {
+		interval := interval
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := services.Settings.Update(ctx, app.UpdateDesktopSettingsRequest{UsageSyncIntervalSeconds: &interval})
+			errorsByUpdate <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errorsByUpdate)
+	for err := range errorsByUpdate {
+		if err != nil {
+			t.Fatalf("expected concurrent interval update to succeed, got %v", err)
+		}
+	}
+
+	persisted, err := services.Settings.Get(ctx)
+	if err != nil {
+		t.Fatalf("expected settings reload to succeed, got %v", err)
+	}
+	if runtime := services.Usage.AutoSyncStatus(ctx); runtime.IntervalSeconds != persisted.UsageSyncIntervalSeconds {
+		t.Fatalf("expected persisted and runtime intervals to match, persisted=%#v runtime=%#v", persisted, runtime)
 	}
 }
 
@@ -490,6 +542,26 @@ func TestCodexConfigSetServiceCRUDAndNotifications(t *testing.T) {
 		if event.Kind != DesktopChangeCodexConfigSetChanged || event.Status != DesktopChangeStatusSuccess || !event.ConfigSetsChanged || event.ProfileChanged || event.ActiveStateChanged {
 			t.Fatalf("unexpected Config Set event: %#v", event)
 		}
+	}
+}
+
+func TestUsageReportServiceDefaultsAndValidatesRange(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	if err := Bootstrap(ctx, Environment{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected bootstrap to succeed, got %v", err)
+	}
+	service := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir}, nil).Usage
+
+	report, err := service.Report(ctx, "", "")
+	if err != nil {
+		t.Fatalf("expected default usage report, got %v", err)
+	}
+	if report.ProviderID != codexconfig.ProviderID || report.Range.Preset != app.UsageRange7Days || len(report.Trend) != 7 {
+		t.Fatalf("unexpected default usage report: %#v", report)
+	}
+	if _, err := service.Report(ctx, codexconfig.ProviderID, "14d"); err == nil {
+		t.Fatalf("expected invalid usage report range to fail")
 	}
 }
 

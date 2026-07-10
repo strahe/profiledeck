@@ -3,6 +3,9 @@ package usage
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -28,6 +31,13 @@ func DefaultCodexDir() (string, error) {
 }
 
 func ListCodexSessionFiles(codexDir string) ([]SourceFile, error) {
+	return ListCodexSessionFilesContext(context.Background(), codexDir)
+}
+
+func ListCodexSessionFilesContext(ctx context.Context, codexDir string) ([]SourceFile, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	codexDir = strings.TrimSpace(codexDir)
 	if codexDir == "" {
 		defaultDir, err := DefaultCodexDir()
@@ -37,16 +47,33 @@ func ListCodexSessionFiles(codexDir string) ([]SourceFile, error) {
 		codexDir = defaultDir
 	}
 
-	sessionsDir := filepath.Join(codexDir, "sessions")
-	if _, err := os.Stat(sessionsDir); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
+	var files []SourceFile
+	if err := collectCodexSessionTree(ctx, filepath.Join(codexDir, "sessions"), &files); err != nil {
 		return nil, err
 	}
+	if err := collectArchivedCodexSessions(ctx, filepath.Join(codexDir, "archived_sessions"), &files); err != nil {
+		return nil, err
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Path < files[j].Path
+	})
+	return files, nil
+}
 
-	var files []SourceFile
-	err := filepath.WalkDir(sessionsDir, func(path string, entry fs.DirEntry, walkErr error) error {
+func collectCodexSessionTree(ctx context.Context, sessionsDir string, files *[]SourceFile) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := os.Stat(sessionsDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return filepath.WalkDir(sessionsDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -57,11 +84,14 @@ func ListCodexSessionFiles(codexDir string) ([]SourceFile, error) {
 		if err != nil {
 			return err
 		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
 		sourceKey, err := SourceKey(path)
 		if err != nil {
 			return err
 		}
-		files = append(files, SourceFile{
+		*files = append(*files, SourceFile{
 			Path:           path,
 			SourceKey:      sourceKey,
 			ModifiedUnixMS: info.ModTime().UnixMilli(),
@@ -69,20 +99,60 @@ func ListCodexSessionFiles(codexDir string) ([]SourceFile, error) {
 		})
 		return nil
 	})
-	if err != nil {
-		return nil, err
+}
+
+func collectArchivedCodexSessions(ctx context.Context, archivedDir string, files *[]SourceFile) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files, nil
+	entries, err := os.ReadDir(archivedDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".jsonl") {
+			continue
+		}
+		path := filepath.Join(archivedDir, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		sourceKey, err := SourceKey(path)
+		if err != nil {
+			return err
+		}
+		*files = append(*files, SourceFile{
+			Path:           path,
+			SourceKey:      sourceKey,
+			ModifiedUnixMS: info.ModTime().UnixMilli(),
+			SizeBytes:      info.Size(),
+		})
+	}
+	return nil
 }
 
 func ParseCodexSessionFile(file SourceFile) (FileParseResult, error) {
-	return parseCodexSessionFile(file, maxCodexSessionLineBytes)
+	return ParseCodexSessionFileContext(context.Background(), file)
 }
 
-func parseCodexSessionFile(file SourceFile, maxLineBytes int) (FileParseResult, error) {
+func ParseCodexSessionFileContext(ctx context.Context, file SourceFile) (FileParseResult, error) {
+	return parseCodexSessionFile(ctx, file, maxCodexSessionLineBytes)
+}
+
+func parseCodexSessionFile(ctx context.Context, file SourceFile, maxLineBytes int) (FileParseResult, error) {
+	if err := ctx.Err(); err != nil {
+		return FileParseResult{}, err
+	}
 	handle, err := os.Open(file.Path)
 	if err != nil {
 		return FileParseResult{}, err
@@ -94,11 +164,18 @@ func parseCodexSessionFile(file SourceFile, maxLineBytes int) (FileParseResult, 
 
 	sessionID := strings.TrimSuffix(filepath.Base(file.Path), filepath.Ext(file.Path))
 	hasLogSessionID := false
-	model := ""
+	modelIdentity := ""
+	modelForStorage := ""
+	modelForPricing := ""
 	previousTotals := map[string]TokenCounts{}
 	var lineIndex int64
 	for {
-		rawLine, tooLong, err := readCodexSessionLine(reader, maxLineBytes)
+		// Background imports must remain cancellable while scanning large local
+		// session files so Desktop shutdown and per-run deadlines can complete.
+		if err := ctx.Err(); err != nil {
+			return FileParseResult{}, err
+		}
+		rawLine, tooLong, err := readCodexSessionLine(ctx, reader, maxLineBytes)
 		if errors.Is(err, io.EOF) {
 			break
 		}
@@ -134,8 +211,10 @@ func parseCodexSessionFile(file SourceFile, maxLineBytes int) (FileParseResult, 
 			sessionID = found
 			hasLogSessionID = true
 		}
-		if found := modelFromObject(object); found != "" {
-			model = found
+		if found := modelFromObject(object); found.Identity != "" {
+			modelIdentity = found.Identity
+			modelForStorage = found.Stored
+			modelForPricing = found.Pricing
 		}
 
 		counts, usageKind, cumulative, ok := tokenCountsFromObject(object)
@@ -163,14 +242,15 @@ func parseCodexSessionFile(file SourceFile, maxLineBytes int) (FileParseResult, 
 			continue
 		}
 
-		costMicros, costStatus := EstimateCostMicros(model, delta)
+		sessionIdentity := eventIdentitySessionID(sessionID, file.SourceKey, hasLogSessionID)
+		costMicros, costStatus := EstimateCostMicros(modelForPricing, delta)
 		result.Events = append(result.Events, Event{
-			ID:                  EventID(ProviderCodex, SourceCodexSessionJSONL, lineIndex, eventIdentitySessionID(sessionID, file.SourceKey, hasLogSessionID), model, delta),
+			ID:                  EventID(ProviderCodex, SourceCodexSessionJSONL, lineIndex, sessionIdentity, modelIdentity, delta),
 			ProviderID:          ProviderCodex,
 			Source:              SourceCodexSessionJSONL,
 			SourceKey:           file.SourceKey,
-			SessionID:           sessionID,
-			Model:               model,
+			SessionID:           storedSessionID(sessionIdentity),
+			Model:               modelForStorage,
 			OccurredAtUnixMS:    occurredAtUnixMS(object),
 			InputTokens:         delta.InputTokens,
 			CachedInputTokens:   delta.CachedInputTokens,
@@ -184,13 +264,16 @@ func parseCodexSessionFile(file SourceFile, maxLineBytes int) (FileParseResult, 
 	return result, nil
 }
 
-func readCodexSessionLine(reader *bufio.Reader, limit int) ([]byte, bool, error) {
+func readCodexSessionLine(ctx context.Context, reader *bufio.Reader, limit int) ([]byte, bool, error) {
 	if limit <= 0 {
 		limit = maxCodexSessionLineBytes
 	}
 
 	var line []byte
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		fragment, err := reader.ReadSlice('\n')
 		if len(fragment) > 0 {
 			if len(line)+len(fragment) > limit {
@@ -198,7 +281,7 @@ func readCodexSessionLine(reader *bufio.Reader, limit int) ([]byte, bool, error)
 				case err == nil || errors.Is(err, io.EOF):
 					return nil, true, nil
 				case errors.Is(err, bufio.ErrBufferFull):
-					if discardErr := discardCodexSessionLine(reader); discardErr != nil {
+					if discardErr := discardCodexSessionLine(ctx, reader); discardErr != nil {
 						return nil, false, discardErr
 					}
 					return nil, true, nil
@@ -225,8 +308,11 @@ func readCodexSessionLine(reader *bufio.Reader, limit int) ([]byte, bool, error)
 	}
 }
 
-func discardCodexSessionLine(reader *bufio.Reader) error {
+func discardCodexSessionLine(ctx context.Context, reader *bufio.Reader) error {
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		_, err := reader.ReadSlice('\n')
 		switch {
 		case err == nil:
@@ -356,30 +442,49 @@ func sessionIDFromObject(object map[string]any, eventType string) string {
 	return ""
 }
 
-func modelFromObject(object map[string]any) string {
+type codexModel struct {
+	Identity string
+	Stored   string
+	Pricing  string
+}
+
+func modelFromObject(object map[string]any) codexModel {
 	for _, holder := range []map[string]any{object} {
 		if value := modelFromMap(holder); value != "" {
-			return normalizeCodexModel(value)
+			return codexModelFromValue(value)
 		}
 	}
 
 	if payload, ok := objectField(object, "payload"); ok {
 		if value := modelFromMap(payload); value != "" {
-			return normalizeCodexModel(value)
+			return codexModelFromValue(value)
 		}
 		if info, ok := objectField(payload, "info"); ok {
 			if value := modelFromMap(info); value != "" {
-				return normalizeCodexModel(value)
+				return codexModelFromValue(value)
 			}
 		}
 	}
 
 	if context, ok := objectField(object, "context"); ok {
 		if value := modelFromMap(context); value != "" {
-			return normalizeCodexModel(value)
+			return codexModelFromValue(value)
 		}
 	}
-	return ""
+	return codexModel{}
+}
+
+func codexModelFromValue(value string) codexModel {
+	exact := pricingModelID(value)
+	// Event identity retains the v1 normalization rules so tightening pricing or
+	// display labels never changes existing IDs and duplicates appended files.
+	identity := normalizeCodexModel(value)
+	stored := storedModelName(exact)
+	pricing := exact
+	if stored == "unknown" {
+		pricing = ""
+	}
+	return codexModel{Identity: identity, Stored: stored, Pricing: pricing}
 }
 
 func modelFromMap(object map[string]any) string {
@@ -584,8 +689,48 @@ func (tokens *TokenCounts) normalizeTotal() {
 func (tokens TokenCounts) valid() bool {
 	return tokens.InputTokens >= 0 &&
 		tokens.CachedInputTokens >= 0 &&
+		tokens.CachedInputTokens <= tokens.InputTokens &&
 		tokens.OutputTokens >= 0 &&
 		tokens.TotalTokens >= 0
+}
+
+func storedModelName(value string) string {
+	if value == "" {
+		return ""
+	}
+	if len(value) > 200 || !isSafeUsageIdentifier(value, true) {
+		return "unknown"
+	}
+	return value
+}
+
+func storedSessionID(identity string) string {
+	if identity == "" {
+		return ""
+	}
+	if len(identity) <= 256 && isSafeUsageIdentifier(identity, false) {
+		return identity
+	}
+	sum := sha256.Sum256([]byte(identity))
+	return "derived-" + hex.EncodeToString(sum[:])
+}
+
+func isSafeUsageIdentifier(value string, model bool) bool {
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' {
+			continue
+		}
+		switch character {
+		case '.', '_', '-', ':':
+			continue
+		case '/', '@':
+			if model {
+				continue
+			}
+		}
+		return false
+	}
+	return value != ""
 }
 
 func (tokens TokenCounts) empty() bool {

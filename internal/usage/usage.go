@@ -8,6 +8,7 @@ import (
 	"math"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 )
 
@@ -15,8 +16,12 @@ const (
 	ProviderCodex             = "codex"
 	SourceCodexSessionJSONL   = "codex-session-jsonl"
 	CostStatusEstimated       = "estimated"
+	CostStatusPartial         = "partial"
 	CostStatusUnknown         = "unknown"
 	CodexSessionParserVersion = "codex-session-jsonl-v1"
+	PricingBasis              = "openai-standard-api"
+	PricingSourceURL          = "https://developers.openai.com/api/docs/pricing"
+	PricingVerifiedAt         = "2026-07-10"
 )
 
 type TokenCounts struct {
@@ -59,14 +64,20 @@ type FileParseResult struct {
 type Price struct {
 	InputMicrosPerMillion       int64
 	CachedInputMicrosPerMillion *int64
+	CacheWriteMicrosPerMillion  *int64
 	OutputMicrosPerMillion      int64
 }
 
-// Static price source: OpenAI API pricing, accessed 2026-07-06.
+// Static price source: OpenAI API pricing, accessed 2026-07-10.
 // These local estimates use Standard API prices. For models with multiple
 // context tiers, the table uses the short-context rate until Codex logs expose
 // enough billing context to select batch, flex, priority, or long-context rates.
+// GPT-5.6 logs do not expose cache-write tokens, so their stored amount is the
+// verifiable input/cache-read/output subtotal and remains explicitly partial.
 var staticPrices = map[string]Price{
+	"gpt-5.6-sol":   priceWithCacheWrite(5_000_000, 500_000, 6_250_000, 30_000_000),
+	"gpt-5.6-terra": priceWithCacheWrite(2_500_000, 250_000, 3_125_000, 15_000_000),
+	"gpt-5.6-luna":  priceWithCacheWrite(1_000_000, 100_000, 1_250_000, 6_000_000),
 	"gpt-5.5":       price(5_000_000, 500_000, 30_000_000),
 	"gpt-5.5-pro":   priceWithoutCached(30_000_000, 180_000_000),
 	"gpt-5.4":       price(2_500_000, 250_000, 15_000_000),
@@ -75,10 +86,20 @@ var staticPrices = map[string]Price{
 	"gpt-5.4-pro":   priceWithoutCached(30_000_000, 180_000_000),
 	"chat-latest":   price(5_000_000, 500_000, 30_000_000),
 	"gpt-5.3-codex": price(1_750_000, 175_000, 14_000_000),
+	"gpt-5.2":       price(1_750_000, 175_000, 14_000_000),
+	"gpt-5.2-pro":   priceWithoutCached(21_000_000, 168_000_000),
+	"gpt-5.1":       price(1_250_000, 125_000, 10_000_000),
+	"gpt-5":         price(1_250_000, 125_000, 10_000_000),
+	"gpt-5-mini":    price(250_000, 25_000, 2_000_000),
+	"gpt-5-nano":    price(50_000, 5_000, 400_000),
+	"gpt-5-pro":     priceWithoutCached(15_000_000, 120_000_000),
+	"gpt-4.1":       price(2_000_000, 500_000, 8_000_000),
+	"gpt-4.1-mini":  price(400_000, 100_000, 1_600_000),
+	"gpt-4.1-nano":  price(100_000, 25_000, 400_000),
 }
 
 func EstimateCostMicros(model string, tokens TokenCounts) (*int64, string) {
-	price, ok := staticPrices[normalizeCodexModel(model)]
+	price, ok := staticPrices[pricingModelID(model)]
 	if !ok || tokens.CachedInputTokens > tokens.InputTokens {
 		return nil, CostStatusUnknown
 	}
@@ -109,7 +130,25 @@ func EstimateCostMicros(model string, tokens TokenCounts) (*int64, string) {
 	if !ok {
 		return nil, CostStatusUnknown
 	}
+	if price.CacheWriteMicrosPerMillion != nil {
+		return &cost, CostStatusPartial
+	}
 	return &cost, CostStatusEstimated
+}
+
+func PartialCostModelIDs() []string {
+	models := make([]string, 0)
+	for model, price := range staticPrices {
+		if price.CacheWriteMicrosPerMillion != nil {
+			models = append(models, model)
+		}
+	}
+	sort.Strings(models)
+	return models
+}
+
+func pricingModelID(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func price(inputMicrosPerMillion int64, cachedInputMicrosPerMillion int64, outputMicrosPerMillion int64) Price {
@@ -118,6 +157,12 @@ func price(inputMicrosPerMillion int64, cachedInputMicrosPerMillion int64, outpu
 		CachedInputMicrosPerMillion: &cachedInputMicrosPerMillion,
 		OutputMicrosPerMillion:      outputMicrosPerMillion,
 	}
+}
+
+func priceWithCacheWrite(inputMicrosPerMillion int64, cachedInputMicrosPerMillion int64, cacheWriteMicrosPerMillion int64, outputMicrosPerMillion int64) Price {
+	price := price(inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion)
+	price.CacheWriteMicrosPerMillion = &cacheWriteMicrosPerMillion
+	return price
 }
 
 func priceWithoutCached(inputMicrosPerMillion int64, outputMicrosPerMillion int64) Price {
@@ -177,13 +222,21 @@ func MetadataJSON(lineIndex int64, eventType string, usageKind string) string {
 	raw, err := json.Marshal(map[string]any{
 		"parser_version": CodexSessionParserVersion,
 		"line_index":     lineIndex,
-		"event_type":     eventType,
-		"usage_kind":     usageKind,
+		"event_type":     safeUsageMetadataLabel(eventType),
+		"usage_kind":     safeUsageMetadataLabel(usageKind),
 	})
 	if err != nil {
 		return "{}"
 	}
 	return string(raw)
+}
+
+func safeUsageMetadataLabel(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if len(value) == 0 || len(value) > 80 || !isSafeUsageIdentifier(value, false) {
+		return "unknown"
+	}
+	return value
 }
 
 func roundedTokenCostMicros(tokens int64, microsPerMillion int64) int64 {

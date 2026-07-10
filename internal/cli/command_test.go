@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/strahe/profiledeck/internal/app"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
@@ -270,6 +271,33 @@ func TestUsageSyncCodexAndSummaryJSON(t *testing.T) {
 	if summary.CostStatus != "estimated" || summary.EstimatedCostUSD == nil {
 		t.Fatalf("expected estimated cost summary, got %#v", summary)
 	}
+
+	reportOut, err := runCLI(t, "--config-dir", configDir, "usage", "report", "--json")
+	if err != nil {
+		t.Fatalf("expected default usage report to succeed, got %v", err)
+	}
+	for _, forbidden := range []string{"SECRET_PROMPT", "SECRET_KEY", codexDir} {
+		if strings.Contains(reportOut, forbidden) {
+			t.Fatalf("expected usage report output to exclude %q, got %q", forbidden, reportOut)
+		}
+	}
+	var report app.UsageReportResult
+	decodeCLIJSON(t, []byte(reportOut), &report)
+	if report.Range.Preset != app.UsageRange7Days || report.Summary.EventCount != 0 || report.Summary.UndatedEventCount != 1 || len(report.Trend) != 7 {
+		t.Fatalf("unexpected default usage report: %#v", report)
+	}
+	humanReport, err := runCLI(t, "--config-dir", configDir, "usage", "report", "--range", "all")
+	if err != nil {
+		t.Fatalf("expected human all-time usage report, got %v", err)
+	}
+	for _, expected := range []string{"Usage report", "Trend", "Models", "gpt-5.3-codex", "API"} {
+		if !strings.Contains(humanReport, expected) {
+			t.Fatalf("expected human report to contain %q, got %q", expected, humanReport)
+		}
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "usage", "report", "--range", "14d"); err == nil {
+		t.Fatalf("expected invalid usage report range to fail")
+	}
 }
 
 func TestUsageSyncCodexDefaultsToCodexHomeEnv(t *testing.T) {
@@ -293,6 +321,19 @@ func TestUsageSyncCodexDefaultsToCodexHomeEnv(t *testing.T) {
 	decodeCLIJSON(t, []byte(out), &result)
 	if result.ScannedFiles != 1 || result.ImportedEvents != 1 {
 		t.Fatalf("expected CODEX_HOME usage file to be imported, got %#v", result)
+	}
+}
+
+func TestUsageBucketLabelDistinguishesRepeatedDSTHour(t *testing.T) {
+	location, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Skipf("timezone data unavailable: %v", err)
+	}
+	resolved := app.UsageResolvedRange{BucketUnit: "hour", TimeZone: location.String()}
+	first := usageBucketLabel(resolved, time.Date(2026, time.November, 1, 8, 30, 0, 0, time.UTC).UnixMilli())
+	second := usageBucketLabel(resolved, time.Date(2026, time.November, 1, 9, 30, 0, 0, time.UTC).UnixMilli())
+	if first == second || !strings.Contains(first, "PDT") || !strings.Contains(second, "PST") {
+		t.Fatalf("expected repeated hour labels to include distinct zones, first=%q second=%q", first, second)
 	}
 }
 
