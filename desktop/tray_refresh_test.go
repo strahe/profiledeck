@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/strahe/profiledeck/desktop/backend"
 	"github.com/strahe/profiledeck/internal/app"
+	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 func TestDesktopChangeDebouncerCoalescesLatestEvent(t *testing.T) {
@@ -54,13 +57,211 @@ func TestDesktopChangeDebouncerStopCancelsPendingEvent(t *testing.T) {
 	}
 }
 
-func TestCodexProfilesReturnsSharedListError(t *testing.T) {
+func TestBuildTrayMenuUsesDashboardCodexProfiles(t *testing.T) {
+	t.Run("unavailable", func(t *testing.T) {
+		menu := buildTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{})
+
+		submenu := requireMenuSubmenu(t, menu, "Codex Profiles")
+		if got := submenu.ItemAt(0).Label(); got != trayCodexProfilesUnavailableLabel {
+			t.Fatalf("expected unavailable profile label, got %q", got)
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		menu := buildTrayMenu(dashboardWithCodexProfiles(), nil, trayMenuActions{})
+
+		submenu := requireMenuSubmenu(t, menu, "Codex Profiles")
+		if got := submenu.ItemAt(0).Label(); got != "No Codex profiles" {
+			t.Fatalf("expected empty profile label, got %q", got)
+		}
+	})
+
+	t.Run("profiles", func(t *testing.T) {
+		menu := buildTrayMenu(
+			dashboardWithCodexProfiles(
+				codexProfileSummary("work", "Work", true),
+				codexProfileSummary("personal", "", false),
+			),
+			nil,
+			trayMenuActions{},
+		)
+
+		submenu := requireMenuSubmenu(t, menu, "Codex Profiles")
+		work := submenu.ItemAt(0)
+		if got := work.Label(); got != "Work" {
+			t.Fatalf("expected named profile label, got %q", got)
+		}
+		if !work.Checked() {
+			t.Fatalf("expected active profile to be checked")
+		}
+		if got := submenu.ItemAt(1).Label(); got != "personal" {
+			t.Fatalf("expected profile id fallback label, got %q", got)
+		}
+	})
+}
+
+func TestTrayControllerRefreshDropsStaleDashboard(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	services := backend.NewServices(app.DefaultInfo(), backend.Environment{ConfigDir: t.TempDir()}, nil)
+	ui := newFakeTrayUI()
+	controller := newTrayController(ctx, services, ui)
 
-	_, err := codexProfiles(context.Background(), services, backend.DashboardResult{})
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var loads atomic.Int32
+	controller.loadDashboard = func(context.Context) (backend.DashboardResult, error) {
+		if loads.Add(1) == 1 {
+			close(firstStarted)
+			<-releaseFirst
+			return dashboardWithCodexProfiles(codexProfileSummary("old", "Old", false)), nil
+		}
+		return dashboardWithCodexProfiles(codexProfileSummary("new", "New", false)), nil
+	}
 
-	if err == nil {
-		t.Fatalf("expected Codex profile listing error")
+	controller.Refresh(nil, false)
+	select {
+	case <-firstStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("expected first refresh to start")
+	}
+
+	event := backend.DesktopChangeEvent{Kind: backend.DesktopChangeCodexProfileChanged}
+	controller.Refresh(&event, true)
+	menu := waitForMenu(t, ui)
+	submenu := requireMenuSubmenu(t, menu, "Codex Profiles")
+	if got := submenu.ItemAt(0).Label(); got != "New" {
+		t.Fatalf("expected latest dashboard menu, got %q", got)
+	}
+	emitted := waitForEvent(t, ui)
+	if emitted.name != "profiledeck:dashboard-updated" {
+		t.Fatalf("expected dashboard update event, got %q", emitted.name)
+	}
+
+	close(releaseFirst)
+	select {
+	case stale := <-ui.menus:
+		t.Fatalf("expected stale refresh to be dropped, got menu %#v", stale)
+	case stale := <-ui.events:
+		t.Fatalf("expected stale refresh not to emit, got event %#v", stale)
+	case <-time.After(80 * time.Millisecond):
+	}
+}
+
+func TestTrayControllerMenuRefreshDoesNotDropPendingDashboardEvent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	services := backend.NewServices(app.DefaultInfo(), backend.Environment{ConfigDir: t.TempDir()}, nil)
+	ui := newFakeTrayUI()
+	controller := newTrayController(ctx, services, ui)
+
+	eventStarted := make(chan struct{})
+	releaseEvent := make(chan struct{})
+	var loads atomic.Int32
+	controller.loadDashboard = func(context.Context) (backend.DashboardResult, error) {
+		switch loads.Add(1) {
+		case 1:
+			close(eventStarted)
+			<-releaseEvent
+			return dashboardWithCodexProfiles(codexProfileSummary("event", "Event", false)), nil
+		case 2:
+			return dashboardWithCodexProfiles(codexProfileSummary("manual", "Manual", false)), nil
+		default:
+			return backend.DashboardResult{}, fmt.Errorf("unexpected dashboard load")
+		}
+	}
+
+	event := backend.DesktopChangeEvent{Kind: backend.DesktopChangeUsageSynced}
+	controller.Refresh(&event, true)
+	select {
+	case <-eventStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("expected event refresh to start")
+	}
+
+	controller.Refresh(nil, false)
+	menu := waitForMenu(t, ui)
+	submenu := requireMenuSubmenu(t, menu, "Codex Profiles")
+	if got := submenu.ItemAt(0).Label(); got != "Manual" {
+		t.Fatalf("expected menu-only refresh to update tray menu, got %q", got)
+	}
+
+	close(releaseEvent)
+	emitted := waitForEvent(t, ui)
+	if emitted.name != "profiledeck:dashboard-updated" {
+		t.Fatalf("expected pending dashboard event to survive menu refresh, got %q", emitted.name)
+	}
+	if len(emitted.data) != 1 {
+		t.Fatalf("expected one dashboard update payload, got %#v", emitted.data)
+	}
+	payload, ok := emitted.data[0].(backend.DashboardUpdatePayload)
+	if !ok {
+		t.Fatalf("expected dashboard update payload, got %#v", emitted.data)
+	}
+	if payload.Event.Kind != backend.DesktopChangeUsageSynced {
+		t.Fatalf("expected usage event payload, got %q", payload.Event.Kind)
+	}
+	if got := payload.Dashboard.CodexProfiles.Profiles[0].Profile.Name; got != "Event" {
+		t.Fatalf("expected event dashboard payload, got %q", got)
+	}
+	select {
+	case stale := <-ui.menus:
+		t.Fatalf("expected event refresh not to overwrite newer menu, got %#v", stale)
+	case <-time.After(80 * time.Millisecond):
+	}
+}
+
+func TestTrayControllerRefreshSetsMenuBeforeDashboardEvent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	services := backend.NewServices(app.DefaultInfo(), backend.Environment{ConfigDir: t.TempDir()}, nil)
+	ui := newFakeTrayUI()
+	controller := newTrayController(ctx, services, ui)
+	controller.loadDashboard = func(context.Context) (backend.DashboardResult, error) {
+		return dashboardWithCodexProfiles(codexProfileSummary("work", "Work", true)), nil
+	}
+
+	event := backend.DesktopChangeEvent{Kind: backend.DesktopChangeCodexProfileChanged}
+	controller.Refresh(&event, true)
+
+	if got := waitForTrayUICall(t, ui); got != "set-menu" {
+		t.Fatalf("expected SetMenu before event emit, got %q", got)
+	}
+	if got := waitForTrayUICall(t, ui); got != "emit:profiledeck:dashboard-updated" {
+		t.Fatalf("expected dashboard update emit after SetMenu, got %q", got)
+	}
+}
+
+func TestTrayControllerSyncUsageUsesActionTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	services := backend.NewServices(app.DefaultInfo(), backend.Environment{ConfigDir: t.TempDir()}, nil)
+	ui := newFakeTrayUI()
+	controller := newTrayController(ctx, services, ui)
+	checked := make(chan struct{})
+
+	controller.syncUsageCodex = func(ctx context.Context) (app.UsageSyncResult, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatalf("expected usage sync context to have a deadline")
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 || remaining > trayUsageSyncTimeout {
+			t.Fatalf("expected deadline within %s, got %s", trayUsageSyncTimeout, remaining)
+		}
+		close(checked)
+		return app.UsageSyncResult{ProviderID: codexconfig.ProviderID}, nil
+	}
+
+	controller.syncUsage()
+	select {
+	case <-checked:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("expected usage sync to run")
+	}
+	event := waitForEvent(t, ui)
+	if event.name != "profiledeck:usage-synced" {
+		t.Fatalf("expected usage synced event, got %q", event.name)
 	}
 }
 
@@ -78,5 +279,103 @@ func TestTrayErrorLabelDoesNotExposeRawError(t *testing.T) {
 		if !strings.Contains(label, "Open ProfileDeck") {
 			t.Fatalf("expected tray label to guide user to main window, got %q", label)
 		}
+	}
+}
+
+type fakeTrayEvent struct {
+	name string
+	data []any
+}
+
+type fakeTrayUI struct {
+	menus  chan *application.Menu
+	events chan fakeTrayEvent
+	calls  chan string
+}
+
+func newFakeTrayUI() *fakeTrayUI {
+	return &fakeTrayUI{
+		menus:  make(chan *application.Menu, 4),
+		events: make(chan fakeTrayEvent, 4),
+		calls:  make(chan string, 8),
+	}
+}
+
+func (ui *fakeTrayUI) SetMenu(menu *application.Menu) {
+	ui.calls <- "set-menu"
+	ui.menus <- menu
+}
+
+func (ui *fakeTrayUI) Emit(name string, data ...any) {
+	ui.calls <- "emit:" + name
+	ui.events <- fakeTrayEvent{name: name, data: data}
+}
+
+func (ui *fakeTrayUI) ShowMainWindow() {}
+
+func (ui *fakeTrayUI) HideTray() {}
+
+func (ui *fakeTrayUI) Quit() {}
+
+func waitForMenu(t *testing.T, ui *fakeTrayUI) *application.Menu {
+	t.Helper()
+	select {
+	case menu := <-ui.menus:
+		return menu
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("expected menu update")
+		return nil
+	}
+}
+
+func waitForEvent(t *testing.T, ui *fakeTrayUI) fakeTrayEvent {
+	t.Helper()
+	select {
+	case event := <-ui.events:
+		return event
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("expected emitted event")
+		return fakeTrayEvent{}
+	}
+}
+
+func waitForTrayUICall(t *testing.T, ui *fakeTrayUI) string {
+	t.Helper()
+	select {
+	case call := <-ui.calls:
+		return call
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("expected tray UI call")
+		return ""
+	}
+}
+
+func requireMenuSubmenu(t *testing.T, menu *application.Menu, label string) *application.Menu {
+	t.Helper()
+	item := menu.FindByLabel(label)
+	if item == nil {
+		t.Fatalf("expected submenu %q", label)
+	}
+	submenu := item.GetSubmenu()
+	if submenu == nil {
+		t.Fatalf("expected %q to be a submenu", label)
+	}
+	return submenu
+}
+
+func dashboardWithCodexProfiles(profiles ...app.CodexProfileSummary) backend.DashboardResult {
+	return backend.DashboardResult{
+		CodexProfiles: &app.CodexProfileListResult{Profiles: profiles},
+	}
+}
+
+func codexProfileSummary(profileID, name string, active bool) app.CodexProfileSummary {
+	return app.CodexProfileSummary{
+		Profile: app.Profile{
+			ID:   profileID,
+			Name: name,
+		},
+		ProviderID: codexconfig.ProviderID,
+		Active:     active,
 	}
 }

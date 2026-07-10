@@ -10,11 +10,9 @@ import (
 	"image/png"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/strahe/profiledeck/desktop/backend"
 	"github.com/strahe/profiledeck/internal/app"
-	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
@@ -114,16 +112,17 @@ func setupTray(ctx context.Context, wailsApp *application.App, mainWindow *appli
 	tray.SetIconPosition(application.NSImageOnly)
 	tray.SetTooltip(app.ProductName)
 	tray.AttachWindow(mainWindow).WindowOffset(10)
-	tray.OnClick(func() {
-		showMainWindow(mainWindow)
-	})
 
-	refresh := func() {
-		refreshTrayDashboard(ctx, wailsApp, mainWindow, tray, services, nil, false)
-	}
-	dashboard, dashboardErr := services.App.Dashboard(ctx)
-	tray.SetMenu(buildTrayMenu(ctx, wailsApp, mainWindow, tray, services, dashboard, dashboardErr, refresh))
-	cleanupTrayRefresh := subscribeTrayRefresh(ctx, wailsApp, mainWindow, tray, services)
+	controller := newTrayController(ctx, services, wailsTrayUI{
+		app:    wailsApp,
+		window: mainWindow,
+		tray:   tray,
+	})
+	tray.OnClick(func() {
+		runTrayAction(controller.openMainWindow)
+	})
+	controller.Refresh(nil, false)
+	cleanupTrayRefresh := subscribeTrayRefresh(services, controller)
 	wailsApp.OnShutdown(cleanupTrayRefresh)
 }
 
@@ -134,157 +133,6 @@ func hideMainWindowOnUserClose(window *application.WebviewWindow) {
 		event.Cancel()
 		window.Hide()
 	})
-}
-
-func refreshTrayDashboard(ctx context.Context, wailsApp *application.App, mainWindow *application.WebviewWindow, tray *application.SystemTray, services backend.Services, event *backend.DesktopChangeEvent, emit bool) {
-	dashboard, dashboardErr := services.App.Dashboard(ctx)
-	application.InvokeAsync(func() {
-		refresh := func() {
-			refreshTrayDashboard(ctx, wailsApp, mainWindow, tray, services, nil, false)
-		}
-		tray.SetMenu(buildTrayMenu(ctx, wailsApp, mainWindow, tray, services, dashboard, dashboardErr, refresh))
-		if emit && event != nil {
-			payload := backend.DashboardUpdatePayload{Event: *event, Dashboard: dashboard}
-			if dashboardErr != nil {
-				payload.Error = backend.FormatDesktopErrorPtr(dashboardErr)
-			}
-			wailsApp.Event.Emit("profiledeck:dashboard-updated", payload)
-		}
-	})
-}
-
-func buildTrayMenu(ctx context.Context, wailsApp *application.App, mainWindow *application.WebviewWindow, tray *application.SystemTray, services backend.Services, dashboard backend.DashboardResult, dashboardErr error, refresh func()) *application.Menu {
-	menu := wailsApp.NewMenu()
-	if dashboardErr != nil {
-		menu.Add("ProfileDeck: unavailable").SetEnabled(false)
-		menu.Add(trayErrorLabel(dashboardErr, trayDashboardUnavailableLabel)).SetEnabled(false)
-	} else {
-		menu.Add(currentProfileLabel(dashboard)).SetEnabled(false)
-		if missingID := missingActiveCodexProfileID(dashboard); missingID != "" {
-			menu.Add("Missing active profile: " + missingID).SetEnabled(false)
-		}
-	}
-	menu.AddSeparator()
-	menu.Add("Open ProfileDeck").OnClick(func(*application.Context) {
-		showMainWindow(mainWindow)
-	})
-	menu.Add("Run Doctor").OnClick(func(*application.Context) {
-		showMainWindow(mainWindow)
-		wailsApp.Event.Emit("profiledeck:open-doctor")
-	})
-	menu.Add("Sync Usage").OnClick(func(*application.Context) {
-		go func() {
-			result, syncErr := services.Usage.SyncCodex(ctx)
-			application.InvokeAsync(func() {
-				if syncErr != nil {
-					wailsApp.Event.Emit("profiledeck:operation-error", backend.FormatDesktopError(syncErr))
-					showMainWindow(mainWindow)
-					return
-				}
-				wailsApp.Event.Emit("profiledeck:usage-synced", result)
-			})
-		}()
-	})
-
-	profilesMenu := menu.AddSubmenu("Codex Profiles")
-	profiles, profilesErr := codexProfiles(ctx, services, dashboard)
-	if profilesErr != nil {
-		profilesMenu.Add(trayErrorLabel(profilesErr, trayCodexProfilesUnavailableLabel)).SetEnabled(false)
-	} else if len(profiles) == 0 {
-		profilesMenu.Add("No Codex profiles").SetEnabled(false)
-	} else {
-		for _, profile := range profiles {
-			profile := profile
-			label := profile.Profile.Name
-			if label == "" {
-				label = profile.Profile.ID
-			}
-			item := profilesMenu.Add(label)
-			if profile.Active {
-				item.SetChecked(true)
-			}
-			item.OnClick(func(*application.Context) {
-				showMainWindow(mainWindow)
-				wailsApp.Event.Emit("profiledeck:open-switch", map[string]string{
-					"provider_id": codexconfig.ProviderID,
-					"profile_id":  profile.Profile.ID,
-				})
-			})
-		}
-	}
-
-	menu.AddSeparator()
-	menu.Add("Refresh Menu").OnClick(func(*application.Context) {
-		refresh()
-	})
-	menu.Add("Quit").OnClick(func(*application.Context) {
-		tray.Hide()
-		wailsApp.Quit()
-	})
-	return menu
-}
-
-func subscribeTrayRefresh(ctx context.Context, wailsApp *application.App, mainWindow *application.WebviewWindow, tray *application.SystemTray, services backend.Services) func() {
-	const debounce = 120 * time.Millisecond
-	debouncer := newDesktopChangeDebouncer(debounce, func(event backend.DesktopChangeEvent) {
-		refreshTrayDashboard(ctx, wailsApp, mainWindow, tray, services, &event, true)
-	})
-
-	unsubscribe := services.SubscribeChanges(func(event backend.DesktopChangeEvent) {
-		debouncer.Notify(event)
-	})
-	return func() {
-		unsubscribe()
-		debouncer.Stop()
-	}
-}
-
-func trayErrorLabel(err error, fallback string) string {
-	if err == nil {
-		return ""
-	}
-	return fallback
-}
-
-func codexProfiles(ctx context.Context, services backend.Services, _ backend.DashboardResult) ([]app.CodexProfileSummary, error) {
-	result, err := services.Codex.ListProfiles(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return result.Profiles, nil
-}
-
-func currentProfileLabel(dashboard backend.DashboardResult) string {
-	for _, state := range dashboard.ActiveStates {
-		if state.ProviderID != codexconfig.ProviderID {
-			continue
-		}
-		name := state.ProfileName
-		if name == "" {
-			name = state.ProfileID
-		}
-		if name == "" {
-			return "Current: Codex not active"
-		}
-		if !state.ProfileAvailable {
-			return "Current: missing profile " + name
-		}
-		return "Current: " + name
-	}
-	return "Current: Codex not active"
-}
-
-func missingActiveCodexProfileID(dashboard backend.DashboardResult) string {
-	for _, state := range dashboard.ActiveStates {
-		if state.ProviderID == codexconfig.ProviderID && state.ProfileID != "" && !state.ProfileAvailable {
-			return state.ProfileID
-		}
-	}
-	return ""
-}
-
-func showMainWindow(window application.Window) {
-	window.Show().Focus()
 }
 
 func trayTemplateIcon() []byte {

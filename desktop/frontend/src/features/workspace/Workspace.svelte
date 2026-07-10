@@ -307,7 +307,6 @@
 			Events.On("profiledeck:usage-synced", (event) => {
 				usageSyncResult = event.data ?? null;
 				showNotice(t("notice.usageSynced.title"), t("notice.usageSynced.codexDescription"));
-				void refreshUsage();
 			}),
 			Events.On("profiledeck:dashboard-updated", (event) => {
 				handleDashboardUpdate(event.data as DashboardUpdatePayload);
@@ -788,16 +787,8 @@
 
 	async function refreshLightForEvent(event: DesktopChangeEvent | null | undefined) {
 		if (!event) return;
-		if (
-			event.kind === desktopChangeKind.switchApplied ||
-			event.kind === desktopChangeKind.rollbackApplied ||
-			event.kind === desktopChangeKind.switchRecovered
-		) {
-			await Promise.allSettled([refreshCodexProfiles(), refreshDashboard()]);
-		}
-		if (event.kind === desktopChangeKind.usageSynced) await refreshUsage();
 		if (event.kind === desktopChangeKind.codexProfileChanged) {
-			await Promise.allSettled([refreshDetect(), refreshCodexProfiles(), refreshDashboard(), refreshUsage()]);
+			await refreshDetect();
 		}
 		updateRefreshSummary();
 	}
