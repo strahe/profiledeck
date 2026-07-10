@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/targetfs"
 )
@@ -53,6 +54,78 @@ func TestDoctorHealthyDatabaseReportsOK(t *testing.T) {
 	}
 	if result.OverallLevel != DoctorLevelOK || len(result.Operations) != 0 || result.Lock.Exists {
 		t.Fatalf("expected clean doctor result, got %#v", result)
+	}
+}
+
+func TestDoctorReportsCodexPresetAndBindingFailures(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"tokens":{"account_id":"work","access_token":"token"}}`)
+	created, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: configDir, CodexDir: codexDir, ProfileID: "work"})
+	if err != nil {
+		t.Fatalf("expected profile create to succeed, got %v", err)
+	}
+
+	db, err := openHealthyStore(ctx, configDir, false)
+	if err != nil {
+		t.Fatalf("expected writable store, got %v", err)
+	}
+	provider, err := db.GetProvider(ctx, codexconfig.ProviderID)
+	if err != nil {
+		t.Fatalf("expected Codex provider, got %v", err)
+	}
+	metadata, err := codexpreset.DecodeProviderMetadata(provider.MetadataJSON)
+	if err != nil {
+		t.Fatalf("expected provider metadata, got %v", err)
+	}
+	metadata.PresetVersion = 1
+	metadataRaw, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatalf("expected provider metadata encode, got %v", err)
+	}
+	metadataJSON := string(metadataRaw)
+	if _, err := db.UpdateProvider(ctx, store.UpdateProviderParams{ID: codexconfig.ProviderID, MetadataJSON: &metadataJSON}); err != nil {
+		t.Fatalf("expected provider metadata update, got %v", err)
+	}
+	targets, err := db.ListProfileTargets(ctx, "work", codexconfig.ProviderID, true)
+	if err != nil {
+		t.Fatalf("expected Codex targets, got %v", err)
+	}
+	var configTarget store.ProfileTarget
+	for _, target := range targets {
+		if target.TargetID == codexconfig.TargetID {
+			configTarget = target
+		}
+		if err := db.DeleteProfileTarget(ctx, "work", codexconfig.ProviderID, target.TargetID); err != nil {
+			t.Fatalf("expected target delete, got %v", err)
+		}
+	}
+	if err := db.DeleteProviderConfigSet(ctx, created.Summary.ConfigSetID); err != nil {
+		t.Fatalf("expected config set delete, got %v", err)
+	}
+	if _, err := db.CreateProfileTarget(ctx, store.CreateProfileTargetParams{
+		ProfileID: "work", ProviderID: codexconfig.ProviderID, TargetID: configTarget.TargetID,
+		Path: configTarget.Path, PathKey: configTarget.PathKey, Format: configTarget.Format, Strategy: configTarget.Strategy,
+		ValueJSON: configTarget.ValueJSON, Enabled: true, MetadataJSON: configTarget.MetadataJSON,
+	}); err != nil {
+		t.Fatalf("expected missing-resource config binding setup, got %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("expected store close, got %v", err)
+	}
+
+	result, err := Doctor(ctx, DoctorRequest{ConfigDir: configDir})
+	if err != nil {
+		t.Fatalf("expected doctor to succeed, got %v", err)
+	}
+	for _, findingID := range []string{"codex_preset_v2_invalid", "codex_login_binding_missing", "codex_config_set_invalid"} {
+		if !hasDoctorFinding(result.Findings, findingID) {
+			t.Fatalf("expected %s finding, got %#v", findingID, result.Findings)
+		}
 	}
 }
 

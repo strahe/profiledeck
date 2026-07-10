@@ -1,24 +1,22 @@
 <script lang="ts">
 	import { onDestroy, tick } from "svelte";
-	import { type CancellablePromise } from "@wailsio/runtime";
+	import type { CancellablePromise } from "@wailsio/runtime";
 	import { push } from "svelte-spa-router";
 	import { _, locale } from "svelte-i18n";
 	import { toast } from "svelte-sonner";
 	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
-	import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
-	import CheckCircleIcon from "@lucide/svelte/icons/circle-check";
-	import GitForkIcon from "@lucide/svelte/icons/git-fork";
-	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-	import SaveIcon from "@lucide/svelte/icons/save";
 
 	import { CodexService, SwitchService } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type {
+		CopyCodexConfigSetRequest,
+		CreateCodexConfigSetRequest,
 		CreateCodexProfileRequest,
 		ForkCodexProfileRequest,
-		SyncCodexProfileRequest,
+		UpdateCodexConfigSetRequest,
 		UpdateCodexProfileMetadataRequest,
 	} from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type {
+		CodexConfigSet,
 		CodexDetectResult,
 		CodexProfileDetail,
 		CodexProfileSaveResult,
@@ -27,50 +25,30 @@
 	} from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
 
 	import * as Alert from "$lib/components/ui/alert";
-	import * as Breadcrumb from "$lib/components/ui/breadcrumb";
-	import * as Card from "$lib/components/ui/card";
+	import * as AlertDialog from "$lib/components/ui/alert-dialog";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import * as Field from "$lib/components/ui/field";
-	import * as RadioGroup from "$lib/components/ui/radio-group";
-	import { Badge } from "$lib/components/ui/badge";
+	import * as Select from "$lib/components/ui/select";
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
-	import { Separator } from "$lib/components/ui/separator";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { Spinner } from "$lib/components/ui/spinner";
 	import { Textarea } from "$lib/components/ui/textarea";
-	import { desktopErrorCode, desktopErrorDetails, desktopErrorMessage, isCancelError, isDesktopErrorCode } from "$lib/desktop-errors";
+	import { desktopErrorMessage, isCancelError, isDesktopErrorCode } from "$lib/desktop-errors";
 	import { currentDesktopLocale, translate } from "$lib/i18n";
 
+	import ConfigSetDialog from "./ConfigSetDialog.svelte";
+	import ConfigSetPage from "./ConfigSetPage.svelte";
 	import ProfileDetail from "./ProfileDetail.svelte";
-	import ProfileForm from "./ProfileForm.svelte";
+	import ProfileEditorPage from "./ProfileEditorPage.svelte";
 	import ProfileList from "./ProfileList.svelte";
 	import UseProfileDialog from "./UseProfileDialog.svelte";
-	import type {
-		CodexForkAuthBinding,
-		CodexProfileListItem,
-		CodexProfileRoute,
-		CodexSyncAuthUpdate,
-		ProfileUseRequest,
-	} from "./types";
+	import type { CodexForkBinding, CodexProfileListItem, CodexProfileRoute, ConfigSetDialogState, ProfileUseRequest } from "./types";
 
-	let {
-		route,
-		profiles,
-		detectResult,
-		activeProfileID,
-		loadingProfiles,
-		profileError,
-		useRequest,
-		refreshDetect,
-		refreshProfiles,
-		cancelDetect,
-		onUseRequestHandled,
-		showError,
-		showNotice,
-	}: {
+	interface Props {
 		route: CodexProfileRoute;
 		profiles: CodexProfileSummary[];
+		dashboardConfigSets: CodexConfigSet[];
 		detectResult: CodexDetectResult | null;
 		activeProfileID: string;
 		loadingProfiles: boolean;
@@ -82,7 +60,9 @@
 		onUseRequestHandled: (sequence: number) => void;
 		showError: (value: unknown) => void;
 		showNotice: (title: string, description: string) => void;
-	} = $props();
+	}
+
+	let { route, profiles, dashboardConfigSets, detectResult, activeProfileID, loadingProfiles, profileError, useRequest, refreshDetect, refreshProfiles, cancelDetect, onUseRequestHandled, showError, showNotice }: Props = $props();
 
 	const codexProviderID = "codex";
 	const inFlight = new Map<string, CancellablePromise<unknown>>();
@@ -91,26 +71,31 @@
 	let detail = $state<CodexProfileDetail | null>(null);
 	let detailLoading = $state(false);
 	let detailError = $state("");
-	let lastRouteKey = "";
-	let detailSequence = 0;
-	let sourceDetecting = $state(false);
+	let routeKey = "";
+	let routeSequence = 0;
 
 	let profileID = $state("");
 	let profileName = $state("");
 	let profileDescription = $state("");
 	let formSubmitted = $state(false);
-	let forkAuthBinding = $state<CodexForkAuthBinding>("share-parent");
+	let configMode = $state<"reuse" | "new">("reuse");
+	let credentialBinding = $state<CodexForkBinding>("copy-new");
+	let configBinding = $state<CodexForkBinding>("share-parent");
+	let newConfigSetID = $state("");
+	let newConfigSetName = $state("");
+
+	let configSets = $state<CodexConfigSet[]>([]);
+	let configSetsLoading = $state(false);
+	let configSetsError = $state("");
+	let configDialogOpen = $state(false);
+	let configDialog = $state<ConfigSetDialogState>({ mode: "create", source: null });
 
 	let editOpen = $state(false);
 	let editName = $state("");
 	let editDescription = $state("");
-	let editSubmitted = $state(false);
-
-	let syncOpen = $state(false);
-	let syncStage = $state<"confirm" | "conflict">("confirm");
-	let syncAuthUpdate = $state<CodexSyncAuthUpdate | "">("");
-	let syncError = $state("");
-	let syncDetecting = $state(false);
+	let saveCurrentOpen = $state(false);
+	let setConfigOpen = $state(false);
+	let selectedConfigSetID = $state("");
 
 	let useOpen = $state(false);
 	let useProfile = $state<CodexProfileListItem | null>(null);
@@ -118,48 +103,28 @@
 	let useBuilding = $state(false);
 	let useApplying = $state(false);
 	let useInlineError = $state("");
-	let handledUseSequence = 0;
 	let useSequence = 0;
+	let handledUseSequence = 0;
 
 	let listItems = $derived.by(() => {
 		void $locale;
 		return profiles.map(profileListItem);
 	});
-	let sourceReady = $derived(
-		!!detectResult?.profiledeck_initialized &&
-			detectResult.provider_compatible &&
-			detectResult.config_status === "valid" &&
-			detectResult.auth_status === "valid",
-	);
-	let rawIDError = $derived.by(() => {
-		void $locale;
-		return validateProfileID(profileID);
-	});
-	let rawNameError = $derived.by(() => {
-		void $locale;
-		return validateOptionalName(profileName);
-	});
-	let rawDescriptionError = $derived.by(() => {
-		void $locale;
-		return validateDescription(profileDescription);
-	});
-	let formValid = $derived(!rawIDError && !rawNameError && !rawDescriptionError);
+	let rawIDError = $derived.by(() => { void $locale; return validateProfileID(profileID); });
+	let rawNameError = $derived.by(() => { void $locale; return validateOptionalName(profileName); });
+	let rawDescriptionError = $derived.by(() => { void $locale; return validateDescription(profileDescription); });
 	let displayedIDError = $derived(formSubmitted || profileID ? rawIDError : "");
 	let displayedNameError = $derived(formSubmitted || profileName ? rawNameError : "");
 	let displayedDescriptionError = $derived(formSubmitted || profileDescription ? rawDescriptionError : "");
-	let editNameError = $derived.by(() => {
-		void $locale;
-		return editSubmitted ? validateRequiredName(editName) : "";
-	});
-	let editDescriptionError = $derived.by(() => {
-		void $locale;
-		return editSubmitted ? validateDescription(editDescription) : "";
+
+	$effect(() => {
+		configSets = dashboardConfigSets;
 	});
 
 	$effect(() => {
 		const key = `${route.kind}:${route.profileID}`;
-		if (key === lastRouteKey) return;
-		lastRouteKey = key;
+		if (key === routeKey) return;
+		routeKey = key;
 		void enterRoute(route);
 	});
 
@@ -175,60 +140,52 @@
 	});
 
 	async function enterRoute(next: CodexProfileRoute) {
-		const sequence = ++detailSequence;
-		for (const key of ["profile-detail", "profile-create", "profile-fork", "profile-metadata", "profile-sync"]) cancelAction(key);
-		cancelDetect();
-		if (useOpen) closeUse();
-		editOpen = false;
-		syncOpen = false;
-		syncStage = "confirm";
-		syncAuthUpdate = "";
-		syncError = "";
+		const sequence = ++routeSequence;
+		cancelAll();
+		closeUse();
 		busyAction = "";
-		sourceDetecting = false;
 		detailError = "";
 		formSubmitted = false;
+		editOpen = false;
+		setConfigOpen = false;
 		if (next.kind === "list") {
 			detail = null;
 			resetForm();
 			return;
 		}
+		if (next.kind === "config-sets") {
+			detail = null;
+			await refreshConfigSets();
+			return;
+		}
 		if (next.kind === "new") {
 			detail = null;
 			resetForm();
-			await detectSource(sequence);
+			await refreshDetect();
 			return;
 		}
 		await loadDetail(next.profileID, next.kind === "fork", sequence);
 	}
 
-	async function detectSource(sequence = detailSequence) {
-		sourceDetecting = true;
-		try {
-			await refreshDetect();
-		} finally {
-			if (sequence === detailSequence) sourceDetecting = false;
-		}
-	}
-
-	async function loadDetail(id: string, prepareFork = false, sequence = detailSequence) {
+	async function loadDetail(id: string, prepareFork = false, sequence = routeSequence) {
 		detailLoading = true;
-		detailError = "";
 		try {
-			const next = await track("profile-detail", CodexService.ShowProfile(id));
-			if (sequence !== detailSequence) return;
-			detail = next;
+			const value = await track("profile-detail", CodexService.ShowProfile(id));
+			if (sequence !== routeSequence) return;
+			detail = value;
 			if (prepareFork) {
-				const sourceName = next.summary.profile.name || next.summary.profile.id;
-				profileID = `${next.summary.profile.id}-copy`;
-				profileName = translate("profilePages.fork.copyName", { profile: sourceName });
-				profileDescription = next.summary.profile.description || "";
-				forkAuthBinding = "share-parent";
+				profileID = `${value.summary.profile.id}-copy`;
+				profileName = translate("profilePages.fork.copyName", { profile: value.summary.profile.name || value.summary.profile.id });
+				profileDescription = value.summary.profile.description || "";
+				credentialBinding = "copy-new";
+				configBinding = "share-parent";
+				newConfigSetID = `${value.summary.profile.id}-config-copy`;
+				newConfigSetName = `${value.config_set?.name || value.summary.profile.name || value.summary.profile.id} copy`;
 			}
 		} catch (error) {
-			if (sequence === detailSequence && !isCancelError(error)) detailError = formatError(error);
+			if (sequence === routeSequence && !isCancelError(error)) detailError = formatError(error);
 		} finally {
-			if (sequence === detailSequence) detailLoading = false;
+			if (sequence === routeSequence) detailLoading = false;
 		}
 	}
 
@@ -236,48 +193,45 @@
 		profileID = "";
 		profileName = "";
 		profileDescription = "";
-		forkAuthBinding = "share-parent";
-		formSubmitted = false;
+		configMode = "reuse";
+		credentialBinding = "copy-new";
+		configBinding = "share-parent";
+		newConfigSetID = "";
+		newConfigSetName = "";
 	}
 
 	async function createProfile() {
 		formSubmitted = true;
-		if (!formValid || !sourceReady) return;
+		if (rawIDError || rawNameError || rawDescriptionError) return;
 		const request: CreateCodexProfileRequest = {
-			profile_id: profileID.trim(),
-			name: optional(profileName),
-			description: optional(profileDescription),
+			profile_id: profileID.trim(), name: optional(profileName), description: optional(profileDescription),
+			new_config_set_id: configMode === "new" ? newConfigSetID.trim() : "",
+			new_config_set_name: configMode === "new" ? optional(newConfigSetName) : null,
 		};
 		await runAction("profile-create", async () => {
 			const result = await track("profile-create", CodexService.CreateProfile(request));
 			await refreshProfiles();
 			showResultWarnings(result);
-			showNotice(
-				translate("notice.profileCreated.title"),
-				translate("notice.profileCreated.codexDescription", { profile: result.profile.name || result.profile.id }),
-			);
+			showNotice(translate("notice.profileCreated.title"), translate("notice.profileCreated.codexDescription", { profile: result.profile.name || result.profile.id }));
 			await push(`/codex/profiles/${encodeURIComponent(result.profile.id)}`);
 		});
 	}
 
 	async function forkProfile() {
 		formSubmitted = true;
-		if (!formValid || !detail) return;
+		if (!detail || rawIDError || rawNameError || rawDescriptionError) return;
 		const request: ForkCodexProfileRequest = {
-			source_profile_id: detail.summary.profile.id,
-			profile_id: profileID.trim(),
-			auth_binding: forkAuthBinding,
-			name: optional(profileName),
-			description: optional(profileDescription),
+			source_profile_id: detail.summary.profile.id, profile_id: profileID.trim(),
+			credential_binding: credentialBinding, config_binding: configBinding,
+			new_config_set_id: configBinding === "copy-new" ? newConfigSetID.trim() : "",
+			new_config_set_name: configBinding === "copy-new" ? optional(newConfigSetName) : null,
+			name: optional(profileName), description: optional(profileDescription),
 		};
 		await runAction("profile-fork", async () => {
 			const result = await track("profile-fork", CodexService.ForkProfile(request));
 			await refreshProfiles();
 			showResultWarnings(result);
-			showNotice(
-				translate("notice.profileForked.title"),
-				translate("notice.profileForked.codexDescription", { profile: result.profile.name || result.profile.id }),
-			);
+			showNotice(translate("notice.profileForked.title"), translate("notice.profileForked.codexDescription", { profile: result.profile.name || result.profile.id }));
 			await push(`/codex/profiles/${encodeURIComponent(result.profile.id)}`);
 		});
 	}
@@ -286,104 +240,85 @@
 		if (!detail) return;
 		editName = detail.summary.profile.name || detail.summary.profile.id;
 		editDescription = detail.summary.profile.description || "";
-		editSubmitted = false;
 		editOpen = true;
 	}
 
 	async function saveMetadata() {
-		if (!detail) return;
-		editSubmitted = true;
-		if (validateRequiredName(editName) || validateDescription(editDescription)) return;
-
-		const current = detail.summary.profile;
-		const nextName = editName.trim();
-		const nextDescription = editDescription.trim();
-		const request: UpdateCodexProfileMetadataRequest = { profile_id: current.id };
-		if (nextName !== current.name) request.name = nextName;
-		if (nextDescription !== current.description) request.description = nextDescription;
-		if (request.name === undefined && request.description === undefined) {
-			editOpen = false;
-			return;
-		}
-
+		if (!detail || !editName.trim()) return;
+		const request: UpdateCodexProfileMetadataRequest = { profile_id: detail.summary.profile.id, name: editName.trim(), description: optional(editDescription) };
 		await runAction("profile-metadata", async () => {
-			const updated = await track("profile-metadata", CodexService.UpdateProfileMetadata(request));
-			if (detail) {
-				detail = { ...detail, summary: { ...detail.summary, profile: updated, updated_at_unix_ms: updated.updated_at_unix_ms } };
-			}
+			await track("profile-metadata", CodexService.UpdateProfileMetadata(request));
 			editOpen = false;
-			await refreshProfiles();
+			await Promise.all([refreshProfiles(), loadDetail(detail!.summary.profile.id)]);
 			showNotice(translate("notice.profileUpdated.title"), translate("notice.profileUpdated.description"));
 		});
 	}
 
-	async function openSync() {
-		if (!detail) return;
-		syncStage = "confirm";
-		syncAuthUpdate = "";
-		syncError = "";
-		syncOpen = true;
-		syncDetecting = true;
-		try {
-			await refreshDetect();
-		} finally {
-			if (syncOpen) syncDetecting = false;
-		}
+	async function saveCurrent() {
+		await runAction("profile-save-current", async () => {
+			const result = await track("profile-save-current", CodexService.SaveActiveProfileState());
+			saveCurrentOpen = false;
+			await Promise.all([refreshProfiles(), refreshConfigSets(), detail ? loadDetail(detail.summary.profile.id) : Promise.resolve()]);
+			if (result.warnings?.length) toast.warning(translate("notice.profileWarnings.title"), { description: result.warnings.join(" ") });
+			showNotice(translate("notice.profileSaved.title"), translate("notice.profileSaved.description"));
+		});
 	}
 
-	function handleSyncOpenChange(value: boolean) {
-		syncOpen = value;
-		if (value) return;
-		cancelDetect();
-		cancelAction("profile-sync");
-		syncStage = "confirm";
-		syncAuthUpdate = "";
-		syncError = "";
-		syncDetecting = false;
-		if (busyAction === "profile-sync") busyAction = "";
+	async function openSetConfig() {
+		await refreshConfigSets();
+		selectedConfigSetID = detail?.summary.config_set_id || configSets[0]?.id || "";
+		setConfigOpen = true;
 	}
 
-	async function syncProfile() {
-		if (!detail || syncDetecting) return;
-		if (syncStage === "confirm" && !sourceReady) {
-			syncError = translate("profilePages.sync.sourceNotReady");
-			return;
-		}
-		if (syncStage === "conflict" && !syncAuthUpdate) return;
+	async function setProfileConfig() {
+		if (!detail || !selectedConfigSetID) return;
+		await runAction("profile-set-config", async () => {
+			await track("profile-set-config", CodexService.SetProfileConfig({ profile_id: detail!.summary.profile.id, config_set_id: selectedConfigSetID }));
+			setConfigOpen = false;
+			await Promise.all([refreshProfiles(), loadDetail(detail!.summary.profile.id), refreshConfigSets()]);
+		});
+	}
 
-		busyAction = "profile-sync";
-		syncError = "";
-		const request: SyncCodexProfileRequest = {
-			profile_id: detail.summary.profile.id,
-			auth_update: syncStage === "conflict" ? syncAuthUpdate : undefined,
-		};
+	async function refreshConfigSets() {
+		configSetsLoading = true;
 		try {
-			const result = await track("profile-sync", CodexService.SyncProfile(request));
-			showResultWarnings(result);
-			syncOpen = false;
-			await Promise.all([refreshProfiles(), loadDetail(result.profile.id)]);
-			showNotice(
-				translate("notice.profileSynced.title"),
-				translate("notice.profileSynced.codexDescription", { profile: result.profile.name || result.profile.id }),
-			);
+			const result = await track("config-sets", CodexService.ListConfigSets());
+			configSets = result.config_sets ?? [];
+			configSetsError = "";
 		} catch (error) {
-			if (isCancelError(error)) return;
-			if (isSharedCredentialConflict(error)) {
-				syncStage = "conflict";
-				syncAuthUpdate = "";
-				return;
-			}
-			syncError = formatError(error);
-			showError(error);
+			if (!isCancelError(error)) configSetsError = formatError(error);
 		} finally {
-			if (busyAction === "profile-sync") busyAction = "";
+			configSetsLoading = false;
 		}
 	}
 
-	function isSharedCredentialConflict(error: unknown): boolean {
-		if (desktopErrorCode(error) !== "CODEX_INVALID") return false;
-		const supported = desktopErrorDetails(error)?.supported_auth_updates;
-		return Array.isArray(supported) && supported.includes("update-shared") && supported.includes("fork-new");
+	function openConfigDialog(mode: ConfigSetDialogState["mode"], source: CodexConfigSet | null = null) {
+		configDialog = { mode, source };
+		configDialogOpen = true;
+	}
+
+	async function submitConfigDialog(value: { id: string; name: string; description: string }) {
+		await runAction("config-set-save", async () => {
+			if (configDialog.mode === "create") {
+				const request: CreateCodexConfigSetRequest = { config_set_id: value.id, name: value.name, description: value.description };
+				await track("config-set-save", CodexService.CreateConfigSet(request));
+			} else if (configDialog.mode === "copy" && configDialog.source) {
+				const request: CopyCodexConfigSetRequest = { source_config_set_id: configDialog.source.id, config_set_id: value.id, name: value.name, description: value.description };
+				await track("config-set-save", CodexService.CopyConfigSet(request));
+			} else if (configDialog.source) {
+				const request: UpdateCodexConfigSetRequest = { config_set_id: configDialog.source.id, name: value.name, description: value.description };
+				await track("config-set-save", CodexService.UpdateConfigSet(request));
+			}
+			configDialogOpen = false;
+			await Promise.all([refreshConfigSets(), refreshProfiles()]);
+		});
+	}
+
+	async function deleteConfigSet(configSet: CodexConfigSet) {
+		await runAction("config-set-delete", async () => {
+			await track("config-set-delete", CodexService.DeleteConfigSet(configSet.id));
+			await refreshConfigSets();
+		});
 	}
 
 	async function openUse(profile: CodexProfileListItem) {
@@ -396,10 +331,7 @@
 			const plan = await track("use-build", SwitchService.BuildPlan(codexProviderID, profile.id));
 			if (sequence === useSequence) usePlan = plan;
 		} catch (error) {
-			if (sequence === useSequence && !isCancelError(error)) {
-				useInlineError = formatError(error);
-				showError(error);
-			}
+			if (sequence === useSequence && !isCancelError(error)) useInlineError = formatError(error);
 		} finally {
 			if (sequence === useSequence) useBuilding = false;
 		}
@@ -412,62 +344,31 @@
 			await tick();
 			profile = listItems.find((item) => item.id === id);
 		}
-		if (!profile) {
-			showError(translate("errors.codexProfileNotFound", { profile: id }));
-			return;
-		}
-		await openUse(profile);
+		if (profile) await openUse(profile);
+		else showError(translate("errors.codexProfileNotFound", { profile: id }));
 	}
 
 	async function confirmUse() {
 		if (!useProfile || !usePlan?.plan_fingerprint) return;
 		const sequence = useSequence;
 		useApplying = true;
-		useInlineError = "";
-		const profile = useProfile;
 		try {
-			const result = await track(
-				"use-apply",
-				SwitchService.Apply({
-					provider_id: codexProviderID,
-					profile_id: profile.id,
-					expected_plan_fingerprint: usePlan.plan_fingerprint,
-					confirm: true,
-				}),
-			);
+			const result = await track("use-apply", SwitchService.Apply({ provider_id: codexProviderID, profile_id: useProfile.id, expected_plan_fingerprint: usePlan.plan_fingerprint, confirm: true }));
 			if (sequence !== useSequence) return;
 			closeUse();
-			await refreshProfiles();
-			showNotice(
-				translate("notice.profileSwitched.title"),
-				translate("notice.profileSwitched.codexDescription", { profile: result.profile.name || result.profile.id }),
-			);
+			await Promise.all([refreshProfiles(), refreshConfigSets()]);
+			showNotice(translate("notice.profileSwitched.title"), translate("notice.profileSwitched.codexDescription", { profile: result.profile.name || result.profile.id }));
 		} catch (error) {
 			if (sequence !== useSequence || isCancelError(error)) return;
 			if (isDesktopErrorCode(error, "TARGET_CHANGED")) {
 				useInlineError = translate("errors.targetChanged");
-				usePlan = null;
-				await rebuildUsePlan(profile, sequence);
-				return;
+				usePlan = await track("use-build", SwitchService.BuildPlan(codexProviderID, useProfile.id));
+			} else {
+				useInlineError = formatError(error);
+				showError(error);
 			}
-			useInlineError = formatError(error);
-			showError(error);
 		} finally {
 			if (sequence === useSequence) useApplying = false;
-		}
-	}
-
-	async function rebuildUsePlan(profile: CodexProfileListItem, sequence: number) {
-		useBuilding = true;
-		try {
-			const plan = await track("use-build", SwitchService.BuildPlan(codexProviderID, profile.id));
-			if (sequence === useSequence) usePlan = plan;
-		} catch (error) {
-			if (sequence === useSequence && !isCancelError(error)) {
-				useInlineError = `${translate("errors.targetChanged")} ${formatError(error)}`;
-			}
-		} finally {
-			if (sequence === useSequence) useBuilding = false;
 		}
 	}
 
@@ -483,456 +384,84 @@
 		useInlineError = "";
 	}
 
-	function showResultWarnings(result: CodexProfileSaveResult) {
-		if (!result.warnings?.length) return;
-		toast.warning(translate("notice.profileWarnings.title"), { description: result.warnings.join(" ") });
-	}
-
 	async function runAction(name: string, action: () => Promise<void>) {
 		if (busyAction) return;
 		busyAction = name;
-		try {
-			await action();
-		} catch (error) {
-			if (!isCancelError(error)) showError(error);
-		} finally {
-			if (busyAction === name) busyAction = "";
-		}
+		try { await action(); } catch (error) { if (!isCancelError(error)) showError(error); } finally { if (busyAction === name) busyAction = ""; }
 	}
 
 	function track<T>(key: string, promise: CancellablePromise<T>): CancellablePromise<T> {
 		cancelAction(key);
 		inFlight.set(key, promise as CancellablePromise<unknown>);
-		promise.finally(() => {
-			if (inFlight.get(key) === promise) inFlight.delete(key);
-		}).catch(() => {});
+		promise.finally(() => { if (inFlight.get(key) === promise) inFlight.delete(key); }).catch(() => {});
 		return promise;
 	}
 
-	function cancelAction(key: string) {
-		inFlight.get(key)?.cancel("replaced");
-		inFlight.delete(key);
-	}
-
-	function cancelAll() {
-		for (const promise of inFlight.values()) promise.cancel("unmount");
-		inFlight.clear();
-	}
+	function cancelAction(key: string) { inFlight.get(key)?.cancel("replaced"); inFlight.delete(key); }
+	function cancelAll() { for (const promise of inFlight.values()) promise.cancel("route-change"); inFlight.clear(); }
+	function showResultWarnings(result: CodexProfileSaveResult) { if (result.warnings?.length) toast.warning(translate("notice.profileWarnings.title"), { description: result.warnings.join(" ") }); }
 
 	function profileListItem(summary: CodexProfileSummary): CodexProfileListItem {
-		return {
-			summary,
-			id: summary.profile.id,
-			name: summary.profile.name || summary.profile.id,
-			description: summary.profile.description || "",
-			updated: formatRelativeTime(summary.updated_at_unix_ms),
-			model: summary.model || "",
-			provider: summary.model_provider || "",
-			baseURL: summary.openai_base_url || "",
-			account: summary.codex_account_id || "",
-		};
+		return { summary, id: summary.profile.id, name: summary.profile.name || summary.profile.id, description: summary.profile.description || "", updated: formatRelativeTime(summary.updated_at_unix_ms), account: summary.codex_account_id || "", configSet: summary.config_set_name || summary.config_set_id || "" };
 	}
-
-	function formatRelativeTime(value: number | undefined, requestedLocale?: string | null): string {
+	function formatRelativeTime(value: number | undefined): string {
 		if (!value) return "—";
-		const locale = requestedLocale === "zh-CN" || requestedLocale === "en-US" ? requestedLocale : currentDesktopLocale();
 		const delta = Date.now() - value;
 		if (delta < 60_000) return translate("time.justNow");
 		if (delta < 3_600_000) return translate("time.minutesAgo", { count: Math.max(1, Math.floor(delta / 60_000)) });
-		const date = new Date(value);
-		if (date.toDateString() === new Date().toDateString()) {
-			return translate("time.todayAt", { time: date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" }) });
-		}
-		return date.toLocaleDateString(locale, { month: "short", day: "numeric" });
+		return new Date(value).toLocaleDateString(currentDesktopLocale(), { month: "short", day: "numeric" });
 	}
-
-	function sourceStatusLabel(status: string | undefined, currentLocale?: string | null): string {
-		void currentLocale;
-		if (status === "valid") return translate("sourceStatus.valid");
-		if (status === "invalid") return translate("sourceStatus.invalid");
-		if (status === "unreadable") return translate("sourceStatus.unreadable");
-		return translate("sourceStatus.missing");
-	}
-
-	function sourceStatusVariant(status: string | undefined): "secondary" | "destructive" | "outline" {
-		if (status === "valid") return "secondary";
-		if (status === "invalid" || status === "unreadable") return "destructive";
-		return "outline";
-	}
-
-	function validateProfileID(value: string): string {
-		const trimmed = value.trim();
-		if (!trimmed) return translate("profilePages.validation.idRequired");
-		if (trimmed.length > 80) return translate("profilePages.validation.idTooLong");
-		if (!/^[a-z0-9][a-z0-9._-]*$/.test(trimmed)) return translate("profilePages.validation.idFormat");
-		return "";
-	}
-
-	function validateOptionalName(value: string): string {
-		return value.trim().length > 120 ? translate("profilePages.validation.nameTooLong") : "";
-	}
-
-	function validateRequiredName(value: string): string {
-		if (!value.trim()) return translate("profilePages.validation.nameRequired");
-		return validateOptionalName(value);
-	}
-
-	function validateDescription(value: string): string {
-		return value.trim().length > 1000 ? translate("profilePages.validation.descriptionTooLong") : "";
-	}
-
-	function optional(value: string): string | null {
-		const trimmed = value.trim();
-		return trimmed || null;
-	}
-
-	function formatError(value: unknown): string {
-		return desktopErrorMessage(value, translate("errors.desktopUnavailable"));
-	}
+	function validateProfileID(value: string): string { const trimmed = value.trim(); if (!trimmed) return translate("profilePages.validation.idRequired"); if (trimmed.length > 80) return translate("profilePages.validation.idTooLong"); return /^[a-z0-9][a-z0-9._-]*$/.test(trimmed) ? "" : translate("profilePages.validation.idFormat"); }
+	function validateOptionalName(value: string): string { return value.trim().length > 120 ? translate("profilePages.validation.nameTooLong") : ""; }
+	function validateDescription(value: string): string { return value.trim().length > 1000 ? translate("profilePages.validation.descriptionTooLong") : ""; }
+	function optional(value: string): string | null { return value.trim() || null; }
+	function formatError(value: unknown): string { return desktopErrorMessage(value, translate("errors.desktopUnavailable")); }
 </script>
 
 {#if route.kind === "list"}
 	<div class="mx-auto w-full max-w-5xl">
-		<ProfileList
-			profiles={listItems}
-			loading={loadingProfiles}
-			error={profileError}
-			busy={!!busyAction || useBuilding || useApplying}
-			onNew={() => push("/codex/profiles/new")}
-			onUse={openUse}
-			onDetails={(profile) => push(`/codex/profiles/${encodeURIComponent(profile.id)}`)}
-			onFork={(profile) => push(`/codex/profiles/${encodeURIComponent(profile.id)}/fork`)}
-		/>
+		<ProfileList profiles={listItems} loading={loadingProfiles} error={profileError} busy={!!busyAction || useBuilding || useApplying} onNew={() => push("/codex/profiles/new")} onConfigSets={() => push("/codex/config-sets")} onUse={openUse} onDetails={(profile) => push(`/codex/profiles/${encodeURIComponent(profile.id)}`)} onFork={(profile) => push(`/codex/profiles/${encodeURIComponent(profile.id)}/fork`)} />
 	</div>
+{:else if route.kind === "config-sets"}
+	<ConfigSetPage {configSets} loading={configSetsLoading} error={configSetsError} busy={!!busyAction} formatUpdated={formatRelativeTime} onBack={() => push("/codex/profiles")} onCreate={() => openConfigDialog("create")} onCopy={(value) => openConfigDialog("copy", value)} onEdit={(value) => openConfigDialog("edit", value)} onDelete={deleteConfigSet} />
 {:else if route.kind === "new"}
-	<div class="mx-auto flex w-full max-w-4xl flex-col gap-4">
-		<Breadcrumb.Root>
-			<Breadcrumb.List>
-				<Breadcrumb.Item><Breadcrumb.Link href="#/codex/profiles">{$_("tabs.profiles")}</Breadcrumb.Link></Breadcrumb.Item>
-				<Breadcrumb.Separator />
-				<Breadcrumb.Item><Breadcrumb.Page>{$_("profilePages.new.title")}</Breadcrumb.Page></Breadcrumb.Item>
-			</Breadcrumb.List>
-		</Breadcrumb.Root>
-
-		<div class="flex flex-col gap-1">
-			<h2 class="text-xl font-semibold tracking-tight">{$_("profilePages.new.title")}</h2>
-			<p class="text-sm text-muted-foreground">{$_("profilePages.new.description")}</p>
-		</div>
-
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>{$_("profilePages.source.title")}</Card.Title>
-				<Card.Description>{$_("profilePages.source.description")}</Card.Description>
-				<Card.Action>
-					<Button size="sm" variant="outline" disabled={sourceDetecting} onclick={() => detectSource()}>
-						{#if sourceDetecting}<Spinner data-icon="inline-start" />{:else}<RefreshCwIcon data-icon="inline-start" />{/if}
-						{$_("actions.refresh")}
-					</Button>
-				</Card.Action>
-			</Card.Header>
-			<Card.Content class="flex flex-col gap-3">
-				<div class="grid gap-3 md:grid-cols-2">
-					<div class="flex min-w-0 flex-col gap-1 rounded-lg border p-3">
-						<div class="flex items-center justify-between gap-2">
-							<span class="text-sm font-medium">config.toml</span>
-							<Badge variant={sourceStatusVariant(detectResult?.config_status)}>{sourceStatusLabel(detectResult?.config_status, $locale)}</Badge>
-						</div>
-						<span class="truncate font-mono text-xs text-muted-foreground">{detectResult?.config_path || "—"}</span>
-					</div>
-					<div class="flex min-w-0 flex-col gap-1 rounded-lg border p-3">
-						<div class="flex items-center justify-between gap-2">
-							<span class="text-sm font-medium">auth.json</span>
-							<Badge variant={sourceStatusVariant(detectResult?.auth_status)}>{sourceStatusLabel(detectResult?.auth_status, $locale)}</Badge>
-						</div>
-						<span class="truncate font-mono text-xs text-muted-foreground">{detectResult?.auth_path || "—"}</span>
-					</div>
-				</div>
-				{#if !sourceReady}
-					<Alert.Root variant="destructive">
-						<AlertTriangleIcon data-icon="inline-start" />
-						<Alert.Title>{$_("profilePages.source.notReadyTitle")}</Alert.Title>
-						<Alert.Description>{$_("profilePages.source.notReadyDescription")}</Alert.Description>
-					</Alert.Root>
-				{:else}
-					<Alert.Root>
-						<CheckCircleIcon data-icon="inline-start" />
-						<Alert.Title>{$_("profilePages.source.readyTitle")}</Alert.Title>
-						<Alert.Description>{$_("profilePages.source.readyDescription")}</Alert.Description>
-					</Alert.Root>
-				{/if}
-				{#if detectResult?.warnings?.length}
-					<Alert.Root>
-						<AlertTriangleIcon data-icon="inline-start" />
-						<Alert.Title>{$_("profilePages.source.warningTitle")}</Alert.Title>
-						<Alert.Description>{detectResult.warnings.join(" ")}</Alert.Description>
-					</Alert.Root>
-				{/if}
-			</Card.Content>
-		</Card.Root>
-
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>{$_("profilePages.form.profile")}</Card.Title>
-				<Card.Description>{$_("profilePages.form.profileDescription")}</Card.Description>
-			</Card.Header>
-			<Card.Content>
-				<ProfileForm
-					bind:profileID
-					bind:name={profileName}
-					bind:description={profileDescription}
-					idError={displayedIDError}
-					nameError={displayedNameError}
-					descriptionError={displayedDescriptionError}
-				/>
-			</Card.Content>
-			<Card.Footer class="justify-end gap-2">
-				<Button variant="outline" onclick={() => push("/codex/profiles")}>
-					<ArrowLeftIcon data-icon="inline-start" />
-					{$_("actions.cancel")}
-				</Button>
-				<Button disabled={!sourceReady || !formValid || !!busyAction} onclick={createProfile}>
-					{#if busyAction === "profile-create"}<Spinner data-icon="inline-start" />{:else}<SaveIcon data-icon="inline-start" />{/if}
-					{$_("actions.createProfile")}
-				</Button>
-			</Card.Footer>
-		</Card.Root>
-	</div>
+	<ProfileEditorPage mode="new" {detectResult} canChooseConfigSet={!!activeProfileID} busy={!!busyAction} bind:profileID bind:profileName bind:profileDescription bind:configMode bind:credentialBinding bind:configBinding bind:newConfigSetID bind:newConfigSetName idError={displayedIDError} nameError={displayedNameError} descriptionError={displayedDescriptionError} onCancel={() => push("/codex/profiles")} onSubmit={createProfile} />
 {:else if detailLoading}
-	<div class="mx-auto flex w-full max-w-5xl flex-col gap-4">
-		<Skeleton class="h-5 w-48" />
-		<Skeleton class="h-20 w-full" />
-		<Skeleton class="h-52 w-full" />
-		<Skeleton class="h-48 w-full" />
-	</div>
+	<div class="mx-auto flex w-full max-w-5xl flex-col gap-4"><Skeleton class="h-5 w-48" /><Skeleton class="h-20 w-full" /><Skeleton class="h-52 w-full" /></div>
 {:else if detailError || !detail}
-	<div class="mx-auto flex w-full max-w-3xl flex-col gap-4">
-		<Alert.Root variant="destructive">
-			<AlertTriangleIcon data-icon="inline-start" />
-			<Alert.Title>{$_("profilePages.errorTitle")}</Alert.Title>
-			<Alert.Description>{detailError || $_("errors.profileNotReady")}</Alert.Description>
-		</Alert.Root>
-		<Button class="self-start" variant="outline" onclick={() => push("/codex/profiles")}>
-			<ArrowLeftIcon data-icon="inline-start" />
-			{$_("actions.back")}
-		</Button>
-	</div>
+	<div class="mx-auto w-full max-w-3xl"><Alert.Root variant="destructive"><AlertTriangleIcon data-icon="inline-start" /><Alert.Title>{$_("profilePages.errorTitle")}</Alert.Title><Alert.Description>{detailError || $_("errors.profileNotReady")}</Alert.Description></Alert.Root></div>
 {:else if route.kind === "detail"}
-	<ProfileDetail
-		{detail}
-		{busyAction}
-		updated={formatRelativeTime(detail.summary.updated_at_unix_ms, $locale)}
-		onUse={() => openUse(profileListItem(detail!.summary))}
-		onFork={() => push(`/codex/profiles/${encodeURIComponent(detail!.summary.profile.id)}/fork`)}
-		onEdit={openEdit}
-		onSync={openSync}
-	/>
+	<ProfileDetail {detail} {busyAction} updated={formatRelativeTime(detail.summary.updated_at_unix_ms)} onUse={() => openUse(profileListItem(detail!.summary))} onFork={() => push(`/codex/profiles/${encodeURIComponent(detail!.summary.profile.id)}/fork`)} onEdit={openEdit} onSaveCurrent={() => (saveCurrentOpen = true)} onSetConfig={openSetConfig} />
 {:else}
-	<div class="mx-auto flex w-full max-w-4xl flex-col gap-4">
-		<Breadcrumb.Root>
-			<Breadcrumb.List>
-				<Breadcrumb.Item><Breadcrumb.Link href="#/codex/profiles">{$_("tabs.profiles")}</Breadcrumb.Link></Breadcrumb.Item>
-				<Breadcrumb.Separator />
-				<Breadcrumb.Item><Breadcrumb.Link href={`#/codex/profiles/${encodeURIComponent(detail.summary.profile.id)}`}>{detail.summary.profile.name || detail.summary.profile.id}</Breadcrumb.Link></Breadcrumb.Item>
-				<Breadcrumb.Separator />
-				<Breadcrumb.Item><Breadcrumb.Page>{$_("actions.fork")}</Breadcrumb.Page></Breadcrumb.Item>
-			</Breadcrumb.List>
-		</Breadcrumb.Root>
-
-		<div class="flex flex-col gap-1">
-			<h2 class="text-xl font-semibold tracking-tight">{$_("profilePages.fork.title", { values: { profile: detail.summary.profile.name || detail.summary.profile.id } })}</h2>
-			<p class="text-sm text-muted-foreground">{$_("profilePages.fork.description")}</p>
-		</div>
-
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>{$_("profilePages.fork.sourceTitle")}</Card.Title>
-				<Card.Description>{$_("profilePages.fork.sourceDescription")}</Card.Description>
-			</Card.Header>
-			<Card.Content>
-				<div class="flex flex-col text-sm">
-					<div class="grid grid-cols-2 gap-6 pb-3">
-						<div class="flex min-w-0 flex-col gap-1"><span class="text-xs text-muted-foreground">{$_("profilePages.form.profileID")}</span><span class="truncate font-mono">{detail.summary.profile.id}</span></div>
-						<div class="flex min-w-0 flex-col gap-1"><span class="text-xs text-muted-foreground">{$_("profilePages.detail.name")}</span><span class="truncate">{detail.summary.profile.name || detail.summary.profile.id}</span></div>
-					</div>
-					<Separator />
-					{#if detail.summary.profile.description}
-						<div class="flex min-w-0 flex-col gap-1 py-3"><span class="text-xs text-muted-foreground">{$_("profilePages.form.description")}</span><span>{detail.summary.profile.description}</span></div>
-						<Separator />
-					{/if}
-					<div class="grid grid-cols-2 gap-6 pt-3">
-						<div class="flex flex-col gap-1"><span class="text-xs text-muted-foreground">{$_("profilePages.detail.model")}</span><span>{detail.summary.model || "—"}</span></div>
-						<div class="flex flex-col gap-1"><span class="text-xs text-muted-foreground">{$_("profilePages.detail.account")}</span><span>{detail.summary.codex_account_id || $_("profile.noAccount")}</span></div>
-					</div>
-				</div>
-			</Card.Content>
-		</Card.Root>
-
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>{$_("profilePages.form.profile")}</Card.Title>
-				<Card.Description>{$_("profilePages.fork.profileDescription")}</Card.Description>
-			</Card.Header>
-			<Card.Content>
-				<ProfileForm
-					bind:profileID
-					bind:name={profileName}
-					bind:description={profileDescription}
-					idError={displayedIDError}
-					nameError={displayedNameError}
-					descriptionError={displayedDescriptionError}
-				/>
-			</Card.Content>
-		</Card.Root>
-
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>{$_("profilePages.fork.authBinding")}</Card.Title>
-				<Card.Description>{$_("profilePages.fork.authBindingDescription")}</Card.Description>
-			</Card.Header>
-			<Card.Content>
-				<Field.FieldSet>
-					<Field.FieldLegend class="sr-only">{$_("profilePages.fork.authBinding")}</Field.FieldLegend>
-					<RadioGroup.Root bind:value={forkAuthBinding}>
-						<Field.FieldLabel class="rounded-lg border p-3 has-[[data-checked]]:border-primary has-[[data-checked]]:bg-muted/50" for="fork-auth-share">
-							<Field.Field orientation="horizontal">
-								<Field.FieldContent>
-									<Field.FieldTitle>{$_("profilePages.fork.shareParent")}</Field.FieldTitle>
-									<Field.FieldDescription>{$_("profilePages.fork.shareParentDescription")}</Field.FieldDescription>
-								</Field.FieldContent>
-								<RadioGroup.Item id="fork-auth-share" value="share-parent" />
-							</Field.Field>
-						</Field.FieldLabel>
-						<Field.FieldLabel class="rounded-lg border p-3 has-[[data-checked]]:border-primary has-[[data-checked]]:bg-muted/50" for="fork-auth-copy">
-							<Field.Field orientation="horizontal">
-								<Field.FieldContent>
-									<Field.FieldTitle>{$_("profilePages.fork.copyNew")}</Field.FieldTitle>
-									<Field.FieldDescription>{$_("profilePages.fork.copyNewDescription")}</Field.FieldDescription>
-								</Field.FieldContent>
-								<RadioGroup.Item id="fork-auth-copy" value="copy-new" />
-							</Field.Field>
-						</Field.FieldLabel>
-					</RadioGroup.Root>
-				</Field.FieldSet>
-			</Card.Content>
-			<Card.Footer class="justify-end gap-2">
-				<Button variant="outline" onclick={() => push(`/codex/profiles/${encodeURIComponent(detail!.summary.profile.id)}`)}>
-					<ArrowLeftIcon data-icon="inline-start" />
-					{$_("actions.cancel")}
-				</Button>
-				<Button disabled={!formValid || !!busyAction} onclick={forkProfile}>
-					{#if busyAction === "profile-fork"}<Spinner data-icon="inline-start" />{:else}<GitForkIcon data-icon="inline-start" />{/if}
-					{$_("actions.createFork")}
-				</Button>
-			</Card.Footer>
-		</Card.Root>
-	</div>
+	<ProfileEditorPage mode="fork" {detail} {detectResult} busy={!!busyAction} bind:profileID bind:profileName bind:profileDescription bind:configMode bind:credentialBinding bind:configBinding bind:newConfigSetID bind:newConfigSetName idError={displayedIDError} nameError={displayedNameError} descriptionError={displayedDescriptionError} onCancel={() => push(`/codex/profiles/${encodeURIComponent(detail!.summary.profile.id)}`)} onSubmit={forkProfile} />
 {/if}
 
+<UseProfileDialog bind:open={useOpen} profile={useProfile} currentProfile={activeProfileID} plan={usePlan} building={useBuilding} applying={useApplying} inlineError={useInlineError} onClose={closeUse} onConfirm={confirmUse} />
+
+<ConfigSetDialog bind:open={configDialogOpen} mode={configDialog.mode} busy={busyAction === "config-set-save"} configSetID={configDialog.source?.id || ""} name={configDialog.source?.name || ""} description={configDialog.source?.description || ""} onClose={() => (configDialogOpen = false)} onSubmit={submitConfigDialog} />
+
 <Dialog.Root bind:open={editOpen}>
-	<Dialog.Content class="sm:max-w-[520px]">
-		<Dialog.Header>
-			<Dialog.Title>{$_("profilePages.edit.title")}</Dialog.Title>
-			<Dialog.Description>{$_("profilePages.edit.description")}</Dialog.Description>
-		</Dialog.Header>
-		<Field.FieldGroup>
-			<Field.Field data-invalid={!!editNameError}>
-				<Field.FieldLabel for="edit-profile-name">{$_("profilePages.form.name")}</Field.FieldLabel>
-				<Input id="edit-profile-name" bind:value={editName} maxlength={120} aria-invalid={!!editNameError} />
-				<Field.FieldError errors={editNameError ? [{ message: editNameError }] : []} />
-			</Field.Field>
-			<Field.FieldSeparator />
-			<Field.Field data-invalid={!!editDescriptionError}>
-				<Field.FieldLabel for="edit-profile-description">{$_("profilePages.form.description")}</Field.FieldLabel>
-				<Textarea id="edit-profile-description" bind:value={editDescription} maxlength={1000} rows={4} aria-invalid={!!editDescriptionError} />
-				<Field.FieldError errors={editDescriptionError ? [{ message: editDescriptionError }] : []} />
-			</Field.Field>
-		</Field.FieldGroup>
-		<Dialog.Footer>
-			<Button variant="outline" onclick={() => (editOpen = false)}>{$_("actions.cancel")}</Button>
-			<Button disabled={busyAction === "profile-metadata"} onclick={saveMetadata}>
-				{#if busyAction === "profile-metadata"}<Spinner data-icon="inline-start" />{/if}
-				{$_("actions.saveChanges")}
-			</Button>
-		</Dialog.Footer>
+	<Dialog.Content class="sm:max-w-lg">
+		<Dialog.Header><Dialog.Title>{$_("profilePages.edit.title")}</Dialog.Title><Dialog.Description>{$_("profilePages.edit.description")}</Dialog.Description></Dialog.Header>
+		<Field.FieldGroup><Field.Field><Field.FieldLabel for="edit-profile-name">{$_("profilePages.form.name")}</Field.FieldLabel><Input id="edit-profile-name" bind:value={editName} /></Field.Field><Field.Field><Field.FieldLabel for="edit-profile-description">{$_("profilePages.form.description")}</Field.FieldLabel><Textarea id="edit-profile-description" bind:value={editDescription} rows={3} /></Field.Field></Field.FieldGroup>
+		<Dialog.Footer><Button variant="outline" onclick={() => (editOpen = false)}>{$_("actions.cancel")}</Button><Button disabled={!editName.trim() || busyAction === "profile-metadata"} onclick={saveMetadata}>{#if busyAction === "profile-metadata"}<Spinner data-icon="inline-start" />{/if}{$_("actions.save")}</Button></Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
 
-<Dialog.Root open={syncOpen} onOpenChange={handleSyncOpenChange}>
-	<Dialog.Content class="sm:max-w-[600px]">
-		<Dialog.Header>
-			<Dialog.Title>{syncStage === "confirm" ? $_("profilePages.sync.title") : $_("profilePages.sync.conflictTitle")}</Dialog.Title>
-			<Dialog.Description>{syncStage === "confirm" ? $_("profilePages.sync.description") : $_("profilePages.sync.conflictDescription")}</Dialog.Description>
-		</Dialog.Header>
-
-		{#if syncStage === "confirm"}
-			<div class="flex flex-col gap-3">
-				{#if syncDetecting}
-					<Skeleton class="h-16 w-full" />
-				{:else}
-					<div class="grid gap-3 md:grid-cols-2">
-						<div class="flex min-w-0 flex-col gap-1 rounded-lg border p-3">
-							<div class="flex items-center justify-between gap-2"><span class="text-sm font-medium">config.toml</span><Badge variant={sourceStatusVariant(detectResult?.config_status)}>{sourceStatusLabel(detectResult?.config_status, $locale)}</Badge></div>
-							<span class="truncate font-mono text-xs text-muted-foreground">{detectResult?.config_path || "—"}</span>
-						</div>
-						<div class="flex min-w-0 flex-col gap-1 rounded-lg border p-3">
-							<div class="flex items-center justify-between gap-2"><span class="text-sm font-medium">auth.json</span><Badge variant={sourceStatusVariant(detectResult?.auth_status)}>{sourceStatusLabel(detectResult?.auth_status, $locale)}</Badge></div>
-							<span class="truncate font-mono text-xs text-muted-foreground">{detectResult?.auth_path || "—"}</span>
-						</div>
-					</div>
-				{/if}
-				<Alert.Root>
-					<RefreshCwIcon data-icon="inline-start" />
-					<Alert.Title>{$_("profilePages.sync.replaceTitle")}</Alert.Title>
-					<Alert.Description>{$_("profilePages.sync.replaceDescription")}</Alert.Description>
-				</Alert.Root>
-			</div>
-		{:else}
-			<Field.FieldSet>
-				<Field.FieldLegend>{$_("profilePages.sync.authChoice")}</Field.FieldLegend>
-				<Field.FieldDescription>{$_("profilePages.sync.authChoiceDescription")}</Field.FieldDescription>
-				<RadioGroup.Root bind:value={syncAuthUpdate}>
-					<Field.FieldLabel class="rounded-lg border p-3 has-[[data-checked]]:border-primary has-[[data-checked]]:bg-muted/50" for="sync-update-shared">
-						<Field.Field orientation="horizontal">
-							<Field.FieldContent><Field.FieldTitle>{$_("profilePages.sync.updateShared")}</Field.FieldTitle><Field.FieldDescription>{$_("profilePages.sync.updateSharedDescription")}</Field.FieldDescription></Field.FieldContent>
-							<RadioGroup.Item id="sync-update-shared" value="update-shared" />
-						</Field.Field>
-					</Field.FieldLabel>
-					<Field.FieldLabel class="rounded-lg border p-3 has-[[data-checked]]:border-primary has-[[data-checked]]:bg-muted/50" for="sync-fork-new">
-						<Field.Field orientation="horizontal">
-							<Field.FieldContent><Field.FieldTitle>{$_("profilePages.sync.forkNew")}</Field.FieldTitle><Field.FieldDescription>{$_("profilePages.sync.forkNewDescription")}</Field.FieldDescription></Field.FieldContent>
-							<RadioGroup.Item id="sync-fork-new" value="fork-new" />
-						</Field.Field>
-					</Field.FieldLabel>
-				</RadioGroup.Root>
-			</Field.FieldSet>
-		{/if}
-
-		{#if syncError}
-			<Alert.Root variant="destructive">
-				<AlertTriangleIcon data-icon="inline-start" />
-				<Alert.Title>{$_("profilePages.sync.errorTitle")}</Alert.Title>
-				<Alert.Description>{syncError}</Alert.Description>
-			</Alert.Root>
-		{/if}
-
-		<Dialog.Footer>
-			<Button variant="outline" onclick={() => handleSyncOpenChange(false)}>{$_("actions.cancel")}</Button>
-			<Button disabled={syncDetecting || busyAction === "profile-sync" || (syncStage === "confirm" ? !sourceReady : !syncAuthUpdate)} onclick={syncProfile}>
-				{#if busyAction === "profile-sync"}<Spinner data-icon="inline-start" />{/if}
-				{syncStage === "confirm" ? $_("actions.updateProfile") : $_("actions.continue")}
-			</Button>
-		</Dialog.Footer>
+<Dialog.Root bind:open={setConfigOpen}>
+	<Dialog.Content class="sm:max-w-md">
+		<Dialog.Header><Dialog.Title>{$_("actions.changeConfigSet")}</Dialog.Title><Dialog.Description>{$_("profilePages.detail.changeConfigDescription")}</Dialog.Description></Dialog.Header>
+		<Select.Root type="single" value={selectedConfigSetID} onValueChange={(value) => (selectedConfigSetID = value)}>
+			<Select.Trigger>{configSets.find((item) => item.id === selectedConfigSetID)?.name || $_("configSets.select")}</Select.Trigger>
+			<Select.Content><Select.Group>{#each configSets as item (item.id)}<Select.Item value={item.id} label={`${item.name} · ${item.id}`} />{/each}</Select.Group></Select.Content>
+		</Select.Root>
+		<Dialog.Footer><Button variant="outline" onclick={() => (setConfigOpen = false)}>{$_("actions.cancel")}</Button><Button disabled={!selectedConfigSetID || busyAction === "profile-set-config"} onclick={setProfileConfig}>{$_("actions.save")}</Button></Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
 
-<UseProfileDialog
-	bind:open={useOpen}
-	profile={useProfile}
-	currentProfile={activeProfileID}
-	plan={usePlan}
-	building={useBuilding}
-	applying={useApplying}
-	inlineError={useInlineError}
-	onClose={closeUse}
-	onConfirm={confirmUse}
-/>
+<AlertDialog.Root bind:open={saveCurrentOpen}>
+	<AlertDialog.Content>
+		<AlertDialog.Header><AlertDialog.Title>{$_("profilePages.saveCurrent.title")}</AlertDialog.Title><AlertDialog.Description>{$_("profilePages.saveCurrent.description", { values: { credential: detail?.login?.reference_count ?? 0, config: detail?.config_set?.reference_count ?? 0 } })}</AlertDialog.Description></AlertDialog.Header>
+		<AlertDialog.Footer><AlertDialog.Cancel>{$_("actions.cancel")}</AlertDialog.Cancel><AlertDialog.Action onclick={saveCurrent}>{$_("actions.saveCurrent")}</AlertDialog.Action></AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>

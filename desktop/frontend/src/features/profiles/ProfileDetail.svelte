@@ -2,38 +2,33 @@
 	import { _ } from "svelte-i18n";
 	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
 	import GitForkIcon from "@lucide/svelte/icons/git-fork";
+	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import PencilIcon from "@lucide/svelte/icons/pencil";
-	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import RocketIcon from "@lucide/svelte/icons/rocket";
+	import SaveIcon from "@lucide/svelte/icons/save";
+	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
 
-	import * as Accordion from "$lib/components/ui/accordion";
 	import * as Alert from "$lib/components/ui/alert";
 	import * as Breadcrumb from "$lib/components/ui/breadcrumb";
 	import * as Card from "$lib/components/ui/card";
+	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
-	import { Separator } from "$lib/components/ui/separator";
 
 	import type { CodexProfileDetail } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
 
-	let {
-		detail,
-		busyAction,
-		updated,
-		onUse,
-		onFork,
-		onEdit,
-		onSync,
-	}: {
+	interface Props {
 		detail: CodexProfileDetail;
 		busyAction: string;
 		updated: string;
 		onUse: () => void;
 		onFork: () => void;
 		onEdit: () => void;
-		onSync: () => void;
-	} = $props();
+		onSaveCurrent: () => void;
+		onSetConfig: () => void;
+	}
 
+	let { detail, busyAction, updated, onUse, onFork, onEdit, onSaveCurrent, onSetConfig }: Props = $props();
 	let profileName = $derived(detail.summary.profile.name || detail.summary.profile.id);
 </script>
 
@@ -46,7 +41,7 @@
 		</Breadcrumb.List>
 	</Breadcrumb.Root>
 
-	<div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+	<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
 		<div class="flex min-w-0 flex-col gap-1">
 			<div class="flex items-center gap-2">
 				<h2 class="truncate text-xl font-semibold tracking-tight">{profileName}</h2>
@@ -57,28 +52,36 @@
 				<span>{updated}</span>
 			</div>
 		</div>
-		<div class="flex shrink-0 flex-wrap justify-start gap-2 lg:justify-end">
+		<div class="flex shrink-0 items-center gap-2">
 			{#if !detail.summary.active}
 				<Button size="sm" disabled={!!busyAction} onclick={onUse}>
-					<RocketIcon data-icon="inline-start" />
-					{$_("actions.useProfile")}
+					<RocketIcon data-icon="inline-start" />{$_("actions.useProfile")}
 				</Button>
 			{/if}
-			<Button size="sm" variant="outline" disabled={!!busyAction} onclick={onFork}>
-				<GitForkIcon data-icon="inline-start" />
-				{$_("actions.fork")}
-			</Button>
-			<Button size="sm" variant="outline" disabled={!!busyAction} onclick={onEdit}>
-				<PencilIcon data-icon="inline-start" />
-				{$_("actions.editDetails")}
-			</Button>
-			<Button size="sm" variant="outline" disabled={!!busyAction} onclick={onSync}>
-				<RefreshCwIcon data-icon="inline-start" />
-				{$_("actions.updateFromCurrent")}
-			</Button>
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger>
+					{#snippet child({ props })}
+						<Button {...props} variant="outline" size="icon-sm" aria-label={$_("actions.more")}>
+							<MoreHorizontalIcon data-icon="inline-start" />
+						</Button>
+					{/snippet}
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Content align="end">
+					<DropdownMenu.Item onSelect={onEdit}><PencilIcon data-icon="inline-start" />{$_("actions.editDetails")}</DropdownMenu.Item>
+					<DropdownMenu.Item onSelect={onFork}><GitForkIcon data-icon="inline-start" />{$_("actions.fork")}</DropdownMenu.Item>
+					{#if detail.summary.active}
+						<DropdownMenu.Item onSelect={onSaveCurrent}><SaveIcon data-icon="inline-start" />{$_("actions.saveCurrent")}</DropdownMenu.Item>
+					{:else}
+						<DropdownMenu.Item onSelect={onSetConfig}><SlidersHorizontalIcon data-icon="inline-start" />{$_("actions.changeConfigSet")}</DropdownMenu.Item>
+					{/if}
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
 		</div>
 	</div>
 
+	{#if detail.summary.profile.description}
+		<p class="text-sm text-muted-foreground">{detail.summary.profile.description}</p>
+	{/if}
 	{#if detail.summary.warnings?.length}
 		<Alert.Root>
 			<AlertTriangleIcon data-icon="inline-start" />
@@ -87,86 +90,52 @@
 		</Alert.Root>
 	{/if}
 
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>{$_("profilePages.detail.overview")}</Card.Title>
-			<Card.Description>{$_("profilePages.detail.overviewDescription")}</Card.Description>
-		</Card.Header>
-		<Card.Content>
-			<dl class="flex flex-col">
-				<div class="grid grid-cols-2 gap-6 pb-3">
+	<div class="grid gap-4 lg:grid-cols-2">
+		<Card.Root>
+			<Card.Header>
+				<Card.Title>{$_("profilePages.detail.loginState")}</Card.Title>
+				<Card.Description>{$_("profilePages.detail.loginStateDescription")}</Card.Description>
+			</Card.Header>
+			<Card.Content>
+				<dl class="grid gap-4 sm:grid-cols-2">
+					<div class="flex min-w-0 flex-col gap-1">
+						<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.account")}</dt>
+						<dd class="truncate text-sm">{detail.login?.codex_account_id || $_("profile.noAccount")}</dd>
+					</div>
+					<div class="flex min-w-0 flex-col gap-1">
+						<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.references")}</dt>
+						<dd class="text-sm">{detail.login?.reference_count ?? 0}</dd>
+					</div>
+				</dl>
+			</Card.Content>
+		</Card.Root>
+
+		<Card.Root>
+			<Card.Header>
+				<Card.Title>{$_("profilePages.detail.configSet")}</Card.Title>
+				<Card.Description>{$_("profilePages.detail.configSetDescription")}</Card.Description>
+			</Card.Header>
+			<Card.Content>
+				<dl class="grid gap-4 sm:grid-cols-2">
 					<div class="flex min-w-0 flex-col gap-1">
 						<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.name")}</dt>
-						<dd class="truncate text-sm">{profileName}</dd>
+						<dd class="truncate text-sm">{detail.config_set?.name || "—"}</dd>
+						<dd class="truncate font-mono text-xs text-muted-foreground">{detail.config_set?.id || "—"}</dd>
 					</div>
 					<div class="flex min-w-0 flex-col gap-1">
-						<dt class="text-xs text-muted-foreground">{$_("profilePages.form.description")}</dt>
-						<dd class="text-sm">{detail.summary.profile.description || $_("profile.noDescription")}</dd>
+						<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.references")}</dt>
+						<dd class="text-sm">{detail.config_set?.reference_count ?? 0}</dd>
 					</div>
-				</div>
-				<Separator />
-				<div class="grid grid-cols-2 gap-6 py-3">
 					<div class="flex min-w-0 flex-col gap-1">
 						<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.model")}</dt>
-						<dd class="truncate text-sm">{detail.summary.model || "—"}</dd>
+						<dd class="truncate text-sm">{detail.config_set?.model || "—"}</dd>
 					</div>
 					<div class="flex min-w-0 flex-col gap-1">
 						<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.provider")}</dt>
-						<dd class="truncate text-sm">{detail.summary.model_provider || "—"}</dd>
+						<dd class="truncate text-sm">{detail.config_set?.model_provider || "—"}</dd>
 					</div>
-				</div>
-				<Separator />
-				<div class="grid grid-cols-2 gap-6 py-3">
-					<div class="flex min-w-0 flex-col gap-1">
-						<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.baseURL")}</dt>
-						<dd class="truncate font-mono text-sm">{detail.summary.openai_base_url || "—"}</dd>
-					</div>
-					<div class="flex min-w-0 flex-col gap-1">
-						<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.account")}</dt>
-						<dd class="truncate text-sm">{detail.summary.codex_account_id || $_("profile.noAccount")}</dd>
-					</div>
-				</div>
-				<Separator />
-				<div class="flex min-w-0 flex-col gap-1 pt-3">
-					<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.targetCount")}</dt>
-					<dd class="text-sm">{detail.targets?.length ?? 0}</dd>
-				</div>
-			</dl>
-		</Card.Content>
-	</Card.Root>
-
-	<Card.Root>
-		<Card.Header>
-			<Card.Title>{$_("profilePages.detail.targets")}</Card.Title>
-			<Card.Description>{$_("profilePages.detail.targetsDescription")}</Card.Description>
-		</Card.Header>
-		<Card.Content>
-			<Accordion.Root type="multiple">
-				{#each detail.targets ?? [] as target (target.target_id)}
-					<Accordion.Item value={target.target_id}>
-						<Accordion.Trigger>
-							<div class="flex min-w-0 flex-1 items-center gap-2 pr-2">
-								<span class="shrink-0 font-medium">{target.target_id}</span>
-								<span class="truncate font-mono text-xs text-muted-foreground">{target.path}</span>
-								<Badge variant={target.enabled ? "secondary" : "outline"}>
-									{target.enabled ? $_("status.enabled") : $_("status.disabled")}
-								</Badge>
-							</div>
-						</Accordion.Trigger>
-						<Accordion.Content>
-							<div class="flex flex-col gap-3">
-								<div class="flex flex-wrap items-center gap-2">
-									<Badge variant="outline">{target.format}</Badge>
-									<Badge variant="outline">{target.strategy}</Badge>
-								</div>
-								<Separator />
-								<pre class="max-h-52 overflow-auto rounded-lg bg-muted p-3 text-xs">{target.value_preview.content || "—"}</pre>
-								{#if target.value_preview.truncated}<span class="text-xs text-muted-foreground">{$_("useDialog.truncated")}</span>{/if}
-							</div>
-						</Accordion.Content>
-					</Accordion.Item>
-				{/each}
-			</Accordion.Root>
-		</Card.Content>
-	</Card.Root>
+				</dl>
+			</Card.Content>
+		</Card.Root>
+	</div>
 </div>

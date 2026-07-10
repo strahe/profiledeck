@@ -1,29 +1,29 @@
 # Codex Profiles
 
-Codex profiles restore the two user-level files that matter for day-to-day switching:
+A Codex Profile combines two independently shareable resources:
 
-- `$CODEX_HOME/config.toml`
-- `$CODEX_HOME/auth.json`
+- a hidden credential containing the desired `$CODEX_HOME/auth.json` payload;
+- a Config Set containing the complete desired `$CODEX_HOME/config.toml` payload.
 
-ProfileDeck does not split or move `sessions/`, logs, skills, or other Codex state. Those remain shared under the same `CODEX_HOME`.
+The files on disk are working copies of the active Profile. ProfileDeck stores long-lived state in `profiledeck.db`, checks valid working-copy changes back into the active bindings during a switch, and writes only the resources whose bindings change.
 
-Internally, a profile stores the full desired `config.toml` content and binds to a hidden auth credential. A credential stores the latest desired `auth.json` payload and may be shared by multiple profiles. Codex `tokens.account_id` is display metadata only; it is never used as a ProfileDeck identity or merge key.
+Config Sets cover only the user-level `config.toml`. Sessions, logs, skills, plugin caches, project `.codex/config.toml` files, and system policy remain outside this model. Codex `tokens.account_id` is display metadata only and never determines identity or binding behavior.
 
 ## Requirements
 
-Codex must use file credentials. If `$CODEX_HOME/auth.json` is missing, add this to `$CODEX_HOME/config.toml` and login again:
+Codex must use file credentials. If `$CODEX_HOME/auth.json` is missing, add this to `$CODEX_HOME/config.toml` and log in again:
 
 ```toml
 cli_auth_credentials_store = "file"
 ```
 
-Then run:
-
 ```bash
 codex login
 ```
 
-## Create a profile from current files
+## Create Profiles
+
+The first Profile captures the current files, creates a Config Set named `shared`, creates a hidden credential, and becomes active:
 
 ```bash
 profiledeck init
@@ -31,48 +31,63 @@ profiledeck codex detect
 profiledeck codex profile create work
 ```
 
-`create` requires both `config.toml` and `auth.json`. It stores the full desired `config.toml` content and creates a new hidden credential for the current `auth.json` payload.
-
-## Fork or sync a profile
-
-Forking copies an existing profile. Choose whether the fork shares the source credential lifecycle or starts with an independent copied credential:
+Later Profiles reuse the active Config Set by default. Log in with another Codex account, then create another Profile to capture a separate credential without duplicating configuration:
 
 ```bash
-profiledeck codex profile fork work client --auth-binding share-parent
-profiledeck codex profile fork work client-isolated --auth-binding copy-new
+codex login
+profiledeck codex profile create personal
 ```
 
-Sync updates an existing profile from current Codex files:
+To preserve the current config as an independent Config Set, create the Profile with a new Config Set ID:
 
 ```bash
-profiledeck codex profile sync work
-profiledeck codex profile sync work --auth-update update-shared
-profiledeck codex profile sync work --auth-update fork-new
+profiledeck codex profile create client \
+  --new-config-set client \
+  --config-set-name "Client"
 ```
 
-When a profile shares a hidden credential with another profile and `auth.json` changed, choose explicitly between updating the shared credential or forking this profile to a new credential.
+## Manage Config Sets
 
-## Switch to a profile
+Config Set commands expose summaries and metadata, never raw TOML:
 
 ```bash
+profiledeck codex config-set list
+profiledeck codex config-set show shared
+profiledeck codex config-set create experimental --name "Experimental"
+profiledeck codex config-set copy shared local --name "Local"
+profiledeck codex config-set update local --description "Local models"
+profiledeck codex config-set delete local --yes
+```
+
+`create` captures the current `config.toml`. A Config Set can be renamed, including `shared`, and can be deleted only when no Profile references it. Rebind an inactive Profile with:
+
+```bash
+profiledeck codex profile set-config work shared
+```
+
+## Fork a Profile
+
+Forking requires explicit choices for both resources. At least one resource must be copied so the result is not only an alias of the source:
+
+```bash
+profiledeck codex profile fork work client-login \
+  --credential-binding copy-new \
+  --config-binding share-parent
+
+profiledeck codex profile fork work client-config \
+  --credential-binding share-parent \
+  --config-binding copy-new \
+  --new-config-set client-config
+```
+
+## Save and Switch
+
+Switching automatically captures valid external changes to the active credential and Config Set. `save-current` is an explicit safety action before logging in again or replacing a working copy:
+
+```bash
+profiledeck codex profile save-current
 profiledeck plan codex work
 profiledeck switch codex work --yes
 ```
 
-`plan` is read-only. `switch` writes `config.toml` and `auth.json` only through the transaction pipeline.
-
-## Create another login profile
-
-1. Login with the other Codex account so `$CODEX_HOME/auth.json` represents that login.
-2. Create it under a different profile:
-
-```bash
-profiledeck codex profile create personal
-```
-
-After both profiles exist:
-
-```bash
-profiledeck switch codex work --yes
-profiledeck switch codex personal --yes
-```
+`plan` is read-only. `switch`, `rollback`, and `recover` are the only paths that write Codex target files. Invalid or missing working copies are not captured; the plan reports a warning and the backup retains the filesystem state.

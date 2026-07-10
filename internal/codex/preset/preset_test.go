@@ -1,7 +1,6 @@
 package preset
 
 import (
-	"encoding/json"
 	"testing"
 
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
@@ -27,16 +26,16 @@ func TestProviderMetadataJSONRoundTrips(t *testing.T) {
 }
 
 func TestTargetMetadataCompatibility(t *testing.T) {
-	fullRaw, err := TargetMetadataJSON(codexconfig.TargetID, TargetModeFullFile)
+	configRaw, err := TargetMetadataJSON(codexconfig.TargetID, TargetModeConfigSet)
 	if err != nil {
-		t.Fatalf("expected full-file target metadata to encode, got %v", err)
+		t.Fatalf("expected config-set target metadata to encode, got %v", err)
 	}
-	full, err := DecodeTargetMetadata(fullRaw)
+	config, err := DecodeTargetMetadata(configRaw)
 	if err != nil {
-		t.Fatalf("expected full-file target metadata to decode, got %v", err)
+		t.Fatalf("expected config-set target metadata to decode, got %v", err)
 	}
-	if !full.Compatible() {
-		t.Fatalf("expected full-file target metadata to be compatible: %#v", full)
+	if !config.Compatible() {
+		t.Fatalf("expected config-set target metadata to be compatible: %#v", config)
 	}
 
 	authRaw, err := TargetMetadataJSON(codexconfig.AuthTargetID, TargetModeCredential)
@@ -62,16 +61,16 @@ func TestTargetMetadataCompatibility(t *testing.T) {
 }
 
 func TestTargetValueJSONHelpers(t *testing.T) {
-	configRaw, err := ReplaceFileValueJSON("model = \"gpt-5.3-codex\"\n")
+	configRaw, err := ConfigSetBindingValueJSON(" shared ")
 	if err != nil {
 		t.Fatalf("expected config value to encode, got %v", err)
 	}
-	var configValue map[string]string
-	if err := json.Unmarshal([]byte(configRaw), &configValue); err != nil {
-		t.Fatalf("expected config value to decode, got %v", err)
+	configSetID, err := ParseConfigSetBindingValueJSON(configRaw)
+	if err != nil {
+		t.Fatalf("expected config binding to parse, got %v", err)
 	}
-	if configValue["content"] != "model = \"gpt-5.3-codex\"\n" {
-		t.Fatalf("unexpected config value: %#v", configValue)
+	if configSetID != "shared" {
+		t.Fatalf("unexpected config set id: %q", configSetID)
 	}
 
 	authRaw, err := CredentialBindingValueJSON("cred_work")

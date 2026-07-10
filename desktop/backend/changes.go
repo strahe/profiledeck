@@ -3,13 +3,14 @@ package backend
 import "sync"
 
 const (
-	DesktopChangeInitialized         = "initialized"
-	DesktopChangeCodexProfileChanged = "codex-profile-changed"
-	DesktopChangeSwitchApplied       = "switch-applied"
-	DesktopChangeLockRepaired        = "lock-repaired"
-	DesktopChangeRollbackApplied     = "rollback-applied"
-	DesktopChangeSwitchRecovered     = "switch-recovered"
-	DesktopChangeUsageSynced         = "usage-synced"
+	DesktopChangeInitialized           = "initialized"
+	DesktopChangeCodexProfileChanged   = "codex-profile-changed"
+	DesktopChangeCodexConfigSetChanged = "codex-config-set-changed"
+	DesktopChangeSwitchApplied         = "switch-applied"
+	DesktopChangeLockRepaired          = "lock-repaired"
+	DesktopChangeRollbackApplied       = "rollback-applied"
+	DesktopChangeSwitchRecovered       = "switch-recovered"
+	DesktopChangeUsageSynced           = "usage-synced"
 
 	DesktopChangeStatusSuccess  = "success"
 	DesktopChangeStatusFailure  = "failure"
@@ -17,13 +18,16 @@ const (
 )
 
 type DesktopChangeEvent struct {
-	Kind        string        `json:"kind"`
-	Source      string        `json:"source,omitempty"`
-	Status      string        `json:"status,omitempty"`
-	Error       *DesktopError `json:"error,omitempty"`
-	ProviderID  string        `json:"provider_id,omitempty"`
-	ProfileID   string        `json:"profile_id,omitempty"`
-	OperationID string        `json:"operation_id,omitempty"`
+	Kind               string        `json:"kind"`
+	Source             string        `json:"source,omitempty"`
+	Status             string        `json:"status,omitempty"`
+	Error              *DesktopError `json:"error,omitempty"`
+	ProviderID         string        `json:"provider_id,omitempty"`
+	ProfileID          string        `json:"profile_id,omitempty"`
+	OperationID        string        `json:"operation_id,omitempty"`
+	ProfileChanged     bool          `json:"profile_changed,omitempty"`
+	ConfigSetsChanged  bool          `json:"config_sets_changed,omitempty"`
+	ActiveStateChanged bool          `json:"active_state_changed,omitempty"`
 }
 
 type DashboardUpdatePayload struct {

@@ -41,6 +41,27 @@ func codexCredentialIDFromTarget(target store.ProfileTarget) (string, error) {
 	return credentialID, nil
 }
 
+func codexConfigSetIDFromTarget(target store.ProfileTarget) (string, error) {
+	metadata, err := codexpreset.DecodeTargetMetadata(target.MetadataJSON)
+	if err != nil {
+		return "", WrapError(ErrorStoreSchemaInvalid, "stored Codex config target metadata is invalid", err).
+			WithDetail("profile_id", target.ProfileID).
+			WithDetail("target_id", target.TargetID)
+	}
+	if metadata.TargetKind != codexconfig.TargetID || metadata.Mode != codexpreset.TargetModeConfigSet {
+		return "", NewError(ErrorCodexInvalid, "stored Codex config target is not a config set binding").
+			WithDetail("profile_id", target.ProfileID).
+			WithDetail("target_id", target.TargetID)
+	}
+	configSetID, err := codexpreset.ParseConfigSetBindingValueJSON(target.ValueJSON)
+	if err != nil {
+		return "", WrapError(ErrorStoreSchemaInvalid, "stored Codex config target value_json is invalid", err).
+			WithDetail("profile_id", target.ProfileID).
+			WithDetail("target_id", target.TargetID)
+	}
+	return configSetID, nil
+}
+
 func codexCredentialBindingCount(ctx context.Context, db *store.Store, credentialID string) (int, error) {
 	targets, err := db.ListProfileTargetsByProvider(ctx, codexconfig.ProviderID)
 	if err != nil {
@@ -62,6 +83,14 @@ func codexCredentialBindingCount(ctx context.Context, db *store.Store, credentia
 	return count, nil
 }
 
+func codexConfigSetBindingCount(ctx context.Context, db *store.Store, configSetID string) (int, error) {
+	count, err := db.CountProviderConfigSetReferences(ctx, configSetID)
+	if err != nil {
+		return 0, WrapError(ErrorStoreStatusFailed, "failed to count Codex config set bindings", err)
+	}
+	return count, nil
+}
+
 func upsertCodexAuthCredential(ctx context.Context, db *store.Store, credentialID string, payload string) (store.ProviderCredential, error) {
 	// Credential identity is ProfileDeck-owned and opaque. Codex tokens.account_id
 	// is deliberately ignored here because it is not a stable unique identifier.
@@ -77,6 +106,23 @@ func upsertCodexAuthCredential(ctx context.Context, db *store.Store, credentialI
 		return store.ProviderCredential{}, WrapError(ErrorStoreStatusFailed, "failed to store Codex auth credential", err)
 	}
 	return credential, nil
+}
+
+func upsertCodexConfigSet(ctx context.Context, db *store.Store, configSetID string, name string, description string, payload string) (store.ProviderConfigSet, error) {
+	configSet, err := db.UpsertProviderConfigSet(ctx, store.UpsertProviderConfigSetParams{
+		ID:            configSetID,
+		ProviderID:    codexconfig.ProviderID,
+		ConfigKind:    codexpreset.ConfigSetKindTOML,
+		Name:          name,
+		Description:   description,
+		PayloadText:   payload,
+		PayloadSHA256: sha256HexString(payload),
+		MetadataJSON:  "{}",
+	})
+	if err != nil {
+		return store.ProviderConfigSet{}, WrapError(ErrorStoreStatusFailed, "failed to store Codex config set", err)
+	}
+	return configSet, nil
 }
 
 func readCodexConfigSnapshot(home codexconfig.Home) (string, bool, *AppError) {
@@ -108,7 +154,9 @@ func codexConfigSnapshotAppError(path string, err error) *AppError {
 	case strings.HasPrefix(message, "read Codex config:"):
 		return WrapError(ErrorCodexInvalid, "failed to read Codex config", err).WithDetail("path", path)
 	case strings.HasPrefix(message, "Codex config TOML is invalid:"):
-		return WrapError(ErrorCodexInvalid, "Codex config TOML is invalid", err).WithDetail("path", path)
+		// TOML parser errors can include source lines, so the raw cause must not
+		// cross an output boundary where configuration secrets could be exposed.
+		return NewError(ErrorCodexInvalid, "Codex config TOML is invalid").WithDetail("path", path)
 	case message == "Codex config is too large":
 		return NewError(ErrorCodexInvalid, "Codex config is too large").WithDetail("path", path)
 	default:
@@ -279,6 +327,16 @@ func mapCodexCredentialStoreError(err error) error {
 	return WrapError(ErrorStoreStatusFailed, "Codex auth credential store operation failed", err)
 }
 
+func mapCodexConfigSetStoreError(err error) error {
+	if errors.Is(err, store.ErrNotFound) {
+		return NewError(ErrorCodexInvalid, "Codex config set not found")
+	}
+	if errors.Is(err, store.ErrInUse) {
+		return NewError(ErrorProfileInUse, "Codex config set is in use")
+	}
+	return WrapError(ErrorStoreStatusFailed, "Codex config set store operation failed", err)
+}
+
 func requireCodexAuthCredential(ctx context.Context, db *store.Store, credentialID string) (store.ProviderCredential, error) {
 	credential, err := db.GetProviderCredential(ctx, credentialID)
 	if err != nil {
@@ -293,6 +351,27 @@ func requireCodexAuthCredential(ctx context.Context, db *store.Store, credential
 		return store.ProviderCredential{}, codexAuthPayloadAppError(err).WithDetail("credential_id", credentialID)
 	}
 	return credential, nil
+}
+
+func requireCodexConfigSet(ctx context.Context, db *store.Store, configSetID string) (store.ProviderConfigSet, error) {
+	configSet, err := db.GetProviderConfigSet(ctx, configSetID)
+	if err != nil {
+		return store.ProviderConfigSet{}, mapCodexConfigSetStoreError(err)
+	}
+	if configSet.ProviderID != codexconfig.ProviderID || configSet.ConfigKind != codexpreset.ConfigSetKindTOML {
+		return store.ProviderConfigSet{}, NewError(ErrorCodexInvalid, "Codex config set has unsupported kind").
+			WithDetail("config_set_id", configSetID).
+			WithDetail("config_kind", configSet.ConfigKind)
+	}
+	if sha256HexString(configSet.PayloadText) != configSet.PayloadSHA256 {
+		return store.ProviderConfigSet{}, NewError(ErrorCodexInvalid, "Codex config set payload hash is invalid").
+			WithDetail("config_set_id", configSetID)
+	}
+	if err := codexconfig.ValidateTOML(configSet.PayloadText); err != nil {
+		return store.ProviderConfigSet{}, NewError(ErrorCodexInvalid, "Codex config set TOML is invalid").
+			WithDetail("config_set_id", configSetID)
+	}
+	return configSet, nil
 }
 
 func newCodexCredentialID(now time.Time) (string, error) {

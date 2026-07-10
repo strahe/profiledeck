@@ -2,8 +2,7 @@ package app
 
 import (
 	"context"
-	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
@@ -11,174 +10,280 @@ import (
 	"github.com/strahe/profiledeck/internal/store"
 )
 
-func TestCreateCodexProfileCreatesIndependentCredential(t *testing.T) {
+func TestCreateCodexProfileCreatesSharedConfigSetAndActivates(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
 	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-
-	writeCodexProfileFixture(t, codexDir, `model = "gpt-5.3-codex"`+"\n", `{"tokens":{"account_id":"same-account","access_token":"token-1"}}`)
-	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: configDir, CodexDir: codexDir, ProfileID: "work"}); err != nil {
-		t.Fatalf("expected first create to succeed, got %v", err)
-	}
-	completeCodexProfileSwitchForTest(t, ctx, configDir, "switch-active", "work")
-
-	writeCodexProfileFixture(t, codexDir, `model = "gpt-5-mini"`+"\n", `{"tokens":{"account_id":"same-account","access_token":"token-2"}}`)
-	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: configDir, CodexDir: codexDir, ProfileID: "personal"}); err != nil {
-		t.Fatalf("expected second create to succeed without auth binding choice, got %v", err)
-	}
-
-	authPath := filepath.Join(codexDir, codexconfig.AuthFileName)
-	if err := os.WriteFile(authPath, []byte(`{"tokens":{"account_id":"same-account","access_token":"live"}}`), 0o600); err != nil {
-		t.Fatalf("expected live auth mutation to succeed, got %v", err)
-	}
-	if _, err := ApplySwitch(ctx, ApplySwitchRequest{ConfigDir: configDir, ProviderID: codexconfig.ProviderID, ProfileID: "work", Confirm: true}); err != nil {
-		t.Fatalf("expected work switch to succeed, got %v", err)
-	}
-	assertJSONFile(t, authPath, "token-1")
-	if _, err := ApplySwitch(ctx, ApplySwitchRequest{ConfigDir: configDir, ProviderID: codexconfig.ProviderID, ProfileID: "personal", Confirm: true}); err != nil {
-		t.Fatalf("expected personal switch to succeed, got %v", err)
-	}
-	assertJSONFile(t, authPath, "token-2")
-}
-
-func TestForkCodexProfileSharesOrCopiesCredential(t *testing.T) {
-	ctx := context.Background()
-	configDir := t.TempDir()
-	codexDir := t.TempDir()
-	authPath := filepath.Join(codexDir, codexconfig.AuthFileName)
-	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
-		t.Fatalf("expected init to succeed, got %v", err)
-	}
-
-	writeCodexProfileFixture(t, codexDir, `model = "gpt-5.3-codex"`+"\n", `{"tokens":{"account_id":"team","access_token":"parent"}}`)
-	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: configDir, CodexDir: codexDir, ProfileID: "parent"}); err != nil {
-		t.Fatalf("expected parent create to succeed, got %v", err)
-	}
-	if _, err := ForkCodexProfile(ctx, ForkCodexProfileRequest{
-		ConfigDir:       configDir,
-		CodexDir:        codexDir,
-		SourceProfileID: "parent",
-		ProfileID:       "shared-child",
-		AuthBinding:     CodexForkAuthBindingShareParent,
-	}); err != nil {
-		t.Fatalf("expected shared fork to succeed, got %v", err)
-	}
-	if _, err := ForkCodexProfile(ctx, ForkCodexProfileRequest{
-		ConfigDir:       configDir,
-		CodexDir:        codexDir,
-		SourceProfileID: "parent",
-		ProfileID:       "copied-child",
-		AuthBinding:     CodexForkAuthBindingCopyNew,
-	}); err != nil {
-		t.Fatalf("expected copied fork to succeed, got %v", err)
-	}
-
-	writeCodexProfileFixture(t, codexDir, `model = "gpt-5.3-codex"`+"\n", `{"tokens":{"account_id":"team","access_token":"updated-parent"}}`)
-	if _, err := SyncCodexProfile(ctx, SyncCodexProfileRequest{
-		ConfigDir:  configDir,
-		CodexDir:   codexDir,
-		ProfileID:  "parent",
-		AuthUpdate: CodexSyncAuthUpdateShared,
-	}); err != nil {
-		t.Fatalf("expected parent shared sync to succeed, got %v", err)
-	}
-
-	if err := os.WriteFile(authPath, []byte(`{"tokens":{"account_id":"team","access_token":"live"}}`), 0o600); err != nil {
-		t.Fatalf("expected live auth mutation to succeed, got %v", err)
-	}
-	if _, err := ApplySwitch(ctx, ApplySwitchRequest{ConfigDir: configDir, ProviderID: codexconfig.ProviderID, ProfileID: "shared-child", Confirm: true}); err != nil {
-		t.Fatalf("expected shared child switch to succeed, got %v", err)
-	}
-	assertJSONFile(t, authPath, "updated-parent")
-	if _, err := ApplySwitch(ctx, ApplySwitchRequest{ConfigDir: configDir, ProviderID: codexconfig.ProviderID, ProfileID: "copied-child", Confirm: true}); err != nil {
-		t.Fatalf("expected copied child switch to succeed, got %v", err)
-	}
-	assertJSONFile(t, authPath, "parent")
-}
-
-func TestForkCodexProfileRejectsMissingSourceCredential(t *testing.T) {
-	ctx := context.Background()
-	configDir := t.TempDir()
-	codexDir := t.TempDir()
-	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
-		t.Fatalf("expected init to succeed, got %v", err)
-	}
-
-	writeCodexProfileFixture(t, codexDir, `model = "gpt-5.3-codex"`+"\n", `{"tokens":{"account_id":"team","access_token":"parent"}}`)
-	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: configDir, CodexDir: codexDir, ProfileID: "parent"}); err != nil {
-		t.Fatalf("expected parent create to succeed, got %v", err)
-	}
-
-	valueJSON, err := codexpreset.CredentialBindingValueJSON("cred_missing")
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"tokens":{"account_id":"work","access_token":"token-1"}}`)
+	result, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: configDir, CodexDir: codexDir, ProfileID: "work"})
 	if err != nil {
-		t.Fatalf("expected missing credential binding setup to encode, got %v", err)
+		t.Fatalf("expected profile create to succeed, got %v", err)
+	}
+	if !result.Summary.Active || result.ConfigSet.ID != codexSharedConfigSetID || result.ConfigSet.Name != codexSharedConfigSetName || result.ConfigSet.ReferenceCount != 1 {
+		t.Fatalf("unexpected create result: %#v", result)
+	}
+	if result.OperationID == "" {
+		t.Fatalf("expected maintenance operation id")
+	}
+
+	db, err := openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatalf("expected store open to succeed, got %v", err)
+	}
+	defer db.Close()
+	configTarget, err := db.GetProfileTarget(ctx, "work", codexconfig.ProviderID, codexconfig.TargetID)
+	if err != nil {
+		t.Fatalf("expected config target, got %v", err)
+	}
+	configSetID, err := codexpreset.ParseConfigSetBindingValueJSON(configTarget.ValueJSON)
+	if err != nil || configSetID != codexSharedConfigSetID {
+		t.Fatalf("unexpected config binding: id=%q err=%v", configSetID, err)
+	}
+	if configTarget.ValueJSON == "model = \"gpt-5\"\n" {
+		t.Fatalf("expected target to contain only a config set binding")
+	}
+}
+
+func TestCreateFirstCodexProfileRejectsCustomConfigSet(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"tokens":{"account_id":"work","access_token":"token"}}`)
+	_, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
+		ConfigDir: configDir, CodexDir: codexDir, ProfileID: "work", NewConfigSetID: "custom",
+	})
+	assertAppErrorCode(t, err, ErrorCodexInvalid)
+	list, err := ListCodexConfigSets(ctx, ListCodexConfigSetsRequest{ConfigDir: configDir})
+	if err != nil || len(list.ConfigSets) != 0 {
+		t.Fatalf("expected rejected first create to leave no Config Sets, got %#v err=%v", list, err)
+	}
+}
+
+func TestListCodexConfigSetsSurvivesInvalidActiveBinding(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"tokens":{"account_id":"work","access_token":"token"}}`)
+	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: configDir, CodexDir: codexDir, ProfileID: "work"}); err != nil {
+		t.Fatalf("expected profile create to succeed, got %v", err)
 	}
 	db, err := openHealthyStore(ctx, configDir, false)
 	if err != nil {
-		t.Fatalf("expected healthy store to open, got %v", err)
+		t.Fatalf("expected store open to succeed, got %v", err)
 	}
+	invalidBinding := `{`
 	if _, err := db.UpdateProfileTarget(ctx, store.UpdateProfileTargetParams{
-		ProfileID:  "parent",
-		ProviderID: codexconfig.ProviderID,
-		TargetID:   codexconfig.AuthTargetID,
-		ValueJSON:  &valueJSON,
+		ProfileID: "work", ProviderID: codexconfig.ProviderID, TargetID: codexconfig.TargetID, ValueJSON: &invalidBinding,
 	}); err != nil {
 		_ = db.Close()
-		t.Fatalf("expected auth target mutation setup to succeed, got %v", err)
+		t.Fatalf("expected active binding corruption setup to succeed, got %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("expected store close to succeed, got %v", err)
 	}
 
-	_, err = ForkCodexProfile(ctx, ForkCodexProfileRequest{
-		ConfigDir:       configDir,
-		CodexDir:        codexDir,
-		SourceProfileID: "parent",
-		ProfileID:       "shared-child",
-		AuthBinding:     CodexForkAuthBindingShareParent,
-	})
-	assertAppErrorCode(t, err, ErrorCodexInvalid)
+	list, err := ListCodexConfigSets(ctx, ListCodexConfigSetsRequest{ConfigDir: configDir})
+	if err != nil {
+		t.Fatalf("expected Config Set listing to survive an invalid active binding, got %v", err)
+	}
+	if len(list.ConfigSets) != 1 || list.ConfigSets[0].Active {
+		t.Fatalf("expected Config Sets without an active marker, got %#v", list.ConfigSets)
+	}
 }
 
-func TestSyncCodexProfileRequiresChoiceForChangedSharedCredential(t *testing.T) {
+func TestCreateCodexProfileDoesNotExposeInvalidConfigContent(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
 	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
+	secret := "config-parser-secret"
+	invalidConfig := "api_key = \"" + secret + "\"\n["
+	_, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
+		ConfigDir: configDir, CodexDir: codexDir, ProfileID: "work", ConfigContent: &invalidConfig,
+	})
+	assertAppErrorCode(t, err, ErrorCodexInvalid)
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("expected invalid TOML error not to expose config content, got %v", err)
+	}
+}
 
-	writeCodexProfileFixture(t, codexDir, `model = "gpt-5.3-codex"`+"\n", `{"tokens":{"account_id":"team","access_token":"token-1"}}`)
+func TestCreateCodexProfileReusesCurrentConfigSetWithIndependentCredential(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"tokens":{"account_id":"same","access_token":"token-1"}}`)
+	first, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: configDir, CodexDir: codexDir, ProfileID: "first"})
+	if err != nil {
+		t.Fatalf("expected first create to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5-mini\"\n", `{"tokens":{"account_id":"same","access_token":"token-2"}}`)
+	second, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: configDir, CodexDir: codexDir, ProfileID: "second"})
+	if err != nil {
+		t.Fatalf("expected second create to succeed, got %v", err)
+	}
+	if first.Summary.ConfigSetID != second.Summary.ConfigSetID || second.ConfigSet.ReferenceCount != 2 {
+		t.Fatalf("expected profiles to share config set: first=%#v second=%#v", first.Summary, second.Summary)
+	}
+	if first.Summary.CredentialID == second.Summary.CredentialID {
+		t.Fatalf("expected each created profile to own an independent credential")
+	}
+	firstDetail, err := GetCodexProfile(ctx, GetCodexProfileRequest{ConfigDir: configDir, ProfileID: "first"})
+	if err != nil {
+		t.Fatalf("expected first profile detail, got %v", err)
+	}
+	if firstDetail.Summary.Model != "gpt-5-mini" {
+		t.Fatalf("expected current config to be checked into shared set, got %#v", firstDetail.Summary)
+	}
+}
+
+func TestForkCodexProfileRequiresAtLeastOneCopiedBinding(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"tokens":{"account_id":"work","access_token":"token"}}`)
 	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: configDir, CodexDir: codexDir, ProfileID: "parent"}); err != nil {
 		t.Fatalf("expected parent create to succeed, got %v", err)
 	}
-	if _, err := ForkCodexProfile(ctx, ForkCodexProfileRequest{
-		ConfigDir:       configDir,
-		CodexDir:        codexDir,
-		SourceProfileID: "parent",
-		ProfileID:       "shared-child",
-		AuthBinding:     CodexForkAuthBindingShareParent,
-	}); err != nil {
-		t.Fatalf("expected shared fork to succeed, got %v", err)
-	}
-
-	writeCodexProfileFixture(t, codexDir, `model = "gpt-5.3-codex"`+"\n", `{"tokens":{"account_id":"team","access_token":"token-2"}}`)
-	_, err := SyncCodexProfile(ctx, SyncCodexProfileRequest{ConfigDir: configDir, CodexDir: codexDir, ProfileID: "parent"})
+	_, err := ForkCodexProfile(ctx, ForkCodexProfileRequest{
+		ConfigDir: configDir, CodexDir: codexDir, SourceProfileID: "parent", ProfileID: "alias",
+		CredentialBinding: CodexForkBindingShareParent, ConfigBinding: CodexForkBindingShareParent,
+	})
 	assertAppErrorCode(t, err, ErrorCodexInvalid)
 
-	result, err := SyncCodexProfile(ctx, SyncCodexProfileRequest{
-		ConfigDir:  configDir,
-		CodexDir:   codexDir,
-		ProfileID:  "parent",
-		AuthUpdate: CodexSyncAuthUpdateShared,
+	child, err := ForkCodexProfile(ctx, ForkCodexProfileRequest{
+		ConfigDir: configDir, CodexDir: codexDir, SourceProfileID: "parent", ProfileID: "child",
+		CredentialBinding: CodexForkBindingShareParent, ConfigBinding: CodexForkBindingCopyNew,
+		NewConfigSetID: "child-config",
 	})
 	if err != nil {
-		t.Fatalf("expected explicit shared sync to succeed, got %v", err)
+		t.Fatalf("expected fork with copied config to succeed, got %v", err)
 	}
-	if !hasWarning(result.Warnings, codexSharedCredentialWarning) {
-		t.Fatalf("expected shared credential warning, got %#v", result.Warnings)
+	if child.Summary.CredentialID == "" || child.ConfigSet.ID != "child-config" {
+		t.Fatalf("unexpected fork result: %#v", child)
+	}
+	parent, err := GetCodexProfile(ctx, GetCodexProfileRequest{ConfigDir: configDir, ProfileID: "parent"})
+	if err != nil {
+		t.Fatalf("expected parent detail, got %v", err)
+	}
+	if child.Summary.CredentialID != parent.Summary.CredentialID {
+		t.Fatalf("expected fork to share parent credential")
+	}
+	loginChild, err := ForkCodexProfile(ctx, ForkCodexProfileRequest{
+		ConfigDir: configDir, CodexDir: codexDir, SourceProfileID: "parent", ProfileID: "login-child",
+		CredentialBinding: CodexForkBindingCopyNew, ConfigBinding: CodexForkBindingShareParent,
+	})
+	if err != nil {
+		t.Fatalf("expected fork with copied credential to succeed, got %v", err)
+	}
+	if loginChild.Summary.CredentialID == parent.Summary.CredentialID || loginChild.Summary.ConfigSetID != parent.Summary.ConfigSetID {
+		t.Fatalf("expected independent credential with shared config, got %#v", loginChild.Summary)
+	}
+}
+
+func TestUpdateCodexProfileConfigSetRejectsActiveProfile(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"tokens":{"account_id":"work","access_token":"token"}}`)
+	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: configDir, CodexDir: codexDir, ProfileID: "parent"}); err != nil {
+		t.Fatalf("expected parent create to succeed, got %v", err)
+	}
+	if _, err := CopyCodexConfigSet(ctx, CopyCodexConfigSetRequest{
+		ConfigDir: configDir, SourceConfigSetID: codexSharedConfigSetID, ConfigSetID: "other", Name: "Other",
+	}); err != nil {
+		t.Fatalf("expected config set copy to succeed, got %v", err)
+	}
+	_, err := UpdateCodexProfileConfigSet(ctx, UpdateCodexProfileConfigSetRequest{ConfigDir: configDir, ProfileID: "parent", ConfigSetID: "other"})
+	assertAppErrorCode(t, err, ErrorCodexInvalid)
+	child, err := ForkCodexProfile(ctx, ForkCodexProfileRequest{
+		ConfigDir: configDir, CodexDir: codexDir, SourceProfileID: "parent", ProfileID: "child",
+		CredentialBinding: CodexForkBindingCopyNew, ConfigBinding: CodexForkBindingShareParent,
+	})
+	if err != nil {
+		t.Fatalf("expected inactive child create, got %v", err)
+	}
+	updated, err := UpdateCodexProfileConfigSet(ctx, UpdateCodexProfileConfigSetRequest{ConfigDir: configDir, ProfileID: child.Profile.ID, ConfigSetID: "other"})
+	if err != nil || updated.Summary.ConfigSetID != "other" {
+		t.Fatalf("expected inactive child config rebind, got %#v err=%v", updated, err)
+	}
+}
+
+func TestSaveActiveCodexProfileStateUpdatesSharedResources(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"tokens":{"account_id":"work","access_token":"token-1"}}`)
+	created, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: configDir, CodexDir: codexDir, ProfileID: "work"})
+	if err != nil {
+		t.Fatalf("expected create to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5-mini\"\n", `{"tokens":{"account_id":"work","access_token":"token-2"}}`)
+	result, err := SaveActiveCodexProfileState(ctx, SaveActiveCodexProfileStateRequest{ConfigDir: configDir, CodexDir: codexDir})
+	if err != nil {
+		t.Fatalf("expected save current to succeed, got %v", err)
+	}
+	if result.ProfileID != "work" || result.ConfigSet.Model != "gpt-5-mini" || result.CredentialID != created.Summary.CredentialID {
+		t.Fatalf("unexpected save result: %#v", result)
+	}
+
+	db, err := openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatalf("expected store open, got %v", err)
+	}
+	defer db.Close()
+	credential, err := db.GetProviderCredential(ctx, result.CredentialID)
+	if err != nil || credential.PayloadJSON != `{"tokens":{"account_id":"work","access_token":"token-2"}}` {
+		t.Fatalf("expected saved credential, got %#v err=%v", credential, err)
+	}
+	if credential.CredentialKind != codexpreset.CredentialKindAuthJSON || credential.ProviderID != codexconfig.ProviderID {
+		t.Fatalf("unexpected credential metadata: %#v", credential)
+	}
+}
+
+func TestSaveActiveCodexProfileStateRejectsDifferentCodexHome(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	activeCodexDir := t.TempDir()
+	otherCodexDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, activeCodexDir, "model = \"active\"\n", `{"tokens":{"account_id":"active","access_token":"active-token"}}`)
+	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: configDir, CodexDir: activeCodexDir, ProfileID: "active"}); err != nil {
+		t.Fatalf("expected create to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, otherCodexDir, "model = \"other\"\n", `{"tokens":{"account_id":"other","access_token":"other-token"}}`)
+
+	_, err := SaveActiveCodexProfileState(ctx, SaveActiveCodexProfileStateRequest{ConfigDir: configDir, CodexDir: otherCodexDir})
+	assertAppErrorCode(t, err, ErrorCodexInvalid)
+}
+
+func createTestCodexConfigSet(t *testing.T, ctx context.Context, db *store.Store, id string, content string) {
+	t.Helper()
+	if _, err := upsertCodexConfigSet(ctx, db, id, id, "", content); err != nil {
+		t.Fatalf("expected test config set create to succeed, got %v", err)
 	}
 }

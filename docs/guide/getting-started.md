@@ -77,3 +77,5 @@ profiledeck switch codex work --yes
 3. `~/.codex`
 
 For Codex profile switching, Codex must have `$CODEX_HOME/auth.json`.
+
+The first Profile creates and activates a Config Set named `shared`. Later Profiles reuse the active Config Set by default, so creating another login usually requires only logging in with that account and running `codex profile create` again. Use `--new-config-set <id>` when the current `config.toml` should become an independent Config Set.

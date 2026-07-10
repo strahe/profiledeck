@@ -39,6 +39,11 @@
 
 	let operations = $derived(plan?.operations ?? []);
 	let unsupportedCount = $derived(operations.filter((operation) => operation.action === "unsupported").length);
+	let loginChanges = $derived(!!plan?.bindings?.find((binding) => binding.target_id === "auth")?.changed);
+	let configChanges = $derived(!!plan?.bindings?.find((binding) => binding.target_id === "config")?.changed);
+	let changeSummary = $derived(
+		loginChanges && configChanges ? $_("useDialog.bothChange") : loginChanges ? $_("useDialog.loginOnly") : configChanges ? $_("useDialog.configOnly") : $_("useDialog.sameBindings"),
+	);
 
 	function handleOpenChange(value: boolean) {
 		open = value;
@@ -81,12 +86,23 @@
 				<ArrowRightIcon data-icon="inline-start" class="shrink-0 text-muted-foreground" />
 				<span class="min-w-0 flex-1 truncate text-right font-mono">{profile?.id ?? "—"}</span>
 			</div>
+			{#if plan}
+				<Alert.Root>
+					<ShieldCheckIcon data-icon="inline-start" />
+					<Alert.Title>{changeSummary}</Alert.Title>
+					<Alert.Description>{$_("useDialog.changeSummaryDescription")}</Alert.Description>
+				</Alert.Root>
+			{:else}
+				<Skeleton class="h-16 w-full" />
+			{/if}
 
+			{#if plan?.state_captures?.length}
 			<Alert.Root>
 				<ShieldCheckIcon data-icon="inline-start" />
-				<Alert.Title>{$_("useDialog.safetyTitle")}</Alert.Title>
-				<Alert.Description>{$_("useDialog.safetyDescription")}</Alert.Description>
+				<Alert.Title>{$_("useDialog.captureTitle")}</Alert.Title>
+				<Alert.Description>{$_("useDialog.captureDescription", { values: { count: plan.state_captures.length } })}</Alert.Description>
 			</Alert.Root>
+			{/if}
 
 			{#if inlineError}
 				<Alert.Root>

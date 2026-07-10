@@ -2,7 +2,11 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -15,100 +19,76 @@ import (
 )
 
 const (
-	CodexForkAuthBindingShareParent = "share-parent"
-	CodexForkAuthBindingCopyNew     = "copy-new"
-
-	CodexSyncAuthUpdateDefault   = ""
-	CodexSyncAuthUpdateShared    = "update-shared"
-	CodexSyncAuthUpdateForkNew   = "fork-new"
-	codexSharedCredentialWarning = "shared Codex auth credential updated"
+	CodexForkBindingShareParent = "share-parent"
+	CodexForkBindingCopyNew     = "copy-new"
+	codexSharedConfigSetID      = "shared"
+	codexSharedConfigSetName    = "Shared"
+	codexMaintenanceRandomBytes = 6
 )
 
-type LoadCodexProfileDraftRequest struct {
-	ConfigDir string
-	CodexDir  string
-}
-
 type CreateCodexProfileRequest struct {
-	ConfigDir     string  `json:"config_dir"`
-	CodexDir      string  `json:"codex_dir"`
-	ProfileID     string  `json:"profile_id"`
-	Name          *string `json:"name,omitempty"`
-	Description   *string `json:"description,omitempty"`
-	ConfigContent *string `json:"config_content,omitempty"`
-	AuthContent   *string `json:"auth_content,omitempty"`
+	ConfigDir               string  `json:"config_dir"`
+	CodexDir                string  `json:"codex_dir"`
+	ProfileID               string  `json:"profile_id"`
+	Name                    *string `json:"name,omitempty"`
+	Description             *string `json:"description,omitempty"`
+	NewConfigSetID          string  `json:"new_config_set_id,omitempty"`
+	NewConfigSetName        *string `json:"new_config_set_name,omitempty"`
+	NewConfigSetDescription *string `json:"new_config_set_description,omitempty"`
+	ConfigContent           *string `json:"config_content,omitempty"`
+	AuthContent             *string `json:"auth_content,omitempty"`
 }
 
 type ForkCodexProfileRequest struct {
-	ConfigDir       string  `json:"config_dir"`
-	CodexDir        string  `json:"codex_dir"`
-	SourceProfileID string  `json:"source_profile_id"`
-	ProfileID       string  `json:"profile_id"`
-	AuthBinding     string  `json:"auth_binding"`
-	Name            *string `json:"name,omitempty"`
-	Description     *string `json:"description,omitempty"`
+	ConfigDir               string  `json:"config_dir"`
+	CodexDir                string  `json:"codex_dir"`
+	SourceProfileID         string  `json:"source_profile_id"`
+	ProfileID               string  `json:"profile_id"`
+	CredentialBinding       string  `json:"credential_binding"`
+	ConfigBinding           string  `json:"config_binding"`
+	NewConfigSetID          string  `json:"new_config_set_id,omitempty"`
+	NewConfigSetName        *string `json:"new_config_set_name,omitempty"`
+	NewConfigSetDescription *string `json:"new_config_set_description,omitempty"`
+	Name                    *string `json:"name,omitempty"`
+	Description             *string `json:"description,omitempty"`
 }
 
-type SyncCodexProfileRequest struct {
-	ConfigDir     string  `json:"config_dir"`
-	CodexDir      string  `json:"codex_dir"`
-	ProfileID     string  `json:"profile_id"`
-	AuthUpdate    string  `json:"auth_update,omitempty"`
-	ConfigContent *string `json:"config_content,omitempty"`
-	AuthContent   *string `json:"auth_content,omitempty"`
+type UpdateCodexProfileConfigSetRequest struct {
+	ConfigDir   string `json:"config_dir"`
+	ProfileID   string `json:"profile_id"`
+	ConfigSetID string `json:"config_set_id"`
 }
 
-type CodexProfileDraft struct {
-	CodexDir       string `json:"codex_dir"`
-	ConfigPath     string `json:"config_path"`
-	AuthPath       string `json:"auth_path"`
-	ConfigContent  string `json:"config_content"`
-	AuthContent    string `json:"auth_content"`
-	ConfigSHA256   string `json:"config_sha256"`
-	AuthSHA256     string `json:"auth_sha256"`
-	CodexAccountID string `json:"codex_account_id,omitempty"`
-	Model          string `json:"model,omitempty"`
-	ModelProvider  string `json:"model_provider,omitempty"`
-	OpenAIBaseURL  string `json:"openai_base_url,omitempty"`
+type SaveActiveCodexProfileStateRequest struct {
+	ConfigDir string `json:"config_dir"`
+	CodexDir  string `json:"codex_dir"`
 }
 
 type CodexProfileSaveResult struct {
-	Provider     Provider      `json:"provider"`
-	Profile      Profile       `json:"profile"`
-	ConfigTarget ProfileTarget `json:"config_target"`
-	AuthTarget   ProfileTarget `json:"auth_target"`
-	CodexDir     string        `json:"codex_dir"`
-	ConfigPath   string        `json:"config_path"`
-	AuthPath     string        `json:"auth_path"`
-	Warnings     []string      `json:"warnings"`
+	OperationID string              `json:"operation_id"`
+	Provider    Provider            `json:"provider"`
+	Profile     Profile             `json:"profile"`
+	Summary     CodexProfileSummary `json:"summary"`
+	ConfigSet   CodexConfigSet      `json:"config_set"`
+	CodexDir    string              `json:"codex_dir"`
+	ConfigPath  string              `json:"config_path"`
+	AuthPath    string              `json:"auth_path"`
+	Warnings    []string            `json:"warnings,omitempty"`
+}
+
+type CodexProfileStateSaveResult struct {
+	OperationID              string         `json:"operation_id"`
+	ProfileID                string         `json:"profile_id"`
+	CredentialID             string         `json:"credential_id"`
+	CredentialReferenceCount int            `json:"credential_reference_count"`
+	ConfigSet                CodexConfigSet `json:"config_set"`
+	Warnings                 []string       `json:"warnings,omitempty"`
 }
 
 type codexProfilePayload struct {
 	Home          codexconfig.Home
 	ConfigContent string
 	AuthPayload   string
-}
-
-func LoadCodexProfileDraft(ctx context.Context, req LoadCodexProfileDraftRequest) (CodexProfileDraft, error) {
-	payload, err := loadCodexProfilePayload(req.CodexDir, nil, nil)
-	if err != nil {
-		return CodexProfileDraft{}, err
-	}
-	accountID, _ := codexauth.ExtractAccountID([]byte(payload.AuthPayload))
-	model, provider, baseURL := codexConfigSummaryFromContent(payload.ConfigContent)
-	return CodexProfileDraft{
-		CodexDir:       payload.Home.Dir,
-		ConfigPath:     payload.Home.ConfigPath,
-		AuthPath:       payload.Home.AuthPath,
-		ConfigContent:  payload.ConfigContent,
-		AuthContent:    payload.AuthPayload,
-		ConfigSHA256:   sha256HexString(payload.ConfigContent),
-		AuthSHA256:     sha256HexString(payload.AuthPayload),
-		CodexAccountID: accountID,
-		Model:          model,
-		ModelProvider:  provider,
-		OpenAIBaseURL:  baseURL,
-	}, nil
 }
 
 func CreateCodexProfile(ctx context.Context, req CreateCodexProfileRequest) (CodexProfileSaveResult, error) {
@@ -120,12 +100,74 @@ func CreateCodexProfile(ctx context.Context, req CreateCodexProfileRequest) (Cod
 	if appErr != nil {
 		return CodexProfileSaveResult{}, appErr
 	}
-	payload, err := loadCodexProfilePayload(req.CodexDir, req.ConfigContent, req.AuthContent)
+	home, err := resolveCodexMutationHome(req.CodexDir)
+	if err != nil {
+		return CodexProfileSaveResult{}, err
+	}
+	db, lock, operationID, err := openLockedCodexStore(ctx, req.ConfigDir, "profile-create")
+	if err != nil {
+		return CodexProfileSaveResult{}, err
+	}
+	defer db.Close()
+	defer lock.Release()
+	payload, err := loadCodexProfilePayload(home, req.ConfigContent, req.AuthContent)
 	if err != nil {
 		return CodexProfileSaveResult{}, err
 	}
 
-	return saveNewCodexProfile(ctx, req.ConfigDir, payload, profileID, fields, "", true)
+	var provider store.Provider
+	var profile store.Profile
+	var configSet store.ProviderConfigSet
+	err = db.WithTransaction(ctx, func(txStore *store.Store) error {
+		currentProvider, hasProvider, err := codexPreflightProvider(ctx, txStore, home)
+		if err != nil {
+			return err
+		}
+		if _, exists, err := codexPreflightProfile(ctx, txStore, profileID); err != nil {
+			return err
+		} else if exists {
+			return NewError(ErrorProfileAlreadyExists, "profile already exists").WithDetail("profile_id", profileID)
+		}
+		configSet, err = resolveCreatedProfileConfigSet(ctx, txStore, payload.ConfigContent, req)
+		if err != nil {
+			return err
+		}
+		credentialID, err := newCodexCredentialID(time.Now())
+		if err != nil {
+			return WrapError(ErrorCodexInvalid, "failed to generate Codex credential id", err)
+		}
+		if _, err := upsertCodexAuthCredential(ctx, txStore, credentialID, payload.AuthPayload); err != nil {
+			return err
+		}
+		providerMetadata, err := codexpreset.ProviderMetadataJSON(home)
+		if err != nil {
+			return WrapError(ErrorCodexInvalid, "failed to encode Codex provider metadata", err)
+		}
+		provider, err = upsertCodexProvider(ctx, txStore, providerMetadata, hasProvider)
+		if err != nil {
+			return err
+		}
+		_ = currentProvider
+		profile, err = upsertCodexProfile(ctx, txStore, profileID, fields, false)
+		if err != nil {
+			return err
+		}
+		if _, _, err := createCodexProfileTargets(ctx, txStore, profileID, home, configSet.ID, credentialID); err != nil {
+			return err
+		}
+		metadata, err := codexMaintenanceMetadata("profile-create", profileID, configSet.ID, credentialID)
+		if err != nil {
+			return err
+		}
+		_, err = txStore.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
+			ID: operationID, ProfileID: profileID, ProviderID: codexconfig.ProviderID, MetadataJSON: metadata, SetActive: true,
+		})
+		return err
+	})
+	if err != nil {
+		return CodexProfileSaveResult{}, wrapCodexMutationTxError("Codex profile create transaction failed", err)
+	}
+	return codexProfileSaveResultFromStore(ctx, db, provider, profile, configSet, operationID, payload.Home, nil)
 }
 
 func ForkCodexProfile(ctx context.Context, req ForkCodexProfileRequest) (CodexProfileSaveResult, error) {
@@ -137,9 +179,16 @@ func ForkCodexProfile(ctx context.Context, req ForkCodexProfileRequest) (CodexPr
 	if appErr != nil {
 		return CodexProfileSaveResult{}, appErr
 	}
-	authBinding, appErr := normalizeCodexForkAuthBinding(req.AuthBinding)
+	credentialBinding, appErr := normalizeCodexForkBinding(req.CredentialBinding, "credential")
 	if appErr != nil {
 		return CodexProfileSaveResult{}, appErr
+	}
+	configBinding, appErr := normalizeCodexForkBinding(req.ConfigBinding, "config")
+	if appErr != nil {
+		return CodexProfileSaveResult{}, appErr
+	}
+	if credentialBinding == CodexForkBindingShareParent && configBinding == CodexForkBindingShareParent {
+		return CodexProfileSaveResult{}, NewError(ErrorCodexInvalid, "a Codex fork must copy at least one binding")
 	}
 	fields, appErr := normalizeCodexProfileFields(profileID, req.Name, req.Description)
 	if appErr != nil {
@@ -149,44 +198,65 @@ func ForkCodexProfile(ctx context.Context, req ForkCodexProfileRequest) (CodexPr
 	if err != nil {
 		return CodexProfileSaveResult{}, err
 	}
-
-	db, err := openHealthyStore(ctx, req.ConfigDir, false)
+	db, lock, operationID, err := openLockedCodexStore(ctx, req.ConfigDir, "profile-fork")
 	if err != nil {
 		return CodexProfileSaveResult{}, err
 	}
 	defer db.Close()
+	defer lock.Release()
 
-	var result CodexProfileSaveResult
-	if err := db.WithTransaction(ctx, func(txStore *store.Store) error {
-		provider, hasProvider, err := codexPreflightProvider(ctx, txStore, home)
+	var provider store.Provider
+	var profile store.Profile
+	var configSet store.ProviderConfigSet
+	err = db.WithTransaction(ctx, func(txStore *store.Store) error {
+		var hasProvider bool
+		provider, hasProvider, err = codexPreflightProvider(ctx, txStore, home)
 		if err != nil {
 			return err
 		}
+		if !hasProvider {
+			return NewError(ErrorProviderNotFound, "Codex provider not found")
+		}
 		if _, err := txStore.GetProfile(ctx, sourceProfileID); err != nil {
 			return mapProfileStoreError(err)
+		}
+		if _, exists, err := codexPreflightProfile(ctx, txStore, profileID); err != nil {
+			return err
+		} else if exists {
+			return NewError(ErrorProfileAlreadyExists, "profile already exists").WithDetail("profile_id", profileID)
 		}
 		sourceTargets, err := txStore.ListProfileTargets(ctx, sourceProfileID, codexconfig.ProviderID, true)
 		if err != nil {
 			return WrapError(ErrorStoreStatusFailed, "failed to read source Codex profile targets", err)
 		}
-		sourceConfig, sourceAuth, err := requireCodexFullProfileTargets(sourceProfileID, sourceTargets)
+		sourceConfigTarget, sourceAuthTarget, err := requireCodexFullProfileTargets(sourceProfileID, sourceTargets)
 		if err != nil {
 			return err
 		}
-		configContent, err := replaceFileContentFromValueJSON(sourceConfig.ValueJSON)
+		sourceConfigSetID, err := codexConfigSetIDFromTarget(sourceConfigTarget)
 		if err != nil {
 			return err
 		}
-		sourceCredentialID, err := codexCredentialIDFromTarget(sourceAuth)
+		sourceConfigSet, err := requireCodexConfigSet(ctx, txStore, sourceConfigSetID)
 		if err != nil {
 			return err
 		}
-		sourceCredential, err := requireCodexAuthCredential(ctx, txStore, sourceCredentialID)
+		configSet = sourceConfigSet
+		if configBinding == CodexForkBindingCopyNew {
+			configSet, err = copyForkedCodexConfigSet(ctx, txStore, sourceConfigSet, req)
+			if err != nil {
+				return err
+			}
+		}
+		credentialID, err := codexCredentialIDFromTarget(sourceAuthTarget)
 		if err != nil {
 			return err
 		}
-		credentialID := sourceCredentialID
-		if authBinding == CodexForkAuthBindingCopyNew {
+		sourceCredential, err := requireCodexAuthCredential(ctx, txStore, credentialID)
+		if err != nil {
+			return err
+		}
+		if credentialBinding == CodexForkBindingCopyNew {
 			credentialID, err = newCodexCredentialID(time.Now())
 			if err != nil {
 				return WrapError(ErrorCodexInvalid, "failed to generate Codex credential id", err)
@@ -195,173 +265,342 @@ func ForkCodexProfile(ctx context.Context, req ForkCodexProfileRequest) (CodexPr
 				return err
 			}
 		}
-		payload := codexProfilePayload{
-			Home:          home,
-			ConfigContent: configContent,
-			AuthPayload:   "",
-		}
-		provider, profile, configTarget, authTarget, warnings, err := createCodexProfileTargets(ctx, txStore, payload, profileID, fields, credentialID, hasProvider)
+		profile, err = upsertCodexProfile(ctx, txStore, profileID, fields, false)
 		if err != nil {
 			return err
 		}
-		result, err = codexProfileSaveResult(provider, profile, configTarget, authTarget, home, warnings)
+		if _, _, err := createCodexProfileTargets(ctx, txStore, profileID, home, configSet.ID, credentialID); err != nil {
+			return err
+		}
+		metadata, err := codexMaintenanceMetadata("profile-fork", profileID, configSet.ID, credentialID)
+		if err != nil {
+			return err
+		}
+		_, err = txStore.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
+			ID: operationID, ProfileID: profileID, ProviderID: codexconfig.ProviderID, MetadataJSON: metadata,
+		})
 		return err
-	}); err != nil {
+	})
+	if err != nil {
 		return CodexProfileSaveResult{}, wrapCodexMutationTxError("Codex profile fork transaction failed", err)
 	}
-	return result, nil
+	return codexProfileSaveResultFromStore(ctx, db, provider, profile, configSet, operationID, home, nil)
 }
 
-func SyncCodexProfile(ctx context.Context, req SyncCodexProfileRequest) (CodexProfileSaveResult, error) {
+func UpdateCodexProfileConfigSet(ctx context.Context, req UpdateCodexProfileConfigSetRequest) (CodexProfileDetail, error) {
 	profileID, appErr := validateID(req.ProfileID, ErrorProfileInvalid)
 	if appErr != nil {
-		return CodexProfileSaveResult{}, appErr
+		return CodexProfileDetail{}, appErr
 	}
-	authUpdate, appErr := normalizeCodexSyncAuthUpdate(req.AuthUpdate)
+	configSetID, appErr := validateID(req.ConfigSetID, ErrorCodexInvalid)
 	if appErr != nil {
-		return CodexProfileSaveResult{}, appErr
+		return CodexProfileDetail{}, appErr
 	}
-	payload, err := loadCodexProfilePayload(req.CodexDir, req.ConfigContent, req.AuthContent)
+	db, lock, operationID, err := openLockedCodexStore(ctx, req.ConfigDir, "profile-set-config")
 	if err != nil {
-		return CodexProfileSaveResult{}, err
-	}
-
-	db, err := openHealthyStore(ctx, req.ConfigDir, false)
-	if err != nil {
-		return CodexProfileSaveResult{}, err
+		return CodexProfileDetail{}, err
 	}
 	defer db.Close()
-
-	var result CodexProfileSaveResult
-	if err := db.WithTransaction(ctx, func(txStore *store.Store) error {
-		provider, hasProvider, err := codexPreflightProvider(ctx, txStore, payload.Home)
+	defer lock.Release()
+	err = db.WithTransaction(ctx, func(txStore *store.Store) error {
+		active, exists, err := codexActiveState(ctx, txStore)
 		if err != nil {
 			return err
 		}
-		profile, hasProfile, err := codexPreflightProfile(ctx, txStore, profileID)
+		if exists && active.ProfileID == profileID {
+			return NewError(ErrorCodexInvalid, "active Codex profile config set cannot be changed").WithDetail("profile_id", profileID)
+		}
+		if _, err := requireCodexConfigSet(ctx, txStore, configSetID); err != nil {
+			return err
+		}
+		targets, err := txStore.ListProfileTargets(ctx, profileID, codexconfig.ProviderID, true)
+		if err != nil {
+			return WrapError(ErrorStoreStatusFailed, "failed to read Codex profile targets", err)
+		}
+		configTarget, _, err := requireCodexFullProfileTargets(profileID, targets)
 		if err != nil {
 			return err
 		}
-		if !hasProfile {
-			return NewError(ErrorProfileNotFound, "Codex profile not found").WithDetail("profile_id", profileID)
-		}
-		targets, err := codexPreflightTargets(ctx, txStore, payload.Home, profileID)
+		valueJSON, err := codexpreset.ConfigSetBindingValueJSON(configSetID)
 		if err != nil {
 			return err
 		}
-		if !targets.HasConfig || !targets.HasAuth {
-			return NewError(ErrorCodexInvalid, "Codex profile is not a valid full profile").WithDetail("profile_id", profileID)
+		if _, err := txStore.UpdateProfileTarget(ctx, store.UpdateProfileTargetParams{
+			ProfileID: profileID, ProviderID: codexconfig.ProviderID, TargetID: configTarget.TargetID, ValueJSON: &valueJSON,
+		}); err != nil {
+			return mapTargetStoreError(err)
 		}
-		credentialID, warnings, err := resolveCodexSyncCredential(ctx, txStore, targets.Auth, payload.AuthPayload, authUpdate)
+		metadata, err := codexMaintenanceMetadata("profile-set-config", profileID, configSetID, "")
 		if err != nil {
 			return err
 		}
-		configValueJSON, authValueJSON, providerMetadata, configMetadata, authMetadata, err := codexMutationEncodedValues(payload, credentialID)
-		if err != nil {
-			return err
-		}
-		provider, err = upsertCodexProvider(ctx, txStore, providerMetadata, hasProvider)
-		if err != nil {
-			return err
-		}
-		if _, err := upsertCodexAuthCredential(ctx, txStore, credentialID, payload.AuthPayload); err != nil {
-			return err
-		}
-		configTarget, err := upsertCodexConfigTarget(ctx, txStore, profileID, payload.Home, configValueJSON, configMetadata, targets.HasConfig)
-		if err != nil {
-			return err
-		}
-		authTarget, err := upsertCodexAuthTarget(ctx, txStore, profileID, payload.Home, authValueJSON, authMetadata, targets.HasAuth)
-		if err != nil {
-			return err
-		}
-		result, err = codexProfileSaveResult(provider, profile, configTarget, authTarget, payload.Home, warnings)
+		_, err = txStore.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
+			ID: operationID, ProfileID: profileID, ProviderID: codexconfig.ProviderID, MetadataJSON: metadata,
+		})
 		return err
-	}); err != nil {
-		return CodexProfileSaveResult{}, wrapCodexMutationTxError("Codex profile sync transaction failed", err)
+	})
+	if err != nil {
+		return CodexProfileDetail{}, wrapCodexMutationTxError("Codex profile config set update failed", err)
 	}
-	return result, nil
+	return getCodexProfileFromStore(ctx, db, profileID)
 }
 
-func saveNewCodexProfile(ctx context.Context, configDir string, payload codexProfilePayload, profileID string, fields codexProfileFields, credentialID string, createCredential bool) (CodexProfileSaveResult, error) {
-	db, err := openHealthyStore(ctx, configDir, false)
+func SaveActiveCodexProfileState(ctx context.Context, req SaveActiveCodexProfileStateRequest) (CodexProfileStateSaveResult, error) {
+	home, err := resolveCodexMutationHome(req.CodexDir)
 	if err != nil {
-		return CodexProfileSaveResult{}, err
+		return CodexProfileStateSaveResult{}, err
+	}
+	db, lock, operationID, err := openLockedCodexStore(ctx, req.ConfigDir, "profile-save-current")
+	if err != nil {
+		return CodexProfileStateSaveResult{}, err
 	}
 	defer db.Close()
-
-	var result CodexProfileSaveResult
-	if err := db.WithTransaction(ctx, func(txStore *store.Store) error {
-		provider, hasProvider, err := codexPreflightProvider(ctx, txStore, payload.Home)
-		if err != nil {
-			return err
-		}
-		_, hasProfile, err := codexPreflightProfile(ctx, txStore, profileID)
-		if err != nil {
-			return err
-		}
-		if hasProfile {
-			return NewError(ErrorProfileAlreadyExists, "profile already exists").WithDetail("profile_id", profileID)
-		}
-		if credentialID == "" {
-			credentialID, err = newCodexCredentialID(time.Now())
-			if err != nil {
-				return WrapError(ErrorCodexInvalid, "failed to generate Codex credential id", err)
-			}
-		}
-		provider, profile, configTarget, authTarget, warnings, err := createCodexProfileTargets(ctx, txStore, payload, profileID, fields, credentialID, hasProvider)
-		if err != nil {
-			return err
-		}
-		if createCredential {
-			if _, err := upsertCodexAuthCredential(ctx, txStore, credentialID, payload.AuthPayload); err != nil {
-				return err
-			}
-		}
-		result, err = codexProfileSaveResult(provider, profile, configTarget, authTarget, payload.Home, warnings)
-		return err
-	}); err != nil {
-		return CodexProfileSaveResult{}, wrapCodexMutationTxError("Codex profile create transaction failed", err)
+	defer lock.Release()
+	payload, err := loadCodexProfilePayload(home, nil, nil)
+	if err != nil {
+		return CodexProfileStateSaveResult{}, err
 	}
-	return result, nil
+
+	var profileID string
+	var credentialID string
+	var configSet store.ProviderConfigSet
+	err = db.WithTransaction(ctx, func(txStore *store.Store) error {
+		_, hasProvider, err := codexPreflightProvider(ctx, txStore, home)
+		if err != nil {
+			return err
+		}
+		if !hasProvider {
+			return NewError(ErrorProviderNotFound, "Codex provider not found")
+		}
+		active, exists, err := codexActiveState(ctx, txStore)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return NewError(ErrorProfileNotFound, "no active Codex profile")
+		}
+		profileID = active.ProfileID
+		targets, err := txStore.ListProfileTargets(ctx, profileID, codexconfig.ProviderID, true)
+		if err != nil {
+			return WrapError(ErrorStoreStatusFailed, "failed to read active Codex profile targets", err)
+		}
+		configTarget, authTarget, err := requireCodexFullProfileTargets(profileID, targets)
+		if err != nil {
+			return err
+		}
+		configSetID, err := codexConfigSetIDFromTarget(configTarget)
+		if err != nil {
+			return err
+		}
+		configSet, err = requireCodexConfigSet(ctx, txStore, configSetID)
+		if err != nil {
+			return err
+		}
+		credentialID, err = codexCredentialIDFromTarget(authTarget)
+		if err != nil {
+			return err
+		}
+		credential, err := requireCodexAuthCredential(ctx, txStore, credentialID)
+		if err != nil {
+			return err
+		}
+		configSet, err = upsertCodexConfigSet(ctx, txStore, configSet.ID, configSet.Name, configSet.Description, payload.ConfigContent)
+		if err != nil {
+			return err
+		}
+		if _, err := txStore.UpsertProviderCredential(ctx, store.UpsertProviderCredentialParams{
+			ID: credential.ID, ProviderID: credential.ProviderID, CredentialKind: credential.CredentialKind,
+			PayloadJSON: payload.AuthPayload, PayloadSHA256: sha256HexString(payload.AuthPayload), MetadataJSON: credential.MetadataJSON,
+		}); err != nil {
+			return mapCodexCredentialStoreError(err)
+		}
+		metadata, err := codexMaintenanceMetadata("profile-save-current", profileID, configSet.ID, credentialID)
+		if err != nil {
+			return err
+		}
+		_, err = txStore.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
+			ID: operationID, ProfileID: profileID, ProviderID: codexconfig.ProviderID, MetadataJSON: metadata,
+		})
+		return err
+	})
+	if err != nil {
+		return CodexProfileStateSaveResult{}, wrapCodexMutationTxError("Codex active profile state save failed", err)
+	}
+	credentialReferences, err := codexCredentialBindingCount(ctx, db, credentialID)
+	if err != nil {
+		return CodexProfileStateSaveResult{}, err
+	}
+	publicConfigSet, err := codexConfigSetFromStore(ctx, db, configSet, configSet.ID)
+	if err != nil {
+		return CodexProfileStateSaveResult{}, err
+	}
+	warnings := []string{}
+	if credentialReferences > 1 {
+		warnings = append(warnings, "shared Codex login state updated")
+	}
+	if publicConfigSet.ReferenceCount > 1 {
+		warnings = append(warnings, "shared Codex config set updated")
+	}
+	return CodexProfileStateSaveResult{
+		OperationID: operationID, ProfileID: profileID, CredentialID: credentialID,
+		CredentialReferenceCount: credentialReferences, ConfigSet: publicConfigSet, Warnings: warnings,
+	}, nil
 }
 
-func createCodexProfileTargets(ctx context.Context, db *store.Store, payload codexProfilePayload, profileID string, fields codexProfileFields, credentialID string, hasProvider bool) (store.Provider, store.Profile, store.ProfileTarget, store.ProfileTarget, []string, error) {
-	targets, err := codexPreflightTargets(ctx, db, payload.Home, profileID)
+func resolveCreatedProfileConfigSet(ctx context.Context, db *store.Store, content string, req CreateCodexProfileRequest) (store.ProviderConfigSet, error) {
+	active, activeExists, err := codexActiveState(ctx, db)
 	if err != nil {
-		return store.Provider{}, store.Profile{}, store.ProfileTarget{}, store.ProfileTarget{}, nil, err
+		return store.ProviderConfigSet{}, err
+	}
+	newID := strings.TrimSpace(req.NewConfigSetID)
+	if !activeExists && newID != "" {
+		return store.ProviderConfigSet{}, NewError(ErrorCodexInvalid, "the first Codex profile must create the shared config set")
+	}
+	if activeExists && newID == "" {
+		targets, err := db.ListProfileTargets(ctx, active.ProfileID, codexconfig.ProviderID, true)
+		if err != nil {
+			return store.ProviderConfigSet{}, WrapError(ErrorStoreStatusFailed, "failed to read active Codex profile targets", err)
+		}
+		configTarget, _, err := requireCodexFullProfileTargets(active.ProfileID, targets)
+		if err != nil {
+			return store.ProviderConfigSet{}, err
+		}
+		configSetID, err := codexConfigSetIDFromTarget(configTarget)
+		if err != nil {
+			return store.ProviderConfigSet{}, err
+		}
+		current, err := requireCodexConfigSet(ctx, db, configSetID)
+		if err != nil {
+			return store.ProviderConfigSet{}, err
+		}
+		return upsertCodexConfigSet(ctx, db, current.ID, current.Name, current.Description, content)
+	}
+	if !activeExists && newID == "" {
+		if shared, err := db.GetProviderConfigSet(ctx, codexSharedConfigSetID); err == nil {
+			if shared.ProviderID != codexconfig.ProviderID || shared.ConfigKind != codexpreset.ConfigSetKindTOML {
+				return store.ProviderConfigSet{}, NewError(ErrorCodexInvalid, "shared Codex config set has unsupported kind")
+			}
+			return upsertCodexConfigSet(ctx, db, shared.ID, shared.Name, shared.Description, content)
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return store.ProviderConfigSet{}, mapCodexConfigSetStoreError(err)
+		}
+		newID = codexSharedConfigSetID
+	}
+	id, appErr := validateID(newID, ErrorCodexInvalid)
+	if appErr != nil {
+		return store.ProviderConfigSet{}, appErr
+	}
+	if _, err := db.GetProviderConfigSet(ctx, id); err == nil {
+		return store.ProviderConfigSet{}, NewError(ErrorProfileAlreadyExists, "Codex config set already exists").WithDetail("config_set_id", id)
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return store.ProviderConfigSet{}, mapCodexConfigSetStoreError(err)
+	}
+	name := id
+	if id == codexSharedConfigSetID {
+		name = codexSharedConfigSetName
+	}
+	if req.NewConfigSetName != nil {
+		name, appErr = validateName(*req.NewConfigSetName, ErrorCodexInvalid)
+		if appErr != nil {
+			return store.ProviderConfigSet{}, appErr
+		}
+	}
+	description := ""
+	if req.NewConfigSetDescription != nil {
+		description, appErr = validateDescription(*req.NewConfigSetDescription, ErrorCodexInvalid)
+		if appErr != nil {
+			return store.ProviderConfigSet{}, appErr
+		}
+	}
+	return upsertCodexConfigSet(ctx, db, id, name, description, content)
+}
+
+func copyForkedCodexConfigSet(ctx context.Context, db *store.Store, source store.ProviderConfigSet, req ForkCodexProfileRequest) (store.ProviderConfigSet, error) {
+	id, appErr := validateID(req.NewConfigSetID, ErrorCodexInvalid)
+	if appErr != nil {
+		return store.ProviderConfigSet{}, appErr
+	}
+	if _, err := db.GetProviderConfigSet(ctx, id); err == nil {
+		return store.ProviderConfigSet{}, NewError(ErrorProfileAlreadyExists, "Codex config set already exists").WithDetail("config_set_id", id)
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return store.ProviderConfigSet{}, mapCodexConfigSetStoreError(err)
+	}
+	name := id
+	if req.NewConfigSetName != nil {
+		name, appErr = validateName(*req.NewConfigSetName, ErrorCodexInvalid)
+		if appErr != nil {
+			return store.ProviderConfigSet{}, appErr
+		}
+	}
+	description := source.Description
+	if req.NewConfigSetDescription != nil {
+		description, appErr = validateDescription(*req.NewConfigSetDescription, ErrorCodexInvalid)
+		if appErr != nil {
+			return store.ProviderConfigSet{}, appErr
+		}
+	}
+	return upsertCodexConfigSet(ctx, db, id, name, description, source.PayloadText)
+}
+
+func createCodexProfileTargets(ctx context.Context, db *store.Store, profileID string, home codexconfig.Home, configSetID string, credentialID string) (store.ProfileTarget, store.ProfileTarget, error) {
+	targets, err := codexPreflightTargets(ctx, db, home, profileID)
+	if err != nil {
+		return store.ProfileTarget{}, store.ProfileTarget{}, err
 	}
 	if targets.HasConfig || targets.HasAuth {
-		return store.Provider{}, store.Profile{}, store.ProfileTarget{}, store.ProfileTarget{}, nil, NewError(ErrorProfileAlreadyExists, "Codex profile targets already exist").WithDetail("profile_id", profileID)
+		return store.ProfileTarget{}, store.ProfileTarget{}, NewError(ErrorProfileAlreadyExists, "Codex profile targets already exist").WithDetail("profile_id", profileID)
 	}
-	configValueJSON, authValueJSON, providerMetadata, configMetadata, authMetadata, err := codexMutationEncodedValues(payload, credentialID)
+	configValue, err := codexpreset.ConfigSetBindingValueJSON(configSetID)
 	if err != nil {
-		return store.Provider{}, store.Profile{}, store.ProfileTarget{}, store.ProfileTarget{}, nil, err
+		return store.ProfileTarget{}, store.ProfileTarget{}, err
 	}
-	provider, err := upsertCodexProvider(ctx, db, providerMetadata, hasProvider)
+	authValue, err := codexpreset.CredentialBindingValueJSON(credentialID)
 	if err != nil {
-		return store.Provider{}, store.Profile{}, store.ProfileTarget{}, store.ProfileTarget{}, nil, err
+		return store.ProfileTarget{}, store.ProfileTarget{}, err
 	}
-	profile, err := upsertCodexProfile(ctx, db, profileID, fields, false)
+	configMetadata, err := codexpreset.TargetMetadataJSON(codexconfig.TargetID, codexpreset.TargetModeConfigSet)
 	if err != nil {
-		return store.Provider{}, store.Profile{}, store.ProfileTarget{}, store.ProfileTarget{}, nil, err
+		return store.ProfileTarget{}, store.ProfileTarget{}, err
 	}
-	configTarget, err := upsertCodexConfigTarget(ctx, db, profileID, payload.Home, configValueJSON, configMetadata, false)
+	authMetadata, err := codexpreset.TargetMetadataJSON(codexconfig.AuthTargetID, codexpreset.TargetModeCredential)
 	if err != nil {
-		return store.Provider{}, store.Profile{}, store.ProfileTarget{}, store.ProfileTarget{}, nil, err
+		return store.ProfileTarget{}, store.ProfileTarget{}, err
 	}
-	authTarget, err := upsertCodexAuthTarget(ctx, db, profileID, payload.Home, authValueJSON, authMetadata, false)
+	configTarget, err := upsertCodexConfigTarget(ctx, db, profileID, home, configValue, configMetadata, false)
 	if err != nil {
-		return store.Provider{}, store.Profile{}, store.ProfileTarget{}, store.ProfileTarget{}, nil, err
+		return store.ProfileTarget{}, store.ProfileTarget{}, err
 	}
-	return provider, profile, configTarget, authTarget, []string{}, nil
+	authTarget, err := upsertCodexAuthTarget(ctx, db, profileID, home, authValue, authMetadata, false)
+	if err != nil {
+		return store.ProfileTarget{}, store.ProfileTarget{}, err
+	}
+	return configTarget, authTarget, nil
 }
 
-func loadCodexProfilePayload(codexDir string, configContent *string, authContent *string) (codexProfilePayload, error) {
-	home, err := resolveCodexMutationHome(codexDir)
-	if err != nil {
-		return codexProfilePayload{}, err
+func requireCodexFullProfileTargets(profileID string, targets []store.ProfileTarget) (store.ProfileTarget, store.ProfileTarget, error) {
+	var configTarget store.ProfileTarget
+	var authTarget store.ProfileTarget
+	for _, target := range targets {
+		switch target.TargetID {
+		case codexconfig.TargetID:
+			if _, err := codexConfigSetIDFromTarget(target); err != nil {
+				return store.ProfileTarget{}, store.ProfileTarget{}, err
+			}
+			configTarget = target
+		case codexconfig.AuthTargetID:
+			if _, err := codexCredentialIDFromTarget(target); err != nil {
+				return store.ProfileTarget{}, store.ProfileTarget{}, err
+			}
+			authTarget = target
+		}
 	}
+	if configTarget.TargetID == "" || authTarget.TargetID == "" {
+		return store.ProfileTarget{}, store.ProfileTarget{}, NewError(ErrorCodexInvalid, "Codex profile is not a valid full profile").WithDetail("profile_id", profileID)
+	}
+	return configTarget, authTarget, nil
+}
+
+func loadCodexProfilePayload(home codexconfig.Home, configContent *string, authContent *string) (codexProfilePayload, error) {
 	config, err := loadCodexConfigContent(home, configContent)
 	if err != nil {
 		return codexProfilePayload{}, err
@@ -399,7 +638,7 @@ func loadCodexConfigContent(home codexconfig.Home, content *string) (string, err
 		return "", NewError(ErrorCodexInvalid, "Codex config is too large").WithDetail("config_path", home.ConfigPath)
 	}
 	if err := codexconfig.ValidateTOML(*content); err != nil {
-		return "", WrapError(ErrorCodexInvalid, "Codex config TOML is invalid", err).WithDetail("config_path", home.ConfigPath)
+		return "", NewError(ErrorCodexInvalid, "Codex config TOML is invalid").WithDetail("config_path", home.ConfigPath)
 	}
 	return *content, nil
 }
@@ -419,127 +658,63 @@ func loadCodexAuthPayload(home codexconfig.Home, content *string) (string, error
 	return payload, nil
 }
 
-func codexMutationEncodedValues(payload codexProfilePayload, credentialID string) (configValueJSON string, authValueJSON string, providerMetadata string, configTargetMetadata string, authTargetMetadata string, err error) {
-	configValueJSON, err = codexpreset.ReplaceFileValueJSON(payload.ConfigContent)
-	if err != nil {
-		return "", "", "", "", "", WrapError(ErrorCodexInvalid, "failed to encode Codex config target value", err)
+func normalizeCodexForkBinding(raw string, kind string) (string, *AppError) {
+	value := strings.TrimSpace(raw)
+	if value == CodexForkBindingShareParent || value == CodexForkBindingCopyNew {
+		return value, nil
 	}
-	authValueJSON, err = codexpreset.CredentialBindingValueJSON(credentialID)
-	if err != nil {
-		return "", "", "", "", "", WrapError(ErrorCodexInvalid, "failed to encode Codex auth target value", err)
-	}
-	providerMetadata, err = codexpreset.ProviderMetadataJSON(payload.Home)
-	if err != nil {
-		return "", "", "", "", "", WrapError(ErrorCodexInvalid, "failed to encode Codex provider metadata", err)
-	}
-	configTargetMetadata, err = codexpreset.TargetMetadataJSON(codexconfig.TargetID, codexpreset.TargetModeFullFile)
-	if err != nil {
-		return "", "", "", "", "", WrapError(ErrorCodexInvalid, "failed to encode Codex config target metadata", err)
-	}
-	authTargetMetadata, err = codexpreset.TargetMetadataJSON(codexconfig.AuthTargetID, codexpreset.TargetModeCredential)
-	if err != nil {
-		return "", "", "", "", "", WrapError(ErrorCodexInvalid, "failed to encode Codex auth target metadata", err)
-	}
-	return configValueJSON, authValueJSON, providerMetadata, configTargetMetadata, authTargetMetadata, nil
+	return "", NewError(ErrorCodexInvalid, "unsupported Codex fork "+kind+" binding").
+		WithDetail("binding", raw).
+		WithDetail("supported", []string{CodexForkBindingShareParent, CodexForkBindingCopyNew})
 }
 
-func requireCodexFullProfileTargets(profileID string, targets []store.ProfileTarget) (store.ProfileTarget, store.ProfileTarget, error) {
-	var configTarget store.ProfileTarget
-	var authTarget store.ProfileTarget
-	hasConfig := false
-	hasAuth := false
-	for _, target := range targets {
-		switch target.TargetID {
-		case codexconfig.TargetID:
-			metadata, err := codexpreset.DecodeTargetMetadata(target.MetadataJSON)
-			if err != nil {
-				return store.ProfileTarget{}, store.ProfileTarget{}, WrapError(ErrorStoreSchemaInvalid, "stored Codex config target metadata is invalid", err)
-			}
-			if metadata.Mode != codexpreset.TargetModeFullFile {
-				return store.ProfileTarget{}, store.ProfileTarget{}, NewError(ErrorCodexInvalid, "Codex config target is not full-file").WithDetail("profile_id", profileID)
-			}
-			configTarget = target
-			hasConfig = true
-		case codexconfig.AuthTargetID:
-			if _, err := codexCredentialIDFromTarget(target); err != nil {
-				return store.ProfileTarget{}, store.ProfileTarget{}, err
-			}
-			authTarget = target
-			hasAuth = true
-		}
-	}
-	if !hasConfig || !hasAuth {
-		return store.ProfileTarget{}, store.ProfileTarget{}, NewError(ErrorCodexInvalid, "Codex profile is not a valid full profile").WithDetail("profile_id", profileID)
-	}
-	return configTarget, authTarget, nil
-}
-
-func resolveCodexSyncCredential(ctx context.Context, db *store.Store, authTarget store.ProfileTarget, authPayload string, authUpdate string) (string, []string, error) {
-	credentialID, err := codexCredentialIDFromTarget(authTarget)
+func openLockedCodexStore(ctx context.Context, configDir string, operation string) (*store.Store, targetfs.Lock, string, error) {
+	_, paths, err := resolveRuntime(configDir)
 	if err != nil {
-		return "", nil, err
+		return nil, targetfs.Lock{}, "", err
 	}
-	credential, err := db.GetProviderCredential(ctx, credentialID)
+	db, err := openHealthyStore(ctx, configDir, false)
 	if err != nil {
-		return "", nil, mapCodexCredentialStoreError(err)
+		return nil, targetfs.Lock{}, "", err
 	}
-	if credential.PayloadJSON == authPayload && authUpdate != CodexSyncAuthUpdateForkNew {
-		return credentialID, []string{}, nil
-	}
-	count, err := codexCredentialBindingCount(ctx, db, credentialID)
+	operationID, err := newCodexMaintenanceOperationID(operation, time.Now())
 	if err != nil {
-		return "", nil, err
+		db.Close()
+		return nil, targetfs.Lock{}, "", WrapError(ErrorOperationCreateFailed, "failed to create Codex maintenance operation id", err)
 	}
-	if authUpdate == CodexSyncAuthUpdateForkNew {
-		id, err := newCodexCredentialID(time.Now())
-		if err != nil {
-			return "", nil, WrapError(ErrorCodexInvalid, "failed to generate Codex credential id", err)
-		}
-		return id, []string{}, nil
-	}
-	if count > 1 && authUpdate == CodexSyncAuthUpdateDefault {
-		return "", nil, NewError(ErrorCodexInvalid, "Codex auth credential is shared; choose an auth update mode").
-			WithDetail("profile_id", authTarget.ProfileID).
-			WithDetail("supported_auth_updates", []string{CodexSyncAuthUpdateShared, CodexSyncAuthUpdateForkNew})
-	}
-	warnings := []string{}
-	if count > 1 {
-		warnings = append(warnings, codexSharedCredentialWarning)
-	}
-	return credentialID, warnings, nil
-}
-
-func normalizeCodexForkAuthBinding(raw string) (string, *AppError) {
-	switch strings.TrimSpace(raw) {
-	case CodexForkAuthBindingShareParent, CodexForkAuthBindingCopyNew:
-		return strings.TrimSpace(raw), nil
-	default:
-		return "", NewError(ErrorCodexInvalid, "unsupported Codex fork auth binding").
-			WithDetail("auth_binding", raw).
-			WithDetail("supported", []string{CodexForkAuthBindingShareParent, CodexForkAuthBindingCopyNew})
-	}
-}
-
-func normalizeCodexSyncAuthUpdate(raw string) (string, *AppError) {
-	switch strings.TrimSpace(raw) {
-	case "", CodexSyncAuthUpdateShared, CodexSyncAuthUpdateForkNew:
-		return strings.TrimSpace(raw), nil
-	default:
-		return "", NewError(ErrorCodexInvalid, "unsupported Codex sync auth update").
-			WithDetail("auth_update", raw).
-			WithDetail("supported", []string{CodexSyncAuthUpdateShared, CodexSyncAuthUpdateForkNew})
-	}
-}
-
-func codexConfigSummaryFromContent(content string) (model string, provider string, baseURL string) {
-	valueJSON, err := codexpreset.ReplaceFileValueJSON(content)
+	lock, err := acquireSwitchLock(paths.Lock, operationID)
 	if err != nil {
-		return "", "", ""
+		db.Close()
+		return nil, targetfs.Lock{}, "", err
 	}
-	return codexConfigModelSummary(valueJSON)
+	return db, lock, operationID, nil
 }
 
-func codexProfileSaveResult(provider store.Provider, profile store.Profile, configTarget store.ProfileTarget, authTarget store.ProfileTarget, home codexconfig.Home, warnings []string) (CodexProfileSaveResult, error) {
+func newCodexMaintenanceOperationID(operation string, now time.Time) (string, error) {
+	randomBytes := make([]byte, codexMaintenanceRandomBytes)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("codex-%s-%d-%s", operation, now.UnixMilli(), hex.EncodeToString(randomBytes)), nil
+}
+
+func codexMaintenanceMetadata(action string, profileID string, configSetID string, credentialID string) (string, error) {
+	metadata := map[string]any{
+		"action":      action,
+		"provider_id": codexconfig.ProviderID,
+		"profile_id":  profileID,
+	}
+	if configSetID != "" {
+		metadata["config_set_id"] = configSetID
+	}
+	if credentialID != "" {
+		metadata["credential_id"] = credentialID
+	}
+	raw, err := json.Marshal(metadata)
+	return string(raw), err
+}
+
+func codexProfileSaveResultFromStore(ctx context.Context, db *store.Store, provider store.Provider, profile store.Profile, configSet store.ProviderConfigSet, operationID string, home codexconfig.Home, warnings []string) (CodexProfileSaveResult, error) {
 	publicProvider, err := providerFromStore(provider)
 	if err != nil {
 		return CodexProfileSaveResult{}, err
@@ -548,24 +723,26 @@ func codexProfileSaveResult(provider store.Provider, profile store.Profile, conf
 	if err != nil {
 		return CodexProfileSaveResult{}, err
 	}
-	publicConfigTarget, err := profileTargetFromStore(configTarget)
+	detail, err := getCodexProfileFromStore(ctx, db, profile.ID)
 	if err != nil {
 		return CodexProfileSaveResult{}, err
 	}
-	publicAuthTarget, err := profileTargetFromStore(authTarget)
+	activeID, err := activeCodexConfigSetID(ctx, db)
+	if err != nil {
+		return CodexProfileSaveResult{}, err
+	}
+	publicConfigSet, err := codexConfigSetFromStore(ctx, db, configSet, activeID)
 	if err != nil {
 		return CodexProfileSaveResult{}, err
 	}
 	return CodexProfileSaveResult{
-		Provider:     publicProvider,
-		Profile:      publicProfile,
-		ConfigTarget: publicConfigTarget,
-		AuthTarget:   publicAuthTarget,
-		CodexDir:     home.Dir,
-		ConfigPath:   home.ConfigPath,
-		AuthPath:     home.AuthPath,
-		Warnings:     warnings,
+		OperationID: operationID, Provider: publicProvider, Profile: publicProfile, Summary: detail.Summary,
+		ConfigSet: publicConfigSet, CodexDir: home.Dir, ConfigPath: home.ConfigPath, AuthPath: home.AuthPath, Warnings: warnings,
 	}, nil
+}
+
+func codexConfigSummaryFromContent(content string) (model string, provider string, baseURL string) {
+	return parseCodexConfigSummary(content)
 }
 
 func wrapCodexMutationTxError(message string, err error) error {

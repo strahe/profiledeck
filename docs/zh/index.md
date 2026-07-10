@@ -1,12 +1,12 @@
 # ProfileDeck
 
-ProfileDeck 用于安全切换本地 AI 编程工具的 profile。当前实现以 Codex 为主：可以从用户配置和文件形式的授权信息创建完整 Codex profile，在已保存的 profile 之间切换，导入本地 token 用量，并从中断的切换操作中恢复。
+ProfileDeck 用于安全切换本地 AI 编程工具的 Profile。当前实现以 Codex 为主：一个 Profile 组合隐藏登录 credential 与可复用 Config Set，事务流程负责切换工作副本、保留有效本地变化并支持恢复。
 
 ## 当前能力
 
-- 从 `$CODEX_HOME/config.toml` 和 `$CODEX_HOME/auth.json` 创建 Codex profile。
-- 通过带锁、hash guard、备份和原子写入的事务流程切换 Codex `config.toml` 与 `auth.json`。
-- 在完整文件 profile 之间共享或 fork 隐藏 Codex auth credential。
+- 从 `$CODEX_HOME/config.toml` 和 `$CODEX_HOME/auth.json` 创建 Codex Profile。
+- 在 Profile 之间独立共享 credential 和完整 Config Set。
+- 通过带锁、hash guard、备份和原子写入的事务流程切换，并自动捕获有效工作副本变化。
 - 导入 Codex session JSONL 用量并显示本地估算成本。
 - 查看备份、诊断运行状态、恢复失败切换、回滚已应用切换。
 - 管理通用 provider、profile 和 target file，用于高级本地流程。
@@ -28,6 +28,6 @@ Codex profile 切换要求 Codex 使用文件凭据。如果 `$CODEX_HOME/auth.j
 ## 文档入口
 
 - [快速开始](/zh/guide/getting-started) 说明本地构建、初始化和常用快捷命令。
-- [Codex Profile](/zh/codex/profiles) 说明 Codex 完整 profile 工作流。
+- [Codex Profile](/zh/codex/profiles) 说明 credential、Config Set 与工作副本语义。
 - [切换流程](/zh/operations/switching) 说明 plan、apply、备份和安全检查。
 - [数据与安全](/zh/reference/data-security) 说明 secret 存储、备份和脱敏边界。

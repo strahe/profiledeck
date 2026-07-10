@@ -38,12 +38,22 @@ profiledeck version
 profiledeck codex detect [--codex-dir PATH] [--json]
 profiledeck codex profile list [--json]
 profiledeck codex profile show <profile-id> [--json]
-profiledeck codex profile create <profile-id> [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
-profiledeck codex profile fork <source-profile-id> <new-profile-id> --auth-binding share-parent|copy-new [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
-profiledeck codex profile sync <profile-id> [--auth-update update-shared|fork-new] [--codex-dir PATH] [--json]
+profiledeck codex profile create <profile-id> [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
+profiledeck codex profile fork <source-profile-id> <new-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
+profiledeck codex profile save-current [--codex-dir PATH] [--json]
+profiledeck codex profile set-config <profile-id> <config-set-id> [--json]
+
+profiledeck codex config-set list [--json]
+profiledeck codex config-set show <config-set-id> [--json]
+profiledeck codex config-set create <config-set-id> [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
+profiledeck codex config-set copy <source-id> <new-id> [--name NAME] [--description TEXT] [--json]
+profiledeck codex config-set update <config-set-id> [--name NAME] [--description TEXT] [--json]
+profiledeck codex config-set delete <config-set-id> --yes [--json]
 ```
 
-`create` 从当前 Codex `config.toml` 和 `auth.json` 创建 profile，并创建新的隐藏 credential。`fork` 复制已有 profile，且必须显式选择 auth 绑定方式。`sync` 从当前 Codex 文件更新已有 profile；当更新共享 credential 或刻意分叉 credential 时使用 `--auth-update`。
+第一次 `profile create` 会把当前 Codex 文件捕获为隐藏 credential 和 `shared` Config Set。后续创建默认复用 active Config Set，除非传入 `--new-config-set`。`fork` 必须指定两个绑定选项，且至少一项为 `copy-new`；复制配置时还必须提供 `--new-config-set`。`save-current` 捕获两个 active 工作副本；`set-config` 只接受 inactive Profile。
+
+`config-set create` 捕获当前 `config.toml`。List 和 show 只返回摘要，不暴露 raw auth 或 raw TOML。只有未被引用的 Config Set 才能删除。
 
 ## 切换
 
@@ -88,6 +98,8 @@ profiledeck profile target show <profile-id> <provider-id> <target-id> [--json]
 profiledeck profile target update <profile-id> <provider-id> <target-id> [--path PATH] [--format FORMAT] [--strategy STRATEGY] [--value-json JSON] [--enabled] [--disabled] [--metadata-json JSON] [--json]
 profiledeck profile target delete <profile-id> <provider-id> <target-id> --yes [--json]
 ```
+
+Generic target CRUD 不能创建、修改或删除 Codex preset target。Credential 与 Config Set 绑定必须使用上面的 Codex 命令。
 
 ## 备份与恢复
 

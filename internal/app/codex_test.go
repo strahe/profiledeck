@@ -140,17 +140,21 @@ func TestCodexPlanRejectsMutatedPresetTargetPath(t *testing.T) {
 	}
 
 	mutatedPath := filepath.Join(t.TempDir(), "other.toml")
-	if _, err := UpdateProfileTarget(ctx, UpdateProfileTargetRequest{
-		ConfigDir:  configDir,
-		ProfileID:  "work",
-		ProviderID: codexconfig.ProviderID,
-		TargetID:   codexconfig.TargetID,
-		Path:       &mutatedPath,
+	db, err := openHealthyStore(ctx, configDir, false)
+	if err != nil {
+		t.Fatalf("expected store open to succeed, got %v", err)
+	}
+	if _, err := db.UpdateProfileTarget(ctx, store.UpdateProfileTargetParams{
+		ProfileID: "work", ProviderID: codexconfig.ProviderID, TargetID: codexconfig.TargetID, Path: &mutatedPath,
 	}); err != nil {
+		_ = db.Close()
 		t.Fatalf("expected target mutation setup to succeed, got %v", err)
 	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("expected store close to succeed, got %v", err)
+	}
 
-	_, err := BuildPlan(ctx, BuildPlanRequest{
+	_, err = BuildPlan(ctx, BuildPlanRequest{
 		ConfigDir:  configDir,
 		ProviderID: codexconfig.ProviderID,
 		ProfileID:  "work",
@@ -260,8 +264,8 @@ func TestCodexLegacyManagedProfileIsHiddenAndRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected profile list to succeed, got %v", err)
 	}
-	if len(list.Profiles) != 0 {
-		t.Fatalf("expected legacy managed profile to be hidden, got %#v", list.Profiles)
+	if len(list.Profiles) != 1 || !hasWarning(list.Profiles[0].Warnings, "config set binding is invalid") {
+		t.Fatalf("expected legacy managed profile to be reported as invalid, got %#v", list.Profiles)
 	}
 
 	_, err = BuildPlan(ctx, BuildPlanRequest{
@@ -287,18 +291,27 @@ func TestCodexLegacyAccountRefAuthProfileIsHiddenAndRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected provider metadata to encode, got %v", err)
 	}
-	configMetadata, err := codexpreset.TargetMetadataJSON(codexconfig.TargetID, codexpreset.TargetModeFullFile)
+	configMetadataRaw, err := json.Marshal(codexpreset.TargetMetadata{
+		Preset: codexconfig.PresetName, PresetVersion: codexconfig.PresetVersion,
+		TargetKind: codexconfig.TargetID, Mode: "full-file",
+	})
 	if err != nil {
 		t.Fatalf("expected config metadata to encode, got %v", err)
 	}
-	configValue, err := codexpreset.ReplaceFileValueJSON(`model = "gpt-5-codex"` + "\n")
+	configValueRaw, err := json.Marshal(map[string]string{"content": `model = "gpt-5-codex"` + "\n"})
 	if err != nil {
 		t.Fatalf("expected config value to encode, got %v", err)
 	}
-	legacyAuthMetadata, err := codexpreset.TargetMetadataJSON(codexconfig.AuthTargetID, codexpreset.TargetModeFullFile)
+	legacyAuthMetadataRaw, err := json.Marshal(codexpreset.TargetMetadata{
+		Preset: codexconfig.PresetName, PresetVersion: codexconfig.PresetVersion,
+		TargetKind: codexconfig.AuthTargetID, Mode: "full-file",
+	})
 	if err != nil {
 		t.Fatalf("expected legacy auth metadata to encode, got %v", err)
 	}
+	configMetadata := string(configMetadataRaw)
+	configValue := string(configValueRaw)
+	legacyAuthMetadata := string(legacyAuthMetadataRaw)
 	db, err := openHealthyStore(ctx, configDir, false)
 	if err != nil {
 		t.Fatalf("expected writable store to open, got %v", err)
@@ -355,8 +368,8 @@ func TestCodexLegacyAccountRefAuthProfileIsHiddenAndRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected profile list to succeed, got %v", err)
 	}
-	if len(list.Profiles) != 0 {
-		t.Fatalf("expected legacy account-ref auth profile to be hidden, got %#v", list.Profiles)
+	if len(list.Profiles) != 1 || !hasWarning(list.Profiles[0].Warnings, "login binding is invalid") {
+		t.Fatalf("expected legacy account-ref auth profile to be reported as invalid, got %#v", list.Profiles)
 	}
 
 	_, err = BuildPlan(ctx, BuildPlanRequest{
@@ -410,11 +423,8 @@ func TestCodexProfileCreateSwitchesFullConfigAndAuthThroughPipeline(t *testing.T
 	if err != nil {
 		t.Fatalf("expected Codex profile create to succeed, got %v", err)
 	}
-	if created.ConfigTarget.TargetID != codexconfig.TargetID || created.AuthTarget.TargetID != codexconfig.AuthTargetID {
-		t.Fatalf("unexpected created targets: %#v", created)
-	}
-	if created.AuthTarget.ValuePreview.Content != codexpreset.AuthPreviewContent {
-		t.Fatalf("expected created auth target preview to be redacted, got %#v", created.AuthTarget.ValuePreview)
+	if created.Summary.ConfigSetID != codexSharedConfigSetID || created.Summary.CredentialID == "" {
+		t.Fatalf("unexpected created bindings: %#v", created)
 	}
 
 	if err := os.WriteFile(configPath, []byte(`model = "other"`+"\n"+`api_key = "live-config-secret"`+"\n"), 0o600); err != nil {
@@ -452,8 +462,8 @@ func TestCodexProfileCreateSwitchesFullConfigAndAuthThroughPipeline(t *testing.T
 	}); err != nil {
 		t.Fatalf("expected Codex switch to succeed, got %v", err)
 	}
-	if got := readFileString(t, configPath); got != desiredConfig {
-		t.Fatalf("expected full config snapshot to be restored, got %q", got)
+	if got := readFileString(t, configPath); !strings.Contains(got, `model = "other"`) {
+		t.Fatalf("expected valid active config working copy to be checked in and retained, got %q", got)
 	}
 	assertJSONFile(t, authPath, "desired-secret")
 	if runtime.GOOS != "windows" {

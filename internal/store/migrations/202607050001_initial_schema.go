@@ -70,11 +70,28 @@ func upInitialSchema(ctx context.Context, db *bun.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_credentials_provider_id ON provider_credentials(provider_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_credentials_kind ON provider_credentials(credential_kind)`,
+		`CREATE TABLE IF NOT EXISTS provider_config_sets (
+			id TEXT PRIMARY KEY,
+			provider_id TEXT NOT NULL,
+			config_kind TEXT NOT NULL,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			payload_text TEXT NOT NULL,
+			payload_sha256 TEXT NOT NULL,
+			metadata_json TEXT NOT NULL DEFAULT '{}',
+			created_at_unix_ms INTEGER NOT NULL,
+			updated_at_unix_ms INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_provider_config_sets_provider_id ON provider_config_sets(provider_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_provider_config_sets_kind ON provider_config_sets(config_kind)`,
 	})
 }
 
 func downInitialSchema(ctx context.Context, db *bun.DB) error {
 	return execStatements(ctx, db, []string{
+		`DROP INDEX IF EXISTS idx_provider_config_sets_kind`,
+		`DROP INDEX IF EXISTS idx_provider_config_sets_provider_id`,
+		`DROP TABLE IF EXISTS provider_config_sets`,
 		`DROP INDEX IF EXISTS idx_provider_credentials_kind`,
 		`DROP INDEX IF EXISTS idx_provider_credentials_provider_id`,
 		`DROP TABLE IF EXISTS provider_credentials`,

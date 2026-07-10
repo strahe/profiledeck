@@ -102,6 +102,9 @@ func CreateProfileTarget(ctx context.Context, req CreateProfileTargetRequest) (P
 	if appErr != nil {
 		return ProfileTarget{}, appErr
 	}
+	if normalized.ProviderID == codexconfig.ProviderID {
+		return ProfileTarget{}, codexManagedTargetMutationError(normalized.TargetID)
+	}
 
 	db, err := openHealthyStore(ctx, req.ConfigDir, false)
 	if err != nil {
@@ -130,6 +133,9 @@ func UpdateProfileTarget(ctx context.Context, req UpdateProfileTargetRequest) (P
 	ids, appErr := normalizeProfileTargetIDs(req.ProfileID, req.ProviderID, req.TargetID)
 	if appErr != nil {
 		return ProfileTarget{}, appErr
+	}
+	if ids.ProviderID == codexconfig.ProviderID {
+		return ProfileTarget{}, codexManagedTargetMutationError(ids.TargetID)
 	}
 	if req.Path == nil && req.Format == nil && req.Strategy == nil && req.ValueJSON == nil && req.Enabled == nil && req.MetadataJSON == nil {
 		return ProfileTarget{}, NewError(ErrorTargetInvalid, "profile target update requires at least one changed field")
@@ -232,6 +238,9 @@ func DeleteProfileTarget(ctx context.Context, req DeleteProfileTargetRequest) (D
 	if appErr != nil {
 		return DeleteResult{}, appErr
 	}
+	if ids.ProviderID == codexconfig.ProviderID {
+		return DeleteResult{}, codexManagedTargetMutationError(ids.TargetID)
+	}
 	if !req.Confirm {
 		return DeleteResult{}, NewError(ErrorConfirmationRequired, "profile target delete requires confirmation")
 	}
@@ -246,6 +255,12 @@ func DeleteProfileTarget(ctx context.Context, req DeleteProfileTargetRequest) (D
 		return DeleteResult{}, mapTargetStoreError(err)
 	}
 	return DeleteResult{ID: ids.TargetID, Deleted: true}, nil
+}
+
+func codexManagedTargetMutationError(targetID string) *AppError {
+	return NewError(ErrorTargetInvalid, "Codex preset targets can only be changed through Codex profile services").
+		WithDetail("provider_id", codexconfig.ProviderID).
+		WithDetail("target_id", targetID)
 }
 
 type profileTargetIDs struct {
@@ -621,6 +636,13 @@ func targetValuePreview(providerID string, targetID string, format string, strat
 	}
 	if providerID == codexconfig.ProviderID && targetID == codexconfig.AuthTargetID {
 		return codexAuthTargetValuePreview(value)
+	}
+	if providerID == codexconfig.ProviderID && targetID == codexconfig.TargetID {
+		configSetID, ok := value["config_set_id"].(string)
+		if !ok || strings.TrimSpace(configSetID) == "" || len(value) != 1 {
+			return TextPreview{}, NewError(ErrorStoreSchemaInvalid, `stored Codex config target value_json must be {"config_set_id": string}`)
+		}
+		return TextPreview{Content: "Config Set: " + strings.TrimSpace(configSetID)}, nil
 	}
 	if strategy == targetStrategyReplaceFile {
 		return replaceFileTargetValuePreview(value)

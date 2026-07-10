@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,8 +26,9 @@ const (
 	sqliteDriverName  = "sqlite"
 	sqliteBusyTimeout = 5 * time.Second
 
-	OperationTypeSwitch   = "switch"
-	OperationTypeRollback = "rollback"
+	OperationTypeSwitch      = "switch"
+	OperationTypeRollback    = "rollback"
+	OperationTypeMaintenance = "maintenance"
 
 	OperationStatusPending = "pending"
 	OperationStatusFailed  = "failed"
@@ -37,6 +40,7 @@ const (
 	UsageCostStatusUnknown   = "unknown"
 
 	maxProviderCredentialPayloadBytes = 16 * 1024 * 1024
+	maxProviderConfigSetPayloadBytes  = 16 * 1024 * 1024
 )
 
 var (
@@ -174,6 +178,19 @@ type ProviderCredential struct {
 	UpdatedAtUnixMS int64
 }
 
+type ProviderConfigSet struct {
+	ID              string
+	ProviderID      string
+	ConfigKind      string
+	Name            string
+	Description     string
+	PayloadText     string
+	PayloadSHA256   string
+	MetadataJSON    string
+	CreatedAtUnixMS int64
+	UpdatedAtUnixMS int64
+}
+
 type Setting struct {
 	Key             string
 	ValueJSON       string
@@ -232,6 +249,14 @@ type CreateRollbackOperationParams struct {
 	MetadataJSON string
 }
 
+type CreateAppliedMaintenanceOperationParams struct {
+	ID           string
+	ProfileID    string
+	ProviderID   string
+	MetadataJSON string
+	SetActive    bool
+}
+
 type MarkOperationFailedParams struct {
 	ID           string
 	ErrorCode    string
@@ -240,10 +265,12 @@ type MarkOperationFailedParams struct {
 }
 
 type CompleteSwitchOperationParams struct {
-	ID           string
-	ProfileID    string
-	ProviderID   string
-	MetadataJSON string
+	ID                string
+	ProfileID         string
+	ProviderID        string
+	MetadataJSON      string
+	CredentialUpdates []UpsertProviderCredentialParams
+	ConfigSetUpdates  []UpsertProviderConfigSetParams
 }
 
 type RollbackActiveStateParams struct {
@@ -300,6 +327,24 @@ type UpsertProviderCredentialParams struct {
 	PayloadJSON    string
 	PayloadSHA256  string
 	MetadataJSON   string
+}
+
+type UpsertProviderConfigSetParams struct {
+	ID            string
+	ProviderID    string
+	ConfigKind    string
+	Name          string
+	Description   string
+	PayloadText   string
+	PayloadSHA256 string
+	MetadataJSON  string
+}
+
+type UpdateProviderConfigSetParams struct {
+	ID           string
+	Name         *string
+	Description  *string
+	MetadataJSON *string
 }
 
 type UpsertSettingParams struct {
@@ -515,6 +560,21 @@ var initialTableSpecs = []tableSpec{
 			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
 		},
 	},
+	{
+		name: "provider_config_sets",
+		columns: []columnSpec{
+			{name: "id", columnType: "TEXT", primaryKey: true},
+			{name: "provider_id", columnType: "TEXT", notNull: true},
+			{name: "config_kind", columnType: "TEXT", notNull: true},
+			{name: "name", columnType: "TEXT", notNull: true},
+			{name: "description", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
+			{name: "payload_text", columnType: "TEXT", notNull: true},
+			{name: "payload_sha256", columnType: "TEXT", notNull: true},
+			{name: "metadata_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
+			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
+			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
+		},
+	},
 }
 
 var initialIndexSpecs = []indexSpec{
@@ -535,6 +595,8 @@ var initialIndexSpecs = []indexSpec{
 	{name: "idx_usage_import_cursors_source", table: "usage_import_cursors", columns: []string{"source"}},
 	{name: "idx_provider_credentials_provider_id", table: "provider_credentials", columns: []string{"provider_id"}},
 	{name: "idx_provider_credentials_kind", table: "provider_credentials", columns: []string{"credential_kind"}},
+	{name: "idx_provider_config_sets_provider_id", table: "provider_config_sets", columns: []string{"provider_id"}},
+	{name: "idx_provider_config_sets_kind", table: "provider_config_sets", columns: []string{"config_kind"}},
 }
 
 var initialTriggerSpecs = []triggerSpec{
@@ -1350,6 +1412,246 @@ func (s *Store) ListProviderCredentials(ctx context.Context, providerID string) 
 	return credentials, nil
 }
 
+func (s *Store) UpsertProviderConfigSet(ctx context.Context, params UpsertProviderConfigSetParams) (ProviderConfigSet, error) {
+	if err := validateProviderConfigSetParams(params); err != nil {
+		return ProviderConfigSet{}, err
+	}
+	id := strings.TrimSpace(params.ID)
+	now := time.Now().UnixMilli()
+	metadataJSON := params.MetadataJSON
+	if metadataJSON == "" {
+		metadataJSON = "{}"
+	}
+	_, err := s.executor().ExecContext(
+		ctx,
+		`INSERT INTO provider_config_sets
+			(id, provider_id, config_kind, name, description, payload_text, payload_sha256, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name = excluded.name,
+			description = excluded.description,
+			payload_text = excluded.payload_text,
+			payload_sha256 = excluded.payload_sha256,
+			metadata_json = excluded.metadata_json,
+			updated_at_unix_ms = excluded.updated_at_unix_ms
+		WHERE provider_config_sets.provider_id = excluded.provider_id
+			AND provider_config_sets.config_kind = excluded.config_kind`,
+		id,
+		strings.TrimSpace(params.ProviderID),
+		strings.TrimSpace(params.ConfigKind),
+		strings.TrimSpace(params.Name),
+		strings.TrimSpace(params.Description),
+		params.PayloadText,
+		strings.ToLower(params.PayloadSHA256),
+		metadataJSON,
+		now,
+		now,
+	)
+	if err != nil {
+		return ProviderConfigSet{}, err
+	}
+	configSet, err := s.GetProviderConfigSet(ctx, id)
+	if err != nil {
+		return ProviderConfigSet{}, err
+	}
+	// A Config Set ID has one provider/kind identity for its full lifetime;
+	// capture updates may change only its metadata and payload.
+	if configSet.ProviderID != strings.TrimSpace(params.ProviderID) || configSet.ConfigKind != strings.TrimSpace(params.ConfigKind) {
+		return ProviderConfigSet{}, fmt.Errorf("provider config set identity does not match existing record")
+	}
+	return configSet, nil
+}
+
+func validateProviderConfigSetParams(params UpsertProviderConfigSetParams) error {
+	if strings.TrimSpace(params.ID) == "" {
+		return fmt.Errorf("provider config set id is required")
+	}
+	if strings.TrimSpace(params.ProviderID) == "" {
+		return fmt.Errorf("provider config set provider_id is required")
+	}
+	if strings.TrimSpace(params.ConfigKind) == "" {
+		return fmt.Errorf("provider config set kind is required")
+	}
+	if strings.TrimSpace(params.Name) == "" {
+		return fmt.Errorf("provider config set name is required")
+	}
+	if len(params.PayloadText) > maxProviderConfigSetPayloadBytes {
+		return fmt.Errorf("provider config set payload is too large")
+	}
+	digest, err := hex.DecodeString(params.PayloadSHA256)
+	if err != nil || len(digest) != sha256.Size {
+		return fmt.Errorf("provider config set payload sha256 is invalid")
+	}
+	actual := sha256.Sum256([]byte(params.PayloadText))
+	if !strings.EqualFold(params.PayloadSHA256, hex.EncodeToString(actual[:])) {
+		return fmt.Errorf("provider config set payload sha256 does not match payload")
+	}
+	metadataJSON := params.MetadataJSON
+	if metadataJSON == "" {
+		metadataJSON = "{}"
+	}
+	if err := validateJSONObject(metadataJSON, "provider config set metadata"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) GetProviderConfigSet(ctx context.Context, id string) (ProviderConfigSet, error) {
+	row := s.executor().QueryRowContext(
+		ctx,
+		`SELECT id, provider_id, config_kind, name, description, payload_text, payload_sha256, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		FROM provider_config_sets
+		WHERE id = ?`,
+		strings.TrimSpace(id),
+	)
+	configSet, err := scanProviderConfigSet(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ProviderConfigSet{}, ErrNotFound
+	}
+	return configSet, err
+}
+
+func (s *Store) ListProviderConfigSets(ctx context.Context, providerID string, configKind string) ([]ProviderConfigSet, error) {
+	query := `SELECT id, provider_id, config_kind, name, description, payload_text, payload_sha256, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		FROM provider_config_sets
+		WHERE provider_id = ?`
+	args := []any{strings.TrimSpace(providerID)}
+	if strings.TrimSpace(configKind) != "" {
+		query += " AND config_kind = ?"
+		args = append(args, strings.TrimSpace(configKind))
+	}
+	query += " ORDER BY name COLLATE NOCASE ASC, id ASC"
+	rows, err := s.executor().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	configSets := []ProviderConfigSet{}
+	for rows.Next() {
+		configSet, err := scanProviderConfigSet(rows)
+		if err != nil {
+			return nil, err
+		}
+		configSets = append(configSets, configSet)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return configSets, nil
+}
+
+func (s *Store) UpdateProviderConfigSet(ctx context.Context, params UpdateProviderConfigSetParams) (ProviderConfigSet, error) {
+	assignments := []string{}
+	args := []any{}
+	if params.Name != nil {
+		name := strings.TrimSpace(*params.Name)
+		if name == "" {
+			return ProviderConfigSet{}, fmt.Errorf("provider config set name is required")
+		}
+		assignments = append(assignments, "name = ?")
+		args = append(args, name)
+	}
+	if params.Description != nil {
+		assignments = append(assignments, "description = ?")
+		args = append(args, strings.TrimSpace(*params.Description))
+	}
+	if params.MetadataJSON != nil {
+		if err := validateJSONObject(*params.MetadataJSON, "provider config set metadata"); err != nil {
+			return ProviderConfigSet{}, err
+		}
+		assignments = append(assignments, "metadata_json = ?")
+		args = append(args, *params.MetadataJSON)
+	}
+	if len(assignments) == 0 {
+		return s.GetProviderConfigSet(ctx, params.ID)
+	}
+	assignments = append(assignments, "updated_at_unix_ms = ?")
+	args = append(args, time.Now().UnixMilli(), strings.TrimSpace(params.ID))
+	result, err := s.executor().ExecContext(
+		ctx,
+		`UPDATE provider_config_sets SET `+strings.Join(assignments, ", ")+` WHERE id = ?`,
+		args...,
+	)
+	if err != nil {
+		return ProviderConfigSet{}, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return ProviderConfigSet{}, err
+	}
+	if rows == 0 {
+		return ProviderConfigSet{}, ErrNotFound
+	}
+	return s.GetProviderConfigSet(ctx, params.ID)
+}
+
+func (s *Store) CountProviderConfigSetReferences(ctx context.Context, id string) (int, error) {
+	var count int
+	err := s.executor().QueryRowContext(
+		ctx,
+		`SELECT COUNT(1)
+		FROM profile_targets AS target
+		JOIN provider_config_sets AS config_set ON config_set.id = ?
+		WHERE target.provider_id = config_set.provider_id
+			AND json_valid(target.value_json) = 1
+			AND json_extract(target.value_json, '$.config_set_id') = config_set.id`,
+		strings.TrimSpace(id),
+	).Scan(&count)
+	return count, err
+}
+
+func (s *Store) DeleteProviderConfigSet(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	result, err := s.executor().ExecContext(
+		ctx,
+		`DELETE FROM provider_config_sets
+		WHERE id = ?
+			AND NOT EXISTS (
+				SELECT 1 FROM profile_targets AS target
+				WHERE target.provider_id = provider_config_sets.provider_id
+					AND json_valid(target.value_json) = 1
+					AND json_extract(target.value_json, '$.config_set_id') = provider_config_sets.id
+			)`,
+		id,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		if _, getErr := s.GetProviderConfigSet(ctx, id); errors.Is(getErr, ErrNotFound) {
+			return ErrNotFound
+		} else if getErr != nil {
+			return getErr
+		}
+		return ErrInUse
+	}
+	return nil
+}
+
+func validateJSONObject(valueJSON string, label string) error {
+	decoder := json.NewDecoder(strings.NewReader(valueJSON))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	if _, ok := value.(map[string]any); !ok {
+		return fmt.Errorf("%s must be a JSON object", label)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err == nil {
+		return fmt.Errorf("%s must contain one JSON object", label)
+	} else if !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
+
 func (s *Store) CreatePendingSwitchOperation(ctx context.Context, params CreateSwitchOperationParams) (Operation, error) {
 	now := time.Now().UnixMilli()
 	_, err := s.executor().ExecContext(
@@ -1394,6 +1696,51 @@ func (s *Store) CreatePendingRollbackOperation(ctx context.Context, params Creat
 			return Operation{}, ErrAlreadyExists
 		}
 		return Operation{}, err
+	}
+	return s.GetOperation(ctx, params.ID)
+}
+
+func (s *Store) CreateAppliedMaintenanceOperation(ctx context.Context, params CreateAppliedMaintenanceOperationParams) (Operation, error) {
+	now := time.Now().UnixMilli()
+	_, err := s.executor().ExecContext(
+		ctx,
+		`INSERT INTO operations
+			(id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		params.ID,
+		OperationTypeMaintenance,
+		OperationStatusApplied,
+		params.ProfileID,
+		params.MetadataJSON,
+		now,
+		now,
+	)
+	if err != nil {
+		if isSQLiteConstraintError(err) {
+			return Operation{}, ErrAlreadyExists
+		}
+		return Operation{}, err
+	}
+	if params.SetActive {
+		// Maintenance capture adopts the current working copy. Its operation and
+		// active state must be committed by the caller's surrounding transaction.
+		_, err = s.executor().ExecContext(
+			ctx,
+			`INSERT INTO active_states (scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(scope_type, scope_id) DO UPDATE SET
+				profile_id = excluded.profile_id,
+				operation_id = excluded.operation_id,
+				updated_at_unix_ms = excluded.updated_at_unix_ms`,
+			ActiveStateScopeProvider,
+			params.ProviderID,
+			params.ProfileID,
+			params.ID,
+			now,
+		)
+		if err != nil {
+			return Operation{}, err
+		}
 	}
 	return s.GetOperation(ctx, params.ID)
 }
@@ -1490,6 +1837,16 @@ func (s *Store) MarkOperationFailed(ctx context.Context, params MarkOperationFai
 }
 
 func (s *Store) CompleteSwitchOperation(ctx context.Context, params CompleteSwitchOperationParams) error {
+	for _, update := range params.CredentialUpdates {
+		if err := validateProviderCredentialParams(update); err != nil {
+			return err
+		}
+	}
+	for _, update := range params.ConfigSetUpdates {
+		if err := validateProviderConfigSetParams(update); err != nil {
+			return err
+		}
+	}
 	tx, err := s.db.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1500,6 +1857,17 @@ func (s *Store) CompleteSwitchOperation(ctx context.Context, params CompleteSwit
 			_ = tx.Rollback()
 		}
 	}()
+	txStore := &Store{db: s.db, exec: tx, transactional: true}
+	for _, update := range params.CredentialUpdates {
+		if _, err := txStore.UpsertProviderCredential(ctx, update); err != nil {
+			return err
+		}
+	}
+	for _, update := range params.ConfigSetUpdates {
+		if _, err := txStore.UpsertProviderConfigSet(ctx, update); err != nil {
+			return err
+		}
+	}
 
 	now := time.Now().UnixMilli()
 	result, err := tx.ExecContext(
@@ -2303,6 +2671,25 @@ func scanProviderCredential(row rowScanner) (ProviderCredential, error) {
 		return ProviderCredential{}, err
 	}
 	return credential, nil
+}
+
+func scanProviderConfigSet(row rowScanner) (ProviderConfigSet, error) {
+	var configSet ProviderConfigSet
+	if err := row.Scan(
+		&configSet.ID,
+		&configSet.ProviderID,
+		&configSet.ConfigKind,
+		&configSet.Name,
+		&configSet.Description,
+		&configSet.PayloadText,
+		&configSet.PayloadSHA256,
+		&configSet.MetadataJSON,
+		&configSet.CreatedAtUnixMS,
+		&configSet.UpdatedAtUnixMS,
+	); err != nil {
+		return ProviderConfigSet{}, err
+	}
+	return configSet, nil
 }
 
 func scanSetting(row rowScanner) (Setting, error) {

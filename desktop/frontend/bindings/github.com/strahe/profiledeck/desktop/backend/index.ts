@@ -21,12 +21,15 @@ export {
 };
 
 export type {
+    CopyCodexConfigSetRequest,
+    CreateCodexConfigSetRequest,
     CreateCodexProfileRequest,
     DashboardResult,
     DesktopError,
     Environment,
     ForkCodexProfileRequest,
     SwitchApplyRequest,
-    SyncCodexProfileRequest,
+    UpdateCodexConfigSetRequest,
+    UpdateCodexProfileConfigSetRequest,
     UpdateCodexProfileMetadataRequest
 } from "./models.js";

@@ -1,8 +1,9 @@
-import type { CodexProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+import type { CodexConfigSet, CodexProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
 
 export type CodexProfileRoute =
 	| { kind: "list"; profileID: "" }
 	| { kind: "new"; profileID: "" }
+	| { kind: "config-sets"; profileID: "" }
 	| { kind: "detail"; profileID: string }
 	| { kind: "fork"; profileID: string };
 
@@ -12,10 +13,8 @@ export type CodexProfileListItem = {
 	name: string;
 	description: string;
 	updated: string;
-	model: string;
-	provider: string;
-	baseURL: string;
 	account: string;
+	configSet: string;
 };
 
 export type ProfileUseRequest = {
@@ -23,5 +22,9 @@ export type ProfileUseRequest = {
 	sequence: number;
 };
 
-export type CodexForkAuthBinding = "share-parent" | "copy-new";
-export type CodexSyncAuthUpdate = "update-shared" | "fork-new";
+export type CodexForkBinding = "share-parent" | "copy-new";
+export type ConfigSetDialogMode = "create" | "copy" | "edit";
+export type ConfigSetDialogState = {
+	mode: ConfigSetDialogMode;
+	source: CodexConfigSet | null;
+};

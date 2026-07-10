@@ -78,6 +78,24 @@ export interface BackupSummary {
     "unsupported_reason"?: string;
 }
 
+export interface CodexConfigSet {
+    "id": string;
+    "name": string;
+    "description"?: string;
+    "reference_count": number;
+    "active": boolean;
+    "model"?: string;
+    "model_provider"?: string;
+    "openai_base_url"?: string;
+    "payload_sha256": string;
+    "created_at_unix_ms": number;
+    "updated_at_unix_ms": number;
+}
+
+export interface CodexConfigSetListResult {
+    "config_sets": CodexConfigSet[] | null;
+}
+
 export interface CodexDetectResult {
     "provider_id": string;
     "adapter_id": string;
@@ -94,9 +112,17 @@ export interface CodexDetectResult {
     "warnings": string[] | null;
 }
 
+export interface CodexLoginStateSummary {
+    "credential_id": string;
+    "codex_account_id"?: string;
+    "reference_count": number;
+    "updated_at_unix_ms": number;
+}
+
 export interface CodexProfileDetail {
     "summary": CodexProfileSummary;
-    "targets": ProfileTarget[] | null;
+    "login"?: CodexLoginStateSummary | null;
+    "config_set"?: CodexConfigSet | null;
 }
 
 export interface CodexProfileListResult {
@@ -104,24 +130,38 @@ export interface CodexProfileListResult {
 }
 
 export interface CodexProfileSaveResult {
+    "operation_id": string;
     "provider": Provider;
     "profile": Profile;
-    "config_target": ProfileTarget;
-    "auth_target": ProfileTarget;
+    "summary": CodexProfileSummary;
+    "config_set": CodexConfigSet;
     "codex_dir": string;
     "config_path": string;
     "auth_path": string;
-    "warnings": string[] | null;
+    "warnings"?: string[] | null;
+}
+
+export interface CodexProfileStateSaveResult {
+    "operation_id": string;
+    "profile_id": string;
+    "credential_id": string;
+    "credential_reference_count": number;
+    "config_set": CodexConfigSet;
+    "warnings"?: string[] | null;
 }
 
 export interface CodexProfileSummary {
     "profile": Profile;
     "provider_id": string;
+    "credential_id"?: string;
+    "credential_reference_count": number;
     "codex_account_id"?: string;
+    "config_set_id"?: string;
+    "config_set_name"?: string;
+    "config_set_reference_count": number;
     "model"?: string;
     "model_provider"?: string;
     "openai_base_url"?: string;
-    "target_count": number;
     "active": boolean;
     "active_operation_id"?: string;
     "updated_at_unix_ms": number;
@@ -212,6 +252,13 @@ export interface ListBackupsResult {
     "backups": BackupSummary[] | null;
 }
 
+export interface PlanBinding {
+    "target_id": string;
+    "current_resource_id"?: string;
+    "target_resource_id": string;
+    "changed": boolean;
+}
+
 export interface PlanOperation {
     "provider_id": string;
     "profile_id": string;
@@ -296,6 +343,14 @@ export interface RollbackCounts {
     "noop": number;
 }
 
+export interface StateCapture {
+    "resource_kind": string;
+    "resource_id": string;
+    "resource_name"?: string;
+    "stored_sha256": string;
+    "current_sha256": string;
+}
+
 export interface StatusResult {
     "config_dir": string;
     "runtime_root": string;
@@ -318,6 +373,8 @@ export interface SwitchPlan {
     "plan_fingerprint": string;
     "provider": PlanProvider;
     "profile": PlanProfile;
+    "bindings"?: PlanBinding[] | null;
+    "state_captures"?: StateCapture[] | null;
     "operations": PlanOperation[] | null;
     "warnings": string[] | null;
 }

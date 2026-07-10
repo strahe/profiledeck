@@ -13,7 +13,6 @@ import (
 
 	"github.com/strahe/profiledeck/internal/app"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
-	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -40,10 +39,11 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 		codex.Command("profile").Command("show") == nil ||
 		codex.Command("profile").Command("create") == nil ||
 		codex.Command("profile").Command("fork") == nil ||
-		codex.Command("profile").Command("sync") == nil ||
-		codex.Command("profile").Command("capture") != nil ||
-		codex.Command("profile").Command("set") != nil {
-		t.Fatalf("expected codex profile list/show/create/fork/sync subcommands without capture/set")
+		codex.Command("profile").Command("save-current") == nil ||
+		codex.Command("profile").Command("set-config") == nil ||
+		codex.Command("profile").Command("sync") != nil ||
+		codex.Command("config-set") == nil {
+		t.Fatalf("expected Codex profile and Config Set commands")
 	}
 	if cmd.Command("doctor") == nil {
 		t.Fatalf("expected doctor subcommand")
@@ -341,7 +341,7 @@ func TestCodexDetectAndProfileCreatePlanSwitchJSON(t *testing.T) {
 	}
 	var createResult app.CodexProfileSaveResult
 	decodeCLIJSON(t, []byte(out), &createResult)
-	if createResult.Provider.ID != codexconfig.ProviderID || createResult.Profile.ID != "work" || createResult.ConfigTarget.TargetID != codexconfig.TargetID {
+	if createResult.Provider.ID != codexconfig.ProviderID || createResult.Profile.ID != "work" || createResult.ConfigSet.ID != "shared" {
 		t.Fatalf("unexpected codex profile create result: %#v", createResult)
 	}
 	if err := os.WriteFile(configPath, []byte(`model = "old-model"`+"\n"+`api_key = "live-secret"`+"\n"), 0o600); err != nil {
@@ -354,7 +354,7 @@ func TestCodexDetectAndProfileCreatePlanSwitchJSON(t *testing.T) {
 	}
 	var plan app.SwitchPlan
 	decodeCLIJSON(t, []byte(out), &plan)
-	if len(plan.Operations) != 2 || !hasCLIPlanOperation(plan.Operations, codexconfig.TargetID, "update") {
+	if len(plan.Operations) != 2 || len(plan.StateCaptures) != 1 || !hasCLIPlanOperation(plan.Operations, codexconfig.TargetID, "noop") {
 		t.Fatalf("unexpected codex plan: %#v", plan)
 	}
 	if strings.Contains(out, "raw-secret") || strings.Contains(out, "live-secret") {
@@ -367,15 +367,15 @@ func TestCodexDetectAndProfileCreatePlanSwitchJSON(t *testing.T) {
 	}
 	var switchResult app.ApplySwitchResult
 	decodeCLIJSON(t, []byte(out), &switchResult)
-	if switchResult.Status != store.OperationStatusApplied || switchResult.Counts.Update != 1 {
+	if switchResult.Status != store.OperationStatusApplied || switchResult.Counts.Noop != 2 {
 		t.Fatalf("unexpected codex switch result: %#v", switchResult)
 	}
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("expected Codex config read to succeed, got %v", err)
 	}
-	if string(raw) != desiredConfig {
-		t.Fatalf("expected created full config to be restored, got %q", string(raw))
+	if !strings.Contains(string(raw), `model = "old-model"`) {
+		t.Fatalf("expected active working copy to be checked in and retained, got %q", string(raw))
 	}
 }
 
@@ -410,7 +410,7 @@ func TestCodexProfileCreateCLIJSONRedactsAuth(t *testing.T) {
 	}
 	var created app.CodexProfileSaveResult
 	decodeCLIJSON(t, []byte(out), &created)
-	if created.Profile.ID != "work" || created.AuthTarget.TargetID != codexconfig.AuthTargetID || created.AuthTarget.ValuePreview.Content != codexpreset.AuthPreviewContent {
+	if created.Profile.ID != "work" || created.Summary.CredentialID == "" || created.ConfigSet.ID != "shared" {
 		t.Fatalf("unexpected create result: %#v", created)
 	}
 
@@ -442,8 +442,8 @@ func TestCodexProfileCreateCLIJSONRedactsAuth(t *testing.T) {
 	if got := string(mustReadFile(t, authPath)); got != desiredAuth {
 		t.Fatalf("expected switch to restore created auth, got %q", got)
 	}
-	if got := string(mustReadFile(t, configPath)); got != desiredConfig {
-		t.Fatalf("expected switch to restore desired config, got %q", got)
+	if got := string(mustReadFile(t, configPath)); !strings.Contains(got, `model = "other"`) {
+		t.Fatalf("expected valid config working copy to be retained, got %q", got)
 	}
 }
 
@@ -479,7 +479,7 @@ func TestCodexProfileCreateRejectsExtraArgs(t *testing.T) {
 	assertCLIAppErrorCode(t, err, app.ErrorProfileInvalid)
 }
 
-func TestCodexProfileCreateForkAndSyncCLI(t *testing.T) {
+func TestCodexProfileCreateForkAndSaveCurrentCLI(t *testing.T) {
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
 	writeCLICodexProfileFixture(t, codexDir, `model = "gpt-5.3-codex"`+"\n", `{"tokens":{"account_id":"same-account","access_token":"token-1"}}`)
@@ -499,7 +499,7 @@ func TestCodexProfileCreateForkAndSyncCLI(t *testing.T) {
 	}
 	var created app.CodexProfileSaveResult
 	decodeCLIJSON(t, []byte(out), &created)
-	if created.Profile.ID != "work" || created.AuthTarget.TargetID != codexconfig.AuthTargetID {
+	if created.Profile.ID != "work" || created.Summary.CredentialID == "" {
 		t.Fatalf("unexpected create result: %#v", created)
 	}
 	if strings.Contains(out, "token-1") {
@@ -510,7 +510,9 @@ func TestCodexProfileCreateForkAndSyncCLI(t *testing.T) {
 		"--config-dir", configDir,
 		"codex", "profile", "fork", "work", "shared-child",
 		"--codex-dir", codexDir,
-		"--auth-binding", app.CodexForkAuthBindingShareParent,
+		"--credential-binding", app.CodexForkBindingShareParent,
+		"--config-binding", app.CodexForkBindingCopyNew,
+		"--new-config-set", "shared-child-config",
 		"--json",
 	)
 	if err != nil {
@@ -523,31 +525,22 @@ func TestCodexProfileCreateForkAndSyncCLI(t *testing.T) {
 	}
 
 	writeCLICodexProfileFixture(t, codexDir, `model = "gpt-5-mini"`+"\n", `{"tokens":{"account_id":"same-account","access_token":"token-2"}}`)
-	_, err = runCLI(t,
-		"--config-dir", configDir,
-		"codex", "profile", "sync", "work",
-		"--codex-dir", codexDir,
-		"--json",
-	)
-	assertCLIAppErrorCode(t, err, app.ErrorCodexInvalid)
-
 	out, err = runCLI(t,
 		"--config-dir", configDir,
-		"codex", "profile", "sync", "work",
+		"codex", "profile", "save-current",
 		"--codex-dir", codexDir,
-		"--auth-update", app.CodexSyncAuthUpdateShared,
 		"--json",
 	)
 	if err != nil {
-		t.Fatalf("expected codex profile sync to succeed, got %v", err)
+		t.Fatalf("expected codex profile save-current to succeed, got %v", err)
 	}
-	var synced app.CodexProfileSaveResult
-	decodeCLIJSON(t, []byte(out), &synced)
-	if synced.Profile.ID != "work" || len(synced.Warnings) != 1 {
-		t.Fatalf("unexpected sync result: %#v", synced)
+	var saved app.CodexProfileStateSaveResult
+	decodeCLIJSON(t, []byte(out), &saved)
+	if saved.ProfileID != "work" {
+		t.Fatalf("unexpected save-current result: %#v", saved)
 	}
 	if strings.Contains(out, "token-2") {
-		t.Fatalf("expected sync output to redact auth payload, got %q", out)
+		t.Fatalf("expected save-current output to redact auth payload, got %q", out)
 	}
 
 	if _, err := runCLI(t, "--config-dir", configDir, "switch", codexconfig.ProviderID, "shared-child", "--yes", "--json"); err != nil {
@@ -555,6 +548,55 @@ func TestCodexProfileCreateForkAndSyncCLI(t *testing.T) {
 	}
 	if got := string(mustReadFile(t, filepath.Join(codexDir, codexconfig.AuthFileName))); !strings.Contains(got, "token-2") {
 		t.Fatalf("expected shared credential update to affect fork, got %q", got)
+	}
+}
+
+func TestCodexConfigSetAndProfileBindingCLI(t *testing.T) {
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	writeCLICodexProfileFixture(t, codexDir, "model = \"gpt-5\"\napi_key = \"config-secret\"\n", `{"tokens":{"account_id":"work","access_token":"auth-secret"}}`)
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "codex", "profile", "create", "work", "--codex-dir", codexDir, "--json"); err != nil {
+		t.Fatalf("expected profile create to succeed, got %v", err)
+	}
+	out, err := runCLI(t, "--config-dir", configDir, "codex", "config-set", "create", "other", "--codex-dir", codexDir, "--name", "Other", "--json")
+	if err != nil {
+		t.Fatalf("expected Config Set create to succeed, got %v", err)
+	}
+	if strings.Contains(out, "config-secret") {
+		t.Fatalf("expected Config Set output not to expose raw TOML, got %q", out)
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "codex", "profile", "fork", "work", "child", "--codex-dir", codexDir, "--credential-binding", app.CodexForkBindingCopyNew, "--config-binding", app.CodexForkBindingShareParent, "--json"); err != nil {
+		t.Fatalf("expected child fork to succeed, got %v", err)
+	}
+	out, err = runCLI(t, "--config-dir", configDir, "codex", "profile", "set-config", "child", "other", "--json")
+	if err != nil {
+		t.Fatalf("expected inactive profile rebind to succeed, got %v", err)
+	}
+	var detail app.CodexProfileDetail
+	decodeCLIJSON(t, []byte(out), &detail)
+	if detail.Summary.ConfigSetID != "other" {
+		t.Fatalf("expected child to use other Config Set, got %#v", detail.Summary)
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "codex", "config-set", "copy", "other", "temporary", "--name", "Temporary", "--json"); err != nil {
+		t.Fatalf("expected Config Set copy to succeed, got %v", err)
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "codex", "config-set", "update", "temporary", "--name", "Renamed", "--json"); err != nil {
+		t.Fatalf("expected Config Set update to succeed, got %v", err)
+	}
+	out, err = runCLI(t, "--config-dir", configDir, "codex", "config-set", "show", "temporary", "--json")
+	if err != nil {
+		t.Fatalf("expected Config Set show to succeed, got %v", err)
+	}
+	var shown app.CodexConfigSet
+	decodeCLIJSON(t, []byte(out), &shown)
+	if shown.Name != "Renamed" || strings.Contains(out, "config-secret") {
+		t.Fatalf("unexpected Config Set summary output: %q", out)
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "codex", "config-set", "delete", "temporary", "--yes", "--json"); err != nil {
+		t.Fatalf("expected unreferenced Config Set delete to succeed, got %v", err)
 	}
 }
 
@@ -619,7 +661,7 @@ func TestCodexProfileListAndShowCLI(t *testing.T) {
 	}
 	var detail app.CodexProfileDetail
 	decodeCLIJSON(t, []byte(out), &detail)
-	if detail.Summary.Profile.ID != "work" || len(detail.Targets) != 2 {
+	if detail.Summary.Profile.ID != "work" || detail.Login == nil || detail.ConfigSet == nil {
 		t.Fatalf("unexpected codex profile detail: %#v", detail)
 	}
 	humanOut, err = runCLI(t, "--config-dir", configDir, "codex", "profile", "show", "work")

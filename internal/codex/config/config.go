@@ -17,7 +17,7 @@ const (
 	TargetID             = "config"
 	AuthTargetID         = "auth"
 	PresetName           = "codex"
-	PresetVersion        = 1
+	PresetVersion        = 2
 	DefaultModelProvider = "openai"
 	ConfigFileName       = "config.toml"
 	AuthFileName         = "auth.json"

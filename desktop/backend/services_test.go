@@ -202,7 +202,8 @@ func TestSwitchApplyStateFailureNotifies(t *testing.T) {
 		event.Status != DesktopChangeStatusFailure ||
 		event.ProviderID != codexconfig.ProviderID ||
 		event.ProfileID != "missing" ||
-		event.Error == nil {
+		event.Error == nil ||
+		!event.ProfileChanged || !event.ConfigSetsChanged || !event.ActiveStateChanged {
 		t.Fatalf("unexpected failed switch event: %#v", event)
 	}
 }
@@ -373,7 +374,7 @@ func TestCodexProfileListAndShowUseSharedAppSemantics(t *testing.T) {
 	}
 }
 
-func TestCodexSyncProfileReadsCurrentFilesBehindDesktopBoundary(t *testing.T) {
+func TestCodexSaveActiveProfileStateReadsCurrentFilesBehindDesktopBoundary(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
@@ -388,13 +389,13 @@ func TestCodexSyncProfileReadsCurrentFilesBehindDesktopBoundary(t *testing.T) {
 	}
 
 	writeDesktopCodexFiles(t, codexDir, `model = "gpt-5.1-codex"`+"\n", `{"tokens":{"account_id":"updated","access_token":"changed"}}`)
-	if _, err := services.Codex.SyncProfile(ctx, SyncCodexProfileRequest{ProfileID: "work"}); err != nil {
-		t.Fatalf("expected sync to read current Codex files, got %v", err)
+	if _, err := services.Codex.SaveActiveProfileState(ctx); err != nil {
+		t.Fatalf("expected save-current to read current Codex files, got %v", err)
 	}
 
 	detail, err := services.Codex.ShowProfile(ctx, "work")
 	if err != nil {
-		t.Fatalf("expected synced profile detail, got %v", err)
+		t.Fatalf("expected saved profile detail, got %v", err)
 	}
 	if detail.Summary.Model != "gpt-5.1-codex" || detail.Summary.CodexAccountID != "updated" {
 		t.Fatalf("expected disk state to be synced, got %#v", detail.Summary)
@@ -447,7 +448,7 @@ func TestCodexUpdateProfileMetadataPersistsAndNotifies(t *testing.T) {
 	}
 }
 
-func TestCodexSyncSharedCredentialConflictKeepsSupportedUpdates(t *testing.T) {
+func TestCodexConfigSetServiceCRUDAndNotifications(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
@@ -460,23 +461,35 @@ func TestCodexSyncSharedCredentialConflictKeepsSupportedUpdates(t *testing.T) {
 	if _, err := services.Codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
 		t.Fatalf("expected create to succeed, got %v", err)
 	}
-	if _, err := services.Codex.ForkProfile(ctx, ForkCodexProfileRequest{
-		SourceProfileID: "work",
-		ProfileID:       "work-copy",
-		AuthBinding:     app.CodexForkAuthBindingShareParent,
-	}); err != nil {
-		t.Fatalf("expected shared fork to succeed, got %v", err)
+	events := []DesktopChangeEvent{}
+	services.SubscribeChanges(func(event DesktopChangeEvent) { events = append(events, event) })
+	created, err := services.Codex.CreateConfigSet(ctx, CreateCodexConfigSetRequest{ConfigSetID: "other", Name: "Other"})
+	if err != nil || created.ID != "other" {
+		t.Fatalf("expected Config Set create, got %#v err=%v", created, err)
 	}
-
-	writeDesktopCodexFiles(t, codexDir, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"shared","access_token":"changed"}}`)
-	_, err := services.Codex.SyncProfile(ctx, SyncCodexProfileRequest{ProfileID: "work"})
-	if err == nil {
-		t.Fatalf("expected shared credential conflict")
+	name := "Renamed"
+	updated, err := services.Codex.UpdateConfigSet(ctx, UpdateCodexConfigSetRequest{ConfigSetID: "other", Name: &name})
+	if err != nil || updated.Name != name {
+		t.Fatalf("expected Config Set update, got %#v err=%v", updated, err)
 	}
-	desktopErr := FormatDesktopError(err)
-	updates, ok := desktopErr.Details["supported_auth_updates"].([]string)
-	if desktopErr.Code != string(app.ErrorCodexInvalid) || !ok || len(updates) != 2 || updates[0] != app.CodexSyncAuthUpdateShared || updates[1] != app.CodexSyncAuthUpdateForkNew {
-		t.Fatalf("expected supported auth updates in desktop error, got %#v", desktopErr)
+	list, err := services.Codex.ListConfigSets(ctx)
+	if err != nil || len(list.ConfigSets) != 2 {
+		t.Fatalf("expected two Config Sets, got %#v err=%v", list, err)
+	}
+	dashboard, err := services.App.Dashboard(ctx)
+	if err != nil || dashboard.CodexConfigSets == nil || len(dashboard.CodexConfigSets.ConfigSets) != 2 {
+		t.Fatalf("expected dashboard Config Sets, got %#v err=%v", dashboard.CodexConfigSets, err)
+	}
+	if err := services.Codex.DeleteConfigSet(ctx, "other"); err != nil {
+		t.Fatalf("expected Config Set delete, got %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected create/update/delete notifications, got %#v", events)
+	}
+	for _, event := range events {
+		if event.Kind != DesktopChangeCodexConfigSetChanged || event.Status != DesktopChangeStatusSuccess || !event.ConfigSetsChanged || event.ProfileChanged || event.ActiveStateChanged {
+			t.Fatalf("unexpected Config Set event: %#v", event)
+		}
 	}
 }
 

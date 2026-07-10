@@ -12,7 +12,8 @@ import (
 const (
 	ProviderName            = "Codex"
 	CredentialKindAuthJSON  = "codex-auth-json"
-	TargetModeFullFile      = "full-file"
+	ConfigSetKindTOML       = "codex-config-toml"
+	TargetModeConfigSet     = "config-set-binding"
 	TargetModeCredential    = "credential-binding"
 	AuthPreviewContent      = "[REDACTED_Codex_AUTH]"
 	FileCredentialStoreHint = `Codex auth.json is required; set cli_auth_credentials_store = "file" in config.toml and run codex login again`
@@ -96,20 +97,12 @@ func (metadata TargetMetadata) Compatible() bool {
 	}
 	switch metadata.TargetKind {
 	case codexconfig.TargetID:
-		return metadata.Mode == TargetModeFullFile
+		return metadata.Mode == TargetModeConfigSet
 	case codexconfig.AuthTargetID:
 		return metadata.Mode == TargetModeCredential
 	default:
 		return false
 	}
-}
-
-func ReplaceFileValueJSON(content string) (string, error) {
-	raw, err := json.Marshal(map[string]string{"content": content})
-	if err != nil {
-		return "", err
-	}
-	return string(raw), nil
 }
 
 func CredentialBindingValueJSON(credentialID string) (string, error) {
@@ -120,7 +113,23 @@ func CredentialBindingValueJSON(credentialID string) (string, error) {
 	return string(raw), nil
 }
 
+func ConfigSetBindingValueJSON(configSetID string) (string, error) {
+	raw, err := json.Marshal(map[string]string{"config_set_id": strings.TrimSpace(configSetID)})
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
 func ParseCredentialBindingValueJSON(raw string) (string, error) {
+	return parseBindingValueJSON(raw, "credential_id", "auth target")
+}
+
+func ParseConfigSetBindingValueJSON(raw string) (string, error) {
+	return parseBindingValueJSON(raw, "config_set_id", "config target")
+}
+
+func parseBindingValueJSON(raw string, key string, label string) (string, error) {
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	var value map[string]string
 	if err := decoder.Decode(&value); err != nil {
@@ -131,13 +140,13 @@ func ParseCredentialBindingValueJSON(raw string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return "", errors.New("auth target value_json must contain one JSON object")
+		return "", errors.New(label + " value_json must contain one JSON object")
 	}
-	credentialID := strings.TrimSpace(value["credential_id"])
-	if credentialID == "" || len(value) != 1 {
-		return "", errors.New(`auth target value_json must be {"credential_id": string}`)
+	id := strings.TrimSpace(value[key])
+	if id == "" || len(value) != 1 {
+		return "", errors.New(label + ` value_json must contain only a non-empty "` + key + `" string`)
 	}
-	return credentialID, nil
+	return id, nil
 }
 
 func ConfigTargetFormatValid(format string, names TargetFormatStrategyNames) bool {

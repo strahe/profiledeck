@@ -5,6 +5,7 @@
 	import GitForkIcon from "@lucide/svelte/icons/git-fork";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import PlusIcon from "@lucide/svelte/icons/plus";
+	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
 
 	import * as Alert from "$lib/components/ui/alert";
 	import * as Card from "$lib/components/ui/card";
@@ -26,6 +27,7 @@
 		onUse,
 		onDetails,
 		onFork,
+		onConfigSets,
 	}: {
 		profiles: CodexProfileListItem[];
 		loading: boolean;
@@ -35,6 +37,7 @@
 		onUse: (profile: CodexProfileListItem) => void;
 		onDetails: (profile: CodexProfileListItem) => void;
 		onFork: (profile: CodexProfileListItem) => void;
+		onConfigSets: () => void;
 	} = $props();
 </script>
 
@@ -43,10 +46,16 @@
 		<Card.Title>{$_("profilePages.list.title")}</Card.Title>
 		<Card.Description>{$_("profilePages.list.description")}</Card.Description>
 		<Card.Action>
-			<Button size="sm" onclick={onNew}>
-				<PlusIcon data-icon="inline-start" />
-				{$_("actions.newProfile")}
-			</Button>
+			<div class="flex items-center gap-2">
+				<Button size="sm" variant="outline" onclick={onConfigSets}>
+					<SlidersHorizontalIcon data-icon="inline-start" />
+					{$_("actions.configSets")}
+				</Button>
+				<Button size="sm" onclick={onNew}>
+					<PlusIcon data-icon="inline-start" />
+					{$_("actions.newProfile")}
+				</Button>
+			</div>
 		</Card.Action>
 	</Card.Header>
 
@@ -105,9 +114,8 @@
 							</div>
 							{#if profile.description}<p class="truncate text-sm text-muted-foreground">{profile.description}</p>{/if}
 							<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-								{#if profile.provider}<span>{profile.provider}</span>{/if}
-								{#if profile.model}<span>{profile.model}</span>{/if}
 								{#if profile.account}<span>{profile.account}</span>{/if}
+								{#if profile.configSet}<Badge variant="outline">{profile.configSet}</Badge>{/if}
 								<span>{profile.updated}</span>
 							</div>
 						</div>

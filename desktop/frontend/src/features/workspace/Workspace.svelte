@@ -15,6 +15,7 @@
 	} from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type { DashboardResult, DesktopError } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type {
+		CodexConfigSet,
 		CodexDetectResult,
 		CodexProfileSummary,
 		DoctorResult,
@@ -162,6 +163,7 @@
 	let usageSummary = $state<UsageSummaryResult | null>(null);
 	let usageSyncResult = $state<UsageSyncResult | null>(null);
 	let codexProfileSummaries = $state<CodexProfileSummary[]>([]);
+	let codexConfigSets = $state<CodexConfigSet[]>([]);
 	let dashboardError = $state("");
 	let detectError = $state("");
 	let profileError = $state("");
@@ -274,6 +276,8 @@
 			if (!isCancelError(error)) showError(error);
 		} finally {
 			languageBusy = false;
+			// Refresh localized summaries and stored error text after the locale changes.
+			await refreshAll();
 		}
 	}
 
@@ -428,6 +432,7 @@
 			codexProfileSummaries = next.codex_profiles.profiles;
 			profileError = "";
 		}
+		if (next.codex_config_sets?.config_sets) codexConfigSets = next.codex_config_sets.config_sets;
 		if (next.usage) {
 			usageSummary = next.usage;
 			usageError = "";
@@ -523,6 +528,7 @@
 	function parseWorkspaceRoute(path: string): WorkspaceRoute {
 		const list = (): WorkspaceRoute => ({ view: "profiles", profile: { kind: "list", profileID: "" }, valid: true });
 		if (path === "/" || path === "/codex/profiles") return list();
+		if (path === "/codex/config-sets") return { view: "profiles", profile: { kind: "config-sets", profileID: "" }, valid: true };
 		if (path === "/codex/profiles/new") return { view: "profiles", profile: { kind: "new", profileID: "" }, valid: true };
 		const fork = path.match(/^\/codex\/profiles\/([^/]+)\/fork$/);
 		if (fork) {
@@ -715,6 +721,7 @@
 								<CodexProfiles
 									route={workspaceRoute.profile}
 									profiles={codexProfileSummaries}
+									dashboardConfigSets={codexConfigSets}
 									{detectResult}
 									activeProfileID={activeCodexProfileID()}
 									{loadingProfiles}

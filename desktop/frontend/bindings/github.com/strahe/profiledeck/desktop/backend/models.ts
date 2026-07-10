@@ -5,10 +5,26 @@
 // @ts-ignore: Unused imports
 import * as app$0 from "../../internal/app/models.js";
 
+export interface CopyCodexConfigSetRequest {
+    "source_config_set_id": string;
+    "config_set_id": string;
+    "name": string;
+    "description"?: string;
+}
+
+export interface CreateCodexConfigSetRequest {
+    "config_set_id": string;
+    "name": string;
+    "description"?: string;
+}
+
 export interface CreateCodexProfileRequest {
     "profile_id": string;
     "name"?: string | null;
     "description"?: string | null;
+    "new_config_set_id"?: string;
+    "new_config_set_name"?: string | null;
+    "new_config_set_description"?: string | null;
 }
 
 export interface DashboardResult {
@@ -20,6 +36,7 @@ export interface DashboardResult {
     "profiles": app$0.Profile[] | null;
     "active_states": app$0.ActiveProviderState[] | null;
     "codex_profiles"?: app$0.CodexProfileListResult | null;
+    "codex_config_sets"?: app$0.CodexConfigSetListResult | null;
     "usage"?: app$0.UsageSummaryResult | null;
     "startup_error"?: DesktopError | null;
     "generated_at_unix_ms": number;
@@ -39,7 +56,11 @@ export interface Environment {
 export interface ForkCodexProfileRequest {
     "source_profile_id": string;
     "profile_id": string;
-    "auth_binding": string;
+    "credential_binding": string;
+    "config_binding": string;
+    "new_config_set_id"?: string;
+    "new_config_set_name"?: string | null;
+    "new_config_set_description"?: string | null;
     "name"?: string | null;
     "description"?: string | null;
 }
@@ -51,9 +72,15 @@ export interface SwitchApplyRequest {
     "confirm": boolean;
 }
 
-export interface SyncCodexProfileRequest {
+export interface UpdateCodexConfigSetRequest {
+    "config_set_id": string;
+    "name"?: string | null;
+    "description"?: string | null;
+}
+
+export interface UpdateCodexProfileConfigSetRequest {
     "profile_id": string;
-    "auth_update"?: string;
+    "config_set_id": string;
 }
 
 export interface UpdateCodexProfileMetadataRequest {

@@ -38,12 +38,22 @@ profiledeck version
 profiledeck codex detect [--codex-dir PATH] [--json]
 profiledeck codex profile list [--json]
 profiledeck codex profile show <profile-id> [--json]
-profiledeck codex profile create <profile-id> [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
-profiledeck codex profile fork <source-profile-id> <new-profile-id> --auth-binding share-parent|copy-new [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
-profiledeck codex profile sync <profile-id> [--auth-update update-shared|fork-new] [--codex-dir PATH] [--json]
+profiledeck codex profile create <profile-id> [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
+profiledeck codex profile fork <source-profile-id> <new-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
+profiledeck codex profile save-current [--codex-dir PATH] [--json]
+profiledeck codex profile set-config <profile-id> <config-set-id> [--json]
+
+profiledeck codex config-set list [--json]
+profiledeck codex config-set show <config-set-id> [--json]
+profiledeck codex config-set create <config-set-id> [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
+profiledeck codex config-set copy <source-id> <new-id> [--name NAME] [--description TEXT] [--json]
+profiledeck codex config-set update <config-set-id> [--name NAME] [--description TEXT] [--json]
+profiledeck codex config-set delete <config-set-id> --yes [--json]
 ```
 
-`create` reads the current Codex `config.toml` and `auth.json` and creates a profile with a new hidden credential. `fork` copies an existing profile and requires an explicit auth binding choice. `sync` updates an existing profile from current Codex files; use `--auth-update` when changing a shared credential or intentionally forking it.
+The first `profile create` captures current Codex files into a hidden credential and the `shared` Config Set. Later creates reuse the active Config Set unless `--new-config-set` is supplied. `fork` requires both binding choices and at least one `copy-new`; copying config also requires `--new-config-set`. `save-current` captures both active working copies, and `set-config` accepts only an inactive Profile.
+
+`config-set create` captures the current `config.toml`. List and show commands return summaries only; they never expose raw auth or raw TOML. Delete requires an unreferenced Config Set.
 
 ## Switching
 
@@ -88,6 +98,8 @@ profiledeck profile target show <profile-id> <provider-id> <target-id> [--json]
 profiledeck profile target update <profile-id> <provider-id> <target-id> [--path PATH] [--format FORMAT] [--strategy STRATEGY] [--value-json JSON] [--enabled] [--disabled] [--metadata-json JSON] [--json]
 profiledeck profile target delete <profile-id> <provider-id> <target-id> --yes [--json]
 ```
+
+Generic target CRUD cannot create, update, or delete Codex preset targets. Use the Codex commands above for credential and Config Set bindings.
 
 ## Backup and recovery
 

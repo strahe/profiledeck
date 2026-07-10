@@ -76,6 +76,7 @@ type switchOperationMetadata struct {
 	BackupPath      string                          `json:"backup_path,omitempty"`
 	Counts          SwitchCounts                    `json:"counts"`
 	PreviousActive  *switchPreviousActiveState      `json:"previous_active_state,omitempty"`
+	StateCaptures   []StateCapture                  `json:"state_captures,omitempty"`
 	Targets         []switchOperationTargetMetadata `json:"targets,omitempty"`
 	Warnings        []string                        `json:"warnings,omitempty"`
 	UpdatedAtUnixMS int64                           `json:"updated_at_unix_ms"`
@@ -211,10 +212,12 @@ func ApplySwitch(ctx context.Context, req ApplySwitchRequest) (ApplySwitchResult
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, backupMetadata, WrapError(ErrorOperationUpdateFailed, "failed to encode switch operation metadata", err))
 	}
 	if err := db.CompleteSwitchOperation(ctx, store.CompleteSwitchOperationParams{
-		ID:           operationID,
-		ProfileID:    profileID,
-		ProviderID:   providerID,
-		MetadataJSON: appliedMetadata,
+		ID:                operationID,
+		ProfileID:         profileID,
+		ProviderID:        providerID,
+		MetadataJSON:      appliedMetadata,
+		CredentialUpdates: plan.CredentialUpdates,
+		ConfigSetUpdates:  plan.ConfigSetUpdates,
 	}); err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, backupMetadata, WrapError(ErrorOperationUpdateFailed, "failed to complete switch operation", err))
 	}
@@ -509,6 +512,7 @@ func marshalSwitchOperationMetadata(checkpoint string, providerID string, profil
 		BackupPath:      backup.Path,
 		Counts:          counts,
 		PreviousActive:  previousActive,
+		StateCaptures:   plan.SwitchPlan.StateCaptures,
 		Targets:         targets,
 		Warnings:        plan.SwitchPlan.Warnings,
 		UpdatedAtUnixMS: time.Now().UnixMilli(),

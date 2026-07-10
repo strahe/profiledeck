@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,7 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 		"active_states",
 		"operations",
 		"provider_credentials",
+		"provider_config_sets",
 		"profile_targets",
 		"usage_events",
 		"usage_import_cursors",
@@ -50,6 +52,8 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 		"idx_operations_operation_type",
 		"idx_provider_credentials_provider_id",
 		"idx_provider_credentials_kind",
+		"idx_provider_config_sets_provider_id",
+		"idx_provider_config_sets_kind",
 		"idx_profile_targets_profile_id",
 		"idx_profile_targets_provider_id",
 		"idx_profile_targets_enabled",
@@ -145,6 +149,143 @@ func TestConcurrentMigrateIsIdempotent(t *testing.T) {
 	}
 	if migrationCount != 3 {
 		t.Fatalf("expected three migration rows after concurrent migration, got %d", migrationCount)
+	}
+}
+
+func TestProviderConfigSetCRUDAndReferences(t *testing.T) {
+	ctx := context.Background()
+	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
+	defer closeTestStore(t, db)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+
+	payload := "model = \"gpt-5\"\n"
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(payload)))
+	created, err := db.UpsertProviderConfigSet(ctx, UpsertProviderConfigSetParams{
+		ID:            " shared ",
+		ProviderID:    "codex",
+		ConfigKind:    "codex-config-toml",
+		Name:          " Shared ",
+		Description:   " Common settings ",
+		PayloadText:   payload,
+		PayloadSHA256: digest,
+	})
+	if err != nil {
+		t.Fatalf("expected config set create to succeed, got %v", err)
+	}
+	if created.ID != "shared" || created.Name != "Shared" || created.Description != "Common settings" || created.PayloadText != payload || created.PayloadSHA256 != digest {
+		t.Fatalf("unexpected created config set: %#v", created)
+	}
+	if created.MetadataJSON != "{}" {
+		t.Fatalf("expected default metadata object, got %q", created.MetadataJSON)
+	}
+	if _, err := db.UpsertProviderConfigSet(ctx, UpsertProviderConfigSetParams{
+		ID: created.ID, ProviderID: "other", ConfigKind: created.ConfigKind, Name: created.Name,
+		PayloadText: payload, PayloadSHA256: digest,
+	}); err == nil {
+		t.Fatalf("expected config set provider identity change to be rejected")
+	}
+
+	updatedName := "Default"
+	updatedDescription := "Used by work profiles"
+	updated, err := db.UpdateProviderConfigSet(ctx, UpdateProviderConfigSetParams{
+		ID:          created.ID,
+		Name:        &updatedName,
+		Description: &updatedDescription,
+	})
+	if err != nil {
+		t.Fatalf("expected config set update to succeed, got %v", err)
+	}
+	if updated.Name != updatedName || updated.Description != updatedDescription || updated.PayloadText != payload {
+		t.Fatalf("unexpected updated config set: %#v", updated)
+	}
+
+	sets, err := db.ListProviderConfigSets(ctx, "codex", "codex-config-toml")
+	if err != nil || len(sets) != 1 || sets[0].ID != created.ID {
+		t.Fatalf("unexpected config set list: sets=%#v err=%v", sets, err)
+	}
+
+	if _, err := db.CreateProfile(ctx, CreateProfileParams{ID: "profile-a", Name: "Profile A", MetadataJSON: "{}"}); err != nil {
+		t.Fatalf("expected profile create to succeed, got %v", err)
+	}
+	if _, err := db.CreateProfileTarget(ctx, CreateProfileTargetParams{
+		ProfileID:    "profile-a",
+		ProviderID:   "codex",
+		TargetID:     "config",
+		Path:         "/tmp/config.toml",
+		Format:       "toml",
+		Strategy:     "replace-file",
+		ValueJSON:    `{"config_set_id":"shared"}`,
+		Enabled:      true,
+		MetadataJSON: "{}",
+	}); err != nil {
+		t.Fatalf("expected profile target create to succeed, got %v", err)
+	}
+	references, err := db.CountProviderConfigSetReferences(ctx, created.ID)
+	if err != nil || references != 1 {
+		t.Fatalf("expected one config set reference, got count=%d err=%v", references, err)
+	}
+	if err := db.DeleteProviderConfigSet(ctx, created.ID); !errors.Is(err, ErrInUse) {
+		t.Fatalf("expected referenced config set deletion to fail with ErrInUse, got %v", err)
+	}
+	if err := db.DeleteProfileTarget(ctx, "profile-a", "codex", "config"); err != nil {
+		t.Fatalf("expected profile target delete to succeed, got %v", err)
+	}
+	if _, err := db.CreateProfileTarget(ctx, CreateProfileTargetParams{
+		ProfileID:    "profile-a",
+		ProviderID:   "generic",
+		TargetID:     "config",
+		Path:         "/tmp/generic-config.toml",
+		Format:       "toml",
+		Strategy:     "replace-file",
+		ValueJSON:    `{"config_set_id":"shared"}`,
+		Enabled:      true,
+		MetadataJSON: "{}",
+	}); err != nil {
+		t.Fatalf("expected unrelated provider target create to succeed, got %v", err)
+	}
+	references, err = db.CountProviderConfigSetReferences(ctx, created.ID)
+	if err != nil || references != 0 {
+		t.Fatalf("expected other-provider target not to reference config set, got count=%d err=%v", references, err)
+	}
+	if err := db.DeleteProviderConfigSet(ctx, created.ID); err != nil {
+		t.Fatalf("expected unreferenced config set delete to succeed, got %v", err)
+	}
+}
+
+func TestProviderConfigSetRejectsInvalidPayload(t *testing.T) {
+	ctx := context.Background()
+	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
+	defer closeTestStore(t, db)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+
+	validPayload := "model = \"gpt-5\"\n"
+	validHash := fmt.Sprintf("%x", sha256.Sum256([]byte(validPayload)))
+	for _, tc := range []struct {
+		name    string
+		payload string
+		hash    string
+	}{
+		{name: "invalid hash", payload: validPayload, hash: "not-a-hash"},
+		{name: "mismatched hash", payload: validPayload + "# changed", hash: validHash},
+		{name: "oversized payload", payload: strings.Repeat("x", maxProviderConfigSetPayloadBytes+1), hash: fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Repeat("x", maxProviderConfigSetPayloadBytes+1))))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := db.UpsertProviderConfigSet(ctx, UpsertProviderConfigSetParams{
+				ID:            "shared",
+				ProviderID:    "codex",
+				ConfigKind:    "codex-config-toml",
+				Name:          "Shared",
+				PayloadText:   tc.payload,
+				PayloadSHA256: tc.hash,
+			})
+			if err == nil {
+				t.Fatalf("expected invalid config set payload to be rejected")
+			}
+		})
 	}
 }
 
@@ -661,11 +802,19 @@ func TestSwitchOperationLifecycle(t *testing.T) {
 		t.Fatalf("unexpected operation after metadata update: %#v", operation)
 	}
 
+	configPayload := "model = \"gpt-5\"\n"
+	configHash := fmt.Sprintf("%x", sha256.Sum256([]byte(configPayload)))
 	if err := db.CompleteSwitchOperation(ctx, CompleteSwitchOperationParams{
 		ID:           "switch-1",
 		ProfileID:    "profile-a",
 		ProviderID:   "provider-a",
 		MetadataJSON: `{"checkpoint":"complete"}`,
+		CredentialUpdates: []UpsertProviderCredentialParams{{
+			ID: "credential-a", ProviderID: "provider-a", CredentialKind: "json", PayloadJSON: `{"token":"hidden"}`, PayloadSHA256: "credential-hash",
+		}},
+		ConfigSetUpdates: []UpsertProviderConfigSetParams{{
+			ID: "config-a", ProviderID: "provider-a", ConfigKind: "toml", Name: "Config A", PayloadText: configPayload, PayloadSHA256: configHash,
+		}},
 	}); err != nil {
 		t.Fatalf("expected switch completion to succeed, got %v", err)
 	}
@@ -683,6 +832,12 @@ func TestSwitchOperationLifecycle(t *testing.T) {
 	}
 	if activeState.ProfileID != "profile-a" || activeState.OperationID != "switch-1" {
 		t.Fatalf("unexpected active state: %#v", activeState)
+	}
+	if credential, err := db.GetProviderCredential(ctx, "credential-a"); err != nil || credential.PayloadJSON != `{"token":"hidden"}` {
+		t.Fatalf("expected credential update to commit with switch, got %#v err=%v", credential, err)
+	}
+	if configSet, err := db.GetProviderConfigSet(ctx, "config-a"); err != nil || configSet.PayloadText != configPayload {
+		t.Fatalf("expected config set update to commit with switch, got %#v err=%v", configSet, err)
 	}
 
 	if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{

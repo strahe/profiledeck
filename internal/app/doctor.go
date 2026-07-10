@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/targetfs"
@@ -33,7 +34,7 @@ const (
 	doctorOSLockStateUnavailable = "unavailable"
 )
 
-var profileDeckOperationIDPrefixes = []string{"switch-", "rollback-"}
+var profileDeckOperationIDPrefixes = []string{"switch-", "rollback-", "codex-"}
 
 type DoctorRequest struct {
 	ConfigDir string
@@ -143,11 +144,99 @@ func Doctor(ctx context.Context, req DoctorRequest) (DoctorResult, error) {
 		defer dbState.db.Close()
 	}
 	result.Findings = append(result.Findings, inspectSensitivePathPermissions(ctx, paths, dbState)...)
+	result.Findings = append(result.Findings, inspectCodexDomainHealth(ctx, dbState)...)
 
 	result.Lock = inspectDoctorLock(ctx, paths.Lock, dbState)
 	result.Operations = doctorOperations(ctx, dbState, paths, operations, result.Lock)
 	result.OverallLevel = doctorOverallLevel(result)
 	return result, nil
+}
+
+func inspectCodexDomainHealth(ctx context.Context, dbState doctorDatabaseState) []DoctorFinding {
+	if !dbState.healthy || dbState.db == nil {
+		return nil
+	}
+	provider, err := dbState.db.GetProvider(ctx, codexconfig.ProviderID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return []DoctorFinding{{ID: "codex_provider_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect Codex provider"}}
+	}
+	findings := []DoctorFinding{}
+	metadata, err := codexpreset.DecodeProviderMetadata(provider.MetadataJSON)
+	if err != nil || !metadata.Compatible() {
+		findings = append(findings, DoctorFinding{
+			ID: "codex_preset_v2_invalid", Level: DoctorLevelError,
+			Message: "Codex provider is not compatible with preset v2",
+		})
+	}
+	targets, err := dbState.db.ListProfileTargetsByProvider(ctx, codexconfig.ProviderID)
+	if err != nil {
+		return append(findings, DoctorFinding{ID: "codex_binding_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect Codex profile bindings"})
+	}
+	grouped := map[string]map[string]store.ProfileTarget{}
+	for _, target := range targets {
+		if grouped[target.ProfileID] == nil {
+			grouped[target.ProfileID] = map[string]store.ProfileTarget{}
+		}
+		grouped[target.ProfileID][target.TargetID] = target
+	}
+	if active, err := dbState.db.GetActiveState(ctx, store.ActiveStateScopeProvider, codexconfig.ProviderID); err == nil {
+		if grouped[active.ProfileID] == nil {
+			grouped[active.ProfileID] = map[string]store.ProfileTarget{}
+		}
+	}
+	for profileID, profileTargets := range grouped {
+		configTarget, hasConfig := profileTargets[codexconfig.TargetID]
+		if !hasConfig {
+			findings = append(findings, DoctorFinding{
+				ID: "codex_config_binding_missing", Level: DoctorLevelError,
+				Message: "Codex profile config binding is missing", Details: map[string]any{"profile_id": profileID},
+			})
+		} else if configSetID, err := codexConfigSetIDFromTarget(configTarget); err != nil {
+			findings = append(findings, DoctorFinding{
+				ID: "codex_config_binding_invalid", Level: DoctorLevelError,
+				Message: "Codex profile config binding is invalid", Details: map[string]any{"profile_id": profileID},
+			})
+		} else if _, err := requireCodexConfigSet(ctx, dbState.db, configSetID); err != nil {
+			findings = append(findings, DoctorFinding{
+				ID: "codex_config_set_invalid", Level: DoctorLevelError,
+				Message: "Codex profile references a missing or invalid config set",
+				Details: map[string]any{"profile_id": profileID, "config_set_id": configSetID},
+			})
+		}
+		authTarget, hasAuth := profileTargets[codexconfig.AuthTargetID]
+		if !hasAuth {
+			findings = append(findings, DoctorFinding{
+				ID: "codex_login_binding_missing", Level: DoctorLevelError,
+				Message: "Codex profile login binding is missing", Details: map[string]any{"profile_id": profileID},
+			})
+		} else if credentialID, err := codexCredentialIDFromTarget(authTarget); err != nil {
+			findings = append(findings, DoctorFinding{
+				ID: "codex_login_binding_invalid", Level: DoctorLevelError,
+				Message: "Codex profile login binding is invalid", Details: map[string]any{"profile_id": profileID},
+			})
+		} else if _, err := requireCodexAuthCredential(ctx, dbState.db, credentialID); err != nil {
+			findings = append(findings, DoctorFinding{
+				ID: "codex_login_state_invalid", Level: DoctorLevelError,
+				Message: "Codex profile references missing or invalid login state", Details: map[string]any{"profile_id": profileID},
+			})
+		}
+	}
+	configSets, err := dbState.db.ListProviderConfigSets(ctx, codexconfig.ProviderID, codexpreset.ConfigSetKindTOML)
+	if err != nil {
+		return append(findings, DoctorFinding{ID: "codex_config_set_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect Codex config sets"})
+	}
+	for _, configSet := range configSets {
+		if _, err := requireCodexConfigSet(ctx, dbState.db, configSet.ID); err != nil {
+			findings = append(findings, DoctorFinding{
+				ID: "codex_config_set_invalid", Level: DoctorLevelError,
+				Message: "Codex config set payload is invalid", Details: map[string]any{"config_set_id": configSet.ID},
+			})
+		}
+	}
+	return findings
 }
 
 func RepairDoctorLock(ctx context.Context, req DoctorRepairLockRequest) (DoctorRepairLockResult, error) {

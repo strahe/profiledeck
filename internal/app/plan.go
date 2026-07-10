@@ -43,8 +43,25 @@ type SwitchPlan struct {
 	PlanFingerprint string          `json:"plan_fingerprint"`
 	Provider        PlanProvider    `json:"provider"`
 	Profile         PlanProfile     `json:"profile"`
+	Bindings        []PlanBinding   `json:"bindings,omitempty"`
+	StateCaptures   []StateCapture  `json:"state_captures,omitempty"`
 	Operations      []PlanOperation `json:"operations"`
 	Warnings        []string        `json:"warnings"`
+}
+
+type PlanBinding struct {
+	TargetID          string `json:"target_id"`
+	CurrentResourceID string `json:"current_resource_id,omitempty"`
+	TargetResourceID  string `json:"target_resource_id"`
+	Changed           bool   `json:"changed"`
+}
+
+type StateCapture struct {
+	ResourceKind  string `json:"resource_kind"`
+	ResourceID    string `json:"resource_id"`
+	ResourceName  string `json:"resource_name,omitempty"`
+	StoredSHA256  string `json:"stored_sha256"`
+	CurrentSHA256 string `json:"current_sha256"`
 }
 
 type PlanProvider struct {
@@ -79,8 +96,10 @@ type PlanOperation struct {
 }
 
 type applyPlan struct {
-	SwitchPlan SwitchPlan
-	Operations []applyPlanOperation
+	SwitchPlan        SwitchPlan
+	Operations        []applyPlanOperation
+	CredentialUpdates []store.UpsertProviderCredentialParams
+	ConfigSetUpdates  []store.UpsertProviderConfigSetParams
 }
 
 type applyPlanOperation struct {
@@ -93,7 +112,16 @@ type applyPlanOperation struct {
 
 type planAdapter interface {
 	ID() string
-	Build(ctx context.Context, input planAdapterInput) ([]applyPlanOperation, []string, error)
+	Build(ctx context.Context, input planAdapterInput) (planAdapterResult, error)
+}
+
+type planAdapterResult struct {
+	Operations        []applyPlanOperation
+	Warnings          []string
+	Bindings          []PlanBinding
+	StateCaptures     []StateCapture
+	CredentialUpdates []store.UpsertProviderCredentialParams
+	ConfigSetUpdates  []store.UpsertProviderConfigSetParams
 }
 
 type planAdapterInput struct {
@@ -157,7 +185,7 @@ func buildApplyPlan(ctx context.Context, db *store.Store, providerID string, pro
 		return applyPlan{}, WrapError(ErrorStoreStatusFailed, "failed to list profile targets", err)
 	}
 
-	operations, warnings, err := adapter.Build(ctx, planAdapterInput{
+	adapterResult, err := adapter.Build(ctx, planAdapterInput{
 		Provider: provider,
 		Profile:  profile,
 		Targets:  targets,
@@ -171,8 +199,8 @@ func buildApplyPlan(ctx context.Context, db *store.Store, providerID string, pro
 		return applyPlan{}, WrapError(ErrorPlanBuildFailed, "failed to build switch plan", err)
 	}
 
-	publicOperations := make([]PlanOperation, 0, len(operations))
-	for _, op := range operations {
+	publicOperations := make([]PlanOperation, 0, len(adapterResult.Operations))
+	for _, op := range adapterResult.Operations {
 		publicOperations = append(publicOperations, op.PlanOperation)
 	}
 	plan := SwitchPlan{
@@ -188,13 +216,17 @@ func buildApplyPlan(ctx context.Context, db *store.Store, providerID string, pro
 			Name:        profile.Name,
 			Description: profile.Description,
 		},
-		Operations: publicOperations,
-		Warnings:   warnings,
+		Bindings:      adapterResult.Bindings,
+		StateCaptures: adapterResult.StateCaptures,
+		Operations:    publicOperations,
+		Warnings:      adapterResult.Warnings,
 	}
 	plan.PlanFingerprint = fingerprintSwitchPlan(plan)
 	return applyPlan{
-		SwitchPlan: plan,
-		Operations: operations,
+		SwitchPlan:        plan,
+		Operations:        adapterResult.Operations,
+		CredentialUpdates: adapterResult.CredentialUpdates,
+		ConfigSetUpdates:  adapterResult.ConfigSetUpdates,
 	}, nil
 }
 
@@ -204,14 +236,14 @@ func (genericPlanAdapter) ID() string {
 	return "generic"
 }
 
-func (genericPlanAdapter) Build(ctx context.Context, input planAdapterInput) ([]applyPlanOperation, []string, error) {
+func (genericPlanAdapter) Build(ctx context.Context, input planAdapterInput) (planAdapterResult, error) {
 	operations := make([]applyPlanOperation, 0, len(input.Targets))
 	warnings := []string{}
 	seenWarnings := map[string]struct{}{}
 	for _, target := range input.Targets {
 		op, err := buildGenericPlanOperation(ctx, input.Provider, input.Profile, target)
 		if err != nil {
-			return nil, nil, err
+			return planAdapterResult{}, err
 		}
 		operations = append(operations, op)
 		for _, warning := range op.Warnings {
@@ -222,7 +254,7 @@ func (genericPlanAdapter) Build(ctx context.Context, input planAdapterInput) ([]
 			warnings = append(warnings, warning)
 		}
 	}
-	return operations, warnings, nil
+	return planAdapterResult{Operations: operations, Warnings: warnings}, nil
 }
 
 func buildGenericPlanOperation(ctx context.Context, provider store.Provider, profile store.Profile, target store.ProfileTarget) (applyPlanOperation, error) {
@@ -381,6 +413,8 @@ func fingerprintSwitchPlan(plan SwitchPlan) string {
 		ProviderID string                 `json:"provider_id"`
 		AdapterID  string                 `json:"adapter_id"`
 		ProfileID  string                 `json:"profile_id"`
+		Bindings   []PlanBinding          `json:"bindings,omitempty"`
+		Captures   []StateCapture         `json:"state_captures,omitempty"`
 		Operations []fingerprintOperation `json:"operations"`
 		Warnings   []string               `json:"warnings"`
 	}
@@ -408,6 +442,8 @@ func fingerprintSwitchPlan(plan SwitchPlan) string {
 		ProviderID: plan.Provider.ID,
 		AdapterID:  plan.Provider.AdapterID,
 		ProfileID:  plan.Profile.ID,
+		Bindings:   plan.Bindings,
+		Captures:   plan.StateCaptures,
 		Operations: operations,
 		Warnings:   plan.Warnings,
 	})
