@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
 	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
+	import DownloadIcon from "@lucide/svelte/icons/download";
 	import EyeIcon from "@lucide/svelte/icons/eye";
 	import GitForkIcon from "@lucide/svelte/icons/git-fork";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
+	import UploadIcon from "@lucide/svelte/icons/upload";
 
 	import * as Alert from "$lib/components/ui/alert";
 	import * as Card from "$lib/components/ui/card";
@@ -28,6 +30,9 @@
 		onDetails,
 		onFork,
 		onConfigSets,
+		onExportAll,
+		onImport,
+		onExport,
 	}: {
 		profiles: CodexProfileListItem[];
 		loading: boolean;
@@ -38,6 +43,9 @@
 		onDetails: (profile: CodexProfileListItem) => void;
 		onFork: (profile: CodexProfileListItem) => void;
 		onConfigSets: () => void;
+		onExportAll: () => void;
+		onImport: () => void;
+		onExport: (profile: CodexProfileListItem) => void;
 	} = $props();
 </script>
 
@@ -47,6 +55,28 @@
 		<Card.Description>{$_("profilePages.list.description")}</Card.Description>
 		<Card.Action>
 			<div class="flex items-center gap-2">
+				<DropdownMenu.Root>
+					<DropdownMenu.Trigger>
+						{#snippet child({ props })}
+							<Button {...props} size="sm" variant="outline" disabled={busy}>
+								<DownloadIcon data-icon="inline-start" />
+								{$_("actions.transferProfiles")}
+							</Button>
+						{/snippet}
+					</DropdownMenu.Trigger>
+					<DropdownMenu.Content align="end">
+						<DropdownMenu.Group>
+							<DropdownMenu.Item onSelect={onExportAll}>
+								<DownloadIcon data-icon="inline-start" />
+								{$_("actions.exportAllProfiles")}
+							</DropdownMenu.Item>
+							<DropdownMenu.Item onSelect={onImport}>
+								<UploadIcon data-icon="inline-start" />
+								{$_("actions.importProfiles")}
+							</DropdownMenu.Item>
+						</DropdownMenu.Group>
+					</DropdownMenu.Content>
+				</DropdownMenu.Root>
 				<Button size="sm" variant="outline" onclick={onConfigSets}>
 					<SlidersHorizontalIcon data-icon="inline-start" />
 					{$_("actions.configSets")}
@@ -138,10 +168,14 @@
 											<EyeIcon data-icon="inline-start" />
 											{$_("actions.details")}
 										</DropdownMenu.Item>
-										<DropdownMenu.Item onSelect={() => onFork(profile)}>
-											<GitForkIcon data-icon="inline-start" />
-											{$_("actions.fork")}
-										</DropdownMenu.Item>
+									<DropdownMenu.Item onSelect={() => onFork(profile)}>
+										<GitForkIcon data-icon="inline-start" />
+										{$_("actions.fork")}
+									</DropdownMenu.Item>
+									<DropdownMenu.Item onSelect={() => onExport(profile)}>
+										<DownloadIcon data-icon="inline-start" />
+										{$_("actions.exportProfile")}
+									</DropdownMenu.Item>
 									</DropdownMenu.Group>
 								</DropdownMenu.Content>
 							</DropdownMenu.Root>

@@ -46,6 +46,10 @@ const (
 	ErrorUsageImportFailed     ErrorCode = "USAGE_IMPORT_FAILED"
 	ErrorCodexInvalid          ErrorCode = "CODEX_INVALID"
 	ErrorSettingInvalid        ErrorCode = "SETTING_INVALID"
+	ErrorExportFailed          ErrorCode = "EXPORT_FAILED"
+	ErrorImportInvalid         ErrorCode = "IMPORT_INVALID"
+	ErrorImportConflict        ErrorCode = "IMPORT_CONFLICT"
+	ErrorImportPlanChanged     ErrorCode = "IMPORT_PLAN_CHANGED"
 )
 
 type AppError struct {

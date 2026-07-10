@@ -59,6 +59,8 @@ profiledeck codex detect
 profiledeck codex profile create work
 profiledeck codex profile list
 profiledeck codex config-set list
+profiledeck codex profile save-current
+profiledeck codex profile export --output ./profiledeck-codex-profiles.json
 profiledeck plan codex work
 profiledeck switch codex work --yes
 profiledeck usage sync codex
@@ -68,5 +70,7 @@ profiledeck usage report --range 7d
 Codex profile switching requires file credentials. If `$CODEX_HOME/auth.json` is missing, set `cli_auth_credentials_store = "file"` in `$CODEX_HOME/config.toml` and run `codex login` again.
 
 Stored Codex auth and complete Config Set payloads are sensitive. ProfileDeck stores them locally in `profiledeck.db`; switch backups may contain previous `auth.json` and `config.toml` content.
+
+Codex Profile exports are explicit sensitive backups. They contain raw `auth.json` and complete `config.toml` payloads in a deterministic JSON file with `0600` permissions on POSIX systems. Keep the file outside the runtime directory before deleting a development database.
 
 Usage analysis stays local and aggregate-only. The Desktop Usage page defaults to an API-equivalent cost trend and can switch to token trends. It does not query account quotas or infer which Profile, credential, or ChatGPT account produced a session.

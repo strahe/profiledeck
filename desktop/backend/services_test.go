@@ -426,6 +426,56 @@ func TestCodexProfileListAndShowUseSharedAppSemantics(t *testing.T) {
 	}
 }
 
+func TestCodexProfileTransferServicesUseSharedCoreAndNotifyImport(t *testing.T) {
+	ctx := context.Background()
+	sourceConfigDir := t.TempDir()
+	codexDir := t.TempDir()
+	if err := Bootstrap(ctx, Environment{ConfigDir: sourceConfigDir, CodexDir: codexDir}); err != nil {
+		t.Fatalf("expected source bootstrap to succeed, got %v", err)
+	}
+	rawSecret := "desktop-transfer-test-value"
+	writeDesktopCodexFiles(t, codexDir, `model = "gpt-test"`+"\n", `{"tokens":{"account_id":"work","access_token":"`+rawSecret+`"}}`)
+	source := NewServices(app.DefaultInfo(), Environment{ConfigDir: sourceConfigDir, CodexDir: codexDir}, nil)
+	if _, err := source.Codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
+		t.Fatalf("expected source profile create, got %v", err)
+	}
+	bundlePath := filepath.Join(t.TempDir(), "profiles.json")
+	exported, err := source.Codex.ExportProfiles(ctx, ExportCodexProfilesRequest{OutputPath: bundlePath})
+	if err != nil || exported.ProfileCount != 1 {
+		t.Fatalf("expected desktop export service, result=%#v err=%v", exported, err)
+	}
+	exportedJSON, _ := json.Marshal(exported)
+	if strings.Contains(string(exportedJSON), rawSecret) {
+		t.Fatalf("expected desktop export DTO to remain metadata-only, got %s", exportedJSON)
+	}
+
+	targetConfigDir := t.TempDir()
+	if err := Bootstrap(ctx, Environment{ConfigDir: targetConfigDir, CodexDir: codexDir}); err != nil {
+		t.Fatalf("expected target bootstrap to succeed, got %v", err)
+	}
+	target := NewServices(app.DefaultInfo(), Environment{ConfigDir: targetConfigDir, CodexDir: codexDir}, nil)
+	events := []DesktopChangeEvent{}
+	target.SubscribeChanges(func(event DesktopChangeEvent) { events = append(events, event) })
+	plan, err := target.Codex.InspectProfileImport(ctx, bundlePath)
+	if err != nil || !plan.CanApply {
+		t.Fatalf("expected desktop import inspection, plan=%#v err=%v", plan, err)
+	}
+	planJSON, _ := json.Marshal(plan)
+	if strings.Contains(string(planJSON), rawSecret) {
+		t.Fatalf("expected desktop import plan to remain metadata-only, got %s", planJSON)
+	}
+	result, err := target.Codex.ApplyProfileImport(ctx, ApplyCodexProfileImportRequest{
+		InputPath: bundlePath, ExpectedPlanFingerprint: plan.PlanFingerprint, Confirm: true,
+	})
+	if err != nil || !result.Changed {
+		t.Fatalf("expected desktop import apply, result=%#v err=%v", result, err)
+	}
+	if len(events) != 1 || events[0].Kind != DesktopChangeCodexProfileChanged || events[0].Source != "codex.importProfiles" ||
+		!events[0].ProfileChanged || !events[0].ConfigSetsChanged || events[0].ActiveStateChanged {
+		t.Fatalf("expected imported profile/config event without active-state change, got %#v", events)
+	}
+}
+
 func TestCodexSaveActiveProfileStateReadsCurrentFilesBehindDesktopBoundary(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()

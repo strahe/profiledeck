@@ -21,12 +21,14 @@ export {
 };
 
 export type {
+    ApplyCodexProfileImportRequest,
     CopyCodexConfigSetRequest,
     CreateCodexConfigSetRequest,
     CreateCodexProfileRequest,
     DashboardResult,
     DesktopError,
     Environment,
+    ExportCodexProfilesRequest,
     ForkCodexProfileRequest,
     SwitchApplyRequest,
     UpdateCodexConfigSetRequest,

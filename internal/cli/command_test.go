@@ -42,6 +42,10 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 		codex.Command("profile").Command("fork") == nil ||
 		codex.Command("profile").Command("save-current") == nil ||
 		codex.Command("profile").Command("set-config") == nil ||
+		codex.Command("profile").Command("export") == nil ||
+		codex.Command("profile").Command("import") == nil ||
+		codex.Command("profile").Command("import").Command("inspect") == nil ||
+		codex.Command("profile").Command("import").Command("apply") == nil ||
 		codex.Command("profile").Command("sync") != nil ||
 		codex.Command("config-set") == nil {
 		t.Fatalf("expected Codex profile and Config Set commands")
@@ -589,6 +593,79 @@ func TestCodexProfileCreateForkAndSaveCurrentCLI(t *testing.T) {
 	}
 	if got := string(mustReadFile(t, filepath.Join(codexDir, codexconfig.AuthFileName))); !strings.Contains(got, "token-2") {
 		t.Fatalf("expected shared credential update to affect fork, got %q", got)
+	}
+}
+
+func TestCodexProfileExportImportCLI(t *testing.T) {
+	sourceConfigDir := t.TempDir()
+	codexDir := t.TempDir()
+	rawAuthSecret := "private-auth-test-value"
+	rawConfigSecret := "private-config-test-value"
+	writeCLICodexProfileFixture(t, codexDir,
+		"model = \"gpt-test\"\napi_key = \""+rawConfigSecret+"\"\n",
+		`{"tokens":{"account_id":"test-account","access_token":"`+rawAuthSecret+`"}}`,
+	)
+	if _, err := runCLI(t, "--config-dir", sourceConfigDir, "init", "--json"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, "--config-dir", sourceConfigDir, "codex", "profile", "create", "work", "--codex-dir", codexDir, "--json"); err != nil {
+		t.Fatal(err)
+	}
+
+	bundlePath := filepath.Join(t.TempDir(), "profiles.json")
+	out, err := runCLI(t, "--config-dir", sourceConfigDir, "codex", "profile", "export", "--output", bundlePath, "--json")
+	if err != nil {
+		t.Fatalf("expected CLI export to succeed, got %v", err)
+	}
+	if strings.Contains(out, rawAuthSecret) || strings.Contains(out, rawConfigSecret) {
+		t.Fatalf("expected export command output to contain metadata only, got %q", out)
+	}
+	var exported app.CodexProfileExportResult
+	decodeCLIJSON(t, []byte(out), &exported)
+	if exported.Path != bundlePath || exported.ProfileCount != 1 || exported.SHA256 == "" {
+		t.Fatalf("unexpected export result: %#v", exported)
+	}
+	bundleRaw := string(mustReadFile(t, bundlePath))
+	if !strings.Contains(bundleRaw, rawAuthSecret) || !strings.Contains(bundleRaw, rawConfigSecret) {
+		t.Fatalf("expected explicitly sensitive bundle to preserve auth and config payloads")
+	}
+	if _, err := runCLI(t, "--config-dir", sourceConfigDir, "codex", "profile", "export", "--output", bundlePath, "--json"); err == nil {
+		t.Fatalf("expected export overwrite to require --force")
+	}
+
+	targetConfigDir := t.TempDir()
+	if _, err := runCLI(t, "--config-dir", targetConfigDir, "init", "--json"); err != nil {
+		t.Fatal(err)
+	}
+	out, err = runCLI(t, "--config-dir", targetConfigDir, "codex", "profile", "import", "inspect", bundlePath, "--codex-dir", codexDir, "--json")
+	if err != nil {
+		t.Fatalf("expected CLI import inspection to succeed, got %v", err)
+	}
+	if strings.Contains(out, rawAuthSecret) || strings.Contains(out, rawConfigSecret) {
+		t.Fatalf("expected import plan output to contain metadata only, got %q", out)
+	}
+	var plan app.CodexProfileImportPlan
+	decodeCLIJSON(t, []byte(out), &plan)
+	if !plan.CanApply || plan.PlanFingerprint == "" {
+		t.Fatalf("unexpected import plan: %#v", plan)
+	}
+	_, err = runCLI(t, "--config-dir", targetConfigDir, "codex", "profile", "import", "apply", bundlePath, "--codex-dir", codexDir, "--plan-fingerprint", plan.PlanFingerprint, "--json")
+	assertCLIAppErrorCode(t, err, app.ErrorConfirmationRequired)
+	out, err = runCLI(t, "--config-dir", targetConfigDir, "codex", "profile", "import", "apply", bundlePath, "--codex-dir", codexDir, "--plan-fingerprint", plan.PlanFingerprint, "--yes", "--json")
+	if err != nil {
+		t.Fatalf("expected CLI import apply to succeed, got %v", err)
+	}
+	if strings.Contains(out, rawAuthSecret) || strings.Contains(out, rawConfigSecret) {
+		t.Fatalf("expected import result output to contain metadata only, got %q", out)
+	}
+	var imported app.CodexProfileImportResult
+	decodeCLIJSON(t, []byte(out), &imported)
+	if !imported.Changed || imported.OperationID == "" {
+		t.Fatalf("unexpected import result: %#v", imported)
+	}
+	listOut, err := runCLI(t, "--config-dir", targetConfigDir, "codex", "profile", "list", "--json")
+	if err != nil || !strings.Contains(listOut, `"id":"work"`) {
+		t.Fatalf("expected imported profile in target store, output=%q err=%v", listOut, err)
 	}
 }
 

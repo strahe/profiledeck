@@ -146,6 +146,18 @@ type UpdateCodexProfileMetadataRequest struct {
 	Description *string `json:"description,omitempty"`
 }
 
+type ExportCodexProfilesRequest struct {
+	ProfileIDs []string `json:"profile_ids,omitempty"`
+	OutputPath string   `json:"output_path"`
+	Overwrite  bool     `json:"overwrite"`
+}
+
+type ApplyCodexProfileImportRequest struct {
+	InputPath               string `json:"input_path"`
+	ExpectedPlanFingerprint string `json:"expected_plan_fingerprint"`
+	Confirm                 bool   `json:"confirm"`
+}
+
 func NewServices(info app.Info, env Environment, startupErr error) Services {
 	changes := NewChangeNotifier()
 	autoSync := newUsageAutoSyncRuntime(env)
@@ -379,6 +391,30 @@ func (s *CodexService) UpdateProfileMetadata(ctx context.Context, req UpdateCode
 	return result, err
 }
 
+func (s *CodexService) ExportProfiles(ctx context.Context, req ExportCodexProfilesRequest) (app.CodexProfileExportResult, error) {
+	return app.ExportCodexProfiles(ctx, app.ExportCodexProfilesRequest{
+		ConfigDir: s.env.ConfigDir, ProfileIDs: req.ProfileIDs,
+		OutputPath: req.OutputPath, Overwrite: req.Overwrite,
+	})
+}
+
+func (s *CodexService) InspectProfileImport(ctx context.Context, inputPath string) (app.CodexProfileImportPlan, error) {
+	return app.InspectCodexProfileImport(ctx, app.InspectCodexProfileImportRequest{
+		ConfigDir: s.env.ConfigDir, CodexDir: s.env.CodexDir, InputPath: inputPath,
+	})
+}
+
+func (s *CodexService) ApplyProfileImport(ctx context.Context, req ApplyCodexProfileImportRequest) (app.CodexProfileImportResult, error) {
+	result, err := app.ImportCodexProfiles(ctx, app.ImportCodexProfilesRequest{
+		ConfigDir: s.env.ConfigDir, CodexDir: s.env.CodexDir, InputPath: req.InputPath,
+		ExpectedPlanFingerprint: req.ExpectedPlanFingerprint, Confirm: req.Confirm,
+	})
+	if err == nil && result.Changed {
+		s.notifyMutationResult(DesktopChangeCodexProfileChanged, "codex.importProfiles", codexconfig.ProviderID, "", result.OperationID, nil)
+	}
+	return result, err
+}
+
 func (s *ProfileService) ListProviders(ctx context.Context) ([]app.Provider, error) {
 	return app.ListProviders(ctx, app.ListProvidersRequest{ConfigDir: s.env.ConfigDir, IncludeDisabled: true})
 }
@@ -546,7 +582,7 @@ func notifyMutationResult(changes *ChangeNotifier, kind string, source string, p
 	switch kind {
 	case DesktopChangeCodexProfileChanged:
 		event.ProfileChanged = true
-		event.ConfigSetsChanged = strings.Contains(source, "createProfile") || strings.Contains(source, "forkProfile") || strings.Contains(source, "saveActiveProfileState") || strings.Contains(source, "setProfileConfig")
+		event.ConfigSetsChanged = strings.Contains(source, "createProfile") || strings.Contains(source, "forkProfile") || strings.Contains(source, "saveActiveProfileState") || strings.Contains(source, "setProfileConfig") || strings.Contains(source, "importProfiles")
 		event.ActiveStateChanged = strings.Contains(source, "createProfile")
 	case DesktopChangeCodexConfigSetChanged:
 		event.ConfigSetsChanged = true

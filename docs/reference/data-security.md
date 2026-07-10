@@ -34,6 +34,14 @@ Switch and rollback backups may contain previous target file content. For Codex,
 
 Backup commands show metadata such as path, action, hash, and mode. They do not print raw auth content in normal output.
 
+## Sensitive Profile exports
+
+`profiledeck codex profile export` is an explicit sensitive export mode for local backup and database rebuilds. Its JSON bundle contains raw Codex `auth.json` and complete Config Set payloads. ProfileDeck requires an explicit output path, writes atomically, refuses symlink targets, and sets the file to `0600` on POSIX systems. It does not create or change the selected parent directory.
+
+Import accepts only a private regular file, validates its format, version, hashes, auth JSON, TOML, references, and conflicts before writing, then applies all database changes in one transaction. It never uses `tokens.account_id` to merge credentials. Import does not set active state or write Codex working files.
+
+Keep sensitive bundles outside the ProfileDeck runtime before deleting a development database. Do not commit or share them.
+
 ## Redaction
 
 ProfileDeck redacts sensitive-looking values in previews and command output. Codex auth previews are always fully redacted. Config Set and Profile APIs expose metadata summaries, never raw TOML or auth payloads.
@@ -49,6 +57,8 @@ profiledeck plan codex <profile-id>
 profiledeck backup show <backup-id>
 profiledeck doctor
 ```
+
+Export and import command output remains metadata-only. Only the explicitly selected bundle file contains raw payloads.
 
 ## What ProfileDeck does not store
 

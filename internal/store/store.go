@@ -28,6 +28,7 @@ const (
 
 	OperationTypeSwitch      = "switch"
 	OperationTypeRollback    = "rollback"
+	OperationTypeImport      = "import"
 	OperationTypeMaintenance = "maintenance"
 
 	OperationStatusPending = "pending"
@@ -257,6 +258,11 @@ type CreateAppliedMaintenanceOperationParams struct {
 	ProviderID   string
 	MetadataJSON string
 	SetActive    bool
+}
+
+type CreateAppliedImportOperationParams struct {
+	ID           string
+	MetadataJSON string
 }
 
 type MarkOperationFailedParams struct {
@@ -1818,6 +1824,29 @@ func (s *Store) CreateAppliedMaintenanceOperation(ctx context.Context, params Cr
 		if err != nil {
 			return Operation{}, err
 		}
+	}
+	return s.GetOperation(ctx, params.ID)
+}
+
+func (s *Store) CreateAppliedImportOperation(ctx context.Context, params CreateAppliedImportOperationParams) (Operation, error) {
+	now := time.Now().UnixMilli()
+	_, err := s.executor().ExecContext(
+		ctx,
+		`INSERT INTO operations
+			(id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, '', ?, ?, ?)`,
+		params.ID,
+		OperationTypeImport,
+		OperationStatusApplied,
+		params.MetadataJSON,
+		now,
+		now,
+	)
+	if err != nil {
+		if isSQLiteConstraintError(err) {
+			return Operation{}, ErrAlreadyExists
+		}
+		return Operation{}, err
 	}
 	return s.GetOperation(ctx, params.ID)
 }

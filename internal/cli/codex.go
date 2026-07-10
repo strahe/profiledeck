@@ -48,6 +48,7 @@ func newCodexProfileCommand() *urfavecli.Command {
 		Commands: []*urfavecli.Command{
 			newCodexProfileListCommand(), newCodexProfileShowCommand(), newCodexProfileCreateCommand(),
 			newCodexProfileForkCommand(), newCodexProfileSaveCurrentCommand(), newCodexProfileSetConfigCommand(),
+			newCodexProfileExportCommand(), newCodexProfileImportCommand(),
 		},
 	}
 }

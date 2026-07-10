@@ -91,3 +91,33 @@ profiledeck switch codex work --yes
 ```
 
 `plan` 只读。只有 `switch`、`rollback` 和 `recover` 会写 Codex 目标文件。无效或缺失的工作副本不会被捕获；plan 会给出警告，backup 会保留文件系统现场。
+
+## 备份与恢复 Profile
+
+导出前先保存 active 工作副本中的有效变化，并把 bundle 写到准备删除的 runtime 目录之外：
+
+```bash
+profiledeck codex profile save-current
+profiledeck codex profile export --output ./profiledeck-codex-profiles.json
+```
+
+默认导出包含全部 Codex Profiles、被引用的隐藏 credential，以及包括未绑定配置集在内的全部 Config Sets。传入一个或多个 Profile ID 时，只导出这些 Profiles 及其依赖：
+
+```bash
+profiledeck codex profile export work personal \
+  --output ./selected-codex-profiles.json
+```
+
+JSON bundle 包含 raw `auth.json` 与完整 `config.toml` payload。ProfileDeck 会在 POSIX 系统上以 `0600` 权限写入文件，命令输出不会打印 payload。请把它按敏感文件保管。
+
+初始化新数据库后，先检查导入 plan，再执行应用：
+
+```bash
+profiledeck init
+profiledeck codex profile import inspect ./profiledeck-codex-profiles.json
+profiledeck codex profile import apply ./profiledeck-codex-profiles.json \
+  --plan-fingerprint <reviewed-fingerprint> \
+  --yes
+```
+
+缺失资源会被创建，相同资源会被跳过；任何同 ID 差异都会阻止整次导入。导入会使用当前 `CODEX_HOME`，在一个数据库事务中重建 Profile targets。它不会恢复 active 状态，也不会写入 `auth.json` 或 `config.toml`；导入后仍通过正常的 plan 和 switch 流程激活 Profile。

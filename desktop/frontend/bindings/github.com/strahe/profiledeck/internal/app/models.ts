@@ -125,6 +125,59 @@ export interface CodexProfileDetail {
     "config_set"?: CodexConfigSet | null;
 }
 
+export interface CodexProfileExportResult {
+    "path": string;
+    "sha256": string;
+    "file_mode": string;
+    "profile_count": number;
+    "credential_count": number;
+    "config_set_count": number;
+    "warnings": string[] | null;
+}
+
+export interface CodexProfileImportCounts {
+    "create": number;
+    "unchanged": number;
+    "conflict": number;
+}
+
+export interface CodexProfileImportItem {
+    "kind": string;
+    "id": string;
+    "name"?: string;
+    "credential_id"?: string;
+    "config_set_id"?: string;
+    "action": string;
+    "reason"?: string;
+}
+
+export interface CodexProfileImportPlan {
+    "path": string;
+    "file_sha256": string;
+    "plan_fingerprint": string;
+    "codex_dir": string;
+    "can_apply": boolean;
+    "no_changes": boolean;
+    "counts": CodexProfileImportCounts;
+    "items": CodexProfileImportItem[] | null;
+    "profile_count": number;
+    "credential_count": number;
+    "config_set_count": number;
+    "warnings": string[] | null;
+}
+
+export interface CodexProfileImportResult {
+    "operation_id"?: string;
+    "file_sha256": string;
+    "plan_fingerprint": string;
+    "changed": boolean;
+    "counts": CodexProfileImportCounts;
+    "profile_count": number;
+    "credential_count": number;
+    "config_set_count": number;
+    "warnings": string[] | null;
+}
+
 export interface CodexProfileListResult {
     "profiles": CodexProfileSummary[] | null;
 }

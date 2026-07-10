@@ -91,3 +91,33 @@ profiledeck switch codex work --yes
 ```
 
 `plan` is read-only. `switch`, `rollback`, and `recover` are the only paths that write Codex target files. Invalid or missing working copies are not captured; the plan reports a warning and the backup retains the filesystem state.
+
+## Back Up and Restore Profiles
+
+Save valid active working-copy changes before export, then write the bundle outside any runtime directory you plan to delete:
+
+```bash
+profiledeck codex profile save-current
+profiledeck codex profile export --output ./profiledeck-codex-profiles.json
+```
+
+The default export includes every Codex Profile, referenced hidden credential, and Config Set, including unreferenced Config Sets. Pass one or more Profile IDs to export only those Profiles and their dependencies:
+
+```bash
+profiledeck codex profile export work personal \
+  --output ./selected-codex-profiles.json
+```
+
+The JSON bundle contains raw `auth.json` and complete `config.toml` payloads. ProfileDeck writes it with `0600` permissions on POSIX systems and does not print payloads in command output. Keep it private.
+
+After initializing a new database, inspect the import before applying it:
+
+```bash
+profiledeck init
+profiledeck codex profile import inspect ./profiledeck-codex-profiles.json
+profiledeck codex profile import apply ./profiledeck-codex-profiles.json \
+  --plan-fingerprint <reviewed-fingerprint> \
+  --yes
+```
+
+Missing resources are created, identical resources are skipped, and any same-ID difference blocks the whole import. Import uses the current `CODEX_HOME` to rebuild Profile targets in one database transaction. It does not restore active state or write `auth.json` or `config.toml`; use the normal plan and switch flow after import.

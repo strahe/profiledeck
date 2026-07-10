@@ -5,6 +5,12 @@
 // @ts-ignore: Unused imports
 import * as app$0 from "../../internal/app/models.js";
 
+export interface ApplyCodexProfileImportRequest {
+    "input_path": string;
+    "expected_plan_fingerprint": string;
+    "confirm": boolean;
+}
+
 export interface CopyCodexConfigSetRequest {
     "source_config_set_id": string;
     "config_set_id": string;
@@ -51,6 +57,12 @@ export interface DesktopError {
 export interface Environment {
     "config_dir": string;
     "codex_dir": string;
+}
+
+export interface ExportCodexProfilesRequest {
+    "profile_ids"?: string[] | null;
+    "output_path": string;
+    "overwrite": boolean;
 }
 
 export interface ForkCodexProfileRequest {
