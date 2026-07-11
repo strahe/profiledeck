@@ -13,6 +13,7 @@
 
 # Local build output
 bin/
+.task/
 
 # VitePress documentation output
 docs/node_modules/

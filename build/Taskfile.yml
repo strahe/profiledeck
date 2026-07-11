@@ -1,0 +1,38 @@
+version: '3'
+
+tasks:
+  frontend:install:
+    run: once
+    dir: '{{.FRONTEND_DIR}}'
+    sources:
+      - package.json
+      - package-lock.json
+    generates:
+      - node_modules/.profiledeck-install-stamp
+    preconditions:
+      - sh: npm --version
+        msg: npm is required to install Desktop frontend dependencies.
+    cmds:
+      - npm ci
+      - node -e "require('node:fs').writeFileSync('node_modules/.profiledeck-install-stamp', '')"
+
+  bindings:
+    run: once
+    cmds:
+      - wails3 generate bindings -d {{.FRONTEND_DIR}}/bindings -ts -i ./desktop/...
+
+  frontend:build:
+    run: once
+    deps:
+      - task: frontend:install
+      - task: bindings
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - 'npm run {{if eq .DEV "true"}}build:dev{{else}}build{{end}}'
+
+  frontend:dev:
+    deps:
+      - task: frontend:install
+    dir: '{{.FRONTEND_DIR}}'
+    cmds:
+      - npm run dev -- --force --port {{.VITE_PORT}} --strictPort

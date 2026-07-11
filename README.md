@@ -47,9 +47,25 @@ Full local validation requires macOS, compatible `golangci-lint` v2 and `wails3`
 
 macOS desktop builds target macOS 14.0 by default. Override it with `MACOS_MIN_VERSION=<version>` when running desktop Make targets.
 
-During desktop development, set `PROFILEDECK_CONFIG_DIR` to a temporary directory when you need to avoid touching the normal ProfileDeck runtime.
+Wails-native Desktop development is available through the root Taskfile:
 
-Global Desktop settings contain the language preference: Auto, Simplified Chinese, or English. Codex-specific settings contain the local usage-sync interval and per-Profile account-limit automation. Usage sync runs while ProfileDeck is open or hidden in the tray; the available intervals are 5, 15, 30, and 60 seconds, with 15 seconds as the default. Account-limit refresh and login keepalive are off by default.
+```bash
+wails3 build
+wails3 dev
+wails3 task run
+```
+
+The Taskfile owns only the cross-platform Wails build, run, bindings, frontend, and hot-reload lifecycle. The Makefile remains the authoritative interface for tests, linting, generated-binding checks, documentation, and CI validation.
+
+During desktop development, set `PROFILEDECK_CONFIG_DIR` to a temporary directory to avoid touching the normal ProfileDeck runtime. Set `PROFILEDECK_CODEX_DIR` as well when testing against an isolated Codex working copy.
+
+```bash
+PROFILEDECK_CONFIG_DIR=/tmp/profiledeck-dev PROFILEDECK_CODEX_DIR=/tmp/profiledeck-codex wails3 dev
+```
+
+Global Desktop settings contain language and appearance preferences. Appearance defaults to System, and the Agent sidebar starts expanded; both appearance and sidebar state persist in `profiledeck.db`. The sidebar currently lists the implemented Codex Agent, can collapse to icons, and keeps global Settings and Diagnostics in its footer. The selected Agent's Profiles, Usage, and Settings remain secondary navigation within its workspace. Diagnostics replaces the former Codex-specific health view and shows only actionable findings, lock issues, and incomplete operations when attention is required.
+
+Codex-specific settings contain the local usage-sync interval and per-Profile account-limit automation. The same automation controls are also available on each Profile detail page and stay synchronized. Usage sync runs while ProfileDeck is open or hidden in the tray; the available intervals are 5, 15, 30, and 60 seconds, with 15 seconds as the default. Account-limit refresh and login keepalive are off by default.
 
 ## Codex Quick Start
 

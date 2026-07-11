@@ -23,6 +23,8 @@ codex login
 
 ## 创建 Profile
 
+在 Desktop 中，使用 **将当前 Codex 配置保存为新 Profile**。Profile ID 是稳定且不可变的 CLI 与路由键，Name 是面向用户的显示名称。只有当前两个 Codex 文件都有效时，此操作才可用；来源文件缺失或无效时，已保存的 Profiles 仍可查看。
+
 第一个 Profile 会捕获当前文件，创建名为 `shared` 的 Config Set 和一个隐藏 credential，并成为 active Profile：
 
 ```bash
@@ -90,11 +92,13 @@ profiledeck plan codex work
 profiledeck switch codex work --yes
 ```
 
+Desktop 中对应的操作是活动 Profile 详情页里的 **从当前 Codex 更新**。它会重新校验来源，然后用当前工作副本更新活动隐藏 credential 和 Config Set。
+
 `plan` 只读。只有 `switch`、`rollback` 和 `recover` 会写 Codex 目标文件。无效或缺失的工作副本不会被捕获；plan 会给出警告，backup 会保留文件系统现场。
 
 ## 查看使用限额
 
-Desktop 的 Profiles 页面可以读取已保存登录状态当前的 ChatGPT Codex 限额。可在单个 Profile 行或详情页点击 **刷新限额**；页面不提供“全部刷新”。
+Desktop 的 Profiles 页面可以读取已保存登录状态当前的 ChatGPT Codex 限额。Desktop 启动并获得 active 状态后，只读取一次 active Profile；不会读取 inactive Profiles，也不会在重新进入页面时重复请求。后续可在单个 Profile 行或详情页点击 **刷新限额**；页面不提供“全部刷新”。
 
 列表显示各限额窗口的剩余百分比和重置时间。详情页还会显示已使用百分比、套餐、限额状态、credits、支出控制、可用重置次数，以及服务返回的其他计量限额。`used_percent` 表示已使用比例，因此剩余比例为 `100 - used_percent`。
 
@@ -102,7 +106,7 @@ Desktop 的 Profiles 页面可以读取已保存登录状态当前的 ChatGPT Co
 
 如果 app-server 缺失或协议不兼容，手动刷新会回退到固定的只读 ChatGPT Codex 限额端点。回退请求不会刷新或写回 token。Profile 自定义的 model-provider URL 不会收到已保存的 ChatGPT token。
 
-在 **Codex > 设置** 中，每个 Profile 的自动限额周期可设为关闭、5、10、30 或 60 分钟，默认关闭。ProfileDeck 同一时间只请求一个 credential，在不同 credentials 之间增加间隔，并按共享 credential 去重；有效周期取所有绑定 Profiles 中最短的已启用周期。首次执行会分散到完整周期内，后续周期会加入时间抖动。
+可在 Profile 详情页或 **Codex 设置** 中，把自动限额周期设为关闭、5、10、30 或 60 分钟。两个入口修改同一份持久化设置，并会立即同步。此功能默认关闭。ProfileDeck 同一时间只请求一个 credential，在不同 credentials 之间增加间隔，并按共享 credential 去重；有效周期取所有绑定 Profiles 中最短的已启用周期。首次执行会分散到完整周期内，后续周期会加入时间抖动。
 
 托管 ChatGPT 登录还可以启用 **保持登录可用**。未启用自动限额时，ProfileDeck 会在 access token 临近过期时请求 Codex 刷新；无法读取过期时间时，则按上次刷新后八天调度。外部 `chatgptAuthTokens` 登录可以查询限额，但不支持原生保活。refresh token 已过期、被复用或撤销时，自动任务会暂停到 credential 内容变化；瞬时失败会使用逐级退避。
 
@@ -112,7 +116,7 @@ Desktop 的 Profiles 页面可以读取已保存登录状态当前的 ChatGPT Co
 
 ## 备份与恢复 Profile
 
-导出前先保存 active 工作副本中的有效变化，并把 bundle 写到准备删除的 runtime 目录之外：
+导出前先从当前有效工作副本更新 active Profile，并把 bundle 写到准备删除的 runtime 目录之外：
 
 ```bash
 profiledeck codex profile save-current

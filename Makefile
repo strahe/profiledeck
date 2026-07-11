@@ -30,7 +30,7 @@ DESKTOP_GO_ENV += CGO_CXXFLAGS="$(CGO_CXXFLAGS) -mmacosx-version-min=$(MACOS_MIN
 DESKTOP_GO_ENV += CGO_LDFLAGS="$(CGO_LDFLAGS) -mmacosx-version-min=$(MACOS_MIN_VERSION)"
 endif
 
-.PHONY: fmt vet lint lint-core lint-desktop test build core-check check clean wails-boundary desktop-go-fmt desktop-bindings desktop-bindings-check desktop-frontend-install desktop-frontend-check desktop-frontend-build desktop-build desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-core-check ci-desktop-check
+.PHONY: fmt vet lint lint-core lint-desktop test build core-check check clean wails-boundary desktop-go-fmt desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-frontend-build desktop-build desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-core-check ci-desktop-check
 
 fmt:
 	$(GOLANGCI_LINT) fmt $(GO_PKGS)
@@ -71,6 +71,13 @@ desktop-bindings-check:
 	$(WAILS3) generate bindings -d "$$temp_dir" -ts -i $(DESKTOP_PKGS); \
 	diff -ru $(DESKTOP_FRONTEND)/bindings "$$temp_dir"
 
+desktop-taskfile-check:
+	$(WAILS3) task --list >/dev/null
+	$(WAILS3) task build GOOS=darwin -dry >/dev/null
+	$(WAILS3) task build GOOS=darwin DEV=true EXTRA_TAGS=taskfilecheck -dry >/dev/null
+	$(WAILS3) task build GOOS=windows DEV=true EXTRA_TAGS=taskfilecheck -dry >/dev/null
+	$(WAILS3) task build GOOS=linux DEV=true EXTRA_TAGS=taskfilecheck -dry >/dev/null
+
 desktop-frontend-install:
 	npm --prefix $(DESKTOP_FRONTEND) ci
 
@@ -84,7 +91,7 @@ desktop-build: desktop-frontend-build
 	mkdir -p $(BIN_DIR)
 	$(DESKTOP_GO_ENV) go build -tags production -o $(BIN_DIR)/profiledeck-desktop $(DESKTOP_CMD)
 
-desktop-check: wails-boundary lint-desktop desktop-bindings-check desktop-frontend-check desktop-build
+desktop-check: wails-boundary lint-desktop desktop-bindings-check desktop-taskfile-check desktop-frontend-check desktop-build
 	$(DESKTOP_GO_ENV) go test ./desktop/...
 
 docs-install:

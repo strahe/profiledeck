@@ -62,13 +62,13 @@ profiledeck doctor
 
 ## Codex 限额与登录保活
 
-手动刷新和显式启用的自动任务通常使用已安装的 `codex app-server`。ProfileDeck 会初始化短生命周期的 stdio session，并调用 Codex 原生账号方法。该进程会关闭 remote plugins、apps、analytics、memories 和 app instructions，避免启动无关网络功能。Profile 自定义的 model-provider URL 不会收到隐藏 ChatGPT token。
+单 Profile 读取（包括 active Profile 启动读取和手动刷新）以及显式启用的自动任务，通常使用已安装的 `codex app-server`。ProfileDeck 会初始化短生命周期的 stdio session，并调用 Codex 原生账号方法。该进程会关闭 remote plugins、apps、analytics、memories 和 app instructions，避免启动无关网络功能。Profile 自定义的 model-provider URL 不会收到隐藏 ChatGPT token。
 
 Active credential 会在 ProfileDeck 持有共享 switch lock 时使用真实 `CODEX_HOME`。如果 Codex 轮换托管 OAuth token，ProfileDeck 会读取更新后的 `auth.json`，并按当前 `credential_id` 签回绑定的 credential。Inactive credential 使用临时 `CODEX_HOME`，目录权限为 `0700`，`auth.json` 权限为 `0600`；只有原 credential hash 未变化时才会更新数据库，并发产生的新 credential 内容优先。`tokens.account_id` 不参与 identity、归属、去重或 token 更新判断。
 
-如果 app-server 不可用或协议不兼容，手动刷新单个 Profile 可以回退到固定的只读 ChatGPT Codex 限额端点。该回退不会刷新或写回 OAuth token。自动限额和登录保活不会使用此回退。
+如果 app-server 不可用或协议不兼容，单 Profile UI 读取可以回退到固定的只读 ChatGPT Codex 限额端点，包括 active Profile 启动读取和手动刷新。该回退不会刷新或写回 OAuth token。周期自动限额和登录保活不会使用此回退。
 
-自动网络任务默认关闭，并且只在 Desktop/托盘进程运行时生效。全局串行 worker 同一时间只处理一个 credential，在不同 credentials 之间增加间隔，并对共享 credential 去重。托管 token 保活使用 Codex 原生刷新路径。外部 `chatgptAuthTokens` credential 可以查询限额，但不能原生保活；API key 等其他登录方式不支持。
+周期自动网络任务默认关闭，并且只在 Desktop/托盘进程运行时生效。除此之外，Desktop 会在启动时读取一次 active Profile，页面导航不会重复触发。全局串行 worker 同一时间只处理一个 credential，在不同 credentials 之间增加间隔，并对共享 credential 去重。托管 token 保活使用 Codex 原生刷新路径。外部 `chatgptAuthTokens` credential 可以查询限额，但不能原生保活；API key 等其他登录方式不支持。
 
 限额快照只保存在进程内存。运行时事件与 Desktop DTO 只包含 Profile ID、时间、下次执行时间、结果状态和映射后的限额快照，不包含 token、临时路径、credential payload hash 或 raw app-server error。
 

@@ -4,11 +4,13 @@
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
 
+	import IconAction from "$lib/components/app/IconAction.svelte";
+	import InfoTooltip from "$lib/components/app/InfoTooltip.svelte";
 	import * as Alert from "$lib/components/ui/alert";
 	import * as Card from "$lib/components/ui/card";
 	import * as Empty from "$lib/components/ui/empty";
 	import { Badge } from "$lib/components/ui/badge";
-	import { Button } from "$lib/components/ui/button";
+	import { Progress } from "$lib/components/ui/progress";
 	import { Separator } from "$lib/components/ui/separator";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { Spinner } from "$lib/components/ui/spinner";
@@ -80,23 +82,22 @@
 
 <Card.Root class="lg:col-span-2">
 	<Card.Header>
-		<Card.Title>{$_("quota.title")}</Card.Title>
-		<Card.Description>{$_("quota.description")}</Card.Description>
+		<Card.Title class="flex items-center gap-1">
+			<span>{$_("quota.title")}</span>
+			<InfoTooltip content={$_("quota.description")} subject={$_("quota.title")} />
+		</Card.Title>
 		<Card.Action>
-			<Button
-				variant="outline"
-				size="sm"
+			<IconAction
+				label={$_("actions.refreshQuota")}
 				disabled={disabled || loading}
 				onclick={onRefresh}
-				aria-label={$_("actions.refreshQuota")}
 			>
-				{#if loading}<Spinner data-icon="inline-start" />{:else}<RefreshCwIcon data-icon="inline-start" />{/if}
-				{$_("actions.refreshQuota")}
-			</Button>
+				{#if loading}<Spinner />{:else}<RefreshCwIcon />{/if}
+			</IconAction>
 		</Card.Action>
 	</Card.Header>
 	<Card.Content>
-		{#if loading}
+		{#if loading && !quota}
 			<div class="flex flex-col gap-4">
 				<div class="flex items-center gap-2"><Skeleton class="h-5 w-16" /><Skeleton class="h-5 w-24" /></div>
 				<div class="grid gap-3 sm:grid-cols-2"><Skeleton class="h-32 w-full" /><Skeleton class="h-32 w-full" /></div>
@@ -219,9 +220,9 @@
 	<div class="flex flex-col gap-3 rounded-lg border p-3">
 		<div class="flex items-center justify-between gap-2">
 			<span class="text-xs font-medium text-muted-foreground">{label} · {formatWindow(window.limit_window_seconds)}</span>
-			<Badge variant="outline">{$_("quota.remaining", { values: { value: formatPercent(window.remaining_percent) } })}</Badge>
+			<span class="text-sm font-medium">{formatPercent(window.remaining_percent)}%</span>
 		</div>
-		<div class="text-2xl font-semibold">{formatPercent(window.remaining_percent)}%</div>
+		<Progress value={window.remaining_percent} aria-label={$_("quota.remaining", { values: { value: formatPercent(window.remaining_percent) } })} />
 		<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
 			<span>{$_("quota.used", { values: { value: formatPercent(window.used_percent) } })}</span>
 			<span>{$_("quota.resetsAt", { values: { value: formatTimestamp(window.reset_at_unix_seconds) } })}</span>

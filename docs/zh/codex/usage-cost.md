@@ -1,6 +1,6 @@
 # Codex 用量与成本
 
-ProfileDeck 导入本地 Codex session 用量，并按时间、模型和唯一 session 数提供离线分析。这套分析不会查询账号限额，也不会把用量归因到 Profile、credential 或 ChatGPT account。Desktop Profile 页面的限额快照是独立功能；无论手动刷新还是显式启用自动刷新，都不属于 usage 导入或报告。
+ProfileDeck 导入本地 Codex session 用量，并按时间、模型和唯一 session 数提供离线分析。这套分析不会查询账号限额，也不会把用量归因到 Profile、credential 或 ChatGPT account。Desktop Profile 页面的限额快照是独立功能；无论来自 active Profile 启动读取、手动刷新还是显式启用的自动刷新，都不属于 usage 导入或报告。
 
 ## Desktop 自动同步
 

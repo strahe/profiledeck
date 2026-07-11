@@ -1,0 +1,34 @@
+version: '3'
+
+vars:
+  APP_NAME: profiledeck-desktop
+  BIN_DIR: bin
+  FRONTEND_DIR: desktop/frontend
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
+  GOOS: '{{.GOOS | default OS}}'
+
+includes:
+  common: ./build/Taskfile.yml
+  darwin: ./build/darwin/Taskfile.yml
+  windows: ./build/windows/Taskfile.yml
+  linux: ./build/linux/Taskfile.yml
+
+tasks:
+  build:
+    desc: Build the Wails desktop application
+    cmds:
+      - task: '{{.GOOS}}:build'
+        vars:
+          DEV: '{{.DEV}}'
+          EXTRA_TAGS: '{{.EXTRA_TAGS}}'
+          ARCH: '{{.ARCH}}'
+
+  run:
+    desc: Run the existing desktop binary
+    cmds:
+      - task: '{{.GOOS}}:run'
+
+  dev:
+    desc: Run the desktop application with Wails and Vite hot reload
+    cmds:
+      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}

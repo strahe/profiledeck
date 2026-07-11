@@ -1,6 +1,7 @@
 <script lang="ts">
+	import { onMount } from "svelte";
 	import { _ } from "svelte-i18n";
-	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
+	import CheckIcon from "@lucide/svelte/icons/check";
 	import DownloadIcon from "@lucide/svelte/icons/download";
 	import EyeIcon from "@lucide/svelte/icons/eye";
 	import GitForkIcon from "@lucide/svelte/icons/git-fork";
@@ -8,18 +9,24 @@
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
+	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 	import UploadIcon from "@lucide/svelte/icons/upload";
 
+	import IconAction from "$lib/components/app/IconAction.svelte";
+	import InfoTooltip from "$lib/components/app/InfoTooltip.svelte";
+	import StatusBadge from "$lib/components/app/StatusBadge.svelte";
 	import * as Alert from "$lib/components/ui/alert";
 	import * as Card from "$lib/components/ui/card";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import * as Empty from "$lib/components/ui/empty";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Separator } from "$lib/components/ui/separator";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { Spinner } from "$lib/components/ui/spinner";
+	import * as Tooltip from "$lib/components/ui/tooltip";
+	import { cn } from "$lib/utils";
 
+	import ProfileQuotaFreshness from "./ProfileQuotaFreshness.svelte";
 	import ProfileQuotaSummary from "./ProfileQuotaSummary.svelte";
 	import type { CodexProfileListItem } from "./types";
 
@@ -28,6 +35,9 @@
 		loading,
 		error,
 		busy,
+		canCreate,
+		sourceChecked,
+		sourceDescription,
 		onNew,
 		onUse,
 		onDetails,
@@ -37,11 +47,16 @@
 		onImport,
 		onExport,
 		onRefreshQuota,
+		onRetrySource,
+		onDiagnostics,
 	}: {
 		profiles: CodexProfileListItem[];
 		loading: boolean;
 		error: string;
 		busy: boolean;
+		canCreate: boolean;
+		sourceChecked: boolean;
+		sourceDescription: string;
 		onNew: () => void;
 		onUse: (profile: CodexProfileListItem) => void;
 		onDetails: (profile: CodexProfileListItem) => void;
@@ -51,160 +66,189 @@
 		onImport: () => void;
 		onExport: (profile: CodexProfileListItem) => void;
 		onRefreshQuota: (profile: CodexProfileListItem) => void;
+		onRetrySource: () => void;
+		onDiagnostics: () => void;
 	} = $props();
+
+	let nowUnixMS = $state(Date.now());
+
+	onMount(() => {
+		const timer = window.setInterval(() => {
+			nowUnixMS = Date.now();
+		}, 60_000);
+		return () => window.clearInterval(timer);
+	});
+
+	function showID(profile: CodexProfileListItem): boolean {
+		const name = profile.summary.profile.name.trim();
+		if (!name) return true;
+		return profiles.filter((item) => item.summary.profile.name.trim() === name).length > 1;
+	}
+
+	function shortID(value: string): string {
+		return value.length > 8 ? `…${value.slice(-8)}` : value;
+	}
 </script>
 
-<Card.Root>
+<Card.Root size="sm">
 	<Card.Header>
-		<Card.Title>{$_("profilePages.list.title")}</Card.Title>
-		<Card.Description>{$_("profilePages.list.description")}</Card.Description>
+		<Card.Title class="flex items-center gap-1">
+			<span>{$_("profilePages.list.title")}</span>
+			<InfoTooltip content={$_("profilePages.list.description")} subject={$_("profilePages.list.title")} />
+		</Card.Title>
 		<Card.Action>
 			<div class="flex items-center gap-2">
 				<DropdownMenu.Root>
 					<DropdownMenu.Trigger>
 						{#snippet child({ props })}
-							<Button {...props} size="sm" variant="outline" disabled={busy}>
-								<DownloadIcon data-icon="inline-start" />
-								{$_("actions.transferProfiles")}
+							<Button {...props} size="icon-sm" variant="outline" aria-label={$_("actions.more")}>
+								<MoreHorizontalIcon />
 							</Button>
 						{/snippet}
 					</DropdownMenu.Trigger>
 					<DropdownMenu.Content align="end">
 						<DropdownMenu.Group>
-							<DropdownMenu.Item onSelect={onExportAll}>
-								<DownloadIcon data-icon="inline-start" />
-								{$_("actions.exportAllProfiles")}
-							</DropdownMenu.Item>
-							<DropdownMenu.Item onSelect={onImport}>
-								<UploadIcon data-icon="inline-start" />
-								{$_("actions.importProfiles")}
-							</DropdownMenu.Item>
+							<DropdownMenu.Item onSelect={onConfigSets}><SlidersHorizontalIcon />{$_("actions.configSets")}</DropdownMenu.Item>
+							<DropdownMenu.Item onSelect={onExportAll}><DownloadIcon />{$_("actions.exportAllProfiles")}</DropdownMenu.Item>
+							<DropdownMenu.Item onSelect={onImport}><UploadIcon />{$_("actions.importProfiles")}</DropdownMenu.Item>
 						</DropdownMenu.Group>
 					</DropdownMenu.Content>
 				</DropdownMenu.Root>
-				<Button size="sm" variant="outline" onclick={onConfigSets}>
-					<SlidersHorizontalIcon data-icon="inline-start" />
-					{$_("actions.configSets")}
-				</Button>
-				<Button size="sm" onclick={onNew}>
-					<PlusIcon data-icon="inline-start" />
-					{$_("actions.newProfile")}
-				</Button>
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						{#snippet child({ props })}
+							<Button
+								{...props}
+								size="sm"
+								aria-disabled={busy || !canCreate}
+								class="aria-disabled:opacity-50"
+								onclick={(event) => {
+									if (busy || !canCreate) {
+										event.preventDefault();
+										return;
+									}
+									onNew();
+								}}
+								aria-label={$_("actions.saveAsNewProfile")}
+							>
+								<PlusIcon data-icon="inline-start" />
+								{$_("actions.saveCurrentShort")}
+							</Button>
+						{/snippet}
+					</Tooltip.Trigger>
+					<Tooltip.Content>{$_("actions.saveAsNewProfile")}</Tooltip.Content>
+				</Tooltip.Root>
 			</div>
 		</Card.Action>
 	</Card.Header>
 
 	<Card.Content class="px-0">
+		{#if sourceChecked && !canCreate}
+			<div class="px-4 pb-4">
+				<Alert.Root variant="destructive">
+					<TriangleAlertIcon data-icon="inline-start" />
+					<Alert.Title>{$_("profilePages.source.notReadyTitle")}</Alert.Title>
+					<Alert.Description>{sourceDescription}</Alert.Description>
+					<Alert.Action>
+						<div class="flex gap-2">
+							<Button size="xs" variant="outline" onclick={onRetrySource}>{$_("actions.retry")}</Button>
+							<Button size="xs" variant="outline" onclick={onDiagnostics}>{$_("nav.diagnostics")}</Button>
+						</div>
+					</Alert.Action>
+				</Alert.Root>
+			</div>
+		{/if}
+
 		{#if loading}
 			<div class="flex flex-col gap-3 px-4 pb-4">
 				{#each [1, 2, 3] as item (item)}
-					<div class="flex items-center gap-4 py-2">
-						<div class="flex min-w-0 flex-1 flex-col gap-2">
+					<div class="flex flex-col gap-2 py-2">
+						<div class="flex items-center justify-between gap-4">
 							<Skeleton class="h-4 w-40" />
-							<Skeleton class="h-3 w-64" />
-							<Skeleton class="h-3 w-52" />
+							<Skeleton class="h-8 w-24" />
 						</div>
-						<Skeleton class="h-7 w-20" />
+						<Skeleton class="h-12 w-full" />
 					</div>
 				{/each}
 			</div>
 		{:else if error}
 			<div class="px-4 pb-4">
 				<Alert.Root variant="destructive">
-					<AlertTriangleIcon data-icon="inline-start" />
+					<TriangleAlertIcon data-icon="inline-start" />
 					<Alert.Title>{$_("empty.loadProfilesFailedTitle")}</Alert.Title>
 					<Alert.Description>{error}</Alert.Description>
+					<Alert.Action><Button size="xs" variant="outline" onclick={onRetrySource}>{$_("actions.retry")}</Button></Alert.Action>
 				</Alert.Root>
 			</div>
 		{:else if profiles.length === 0}
 			<Empty.Root class="border-0 py-12">
 				<Empty.Header>
-					<Empty.Media variant="icon"><PlusIcon data-icon="inline-start" /></Empty.Media>
+					<Empty.Media variant="icon"><PlusIcon /></Empty.Media>
 					<Empty.Title>{$_("empty.noProfilesTitle")}</Empty.Title>
 					<Empty.Description>{$_("profilePages.list.emptyDescription")}</Empty.Description>
 				</Empty.Header>
-				<Empty.Content>
-					<Button size="sm" onclick={onNew}>
-						<PlusIcon data-icon="inline-start" />
-						{$_("actions.newProfile")}
-					</Button>
-				</Empty.Content>
+				{#if canCreate}
+					<Empty.Content><Button size="sm" onclick={onNew}><PlusIcon />{$_("actions.saveAsNewProfile")}</Button></Empty.Content>
+				{/if}
 			</Empty.Root>
 		{:else}
 			{#each profiles as profile, index (profile.id)}
-				<div class="flex flex-col gap-3 px-4 py-3">
-					<div class="flex items-center gap-4">
-						<div class="flex min-w-0 flex-1 flex-col gap-1">
-							<div class="flex items-center gap-2">
+				<div class={cn("flex flex-col gap-2.5 px-4 py-3", profile.summary.active && "bg-primary/5 ring-1 ring-inset ring-primary/20") }>
+					<div class="flex min-w-0 flex-col gap-2">
+						<div class="flex min-w-0 items-center gap-4">
+							<div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
 								<Button variant="link" class="h-auto min-w-0 justify-start p-0" onclick={() => onDetails(profile)}>
 									<span class="truncate">{profile.name}</span>
 								</Button>
-								<span class="truncate font-mono text-xs text-muted-foreground">{profile.id}</span>
-								{#if profile.summary.active}
-									<Badge variant="secondary">{$_("status.active")}</Badge>
-								{/if}
-								{#if profile.summary.warnings?.length}
-									<Badge variant="destructive">{$_("status.warning")}</Badge>
-								{/if}
+								{#if profile.description}<InfoTooltip content={profile.description} subject={profile.name} />{/if}
+								{#if showID(profile)}<span class="font-mono text-xs text-muted-foreground">{shortID(profile.id)}</span>{/if}
+								{#if profile.summary.active}<StatusBadge tone="current"><CheckIcon />{$_("status.current")}</StatusBadge>{/if}
+								{#if profile.summary.warnings?.length}<StatusBadge tone="warning">{$_("status.warning")}</StatusBadge>{/if}
 							</div>
-							{#if profile.description}<p class="truncate text-sm text-muted-foreground">{profile.description}</p>{/if}
-							<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-								{#if profile.account}<span>{profile.account}</span>{/if}
-								{#if profile.configSet}<Badge variant="outline">{profile.configSet}</Badge>{/if}
-								<span>{profile.updated}</span>
+
+							<div class="ml-auto flex shrink-0 items-center justify-end gap-2">
+								<ProfileQuotaFreshness
+									checkedAtUnixMS={profile.quotaCheckedAtUnixMS}
+									checkOutcome={profile.quotaCheckOutcome}
+									{nowUnixMS}
+								/>
+								<IconAction
+									label={$_("actions.refreshProfileQuota", { values: { profile: profile.name } })}
+									disabled={busy || profile.quotaLoading}
+									onclick={() => onRefreshQuota(profile)}
+								>
+									{#if profile.quotaLoading}<Spinner />{:else}<RefreshCwIcon />{/if}
+								</IconAction>
+								{#if !profile.summary.active}<Button size="sm" disabled={busy} onclick={() => onUse(profile)}>{$_("actions.useProfile")}</Button>{/if}
+								<DropdownMenu.Root>
+									<DropdownMenu.Trigger>
+										{#snippet child({ props })}
+											<Button {...props} variant="outline" size="icon-sm" aria-label={$_("actions.more")}><MoreHorizontalIcon /></Button>
+										{/snippet}
+									</DropdownMenu.Trigger>
+									<DropdownMenu.Content align="end">
+										<DropdownMenu.Group>
+											<DropdownMenu.Item onSelect={() => onDetails(profile)}><EyeIcon />{$_("actions.details")}</DropdownMenu.Item>
+											<DropdownMenu.Item onSelect={() => onFork(profile)}><GitForkIcon />{$_("actions.fork")}</DropdownMenu.Item>
+											<DropdownMenu.Item onSelect={() => onExport(profile)}><DownloadIcon />{$_("actions.exportProfile")}</DropdownMenu.Item>
+										</DropdownMenu.Group>
+									</DropdownMenu.Content>
+								</DropdownMenu.Root>
 							</div>
-							<ProfileQuotaSummary quota={profile.quota} loading={profile.quotaLoading} />
 						</div>
 
-						<div class="flex shrink-0 items-center gap-2">
-							<Button
-								size="icon-sm"
-								variant="outline"
-								disabled={busy || profile.quotaLoading}
-								onclick={() => onRefreshQuota(profile)}
-								aria-label={$_("actions.refreshProfileQuota", { values: { profile: profile.name } })}
-								title={$_("actions.refreshProfileQuota", { values: { profile: profile.name } })}
-							>
-								{#if profile.quotaLoading}<Spinner />{:else}<RefreshCwIcon />{/if}
-							</Button>
-							{#if !profile.summary.active}
-								<Button size="sm" disabled={busy} onclick={() => onUse(profile)}>{$_("actions.useProfile")}</Button>
-							{/if}
-							<DropdownMenu.Root>
-								<DropdownMenu.Trigger>
-									{#snippet child({ props })}
-										<Button {...props} variant="outline" size="icon-sm" aria-label={$_("actions.more")}>
-											<MoreHorizontalIcon data-icon="inline-start" />
-										</Button>
-									{/snippet}
-								</DropdownMenu.Trigger>
-								<DropdownMenu.Content align="end">
-									<DropdownMenu.Group>
-										<DropdownMenu.Item onSelect={() => onDetails(profile)}>
-											<EyeIcon data-icon="inline-start" />
-											{$_("actions.details")}
-										</DropdownMenu.Item>
-									<DropdownMenu.Item onSelect={() => onFork(profile)}>
-										<GitForkIcon data-icon="inline-start" />
-										{$_("actions.fork")}
-									</DropdownMenu.Item>
-									<DropdownMenu.Item onSelect={() => onExport(profile)}>
-										<DownloadIcon data-icon="inline-start" />
-										{$_("actions.exportProfile")}
-									</DropdownMenu.Item>
-									</DropdownMenu.Group>
-								</DropdownMenu.Content>
-							</DropdownMenu.Root>
-						</div>
+						<ProfileQuotaSummary
+							quota={profile.quota}
+							loading={profile.quotaLoading}
+							{nowUnixMS}
+						/>
 					</div>
 
 					{#if profile.summary.warnings?.length}
 						<Alert.Root>
-							<AlertTriangleIcon data-icon="inline-start" />
+							<TriangleAlertIcon data-icon="inline-start" />
 							<Alert.Title>{$_("profilePages.list.warningTitle")}</Alert.Title>
-							<Alert.Description>
-								{profile.summary.warnings.join(" ")}
-							</Alert.Description>
+							<Alert.Description>{profile.summary.warnings.join(" ")}</Alert.Description>
 						</Alert.Root>
 					{/if}
 				</div>

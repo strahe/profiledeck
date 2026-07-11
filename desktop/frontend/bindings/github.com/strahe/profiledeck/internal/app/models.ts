@@ -309,6 +309,8 @@ export interface CodexSettings {
 
 export interface DesktopSettings {
     "language": string;
+    "appearance": string;
+    "sidebar_collapsed": boolean;
 }
 
 export interface DoctorFinding {
@@ -534,6 +536,8 @@ export interface UpdateCodexSettingsRequest {
 export interface UpdateDesktopSettingsRequest {
     "config_dir": string;
     "language"?: string | null;
+    "appearance"?: string | null;
+    "sidebar_collapsed"?: boolean | null;
 }
 
 export interface UsageAggregateSummary {

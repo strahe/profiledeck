@@ -7,6 +7,9 @@
 	import type { UsageAutoSyncStatus } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend/models";
 	import type { UsageReportResult } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
 
+	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
+	import PageHeader from "$lib/components/app/PageHeader.svelte";
+	import * as Accordion from "$lib/components/ui/accordion";
 	import * as Alert from "$lib/components/ui/alert";
 	import { Badge } from "$lib/components/ui/badge";
 	import * as Card from "$lib/components/ui/card";
@@ -178,36 +181,42 @@
 	function lastSuccessfulSync(): number {
 		return autoSyncStatus?.last_success_at_unix_ms || report?.import.last_synced_at_unix_ms || 0;
 	}
+
+	function dataQualityIssueCount(value: UsageReportResult): number {
+		return Number(autoSyncStatus?.outcome === "warning")
+			+ Number(value.import.invalid_lines > 0 || value.import.unsupported_lines > 0)
+			+ Number(value.summary.undated_event_count > 0)
+			+ Number(value.summary.partial_cost_event_count > 0)
+			+ Number(value.summary.event_count > 0 && value.summary.unknown_cost_event_count > 0);
+	}
 </script>
 
-<div class="mx-auto flex w-full max-w-6xl flex-col gap-4">
-	<div class="flex flex-wrap items-start justify-between gap-3">
-		<div class="min-w-0">
-			<h2 class="text-base font-semibold tracking-tight">{$_("usage.title")}</h2>
-			<div class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+<ContentContainer class="max-w-6xl">
+	<PageHeader title={$_("usage.title")}>
+		{#snippet meta()}
+			<div class="flex items-center gap-1.5 text-xs text-muted-foreground">
 				{#if autoSyncStatus?.syncing}<Spinner />{/if}
-				<span class="whitespace-nowrap">{$_("usage.autoSync.summary", { values: { seconds: autoSyncStatus?.interval_seconds ?? 15, value: formatLastSync(lastSuccessfulSync()) } })}</span>
+				<span class={autoSyncStatus?.error ? "text-destructive" : ""}>
+					{autoSyncStatus?.error
+						? $_("usage.autoSync.failedDescription")
+						: $_("usage.autoSync.summary", { values: { seconds: autoSyncStatus?.interval_seconds ?? 15, value: formatLastSync(lastSuccessfulSync()) } })}
+				</span>
 			</div>
-		</div>
-		<ToggleGroup.Root type="single" bind:value={rangeSelection} onValueChange={changeRange} variant="outline" size="sm" aria-label={$_("usage.range.label")}>
-			<ToggleGroup.Item value="today">{$_("usage.range.today")}</ToggleGroup.Item>
-			<ToggleGroup.Item value="7d">{$_("usage.range.sevenDays")}</ToggleGroup.Item>
-			<ToggleGroup.Item value="30d">{$_("usage.range.thirtyDays")}</ToggleGroup.Item>
-			<ToggleGroup.Item value="all">{$_("usage.range.all")}</ToggleGroup.Item>
-		</ToggleGroup.Root>
-	</div>
+		{/snippet}
+		{#snippet actions()}
+			<ToggleGroup.Root type="single" bind:value={rangeSelection} onValueChange={changeRange} variant="outline" size="sm" aria-label={$_("usage.range.label")}>
+				<ToggleGroup.Item value="today">{$_("usage.range.today")}</ToggleGroup.Item>
+				<ToggleGroup.Item value="7d">{$_("usage.range.sevenDays")}</ToggleGroup.Item>
+				<ToggleGroup.Item value="30d">{$_("usage.range.thirtyDays")}</ToggleGroup.Item>
+				<ToggleGroup.Item value="all">{$_("usage.range.all")}</ToggleGroup.Item>
+			</ToggleGroup.Root>
+		{/snippet}
+	</PageHeader>
 
 	{#if reportError}
 		<Alert.Root variant="destructive">
 			<Alert.Title>{$_("usage.loadFailedTitle")}</Alert.Title>
 			<Alert.Description>{reportError}</Alert.Description>
-		</Alert.Root>
-	{/if}
-
-	{#if autoSyncStatus?.error}
-		<Alert.Root variant="destructive">
-			<Alert.Title>{$_("usage.autoSync.failedTitle")}</Alert.Title>
-			<Alert.Description>{$_("usage.autoSync.failedDescription")}</Alert.Description>
 		</Alert.Root>
 	{/if}
 
@@ -218,13 +227,21 @@
 			<Alert.Root>
 				<Alert.Title>{$_("usage.dataQuality.title")}</Alert.Title>
 				<Alert.Description>
-					<ul class="list-disc pl-4">
-						{#if autoSyncStatus?.outcome === "warning"}<li>{$_("usage.dataQuality.fileErrors", { values: { count: autoSyncStatus.import_error_count } })}</li>{/if}
-						{#if report.import.invalid_lines > 0 || report.import.unsupported_lines > 0}<li>{$_("usage.dataQuality.lines", { values: { invalid: formatInteger(report.import.invalid_lines), unsupported: formatInteger(report.import.unsupported_lines) } })}</li>{/if}
-						{#if report.summary.undated_event_count > 0}<li>{$_("usage.dataQuality.undated", { values: { count: formatInteger(report.summary.undated_event_count) } })}</li>{/if}
-						{#if report.summary.partial_cost_event_count > 0}<li>{$_("usage.dataQuality.partialPricing", { values: { count: formatInteger(report.summary.partial_cost_event_count) } })}</li>{/if}
-						{#if report.summary.event_count > 0 && report.summary.unknown_cost_event_count > 0}<li>{$_("usage.dataQuality.pricing", { values: { count: formatInteger(report.summary.unknown_cost_event_count), coverage: formatPercent(report.summary.pricing_coverage) } })}</li>{/if}
-					</ul>
+					<p>{$_("usage.dataQuality.summary", { values: { count: dataQualityIssueCount(report) } })}</p>
+					<Accordion.Root type="single" class="mt-1">
+						<Accordion.Item value="details" class="border-0">
+							<Accordion.Trigger class="py-1 text-xs">{$_("usage.dataQuality.showDetails")}</Accordion.Trigger>
+							<Accordion.Content>
+								<ul class="flex list-disc flex-col gap-1 pl-4">
+									{#if autoSyncStatus?.outcome === "warning"}<li>{$_("usage.dataQuality.fileErrors", { values: { count: autoSyncStatus.import_error_count } })}</li>{/if}
+									{#if report.import.invalid_lines > 0 || report.import.unsupported_lines > 0}<li>{$_("usage.dataQuality.lines", { values: { invalid: formatInteger(report.import.invalid_lines), unsupported: formatInteger(report.import.unsupported_lines) } })}</li>{/if}
+									{#if report.summary.undated_event_count > 0}<li>{$_("usage.dataQuality.undated", { values: { count: formatInteger(report.summary.undated_event_count) } })}</li>{/if}
+									{#if report.summary.partial_cost_event_count > 0}<li>{$_("usage.dataQuality.partialPricing", { values: { count: formatInteger(report.summary.partial_cost_event_count) } })}</li>{/if}
+									{#if report.summary.event_count > 0 && report.summary.unknown_cost_event_count > 0}<li>{$_("usage.dataQuality.pricing", { values: { count: formatInteger(report.summary.unknown_cost_event_count), coverage: formatPercent(report.summary.pricing_coverage) } })}</li>{/if}
+								</ul>
+							</Accordion.Content>
+						</Accordion.Item>
+					</Accordion.Root>
 				</Alert.Description>
 			</Alert.Root>
 		{/if}
@@ -291,4 +308,4 @@
 			</Card.Root>
 		{/if}
 	{/if}
-</div>
+</ContentContainer>

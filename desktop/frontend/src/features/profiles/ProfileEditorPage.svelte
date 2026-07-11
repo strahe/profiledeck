@@ -2,6 +2,7 @@
 	import { _ } from "svelte-i18n";
 	import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
 	import SaveIcon from "@lucide/svelte/icons/save";
+	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
 	import * as Alert from "$lib/components/ui/alert";
 	import * as Breadcrumb from "$lib/components/ui/breadcrumb";
@@ -36,6 +37,8 @@
 		descriptionError: string;
 		onCancel: () => void;
 		onSubmit: () => void;
+		onRetrySource?: () => void;
+		onDiagnostics?: () => void;
 	}
 
 	let {
@@ -57,6 +60,8 @@
 		descriptionError,
 		onCancel,
 		onSubmit,
+		onRetrySource = () => {},
+		onDiagnostics = () => {},
 	}: Props = $props();
 
 	let sourceReady = $derived(
@@ -92,7 +97,17 @@
 			<Card.Content class="flex flex-wrap gap-2">
 				<Badge variant={detectResult?.config_status === "valid" ? "secondary" : "destructive"}>config.toml · {detectResult?.config_status || "missing"}</Badge>
 				<Badge variant={detectResult?.auth_status === "valid" ? "secondary" : "destructive"}>auth.json · {detectResult?.auth_status || "missing"}</Badge>
-				{#if !sourceReady}<Alert.Root variant="destructive" class="basis-full"><Alert.Description>{$_("profilePages.source.notReadyDescription")}</Alert.Description></Alert.Root>{/if}
+				{#if !sourceReady}
+					<Alert.Root variant="destructive" class="basis-full">
+						<Alert.Description>{$_("profilePages.source.statusDescription", { values: { config: detectResult?.config_status || "missing", auth: detectResult?.auth_status || "missing" } })}</Alert.Description>
+						<Alert.Action>
+							<div class="flex gap-2">
+								<Button size="xs" variant="outline" onclick={onRetrySource}><RefreshCwIcon />{$_("actions.retry")}</Button>
+								<Button size="xs" variant="outline" onclick={onDiagnostics}>{$_("nav.diagnostics")}</Button>
+							</div>
+						</Alert.Action>
+					</Alert.Root>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 	{/if}
@@ -133,7 +148,7 @@
 		</Card.Content>
 		<Card.Footer class="justify-end gap-2">
 			<Button variant="outline" onclick={onCancel}><ArrowLeftIcon data-icon="inline-start" />{$_("actions.cancel")}</Button>
-			<Button disabled={!submitReady || busy} onclick={onSubmit}>{#if busy}<Spinner data-icon="inline-start" />{:else}<SaveIcon data-icon="inline-start" />{/if}{mode === "new" ? $_("actions.createProfile") : $_("actions.fork")}</Button>
+			<Button disabled={!submitReady || busy} onclick={onSubmit}>{#if busy}<Spinner data-icon="inline-start" />{:else}<SaveIcon data-icon="inline-start" />{/if}{mode === "new" ? $_("actions.saveAsNewProfile") : $_("actions.fork")}</Button>
 		</Card.Footer>
 	</Card.Root>
 </div>

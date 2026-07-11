@@ -12,11 +12,10 @@ export type CodexProfileListItem = {
 	id: string;
 	name: string;
 	description: string;
-	updated: string;
-	account: string;
-	configSet: string;
 	quota: CodexProfileQuota | null;
 	quotaLoading: boolean;
+	quotaCheckedAtUnixMS: number;
+	quotaCheckOutcome: "updated" | "checked" | "failed" | "never";
 };
 
 export type ProfileUseRequest = {

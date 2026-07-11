@@ -92,16 +92,22 @@ func TestSettingsServicePersistsDesktopPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected settings get to succeed, got %v", err)
 	}
-	if initial.Language != app.DesktopLanguageAuto {
+	if initial.Language != app.DesktopLanguageAuto || initial.Appearance != app.DesktopAppearanceSystem || initial.SidebarCollapsed {
 		t.Fatalf("unexpected default settings: %#v", initial)
 	}
 
 	language := app.DesktopLanguageEnUS
-	updated, err := services.Settings.Update(ctx, app.UpdateDesktopSettingsRequest{Language: &language})
+	appearance := app.DesktopAppearanceDark
+	collapsed := true
+	updated, err := services.Settings.Update(ctx, app.UpdateDesktopSettingsRequest{
+		Language:         &language,
+		Appearance:       &appearance,
+		SidebarCollapsed: &collapsed,
+	})
 	if err != nil {
 		t.Fatalf("expected settings update to succeed, got %v", err)
 	}
-	if updated.Language != app.DesktopLanguageEnUS {
+	if updated.Language != app.DesktopLanguageEnUS || updated.Appearance != app.DesktopAppearanceDark || !updated.SidebarCollapsed {
 		t.Fatalf("unexpected language update: %#v", updated)
 	}
 }

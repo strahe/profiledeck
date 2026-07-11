@@ -1,6 +1,6 @@
 # Codex Usage and Cost
 
-ProfileDeck imports local Codex session usage and provides offline analysis by time, model, and session count. This analysis does not query account quotas or attribute usage to a Profile, credential, or ChatGPT account. The separate rate-limit snapshot on Desktop Profile pages, whether refreshed manually or by opt-in automation, is not part of usage import or reporting.
+ProfileDeck imports local Codex session usage and provides offline analysis by time, model, and session count. This analysis does not query account quotas or attribute usage to a Profile, credential, or ChatGPT account. The separate rate-limit snapshot on Desktop Profile pages—whether read once for the active Profile at startup, refreshed manually, or updated by opt-in automation—is not part of usage import or reporting.
 
 ## Automatic Desktop sync
 
