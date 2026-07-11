@@ -368,7 +368,9 @@ func TestBackupAuditShowsOldMetadataButRollbackRejectsIt(t *testing.T) {
 	if err := db.UpdateOperationMetadata(ctx, switchResult.OperationID, string(raw)); err != nil {
 		t.Fatalf("expected metadata downgrade to succeed, got %v", err)
 	}
-	db.Close()
+	if err := db.Close(); err != nil {
+		t.Fatalf("expected metadata store close, got %v", err)
+	}
 
 	detail, err := ShowBackup(ctx, ShowBackupRequest{ConfigDir: configDir, BackupID: switchResult.OperationID})
 	if err != nil {

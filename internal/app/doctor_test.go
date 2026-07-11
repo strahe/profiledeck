@@ -753,7 +753,7 @@ func TestDoctorWarnsAboutWeakCodexAuthPermissions(t *testing.T) {
 	}
 }
 
-func writeTestLockFile(t *testing.T, path string, owner string, pid int) {
+func writeTestLockFile(t *testing.T, path, owner string, pid int) {
 	t.Helper()
 
 	content := owner + "\npid=" + strconv.Itoa(pid) + "\ncreated_at_unix_ms=1\n"

@@ -281,7 +281,7 @@ func TestSaveActiveCodexProfileStateRejectsDifferentCodexHome(t *testing.T) {
 	assertAppErrorCode(t, err, ErrorCodexInvalid)
 }
 
-func createTestCodexConfigSet(t *testing.T, ctx context.Context, db *store.Store, id string, content string) {
+func createTestCodexConfigSet(t *testing.T, ctx context.Context, db *store.Store, id, content string) {
 	t.Helper()
 	if _, err := upsertCodexConfigSet(ctx, db, id, id, "", content); err != nil {
 		t.Fatalf("expected test config set create to succeed, got %v", err)

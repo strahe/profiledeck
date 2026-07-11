@@ -91,7 +91,7 @@ func codexConfigSetBindingCount(ctx context.Context, db *store.Store, configSetI
 	return count, nil
 }
 
-func upsertCodexAuthCredential(ctx context.Context, db *store.Store, credentialID string, payload string) (store.ProviderCredential, error) {
+func upsertCodexAuthCredential(ctx context.Context, db *store.Store, credentialID, payload string) (store.ProviderCredential, error) {
 	// Credential identity is ProfileDeck-owned and opaque. Codex tokens.account_id
 	// is deliberately ignored here because it is not a stable unique identifier.
 	credential, err := db.UpsertProviderCredential(ctx, store.UpsertProviderCredentialParams{
@@ -108,7 +108,7 @@ func upsertCodexAuthCredential(ctx context.Context, db *store.Store, credentialI
 	return credential, nil
 }
 
-func upsertCodexConfigSet(ctx context.Context, db *store.Store, configSetID string, name string, description string, payload string) (store.ProviderConfigSet, error) {
+func upsertCodexConfigSet(ctx context.Context, db *store.Store, configSetID, name, description, payload string) (store.ProviderConfigSet, error) {
 	configSet, err := db.UpsertProviderConfigSet(ctx, store.UpsertProviderConfigSetParams{
 		ID:            configSetID,
 		ProviderID:    codexconfig.ProviderID,
@@ -236,7 +236,7 @@ func upsertCodexProfile(ctx context.Context, db *store.Store, profileID string, 
 	return profile, nil
 }
 
-func upsertCodexConfigTarget(ctx context.Context, db *store.Store, profileID string, home codexconfig.Home, valueJSON string, metadataJSON string, hasTarget bool) (store.ProfileTarget, error) {
+func upsertCodexConfigTarget(ctx context.Context, db *store.Store, profileID string, home codexconfig.Home, valueJSON, metadataJSON string, hasTarget bool) (store.ProfileTarget, error) {
 	enabled := true
 	if !hasTarget {
 		target, err := db.CreateProfileTarget(ctx, store.CreateProfileTargetParams{
@@ -278,7 +278,7 @@ func upsertCodexConfigTarget(ctx context.Context, db *store.Store, profileID str
 	return target, nil
 }
 
-func upsertCodexAuthTarget(ctx context.Context, db *store.Store, profileID string, home codexconfig.Home, valueJSON string, metadataJSON string, hasTarget bool) (store.ProfileTarget, error) {
+func upsertCodexAuthTarget(ctx context.Context, db *store.Store, profileID string, home codexconfig.Home, valueJSON, metadataJSON string, hasTarget bool) (store.ProfileTarget, error) {
 	enabled := true
 	if !hasTarget {
 		target, err := db.CreateProfileTarget(ctx, store.CreateProfileTargetParams{

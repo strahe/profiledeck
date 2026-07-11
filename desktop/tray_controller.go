@@ -5,9 +5,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
+
 	"github.com/strahe/profiledeck/desktop/backend"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 type trayUI interface {
@@ -81,7 +82,7 @@ func (c *trayController) Refresh(event *backend.DesktopChangeEvent, emit bool) {
 	go c.refresh(menuGeneration, eventGeneration, eventCopy)
 }
 
-func (c *trayController) refresh(menuGeneration uint64, eventGeneration uint64, event *backend.DesktopChangeEvent) {
+func (c *trayController) refresh(menuGeneration, eventGeneration uint64, event *backend.DesktopChangeEvent) {
 	dashboard, dashboardErr := c.loadDashboard(c.ctx)
 	if c.ctx.Err() != nil {
 		return

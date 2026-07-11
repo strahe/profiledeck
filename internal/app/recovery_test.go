@@ -336,7 +336,7 @@ func TestRecoverFailedSwitchLockFailureRecordsFailedRecoveryOperation(t *testing
 	}
 }
 
-func createProfileTargetForRecovery(t *testing.T, ctx context.Context, configDir string, profileID string, targetID string, path string, content string) {
+func createProfileTargetForRecovery(t *testing.T, ctx context.Context, configDir, profileID, targetID, path, content string) {
 	t.Helper()
 
 	if _, err := CreateProfileTarget(ctx, CreateProfileTargetRequest{
@@ -353,7 +353,7 @@ func createProfileTargetForRecovery(t *testing.T, ctx context.Context, configDir
 	}
 }
 
-func singleOperationIDByTypeStatus(t *testing.T, databasePath string, operationType string, status string) string {
+func singleOperationIDByTypeStatus(t *testing.T, databasePath, operationType, status string) string {
 	t.Helper()
 
 	db, err := sql.Open("sqlite", databasePath)
@@ -390,27 +390,7 @@ func singleOperationIDByTypeStatus(t *testing.T, databasePath string, operationT
 	return ids[0]
 }
 
-func countOperationsByTypeStatus(t *testing.T, databasePath string, operationType string, status string) int {
-	t.Helper()
-
-	db, err := sql.Open("sqlite", databasePath)
-	if err != nil {
-		t.Fatalf("expected sqlite open to succeed, got %v", err)
-	}
-	defer db.Close()
-
-	var count int
-	if err := db.QueryRow(`
-		SELECT COUNT(1)
-		FROM operations
-		WHERE operation_type = ? AND status = ?
-	`, operationType, status).Scan(&count); err != nil {
-		t.Fatalf("expected operation count query to succeed, got %v", err)
-	}
-	return count
-}
-
-func countOperationsByType(t *testing.T, databasePath string, operationType string) int {
+func countOperationsByType(t *testing.T, databasePath, operationType string) int {
 	t.Helper()
 
 	db, err := sql.Open("sqlite", databasePath)

@@ -151,7 +151,7 @@ func pricingModelID(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
-func price(inputMicrosPerMillion int64, cachedInputMicrosPerMillion int64, outputMicrosPerMillion int64) Price {
+func price(inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion int64) Price {
 	return Price{
 		InputMicrosPerMillion:       inputMicrosPerMillion,
 		CachedInputMicrosPerMillion: &cachedInputMicrosPerMillion,
@@ -159,13 +159,13 @@ func price(inputMicrosPerMillion int64, cachedInputMicrosPerMillion int64, outpu
 	}
 }
 
-func priceWithCacheWrite(inputMicrosPerMillion int64, cachedInputMicrosPerMillion int64, cacheWriteMicrosPerMillion int64, outputMicrosPerMillion int64) Price {
+func priceWithCacheWrite(inputMicrosPerMillion, cachedInputMicrosPerMillion, cacheWriteMicrosPerMillion, outputMicrosPerMillion int64) Price {
 	price := price(inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion)
 	price.CacheWriteMicrosPerMillion = &cacheWriteMicrosPerMillion
 	return price
 }
 
-func priceWithoutCached(inputMicrosPerMillion int64, outputMicrosPerMillion int64) Price {
+func priceWithoutCached(inputMicrosPerMillion, outputMicrosPerMillion int64) Price {
 	return Price{
 		InputMicrosPerMillion:  inputMicrosPerMillion,
 		OutputMicrosPerMillion: outputMicrosPerMillion,
@@ -185,7 +185,7 @@ func SourceKey(path string) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func EventID(providerID string, source string, usageOrdinal int64, sessionID string, model string, tokens TokenCounts) string {
+func EventID(providerID, source string, usageOrdinal int64, sessionID, model string, tokens TokenCounts) string {
 	if providerID == "" || source == "" || usageOrdinal <= 0 || sessionID == "" {
 		return ""
 	}
@@ -221,7 +221,7 @@ func EventDigest(events []Event, limit int64) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-func MetadataJSON(lineIndex int64, usageOrdinal int64, eventType string, usageKind string) string {
+func MetadataJSON(lineIndex, usageOrdinal int64, eventType, usageKind string) string {
 	// Codex session events can contain prompts, completions, and credentials; only
 	// derived audit fields are persisted.
 	raw, err := json.Marshal(map[string]any{
@@ -245,7 +245,7 @@ func safeUsageMetadataLabel(value string) string {
 	return value
 }
 
-func roundedTokenCostMicros(tokens int64, microsPerMillion int64) int64 {
+func roundedTokenCostMicros(tokens, microsPerMillion int64) int64 {
 	cost, ok := roundedTokenCostMicrosSafe(tokens, microsPerMillion)
 	if !ok {
 		return math.MaxInt64
@@ -253,7 +253,7 @@ func roundedTokenCostMicros(tokens int64, microsPerMillion int64) int64 {
 	return cost
 }
 
-func roundedTokenCostMicrosSafe(tokens int64, microsPerMillion int64) (int64, bool) {
+func roundedTokenCostMicrosSafe(tokens, microsPerMillion int64) (int64, bool) {
 	if tokens <= 0 || microsPerMillion <= 0 {
 		return 0, true
 	}
@@ -275,7 +275,7 @@ func roundedTokenCostMicrosSafe(tokens int64, microsPerMillion int64) (int64, bo
 	return addCostMicros(cost, remainderCost)
 }
 
-func addCostMicros(left int64, right int64) (int64, bool) {
+func addCostMicros(left, right int64) (int64, bool) {
 	if left < 0 || right < 0 || left > math.MaxInt64-right {
 		return 0, false
 	}

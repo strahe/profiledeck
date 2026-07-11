@@ -8,8 +8,9 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/strahe/profiledeck/internal/app"
 	urfavecli "github.com/urfave/cli/v3"
+
+	"github.com/strahe/profiledeck/internal/app"
 )
 
 const (
@@ -362,14 +363,14 @@ func newProfileDeleteCommand() *urfavecli.Command {
 	}
 }
 
-func boolFlag(name string, usage string) urfavecli.Flag {
+func boolFlag(name, usage string) urfavecli.Flag {
 	return &urfavecli.BoolFlag{
 		Name:  name,
 		Usage: usage,
 	}
 }
 
-func stringFlag(name string, usage string) urfavecli.Flag {
+func stringFlag(name, usage string) urfavecli.Flag {
 	return &urfavecli.StringFlag{
 		Name:  name,
 		Usage: usage,

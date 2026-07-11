@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -423,7 +424,7 @@ func isEnvNamePart(value byte) bool {
 	return isEnvNameStart(value) || value >= '0' && value <= '9'
 }
 
-func mergeObjects(base map[string]any, patch map[string]any) map[string]any {
+func mergeObjects(base, patch map[string]any) map[string]any {
 	merged := make(map[string]any, len(base)+len(patch))
 	for key, value := range base {
 		merged[key] = value

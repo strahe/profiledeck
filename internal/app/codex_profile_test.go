@@ -128,30 +128,13 @@ func TestListCodexProfilesReportsMalformedBinding(t *testing.T) {
 	}
 }
 
-func writeCodexProfileFixture(t *testing.T, codexDir string, config string, auth string) {
+func writeCodexProfileFixture(t *testing.T, codexDir, config, auth string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.ConfigFileName), []byte(config), 0o600); err != nil {
 		t.Fatalf("expected Codex config fixture to write, got %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.AuthFileName), []byte(auth), 0o600); err != nil {
 		t.Fatalf("expected Codex auth fixture to write, got %v", err)
-	}
-}
-
-func completeCodexProfileSwitchForTest(t *testing.T, ctx context.Context, configDir string, operationID string, profileID string) {
-	t.Helper()
-	db, err := openHealthyStore(ctx, configDir, false)
-	if err != nil {
-		t.Fatalf("expected store open to succeed, got %v", err)
-	}
-	defer db.Close()
-	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{ID: operationID, ProfileID: profileID, MetadataJSON: "{}"}); err != nil {
-		t.Fatalf("expected switch operation create to succeed, got %v", err)
-	}
-	if err := db.CompleteSwitchOperation(ctx, store.CompleteSwitchOperationParams{
-		ID: operationID, ProviderID: codexconfig.ProviderID, ProfileID: profileID, MetadataJSON: "{}",
-	}); err != nil {
-		t.Fatalf("expected switch operation completion to succeed, got %v", err)
 	}
 }
 

@@ -6,8 +6,9 @@ import (
 	"io"
 	"text/tabwriter"
 
-	"github.com/strahe/profiledeck/internal/app"
 	urfavecli "github.com/urfave/cli/v3"
+
+	"github.com/strahe/profiledeck/internal/app"
 )
 
 const (
@@ -82,10 +83,7 @@ func newProfileTargetAddCommand() *urfavecli.Command {
 			if err != nil {
 				return err
 			}
-			enabled := true
-			if cmd.Bool(disabledFlagName) {
-				enabled = false
-			}
+			enabled := !cmd.Bool(disabledFlagName)
 			result, err := app.CreateProfileTarget(ctx, app.CreateProfileTargetRequest{
 				ConfigDir:    configDirValue(cmd),
 				ProfileID:    profileID,

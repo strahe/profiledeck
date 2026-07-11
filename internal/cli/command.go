@@ -7,8 +7,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/strahe/profiledeck/internal/app"
 	urfavecli "github.com/urfave/cli/v3"
+
+	"github.com/strahe/profiledeck/internal/app"
 )
 
 const (

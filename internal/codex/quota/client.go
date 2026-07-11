@@ -325,7 +325,7 @@ func snapshotFromResponse(payload usageResponse, fetchedAt time.Time) (Snapshot,
 	return result, nil
 }
 
-func rateLimitFromResponse(id string, name string, value *rateLimitResponse, fetchedAt time.Time) (RateLimit, error) {
+func rateLimitFromResponse(id, name string, value *rateLimitResponse, fetchedAt time.Time) (RateLimit, error) {
 	result := RateLimit{ID: id, Name: name}
 	if value == nil {
 		return result, nil

@@ -103,10 +103,12 @@ func TestCodexSettingsMigratesLegacyUsageInterval(t *testing.T) {
 		t.Fatalf("expected store open, got %v", err)
 	}
 	if _, err := db.UpsertSetting(ctx, store.UpsertSettingParams{Key: legacyDesktopUsageSyncIntervalSettingKey, ValueJSON: "30"}); err != nil {
-		db.Close()
+		_ = db.Close()
 		t.Fatalf("expected legacy fixture, got %v", err)
 	}
-	db.Close()
+	if err := db.Close(); err != nil {
+		t.Fatalf("expected legacy fixture store close, got %v", err)
+	}
 
 	settings, err := GetCodexSettings(ctx, CodexSettingsRequest{ConfigDir: configDir})
 	if err != nil || settings.UsageSyncIntervalSeconds != 30 {

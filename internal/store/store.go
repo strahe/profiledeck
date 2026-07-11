@@ -14,12 +14,13 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/strahe/profiledeck/internal/store/migrations"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"github.com/uptrace/bun/migrate"
 	sqlite "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
+
+	"github.com/strahe/profiledeck/internal/store/migrations"
 )
 
 const (
@@ -1181,7 +1182,7 @@ func (s *Store) CreateProfileTarget(ctx context.Context, params CreateProfileTar
 	return s.GetProfileTarget(ctx, params.ProfileID, params.ProviderID, params.TargetID)
 }
 
-func (s *Store) ListProfileTargets(ctx context.Context, profileID string, providerID string, includeDisabled bool) ([]ProfileTarget, error) {
+func (s *Store) ListProfileTargets(ctx context.Context, profileID, providerID string, includeDisabled bool) ([]ProfileTarget, error) {
 	query := `
 		SELECT profile_id, provider_id, target_id, path, path_key, format, strategy, value_json, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms
 		FROM profile_targets
@@ -1274,7 +1275,7 @@ func (s *Store) ListProfileTargetsByPathKey(ctx context.Context, pathKey string)
 	return targets, nil
 }
 
-func (s *Store) GetProfileTarget(ctx context.Context, profileID string, providerID string, targetID string) (ProfileTarget, error) {
+func (s *Store) GetProfileTarget(ctx context.Context, profileID, providerID, targetID string) (ProfileTarget, error) {
 	row := s.executor().QueryRowContext(
 		ctx,
 		`SELECT profile_id, provider_id, target_id, path, path_key, format, strategy, value_json, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms
@@ -1351,7 +1352,7 @@ func (s *Store) UpdateProfileTarget(ctx context.Context, params UpdateProfileTar
 	return s.GetProfileTarget(ctx, params.ProfileID, params.ProviderID, params.TargetID)
 }
 
-func (s *Store) DeleteProfileTarget(ctx context.Context, profileID string, providerID string, targetID string) error {
+func (s *Store) DeleteProfileTarget(ctx context.Context, profileID, providerID, targetID string) error {
 	result, err := s.executor().ExecContext(
 		ctx,
 		"DELETE FROM profile_targets WHERE profile_id = ? AND provider_id = ? AND target_id = ?",
@@ -1396,7 +1397,7 @@ func (s *Store) DeleteSetting(ctx context.Context, key string) error {
 	return nil
 }
 
-func (s *Store) GetProviderProfileSetting(ctx context.Context, profileID string, providerID string) (ProviderProfileSetting, error) {
+func (s *Store) GetProviderProfileSetting(ctx context.Context, profileID, providerID string) (ProviderProfileSetting, error) {
 	row := s.executor().QueryRowContext(ctx, `
 		SELECT profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms
 		FROM provider_profile_settings
@@ -1766,7 +1767,7 @@ func (s *Store) GetProviderConfigSet(ctx context.Context, id string) (ProviderCo
 	return configSet, err
 }
 
-func (s *Store) ListProviderConfigSets(ctx context.Context, providerID string, configKind string) ([]ProviderConfigSet, error) {
+func (s *Store) ListProviderConfigSets(ctx context.Context, providerID, configKind string) ([]ProviderConfigSet, error) {
 	query := `SELECT id, provider_id, config_kind, name, description, payload_text, payload_sha256, metadata_json, created_at_unix_ms, updated_at_unix_ms
 		FROM provider_config_sets
 		WHERE provider_id = ?`
@@ -1888,7 +1889,7 @@ func (s *Store) DeleteProviderConfigSet(ctx context.Context, id string) error {
 	return nil
 }
 
-func validateJSONObject(valueJSON string, label string) error {
+func validateJSONObject(valueJSON, label string) error {
 	decoder := json.NewDecoder(strings.NewReader(valueJSON))
 	decoder.UseNumber()
 	var value any
@@ -2067,7 +2068,7 @@ func (s *Store) ListIncompleteOperations(ctx context.Context) ([]Operation, erro
 	return operations, nil
 }
 
-func (s *Store) UpdateOperationMetadata(ctx context.Context, id string, metadataJSON string) error {
+func (s *Store) UpdateOperationMetadata(ctx context.Context, id, metadataJSON string) error {
 	result, err := s.executor().ExecContext(
 		ctx,
 		`UPDATE operations
@@ -2264,7 +2265,7 @@ func (s *Store) CompleteRollbackOperation(ctx context.Context, params CompleteRo
 	return nil
 }
 
-func (s *Store) GetActiveState(ctx context.Context, scopeType string, scopeID string) (ActiveState, error) {
+func (s *Store) GetActiveState(ctx context.Context, scopeType, scopeID string) (ActiveState, error) {
 	row := s.executor().QueryRowContext(
 		ctx,
 		`SELECT scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms
@@ -2418,7 +2419,7 @@ func (s *Store) CommitUsageImport(ctx context.Context, params CommitUsageImportP
 	return result, err
 }
 
-func (s *Store) GetUsageImportCursor(ctx context.Context, providerID string, source string, sourceKey string) (UsageImportCursor, error) {
+func (s *Store) GetUsageImportCursor(ctx context.Context, providerID, source, sourceKey string) (UsageImportCursor, error) {
 	row := s.executor().QueryRowContext(
 		ctx,
 		`SELECT provider_id, source, source_key, modified_unix_ms, size_bytes,
@@ -2471,7 +2472,7 @@ func (s *Store) UpsertUsageImportCursor(ctx context.Context, params UpsertUsageI
 	return err
 }
 
-func (s *Store) TouchUsageImportCursor(ctx context.Context, providerID string, source string, sourceKey string) error {
+func (s *Store) TouchUsageImportCursor(ctx context.Context, providerID, source, sourceKey string) error {
 	result, err := s.executor().ExecContext(
 		ctx,
 		`UPDATE usage_import_cursors
@@ -3086,7 +3087,7 @@ func (s *Store) triggerSchemaHealthy(ctx context.Context, spec triggerSpec) (boo
 	return true, nil
 }
 
-func (s *Store) indexExistsOnTable(ctx context.Context, table string, index string) (bool, bool, error) {
+func (s *Store) indexExistsOnTable(ctx context.Context, table, index string) (bool, bool, error) {
 	rows, err := s.executor().QueryContext(ctx, fmt.Sprintf("PRAGMA index_list(%s)", quoteSQLiteIdentifier(table)))
 	if err != nil {
 		return false, false, err

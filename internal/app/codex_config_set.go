@@ -284,7 +284,7 @@ func DeleteCodexConfigSet(ctx context.Context, req DeleteCodexConfigSetRequest) 
 	return nil
 }
 
-func normalizeCodexConfigSetFields(idRaw string, nameRaw string, descriptionRaw string) (string, string, string, error) {
+func normalizeCodexConfigSetFields(idRaw, nameRaw, descriptionRaw string) (string, string, string, error) {
 	id, appErr := validateID(idRaw, ErrorCodexInvalid)
 	if appErr != nil {
 		return "", "", "", appErr

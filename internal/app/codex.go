@@ -202,7 +202,7 @@ func codexPreflightProvider(ctx context.Context, db *store.Store, home codexconf
 	return provider, true, nil
 }
 
-func normalizeCodexProfileFields(profileID string, name *string, description *string) (codexProfileFields, *AppError) {
+func normalizeCodexProfileFields(profileID string, name, description *string) (codexProfileFields, *AppError) {
 	fields := codexProfileFields{
 		CreateName: profileID,
 	}

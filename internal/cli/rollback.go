@@ -6,8 +6,9 @@ import (
 	"io"
 	"text/tabwriter"
 
-	"github.com/strahe/profiledeck/internal/app"
 	urfavecli "github.com/urfave/cli/v3"
+
+	"github.com/strahe/profiledeck/internal/app"
 )
 
 func newBackupCommand() *urfavecli.Command {

@@ -142,7 +142,7 @@ func TestUsageReportEmptyDefaultsAndValidation(t *testing.T) {
 	assertAppErrorCode(t, err, ErrorUsageInvalid)
 }
 
-func reportEvent(id string, sessionID string, model string, occurredAt int64, input int64, cached int64, output int64, cost *int64, status string) store.CreateUsageEventParams {
+func reportEvent(id, sessionID, model string, occurredAt, input, cached, output int64, cost *int64, status string) store.CreateUsageEventParams {
 	return store.CreateUsageEventParams{
 		ID: id, ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source-" + id,
 		SessionID: sessionID, Model: model, OccurredAtUnixMS: occurredAt,

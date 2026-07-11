@@ -258,7 +258,7 @@ func readPreviousActiveState(ctx context.Context, db *store.Store, providerID st
 	}, nil
 }
 
-func acquireSwitchLock(path string, operationID string) (targetfs.Lock, error) {
+func acquireSwitchLock(path, operationID string) (targetfs.Lock, error) {
 	lock, err := targetfs.AcquireLock(path, operationID)
 	if err != nil {
 		return targetfs.Lock{}, mapTargetFSError(err)
@@ -302,12 +302,6 @@ func verifySingleSwitchPlanHash(ctx context.Context, op applyPlanOperation) erro
 		return mapTargetFSError(err)
 	}
 	return nil
-}
-
-func targetChangedError(op applyPlanOperation, message string) *AppError {
-	return NewError(ErrorTargetChanged, message).
-		WithDetail("target_id", op.TargetID).
-		WithDetail("path", op.Path)
 }
 
 func createSwitchBackup(ctx context.Context, paths runtime.Paths, operationID string, plan applyPlan) (switchBackup, error) {
@@ -367,7 +361,7 @@ func createSwitchBackup(ctx context.Context, paths runtime.Paths, operationID st
 	return backup, nil
 }
 
-func copyBackupFile(ctx context.Context, source string, destination string) (string, error) {
+func copyBackupFile(ctx context.Context, source, destination string) (string, error) {
 	hash, err := targetfs.CopyBackupFile(ctx, source, destination)
 	if err != nil {
 		return "", mapTargetFSError(err)
@@ -393,7 +387,7 @@ func writeTargetAtomic(ctx context.Context, op applyPlanOperation) error {
 	return nil
 }
 
-func failSwitchOperation(ctx context.Context, db *store.Store, operationID string, metadataJSON string, operationErr error) error {
+func failSwitchOperation(ctx context.Context, db *store.Store, operationID, metadataJSON string, operationErr error) error {
 	code, message := errorCodeAndMessage(operationErr)
 	cleanupCtx, cancel := switchCleanupContext(ctx)
 	defer cancel()
@@ -416,7 +410,7 @@ func switchCleanupContext(ctx context.Context) (context.Context, context.CancelF
 	return context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 }
 
-func preserveSwitchOperationError(operationErr error, updateErr error) error {
+func preserveSwitchOperationError(operationErr, updateErr error) error {
 	if operationErr == nil {
 		return WrapError(ErrorOperationUpdateFailed, "failed to mark switch operation failed", updateErr)
 	}
@@ -467,7 +461,7 @@ func mapTargetFSError(err error) error {
 
 	appErr := WrapError(code, targetErr.Message, err)
 	for key, value := range targetErr.Details {
-		appErr.WithDetail(key, value)
+		appErr = appErr.WithDetail(key, value)
 	}
 	return appErr
 }
@@ -487,7 +481,7 @@ func countSwitchOperations(operations []applyPlanOperation) SwitchCounts {
 	return counts
 }
 
-func marshalSwitchOperationMetadata(checkpoint string, providerID string, profileID string, plan applyPlan, backup switchBackup, counts SwitchCounts, previousActive *switchPreviousActiveState) (string, error) {
+func marshalSwitchOperationMetadata(checkpoint, providerID, profileID string, plan applyPlan, backup switchBackup, counts SwitchCounts, previousActive *switchPreviousActiveState) (string, error) {
 	targets := []switchOperationTargetMetadata{}
 	for _, op := range plan.Operations {
 		targets = append(targets, switchOperationTargetMetadata{

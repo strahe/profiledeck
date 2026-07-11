@@ -576,7 +576,7 @@ func (reader *failingReader) Read(p []byte) (int, error) {
 	return copy(p, reader.data), reader.err
 }
 
-func writeTestFile(t *testing.T, path string, content string) {
+func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("expected parent dir setup to succeed, got %v", err)

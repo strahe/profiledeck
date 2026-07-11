@@ -224,7 +224,7 @@ func canonicalBundle(bundle Bundle) Bundle {
 	return bundle
 }
 
-func validateID(value string, label string) error {
+func validateID(value, label string) error {
 	if value == "" || strings.TrimSpace(value) != value {
 		return fmt.Errorf("%s is required and must not contain surrounding whitespace", label)
 	}
@@ -243,7 +243,7 @@ func validateID(value string, label string) error {
 	return nil
 }
 
-func validateName(value string, kind string, id string) error {
+func validateName(value, kind, id string) error {
 	if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value {
 		return fmt.Errorf("%s %q name is required and must not contain surrounding whitespace", kind, id)
 	}
@@ -253,7 +253,7 @@ func validateName(value string, kind string, id string) error {
 	return nil
 }
 
-func validateDescription(value string, kind string, id string) error {
+func validateDescription(value, kind, id string) error {
 	if strings.TrimSpace(value) != value {
 		return fmt.Errorf("%s %q description must not contain surrounding whitespace", kind, id)
 	}
@@ -263,7 +263,7 @@ func validateDescription(value string, kind string, id string) error {
 	return nil
 }
 
-func validateDigest(payload string, expected string, kind string, id string) error {
+func validateDigest(payload, expected, kind, id string) error {
 	digest, err := hex.DecodeString(expected)
 	if err != nil || len(digest) != sha256.Size || expected != strings.ToLower(expected) {
 		return fmt.Errorf("%s %q SHA-256 is invalid", kind, id)

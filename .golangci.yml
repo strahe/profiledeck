@@ -1,0 +1,53 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - revive
+    - staticcheck
+    - unused
+  settings:
+    revive:
+      enable-default-rules: true
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
+  exclusions:
+    rules:
+      - linters:
+          - errcheck
+        source: 'defer .*\.Close\(\)'
+      - linters:
+          - revive
+        path: '_test\.go'
+        text: context-as-argument
+      - linters:
+          - revive
+          - staticcheck
+        text: '(error-strings|ST1005)'
+        source: '(errors\.New|fmt\.Errorf)\("(Codex|Config Set)'
+
+formatters:
+  enable:
+    - gci
+    - gofumpt
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - localmodule
+      custom-order: true
+    gofumpt:
+      module-path: github.com/strahe/profiledeck
+      extra-rules: true

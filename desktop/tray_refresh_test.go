@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
+
 	"github.com/strahe/profiledeck/desktop/backend"
 	"github.com/strahe/profiledeck/internal/app"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 func TestDesktopChangeDebouncerCoalescesLatestEvent(t *testing.T) {

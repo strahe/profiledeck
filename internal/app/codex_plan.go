@@ -190,7 +190,7 @@ func validCodexWorkingCopy(targetID string, before targetPlanRead) (string, bool
 	}
 }
 
-func buildCodexPendingCapture(ctx context.Context, db *store.Store, targetID string, currentResourceID string, desired codexDesiredResource, currentContent string, valid bool) (*codexPendingCapture, string, error) {
+func buildCodexPendingCapture(ctx context.Context, db *store.Store, targetID, currentResourceID string, desired codexDesiredResource, currentContent string, valid bool) (*codexPendingCapture, string, error) {
 	if !valid || currentResourceID == "" {
 		return nil, "", nil
 	}
@@ -244,7 +244,7 @@ func buildCodexPendingCapture(ctx context.Context, db *store.Store, targetID str
 	}
 }
 
-func codexWorkingCopyMatchesDesired(targetID string, currentContent string, currentHash string, desired codexDesiredResource) bool {
+func codexWorkingCopyMatchesDesired(targetID, currentContent, currentHash string, desired codexDesiredResource) bool {
 	if currentHash == desired.SHA256 {
 		return true
 	}
@@ -254,7 +254,7 @@ func codexWorkingCopyMatchesDesired(targetID string, currentContent string, curr
 	return codexAuthPayloadsEqual(currentContent, desired.Content)
 }
 
-func codexAuthPayloadsEqual(left string, right string) bool {
+func codexAuthPayloadsEqual(left, right string) bool {
 	leftValue, leftErr := decodeCodexAuthPayload(left)
 	rightValue, rightErr := decodeCodexAuthPayload(right)
 	if leftErr != nil || rightErr != nil {
@@ -280,7 +280,7 @@ func decodeCodexAuthPayload(payload string) (any, error) {
 	return value, nil
 }
 
-func loadCodexTargetResources(ctx context.Context, db *store.Store, configTarget store.ProfileTarget, authTarget store.ProfileTarget) (codexPlanBindings, codexDesiredResource, codexDesiredResource, error) {
+func loadCodexTargetResources(ctx context.Context, db *store.Store, configTarget, authTarget store.ProfileTarget) (codexPlanBindings, codexDesiredResource, codexDesiredResource, error) {
 	configSetID, err := codexConfigSetIDFromTarget(configTarget)
 	if err != nil {
 		return codexPlanBindings{}, codexDesiredResource{}, codexDesiredResource{}, err

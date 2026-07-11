@@ -11,10 +11,11 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/strahe/profiledeck/desktop/backend"
-	"github.com/strahe/profiledeck/internal/app"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+
+	"github.com/strahe/profiledeck/desktop/backend"
+	"github.com/strahe/profiledeck/internal/app"
 )
 
 var (

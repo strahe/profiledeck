@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+
 	"github.com/strahe/profiledeck/internal/targetfs"
 )
 

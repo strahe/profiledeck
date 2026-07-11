@@ -818,7 +818,7 @@ func createGenericProviderAndProfile(t *testing.T, ctx context.Context, configDi
 	}
 }
 
-func countTableRows(t *testing.T, databasePath string, table string) int {
+func countTableRows(t *testing.T, databasePath, table string) int {
 	t.Helper()
 
 	db, err := sql.Open("sqlite", databasePath)

@@ -208,11 +208,11 @@ func Bootstrap(ctx context.Context, env Environment) error {
 	return err
 }
 
-func (s *AppService) Info(ctx context.Context) app.Info {
+func (s *AppService) Info(_ context.Context) app.Info {
 	return s.info
 }
 
-func (s *AppService) Environment(ctx context.Context) Environment {
+func (s *AppService) Environment(_ context.Context) Environment {
 	return s.env
 }
 
@@ -331,7 +331,7 @@ func (s *CodexService) ReadProfileQuota(ctx context.Context, profileID string) (
 	return s.quota.ReadProfileQuota(ctx, profileID)
 }
 
-func (s *CodexService) QuotaRuntimeStatus(ctx context.Context) CodexQuotaRuntimeStatus {
+func (s *CodexService) QuotaRuntimeStatus(_ context.Context) CodexQuotaRuntimeStatus {
 	return s.quota.Status()
 }
 
@@ -470,7 +470,7 @@ func (s *ProfileService) ListProfiles(ctx context.Context) ([]app.Profile, error
 	return app.ListProfiles(ctx, app.ListProfilesRequest{ConfigDir: s.env.ConfigDir})
 }
 
-func (s *ProfileService) ListTargets(ctx context.Context, profileID string, providerID string) ([]app.ProfileTarget, error) {
+func (s *ProfileService) ListTargets(ctx context.Context, profileID, providerID string) ([]app.ProfileTarget, error) {
 	return app.ListProfileTargets(ctx, app.ListProfileTargetsRequest{
 		ConfigDir:       s.env.ConfigDir,
 		ProfileID:       profileID,
@@ -479,7 +479,7 @@ func (s *ProfileService) ListTargets(ctx context.Context, profileID string, prov
 	})
 }
 
-func (s *SwitchService) BuildPlan(ctx context.Context, providerID string, profileID string) (app.SwitchPlan, error) {
+func (s *SwitchService) BuildPlan(ctx context.Context, providerID, profileID string) (app.SwitchPlan, error) {
 	return app.BuildPlan(ctx, app.BuildPlanRequest{
 		ConfigDir:  s.env.ConfigDir,
 		ProviderID: providerID,
@@ -562,11 +562,11 @@ func (s *UsageService) Summary(ctx context.Context, providerID string) (app.Usag
 	return app.UsageSummary(ctx, app.UsageSummaryRequest{ConfigDir: s.env.ConfigDir, ProviderID: providerID})
 }
 
-func (s *UsageService) AutoSyncStatus(ctx context.Context) UsageAutoSyncStatus {
+func (s *UsageService) AutoSyncStatus(_ context.Context) UsageAutoSyncStatus {
 	return s.autoSync.Status()
 }
 
-func (s *UsageService) Report(ctx context.Context, providerID string, rangeValue string) (app.UsageReportResult, error) {
+func (s *UsageService) Report(ctx context.Context, providerID, rangeValue string) (app.UsageReportResult, error) {
 	if providerID == "" {
 		providerID = codexconfig.ProviderID
 	}
@@ -586,29 +586,29 @@ func (s *SettingsService) Update(ctx context.Context, req app.UpdateDesktopSetti
 	return app.UpdateDesktopSettings(ctx, req)
 }
 
-func (s *AppService) notifyMutationResult(kind string, source string, providerID string, profileID string, operationID string, err error) {
+func (s *AppService) notifyMutationResult(kind, source, providerID, profileID, operationID string, err error) {
 	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
 }
 
-func (s *CodexService) notifyMutationResult(kind string, source string, providerID string, profileID string, operationID string, err error) {
+func (s *CodexService) notifyMutationResult(kind, source, providerID, profileID, operationID string, err error) {
 	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
 	if err == nil && kind == DesktopChangeCodexProfileChanged {
 		reloadCodexQuotaRuntime(s.quota)
 	}
 }
 
-func (s *SwitchService) notifyMutationResult(kind string, source string, providerID string, profileID string, operationID string, err error) {
+func (s *SwitchService) notifyMutationResult(kind, source, providerID, profileID, operationID string, err error) {
 	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
 	if err == nil && providerID == codexconfig.ProviderID {
 		reloadCodexQuotaRuntime(s.quota)
 	}
 }
 
-func (s *DoctorService) notifyMutationResult(kind string, source string, providerID string, profileID string, operationID string, err error) {
+func (s *DoctorService) notifyMutationResult(kind, source, providerID, profileID, operationID string, err error) {
 	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
 }
 
-func (s *BackupService) notifyMutationResult(kind string, source string, providerID string, profileID string, operationID string, err error) {
+func (s *BackupService) notifyMutationResult(kind, source, providerID, profileID, operationID string, err error) {
 	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
 	if err == nil && providerID == codexconfig.ProviderID {
 		reloadCodexQuotaRuntime(s.quota)
@@ -626,7 +626,7 @@ func reloadCodexQuotaRuntime(runtime *codexQuotaRuntime) {
 	}
 }
 
-func notifyMutationResult(changes *ChangeNotifier, kind string, source string, providerID string, profileID string, operationID string, err error) {
+func notifyMutationResult(changes *ChangeNotifier, kind, source, providerID, profileID, operationID string, err error) {
 	event := DesktopChangeEvent{
 		Kind:        kind,
 		Source:      source,

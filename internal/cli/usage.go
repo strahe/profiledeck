@@ -8,12 +8,15 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/strahe/profiledeck/internal/app"
 	urfavecli "github.com/urfave/cli/v3"
+
+	"github.com/strahe/profiledeck/internal/app"
 )
 
-const codexDirFlagName = "codex-dir"
-const usageRangeFlagName = "range"
+const (
+	codexDirFlagName   = "codex-dir"
+	usageRangeFlagName = "range"
+)
 
 func newUsageCommand() *urfavecli.Command {
 	return &urfavecli.Command{

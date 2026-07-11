@@ -16,21 +16,25 @@ Command examples use `profiledeck` as the executable name. Install the binary or
 
 | Command | Purpose |
 | --- | --- |
-| `make fmt` | Format Go packages with `go fmt ./...`. |
-| `make vet` | Run `go vet ./...`. |
+| `make fmt` | Format all Go packages with gofumpt and gci. |
+| `make lint` | Run read-only Go formatting and static-analysis checks. |
 | `make test` | Run `go test ./...`. |
 | `make build` | Build `bin/profiledeck` from `cmd/profiledeck`. |
-| `make check` | Run format, vet, tests, and build. |
+| `make core-check` | Run the CLI/core lint, tests, and build. |
+| `make desktop-check` | Run the Wails boundary, bindings, frontend, build, and Desktop tests. |
+| `make docs-check` | Install documentation dependencies and build the documentation site. |
+| `make check` | Run the complete core, Desktop, and documentation gate. |
 | `make clean` | Remove local build output. |
 
-Documentation uses npm scripts:
+`make check` is read-only for tracked source and generated bindings. Run `make fmt` or `make desktop-bindings` explicitly when those files need updating. Full validation requires macOS and compatible `golangci-lint` v2 and `wails3` executables on `PATH`; use `make core-check` for the portable CLI/core gate on other platforms.
+
+Documentation tasks also use Make targets:
 
 ```bash
-cd docs
-npm install
-npm run dev
-npm run build
-npm run preview
+make docs-install
+make docs-dev
+make docs-build
+make docs-preview
 ```
 
 ## Initialize ProfileDeck

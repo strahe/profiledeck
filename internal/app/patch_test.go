@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
+
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -282,7 +283,7 @@ func TestEnvMergeRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func buildTestPatchOperation(t *testing.T, format string, strategy string, valueJSON string, before *string) PlanOperation {
+func buildTestPatchOperation(t *testing.T, format, strategy, valueJSON string, before *string) PlanOperation {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "target")
@@ -312,7 +313,7 @@ func buildTestPatchOperation(t *testing.T, format string, strategy string, value
 	return op.PlanOperation
 }
 
-func testPatchTarget(t *testing.T, format string, strategy string, valueJSON string) store.ProfileTarget {
+func testPatchTarget(t *testing.T, format, strategy, valueJSON string) store.ProfileTarget {
 	t.Helper()
 
 	return store.ProfileTarget{

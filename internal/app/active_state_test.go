@@ -54,7 +54,7 @@ func TestListActiveProviderStatesMapsProvidersAndProfiles(t *testing.T) {
 	assertActiveProviderState(t, byProvider["provider-missing-profile"], "Provider Missing Profile", "profile-missing", "", "switch-missing", false)
 }
 
-func createProviderAndProfileForActiveState(t *testing.T, ctx context.Context, configDir string, providerID string, providerName string, profileID string, profileName string) {
+func createProviderAndProfileForActiveState(t *testing.T, ctx context.Context, configDir, providerID, providerName, profileID, profileName string) {
 	t.Helper()
 
 	if _, err := CreateProvider(ctx, CreateProviderRequest{
@@ -74,7 +74,7 @@ func createProviderAndProfileForActiveState(t *testing.T, ctx context.Context, c
 	}
 }
 
-func completeActiveStateSwitch(t *testing.T, ctx context.Context, db *store.Store, operationID string, providerID string, profileID string) {
+func completeActiveStateSwitch(t *testing.T, ctx context.Context, db *store.Store, operationID, providerID, profileID string) {
 	t.Helper()
 
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
@@ -94,7 +94,7 @@ func completeActiveStateSwitch(t *testing.T, ctx context.Context, db *store.Stor
 	}
 }
 
-func deleteProfileRow(t *testing.T, databasePath string, profileID string) {
+func deleteProfileRow(t *testing.T, databasePath, profileID string) {
 	t.Helper()
 
 	db, err := sql.Open("sqlite", databasePath)
@@ -107,7 +107,7 @@ func deleteProfileRow(t *testing.T, databasePath string, profileID string) {
 	}
 }
 
-func assertActiveProviderState(t *testing.T, state ActiveProviderState, providerName string, profileID string, profileName string, operationID string, profileAvailable bool) {
+func assertActiveProviderState(t *testing.T, state ActiveProviderState, providerName, profileID, profileName, operationID string, profileAvailable bool) {
 	t.Helper()
 
 	if state.ProviderName != providerName ||

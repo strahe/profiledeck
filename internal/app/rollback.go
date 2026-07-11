@@ -467,7 +467,7 @@ func loadBackupManifest(backupPath string) (switchBackupManifest, error) {
 	return manifest, nil
 }
 
-func validateRollbackManifest(manifest switchBackupManifest, metadata switchOperationMetadata, operationID string, backupID string, backupPath string) error {
+func validateRollbackManifest(manifest switchBackupManifest, metadata switchOperationMetadata, operationID, backupID, backupPath string) error {
 	if manifest.OperationID != backupID || manifest.OperationID != operationID {
 		return NewError(ErrorBackupInvalid, "backup manifest operation id does not match source operation").WithDetail("backup_id", backupID)
 	}
@@ -587,7 +587,7 @@ func validateRollbackEntry(target switchOperationTargetMetadata, entry switchBac
 	return nil
 }
 
-func safeBackupRelPath(backupPath string, raw string) (string, error) {
+func safeBackupRelPath(backupPath, raw string) (string, error) {
 	rel := filepath.Clean(filepath.FromSlash(raw))
 	if rel == "." || rel == "" || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
 		return "", NewError(ErrorBackupInvalid, "backup relative path is invalid").WithDetail("path", raw)
@@ -728,7 +728,7 @@ func createRollbackCurrentBackup(ctx context.Context, paths runtime.Paths, opera
 	return backup, nil
 }
 
-func applyRollbackTargets(ctx context.Context, db *store.Store, operationID string, lastMetadata string, metadataBase rollbackOperationMetadata, source rollbackSource) (RollbackCounts, []string, error) {
+func applyRollbackTargets(ctx context.Context, db *store.Store, operationID, lastMetadata string, metadataBase rollbackOperationMetadata, source rollbackSource) (RollbackCounts, []string, error) {
 	var counts RollbackCounts
 	processed := []string{}
 	for _, target := range source.Targets {
@@ -798,7 +798,7 @@ func applyRollbackTargets(ctx context.Context, db *store.Store, operationID stri
 	return counts, processed, nil
 }
 
-func failRollbackWithProcessed(ctx context.Context, db *store.Store, operationID string, lastMetadata string, metadataBase rollbackOperationMetadata, counts RollbackCounts, processed []string, operationErr error) error {
+func failRollbackWithProcessed(ctx context.Context, db *store.Store, operationID, lastMetadata string, metadataBase rollbackOperationMetadata, counts RollbackCounts, processed []string, operationErr error) error {
 	metadataBase.Counts = counts
 	metadataBase.ProcessedTargets = processed
 	metadataJSON, err := marshalRollbackOperationMetadata("failed", metadataBase)
@@ -850,7 +850,7 @@ func marshalRollbackOperationMetadata(checkpoint string, metadata rollbackOperat
 	return string(raw), nil
 }
 
-func failRollbackOperation(ctx context.Context, db *store.Store, operationID string, metadataJSON string, operationErr error) error {
+func failRollbackOperation(ctx context.Context, db *store.Store, operationID, metadataJSON string, operationErr error) error {
 	code, message := errorCodeAndMessage(operationErr)
 	cleanupCtx, cancel := switchCleanupContext(ctx)
 	defer cancel()

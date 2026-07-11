@@ -337,7 +337,7 @@ func (r *codexQuotaRuntime) applyTargets(targets []app.CodexAutomationTarget) {
 	r.mu.Unlock()
 }
 
-func (r *codexQuotaRuntime) ensureScheduleLocked(schedule *codexCredentialSchedule, old *codexCredentialSchedule, now time.Time) {
+func (r *codexQuotaRuntime) ensureScheduleLocked(schedule, old *codexCredentialSchedule, now time.Time) {
 	if schedule.interval > 0 && schedule.quotaSupported {
 		schedule.nextKind = app.CodexCredentialJobQuota
 		if schedule.nextRunAt.IsZero() || old == nil || old.interval != schedule.interval || old.nextKind != app.CodexCredentialJobQuota {
@@ -704,9 +704,9 @@ func cloneCodexQuotaSnapshot(snapshot *app.CodexQuotaSnapshot) *app.CodexQuotaSn
 	if snapshot == nil {
 		return nil
 	}
-	copy := *snapshot
-	copy.AdditionalRateLimits = append([]app.CodexQuotaRateLimit(nil), snapshot.AdditionalRateLimits...)
-	return &copy
+	cloned := *snapshot
+	cloned.AdditionalRateLimits = append([]app.CodexQuotaRateLimit(nil), snapshot.AdditionalRateLimits...)
+	return &cloned
 }
 
 func nonBlockingQuotaResult(target chan codexQuotaManualResult, result codexQuotaManualResult) {

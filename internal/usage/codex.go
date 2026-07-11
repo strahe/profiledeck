@@ -329,7 +329,7 @@ func discardCodexSessionLine(ctx context.Context, reader *bufio.Reader) error {
 	}
 }
 
-func eventIdentitySessionID(sessionID string, sourceKey string, hasLogSessionID bool) string {
+func eventIdentitySessionID(sessionID, sourceKey string, hasLogSessionID bool) string {
 	if hasLogSessionID {
 		return sessionID
 	}
@@ -383,7 +383,7 @@ func tokenCountsFromUsageObject(object map[string]any) (TokenCounts, bool) {
 	}, true
 }
 
-func deltaFromCumulative(previous TokenCounts, current TokenCounts) TokenCounts {
+func deltaFromCumulative(previous, current TokenCounts) TokenCounts {
 	if previous.empty() || current.InputTokens < previous.InputTokens ||
 		current.OutputTokens < previous.OutputTokens {
 		return current

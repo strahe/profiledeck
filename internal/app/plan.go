@@ -162,7 +162,7 @@ func BuildPlan(ctx context.Context, req BuildPlanRequest) (SwitchPlan, error) {
 	return plan.SwitchPlan, nil
 }
 
-func buildApplyPlan(ctx context.Context, db *store.Store, providerID string, profileID string) (applyPlan, error) {
+func buildApplyPlan(ctx context.Context, db *store.Store, providerID, profileID string) (applyPlan, error) {
 	provider, err := db.GetProvider(ctx, providerID)
 	if err != nil {
 		return applyPlan{}, mapProviderStoreError(err)

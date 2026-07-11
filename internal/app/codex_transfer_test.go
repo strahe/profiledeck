@@ -36,10 +36,12 @@ func TestCodexProfileExportImportRoundTripIsDeterministicAndInactive(t *testing.
 		ProfileID: "work", ProviderID: codexconfig.ProviderID,
 		QuotaRefreshIntervalSeconds: 300, AuthKeepaliveEnabled: true,
 	}); err != nil {
-		sourceDB.Close()
+		_ = sourceDB.Close()
 		t.Fatalf("expected local automation fixture, got %v", err)
 	}
-	sourceDB.Close()
+	if err := sourceDB.Close(); err != nil {
+		t.Fatalf("expected source settings store close, got %v", err)
+	}
 	unboundConfig := "model = \"gpt-unbound\"\n"
 	if _, err := CreateCodexConfigSet(ctx, CreateCodexConfigSetRequest{
 		ConfigDir: sourceConfigDir, CodexDir: codexDir, ConfigSetID: "unbound", Name: "Unbound", ConfigContent: &unboundConfig,
@@ -261,7 +263,7 @@ func TestCodexProfileExportCannotReplaceRuntimeOrWorkingFiles(t *testing.T) {
 	}
 }
 
-func writeCodexTransferFixture(t *testing.T, codexDir string, config string, auth string) {
+func writeCodexTransferFixture(t *testing.T, codexDir, config, auth string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.ConfigFileName), []byte(config), 0o600); err != nil {
 		t.Fatal(err)

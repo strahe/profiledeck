@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/pelletier/go-toml/v2"
+
 	codexauth "github.com/strahe/profiledeck/internal/codex/auth"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/strahe/profiledeck/internal/store"

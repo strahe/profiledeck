@@ -576,7 +576,7 @@ func TestCodexProfileCreateStoresHiddenCredentialAndSummarizesCodexAccountID(t *
 	}
 }
 
-func assertJSONFile(t *testing.T, path string, wantToken string) {
+func assertJSONFile(t *testing.T, path, wantToken string) {
 	t.Helper()
 
 	var decoded map[string]any
@@ -589,7 +589,7 @@ func assertJSONFile(t *testing.T, path string, wantToken string) {
 	}
 }
 
-func hasOperationPreview(operations []PlanOperation, targetID string, preview string) bool {
+func hasOperationPreview(operations []PlanOperation, targetID, preview string) bool {
 	for _, op := range operations {
 		if op.TargetID == targetID && op.DesiredPreview.Content == preview {
 			return true

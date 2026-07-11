@@ -50,7 +50,7 @@ func openProbeFile(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_RDWR, 0)
 }
 
-func removeVerifiedLockFile(path string, file *os.File, expectedSHA256 string, currentInfo os.FileInfo, lockHeld *bool, fileOpen *bool) error {
+func removeVerifiedLockFile(path string, file *os.File, expectedSHA256 string, currentInfo os.FileInfo, lockHeld, fileOpen *bool) error {
 	if *lockHeld {
 		if err := unlockFileHandle(file); err != nil {
 			return WrapError(KindLockFailed, "failed to release lock before removal", err).WithDetail("path", path)

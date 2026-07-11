@@ -178,7 +178,7 @@ func runCodexCredentialJob(ctx context.Context, req RunCodexCredentialJobRequest
 	return result, nil
 }
 
-func prepareCodexCredentialHome(ctx context.Context, db *store.Store, summaries []CodexProfileSummary, credentialID string, storedPayload string) (codexconfig.Home, string, bool, func(), error) {
+func prepareCodexCredentialHome(ctx context.Context, db *store.Store, summaries []CodexProfileSummary, credentialID, storedPayload string) (codexconfig.Home, string, bool, func(), error) {
 	for _, summary := range summaries {
 		if !summary.Active || summary.CredentialID != credentialID {
 			continue

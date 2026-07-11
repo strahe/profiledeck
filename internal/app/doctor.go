@@ -365,7 +365,7 @@ func inspectSensitivePathPermissions(ctx context.Context, paths runtime.Paths, d
 	return findings
 }
 
-func inspectPathPermission(path string, want os.FileMode, id string, message string) []DoctorFinding {
+func inspectPathPermission(path string, want os.FileMode, id, message string) []DoctorFinding {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -499,7 +499,7 @@ func populateDoctorLockFields(lock *DoctorLock, raw string) error {
 	return nil
 }
 
-func classifyDoctorLock(lock *DoctorLock, parseErr error, probeErr error, dbHealthy bool) {
+func classifyDoctorLock(lock *DoctorLock, parseErr, probeErr error, dbHealthy bool) {
 	if probeErr != nil {
 		lock.Level = DoctorLevelWarning
 		lock.Reason = "lock_probe_failed"
@@ -685,7 +685,7 @@ func doctorOverallLevel(result DoctorResult) string {
 	return level
 }
 
-func maxDoctorLevel(left string, right string) string {
+func maxDoctorLevel(left, right string) string {
 	if doctorLevelRank(right) > doctorLevelRank(left) {
 		return right
 	}
@@ -708,7 +708,7 @@ func lockRepairUnsafeError(path string, err error) *AppError {
 	if errors.As(err, &targetErr) {
 		appErr := WrapError(ErrorLockRepairUnsafe, targetErr.Message, err).WithDetail("path", path)
 		for key, value := range targetErr.Details {
-			appErr.WithDetail(key, value)
+			appErr = appErr.WithDetail(key, value)
 		}
 		return appErr
 	}

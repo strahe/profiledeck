@@ -593,7 +593,7 @@ func normalizeTransferPath(raw string, code ErrorCode, label string) (string, *A
 	return filepath.Clean(path), nil
 }
 
-func rejectUnsafeCodexExportPath(ctx context.Context, db *store.Store, configDir string, outputPath string) *AppError {
+func rejectUnsafeCodexExportPath(ctx context.Context, db *store.Store, configDir, outputPath string) *AppError {
 	_, paths, err := resolveRuntime(configDir)
 	if err != nil {
 		var appErr *AppError
@@ -619,7 +619,7 @@ func rejectUnsafeCodexExportPath(ctx context.Context, db *store.Store, configDir
 	return nil
 }
 
-func sameCleanPath(left string, right string) bool {
+func sameCleanPath(left, right string) bool {
 	leftAbs, leftErr := filepath.Abs(left)
 	rightAbs, rightErr := filepath.Abs(right)
 	if leftErr == nil && rightErr == nil && filepath.Clean(leftAbs) == filepath.Clean(rightAbs) {
@@ -630,24 +630,24 @@ func sameCleanPath(left string, right string) bool {
 	return leftStatErr == nil && rightStatErr == nil && os.SameFile(leftInfo, rightInfo)
 }
 
-func codexTransferFileError(code ErrorCode, message string, path string, err error) *AppError {
+func codexTransferFileError(code ErrorCode, message, path string, err error) *AppError {
 	appErr := WrapError(code, message, err).WithDetail("path", path)
 	switch {
 	case errors.Is(err, transferfile.ErrExists):
 		appErr.Message = "Codex profile bundle already exists; confirm overwrite explicitly"
-		appErr.WithDetail("reason", "exists")
+		appErr = appErr.WithDetail("reason", "exists")
 	case errors.Is(err, transferfile.ErrNotPrivate):
 		appErr.Message = "Codex profile bundle permissions must not allow group or other access"
-		appErr.WithDetail("reason", "permissions")
+		appErr = appErr.WithDetail("reason", "permissions")
 	case errors.Is(err, transferfile.ErrNotRegular):
 		appErr.Message = "Codex profile bundle path must be a regular file and not a symlink"
-		appErr.WithDetail("reason", "not_regular")
+		appErr = appErr.WithDetail("reason", "not_regular")
 	case errors.Is(err, transferfile.ErrChanged):
 		appErr.Message = "Codex profile bundle changed during the operation"
-		appErr.WithDetail("reason", "changed")
+		appErr = appErr.WithDetail("reason", "changed")
 	case errors.Is(err, transferfile.ErrTooLarge):
 		appErr.Message = "Codex profile bundle is too large"
-		appErr.WithDetail("reason", "too_large")
+		appErr = appErr.WithDetail("reason", "too_large")
 	}
 	return appErr
 }

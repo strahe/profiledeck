@@ -545,14 +545,14 @@ func TestSummarySourceReflectsAggregatedSources(t *testing.T) {
 	}
 }
 
-func writeAppUsageFixture(t *testing.T, codexDir string, content string) string {
+func writeAppUsageFixture(t *testing.T, codexDir, content string) string {
 	t.Helper()
 	path := filepath.Join(codexDir, "sessions", "2026", "07", "06", "session.jsonl")
 	writeAppUsageFile(t, path, content)
 	return path
 }
 
-func writeAppUsageFile(t *testing.T, path string, content string) {
+func writeAppUsageFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("expected fixture dir setup to succeed, got %v", err)
@@ -562,7 +562,7 @@ func writeAppUsageFile(t *testing.T, path string, content string) {
 	}
 }
 
-func appendAppUsageFixture(t *testing.T, path string, line string) {
+func appendAppUsageFixture(t *testing.T, path, line string) {
 	t.Helper()
 	handle, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {

@@ -603,7 +603,7 @@ func TestUsageReportServiceDefaultsAndValidatesRange(t *testing.T) {
 	}
 }
 
-func writeDesktopCodexFiles(t *testing.T, codexDir string, config string, auth string) {
+func writeDesktopCodexFiles(t *testing.T, codexDir, config, auth string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.ConfigFileName), []byte(config), 0o600); err != nil {
 		t.Fatalf("expected config fixture to write, got %v", err)

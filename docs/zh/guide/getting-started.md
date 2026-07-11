@@ -16,21 +16,25 @@ make build
 
 | 命令 | 用途 |
 | --- | --- |
-| `make fmt` | 使用 `go fmt ./...` 格式化 Go package。 |
-| `make vet` | 运行 `go vet ./...`。 |
+| `make fmt` | 使用 gofumpt 和 gci 格式化全部 Go package。 |
+| `make lint` | 运行只读的 Go 格式与静态分析检查。 |
 | `make test` | 运行 `go test ./...`。 |
 | `make build` | 从 `cmd/profiledeck` 编译 `bin/profiledeck`。 |
-| `make check` | 依次运行 format、vet、test 和 build。 |
+| `make core-check` | 运行 CLI/core lint、测试和构建。 |
+| `make desktop-check` | 运行 Wails 边界、bindings、前端、构建和 Desktop 测试。 |
+| `make docs-check` | 安装文档依赖并构建文档站。 |
+| `make check` | 运行完整的 core、Desktop 和文档门禁。 |
 | `make clean` | 删除本地构建产物。 |
 
-文档站使用 npm 脚本：
+`make check` 不会改写 tracked 源码或生成的 bindings。需要更新这些文件时，请显式运行 `make fmt` 或 `make desktop-bindings`。完整验证要求在 macOS 上运行，且 PATH 中存在兼容的 `golangci-lint` v2 和 `wails3`；其他平台使用 `make core-check` 运行可移植的 CLI/core 门禁。
+
+文档任务也统一使用 Make target：
 
 ```bash
-cd docs
-npm install
-npm run dev
-npm run build
-npm run preview
+make docs-install
+make docs-dev
+make docs-build
+make docs-preview
 ```
 
 ## 初始化 ProfileDeck

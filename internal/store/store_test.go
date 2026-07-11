@@ -2292,7 +2292,7 @@ func closeTestStore(t *testing.T, db *Store) {
 	}
 }
 
-func assertSQLiteObjectExists(t *testing.T, ctx context.Context, db *Store, objectType string, name string) {
+func assertSQLiteObjectExists(t *testing.T, ctx context.Context, db *Store, objectType, name string) {
 	t.Helper()
 
 	exists, err := db.objectExists(ctx, objectType, name)

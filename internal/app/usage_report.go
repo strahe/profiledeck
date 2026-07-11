@@ -220,7 +220,7 @@ func usageAggregateSummary(aggregate store.UsageAggregate) UsageAggregateSummary
 	}
 }
 
-func ratio(numerator int64, denominator int64) float64 {
+func ratio(numerator, denominator int64) float64 {
 	if numerator <= 0 || denominator <= 0 {
 		return 0
 	}

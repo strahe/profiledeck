@@ -69,7 +69,7 @@ func (metadata ProviderMetadata) Compatible() bool {
 		metadata.ConfigPath != ""
 }
 
-func TargetMetadataJSON(targetKind string, mode string) (string, error) {
+func TargetMetadataJSON(targetKind, mode string) (string, error) {
 	metadata := TargetMetadata{
 		Preset:        codexconfig.PresetName,
 		PresetVersion: codexconfig.PresetVersion,
@@ -129,7 +129,7 @@ func ParseConfigSetBindingValueJSON(raw string) (string, error) {
 	return parseBindingValueJSON(raw, "config_set_id", "config target")
 }
 
-func parseBindingValueJSON(raw string, key string, label string) (string, error) {
+func parseBindingValueJSON(raw, key, label string) (string, error) {
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	var value map[string]string
 	if err := decoder.Decode(&value); err != nil {
@@ -157,6 +157,6 @@ func ConfigTargetStrategyValid(strategy string, names TargetFormatStrategyNames)
 	return strategy == names.ReplaceFileStrategy
 }
 
-func AuthTargetFormatStrategyValid(format string, strategy string, names TargetFormatStrategyNames) bool {
+func AuthTargetFormatStrategyValid(format, strategy string, names TargetFormatStrategyNames) bool {
 	return format == names.JSONFormat && strategy == names.ReplaceFileStrategy
 }

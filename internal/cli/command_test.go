@@ -1593,7 +1593,7 @@ func assertCLIAppErrorCode(t *testing.T, err error, code app.ErrorCode) {
 	}
 }
 
-func assertFileString(t *testing.T, path string, expected string) {
+func assertFileString(t *testing.T, path, expected string) {
 	t.Helper()
 
 	raw := mustReadFile(t, path)
@@ -1612,7 +1612,7 @@ func mustReadFile(t *testing.T, path string) []byte {
 	return raw
 }
 
-func insertFailedOperation(t *testing.T, databasePath string, operationID string) {
+func insertFailedOperation(t *testing.T, databasePath, operationID string) {
 	t.Helper()
 
 	db, err := sql.Open("sqlite", databasePath)
@@ -1629,7 +1629,7 @@ func insertFailedOperation(t *testing.T, databasePath string, operationID string
 	}
 }
 
-func writeCLIUsageFixture(t *testing.T, codexDir string, content string) {
+func writeCLIUsageFixture(t *testing.T, codexDir, content string) {
 	t.Helper()
 	path := filepath.Join(codexDir, "sessions", "2026", "07", "06", "session.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -1640,7 +1640,7 @@ func writeCLIUsageFixture(t *testing.T, codexDir string, content string) {
 	}
 }
 
-func writeCLICodexProfileFixture(t *testing.T, codexDir string, config string, auth string) {
+func writeCLICodexProfileFixture(t *testing.T, codexDir, config, auth string) {
 	t.Helper()
 	if err := os.MkdirAll(codexDir, 0o700); err != nil {
 		t.Fatalf("expected Codex fixture dir setup to succeed, got %v", err)
@@ -1653,7 +1653,7 @@ func writeCLICodexProfileFixture(t *testing.T, codexDir string, config string, a
 	}
 }
 
-func hasCLIPlanOperation(operations []app.PlanOperation, targetID string, action string) bool {
+func hasCLIPlanOperation(operations []app.PlanOperation, targetID, action string) bool {
 	for _, operation := range operations {
 		if operation.TargetID == targetID && operation.Action == action {
 			return true
@@ -1662,7 +1662,7 @@ func hasCLIPlanOperation(operations []app.PlanOperation, targetID string, action
 	return false
 }
 
-func singleCLIOperationIDByTypeStatus(t *testing.T, databasePath string, operationType string, status string) string {
+func singleCLIOperationIDByTypeStatus(t *testing.T, databasePath, operationType, status string) string {
 	t.Helper()
 
 	db, err := sql.Open("sqlite", databasePath)

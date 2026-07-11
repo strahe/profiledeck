@@ -127,7 +127,7 @@ func (r *Runner) clock() time.Time {
 	return time.Now()
 }
 
-func (r *Runner) call(ctx context.Context, codexHome string, method string, params any) (json.RawMessage, error) {
+func (r *Runner) call(ctx context.Context, codexHome, method string, params any) (json.RawMessage, error) {
 	if r == nil {
 		return nil, &Error{Kind: ErrorUnavailable}
 	}
@@ -156,7 +156,7 @@ func (r *Runner) call(ctx context.Context, codexHome string, method string, para
 	return result, nil
 }
 
-func (r *Runner) startCommand(ctx context.Context, command string, codexHome string) (*runningProcess, error) {
+func (r *Runner) startCommand(ctx context.Context, command, codexHome string) (*runningProcess, error) {
 	if command == "" {
 		command = "codex"
 	}

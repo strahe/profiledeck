@@ -35,7 +35,7 @@ var localLockRegistry = struct {
 	locks: map[string]struct{}{},
 }
 
-func AcquireLock(path string, owner string) (Lock, error) {
+func AcquireLock(path, owner string) (Lock, error) {
 	token := fmt.Sprintf("%s\npid=%d\ncreated_at_unix_ms=%d\n", owner, os.Getpid(), time.Now().UnixMilli())
 	localKey := localLockKey(path)
 	if !acquireLocalLock(localKey) {
@@ -62,7 +62,7 @@ func AcquireLock(path string, owner string) (Lock, error) {
 	return Lock{}, NewError(KindTargetChanged, "lock file changed during acquire").WithDetail("path", path)
 }
 
-func acquireLockAttempt(path string, token string, localKey string) (Lock, bool, error) {
+func acquireLockAttempt(path, token, localKey string) (Lock, bool, error) {
 	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return Lock{}, false, WrapError(KindLockFailed, "failed to open lock file", err).WithDetail("path", path)
@@ -175,7 +175,7 @@ func probeLockAttempt(path string) (LockProbe, bool, error) {
 	return probe, false, nil
 }
 
-func RemoveStaleLockFile(path string, expectedSHA256 string) error {
+func RemoveStaleLockFile(path, expectedSHA256 string) error {
 	if expectedSHA256 == "" {
 		return NewError(KindTargetChanged, "expected lock file hash is required").WithDetail("path", path)
 	}

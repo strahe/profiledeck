@@ -283,7 +283,7 @@ func setupCodexSwitchProfiles(t *testing.T, independentConfig bool) (context.Con
 	return ctx, configDir, codexDir
 }
 
-func assertCodexPlanAction(t *testing.T, plan SwitchPlan, targetID string, action string) {
+func assertCodexPlanAction(t *testing.T, plan SwitchPlan, targetID, action string) {
 	t.Helper()
 	for _, operation := range plan.Operations {
 		if operation.TargetID == targetID {

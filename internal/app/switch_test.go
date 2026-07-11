@@ -534,7 +534,7 @@ func readBackupManifest(t *testing.T, backupPath string) switchBackupManifest {
 	return manifest
 }
 
-func assertFileContent(t *testing.T, path string, expected string) {
+func assertFileContent(t *testing.T, path, expected string) {
 	t.Helper()
 
 	if got := readFileString(t, path); got != expected {
@@ -552,7 +552,7 @@ func readFileString(t *testing.T, path string) string {
 	return string(raw)
 }
 
-func countOperationsByStatus(t *testing.T, databasePath string, status string) int {
+func countOperationsByStatus(t *testing.T, databasePath, status string) int {
 	t.Helper()
 
 	db, err := sql.Open("sqlite", databasePath)

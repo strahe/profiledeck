@@ -149,10 +149,12 @@ func TestNativeQuotaInactiveCASNeverOverwritesConcurrentCredential(t *testing.T)
 			t.Fatalf("expected concurrent store open, got %v", err)
 		}
 		if _, err := upsertCodexAuthCredential(ctx, db, child.Summary.CredentialID, concurrent); err != nil {
-			db.Close()
+			_ = db.Close()
 			t.Fatalf("expected concurrent credential update, got %v", err)
 		}
-		db.Close()
+		if err := db.Close(); err != nil {
+			t.Fatalf("expected concurrent store close, got %v", err)
+		}
 		if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(rotated), 0o600); err != nil {
 			t.Fatalf("expected stale temporary auth write, got %v", err)
 		}

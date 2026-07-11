@@ -197,7 +197,7 @@ func GuardedRemove(ctx context.Context, req GuardedRemoveRequest) (bool, error) 
 	return true, nil
 }
 
-func CopyBackupFile(ctx context.Context, source string, destination string) (string, error) {
+func CopyBackupFile(ctx context.Context, source, destination string) (string, error) {
 	info, err := os.Lstat(source)
 	if err != nil {
 		return "", WrapError(KindBackupFailed, "failed to inspect target for backup", err).WithDetail("path", source)

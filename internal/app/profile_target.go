@@ -370,7 +370,7 @@ func normalizeUpdateProfileTarget(req UpdateProfileTargetRequest, existing store
 	return params, nil
 }
 
-func ensureProfileTargetPathOwnership(ctx context.Context, db *store.Store, path string, pathKey string, providerID string, targetID string, current *profileTargetIDs) *AppError {
+func ensureProfileTargetPathOwnership(ctx context.Context, db *store.Store, path, pathKey, providerID, targetID string, current *profileTargetIDs) *AppError {
 	targets, err := db.ListProfileTargetsByPathKey(ctx, pathKey)
 	if err != nil {
 		return WrapError(ErrorStoreStatusFailed, "failed to inspect target path ownership", err)
@@ -396,7 +396,7 @@ func targetPathOwnershipKey(path string) string {
 	return targetPathOwnershipKeyForOS(path, runtime.GOOS)
 }
 
-func targetPathOwnershipKeyForOS(path string, goos string) string {
+func targetPathOwnershipKeyForOS(path, goos string) string {
 	switch goos {
 	case "darwin", "windows":
 		// Keep the I/O path exact, but compare ownership using the default case-insensitive filesystem semantics.
@@ -406,7 +406,7 @@ func targetPathOwnershipKeyForOS(path string, goos string) string {
 	}
 }
 
-func normalizeProfileTargetIDs(profileID string, providerID string, targetID string) (profileTargetIDs, *AppError) {
+func normalizeProfileTargetIDs(profileID, providerID, targetID string) (profileTargetIDs, *AppError) {
 	normalizedProfileID, appErr := validateID(profileID, ErrorTargetInvalid)
 	if appErr != nil {
 		return profileTargetIDs{}, appErr.WithDetail("field", "profile_id")
@@ -438,7 +438,7 @@ func validateTargetPath(value string) (string, *AppError) {
 	return value, nil
 }
 
-func normalizeTargetFormatStrategyAndValue(formatValue string, strategyValue string, rawValueJSON string) (string, string, string, *AppError) {
+func normalizeTargetFormatStrategyAndValue(formatValue, strategyValue, rawValueJSON string) (string, string, string, *AppError) {
 	format, appErr := validateTargetFormat(formatValue)
 	if appErr != nil {
 		return "", "", "", appErr
@@ -485,7 +485,7 @@ func validateTargetStrategy(value string) (string, *AppError) {
 	}
 }
 
-func targetFormatStrategyAllowed(format string, strategy string) bool {
+func targetFormatStrategyAllowed(format, strategy string) bool {
 	switch strategy {
 	case targetStrategyReplaceFile:
 		return format == targetFormatText || format == targetFormatJSON || format == targetFormatTOML || format == targetFormatEnv
@@ -500,7 +500,7 @@ func targetFormatStrategyAllowed(format string, strategy string) bool {
 	}
 }
 
-func validateTargetValueShape(format string, strategy string, value map[string]any) *AppError {
+func validateTargetValueShape(format, strategy string, value map[string]any) *AppError {
 	if strategy == targetStrategyReplaceFile {
 		content, ok := value["content"].(string)
 		if !ok || len(value) != 1 {
@@ -629,7 +629,7 @@ func profileTargetFromStore(target store.ProfileTarget) (ProfileTarget, error) {
 	}, nil
 }
 
-func targetValuePreview(providerID string, targetID string, format string, strategy string, raw string) (TextPreview, error) {
+func targetValuePreview(providerID, targetID, format, strategy, raw string) (TextPreview, error) {
 	value, appErr := decodeSingleJSONObject(raw, ErrorStoreSchemaInvalid, "stored value_json")
 	if appErr != nil {
 		return TextPreview{}, appErr
@@ -688,7 +688,7 @@ func marshalJSONNoEscape(value any) ([]byte, error) {
 	return bytes.TrimSpace(buf.Bytes()), nil
 }
 
-func redactTargetValue(_ string, strategy string, value map[string]any) any {
+func redactTargetValue(_, strategy string, value map[string]any) any {
 	if strategy == targetStrategyReplaceFile {
 		redacted := make(map[string]any, len(value))
 		for key, child := range value {

@@ -542,7 +542,7 @@ func copyForkedCodexConfigSet(ctx context.Context, db *store.Store, source store
 	return upsertCodexConfigSet(ctx, db, id, name, description, source.PayloadText)
 }
 
-func createCodexProfileTargets(ctx context.Context, db *store.Store, profileID string, home codexconfig.Home, configSetID string, credentialID string) (store.ProfileTarget, store.ProfileTarget, error) {
+func createCodexProfileTargets(ctx context.Context, db *store.Store, profileID string, home codexconfig.Home, configSetID, credentialID string) (store.ProfileTarget, store.ProfileTarget, error) {
 	targets, err := codexPreflightTargets(ctx, db, home, profileID)
 	if err != nil {
 		return store.ProfileTarget{}, store.ProfileTarget{}, err
@@ -600,7 +600,7 @@ func requireCodexFullProfileTargets(profileID string, targets []store.ProfileTar
 	return configTarget, authTarget, nil
 }
 
-func loadCodexProfilePayload(home codexconfig.Home, configContent *string, authContent *string) (codexProfilePayload, error) {
+func loadCodexProfilePayload(home codexconfig.Home, configContent, authContent *string) (codexProfilePayload, error) {
 	config, err := loadCodexConfigContent(home, configContent)
 	if err != nil {
 		return codexProfilePayload{}, err
@@ -658,7 +658,7 @@ func loadCodexAuthPayload(home codexconfig.Home, content *string) (string, error
 	return payload, nil
 }
 
-func normalizeCodexForkBinding(raw string, kind string) (string, *AppError) {
+func normalizeCodexForkBinding(raw, kind string) (string, *AppError) {
 	value := strings.TrimSpace(raw)
 	if value == CodexForkBindingShareParent || value == CodexForkBindingCopyNew {
 		return value, nil
@@ -668,7 +668,7 @@ func normalizeCodexForkBinding(raw string, kind string) (string, *AppError) {
 		WithDetail("supported", []string{CodexForkBindingShareParent, CodexForkBindingCopyNew})
 }
 
-func openLockedCodexStore(ctx context.Context, configDir string, operation string) (*store.Store, targetfs.Lock, string, error) {
+func openLockedCodexStore(ctx context.Context, configDir, operation string) (*store.Store, targetfs.Lock, string, error) {
 	_, paths, err := resolveRuntime(configDir)
 	if err != nil {
 		return nil, targetfs.Lock{}, "", err
@@ -679,12 +679,12 @@ func openLockedCodexStore(ctx context.Context, configDir string, operation strin
 	}
 	operationID, err := newCodexMaintenanceOperationID(operation, time.Now())
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, targetfs.Lock{}, "", WrapError(ErrorOperationCreateFailed, "failed to create Codex maintenance operation id", err)
 	}
 	lock, err := acquireSwitchLock(paths.Lock, operationID)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, targetfs.Lock{}, "", err
 	}
 	return db, lock, operationID, nil
@@ -698,7 +698,7 @@ func newCodexMaintenanceOperationID(operation string, now time.Time) (string, er
 	return fmt.Sprintf("codex-%s-%d-%s", operation, now.UnixMilli(), hex.EncodeToString(randomBytes)), nil
 }
 
-func codexMaintenanceMetadata(action string, profileID string, configSetID string, credentialID string) (string, error) {
+func codexMaintenanceMetadata(action, profileID, configSetID, credentialID string) (string, error) {
 	metadata := map[string]any{
 		"action":      action,
 		"provider_id": codexconfig.ProviderID,
@@ -741,7 +741,7 @@ func codexProfileSaveResultFromStore(ctx context.Context, db *store.Store, provi
 	}, nil
 }
 
-func codexConfigSummaryFromContent(content string) (model string, provider string, baseURL string) {
+func codexConfigSummaryFromContent(content string) (model, provider, baseURL string) {
 	return parseCodexConfigSummary(content)
 }
 

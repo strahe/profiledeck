@@ -6,13 +6,13 @@ ProfileDeck is currently a Go CLI and macOS desktop MVP with a Codex-first workf
 
 ## Documentation
 
-The full documentation is in `docs/` and is built with VitePress.
+The full documentation is in `docs/` and is built with VitePress through Make targets.
 
 ```bash
-cd docs
-npm install
-npm run dev
-npm run build
+make docs-install
+make docs-dev
+make docs-build
+make docs-preview
 ```
 
 English is served at `/`; Simplified Chinese is served at `/zh/`.
@@ -33,17 +33,17 @@ Useful shortcuts:
 
 ```bash
 make fmt
-make vet
-make test
+make lint
+make core-check
+make desktop-check
+make docs-check
 make check
 make clean
 ```
 
-Desktop checks are kept separate from the CLI/core check because the Wails version and release policy are still desktop-specific:
+`make check` is the full project gate. Use the component checks for faster feedback while working in one area. Formatting is an explicit mutating command; the check targets do not rewrite tracked source or generated bindings.
 
-```bash
-make desktop-check
-```
+Full local validation requires macOS, compatible `golangci-lint` v2 and `wails3` executables on `PATH`, plus Go and a Node/npm version supported by the lockfiles. Use `make core-check` for the portable CLI/core gate on other platforms.
 
 macOS desktop builds target macOS 14.0 by default. Override it with `MACOS_MIN_VERSION=<version>` when running desktop Make targets.
 

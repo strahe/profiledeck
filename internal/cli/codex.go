@@ -6,8 +6,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/strahe/profiledeck/internal/app"
 	urfavecli "github.com/urfave/cli/v3"
+
+	"github.com/strahe/profiledeck/internal/app"
 )
 
 const (
