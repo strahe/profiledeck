@@ -20,8 +20,11 @@ type AppService struct {
 }
 
 type CodexService struct {
-	env     Environment
-	changes *ChangeNotifier
+	env        Environment
+	changes    *ChangeNotifier
+	autoSync   *usageAutoSyncRuntime
+	quota      *codexQuotaRuntime
+	settingsMu sync.Mutex
 }
 
 type ProfileService struct {
@@ -31,6 +34,7 @@ type ProfileService struct {
 type SwitchService struct {
 	env     Environment
 	changes *ChangeNotifier
+	quota   *codexQuotaRuntime
 }
 
 type DoctorService struct {
@@ -41,6 +45,7 @@ type DoctorService struct {
 type BackupService struct {
 	env     Environment
 	changes *ChangeNotifier
+	quota   *codexQuotaRuntime
 }
 
 type UsageService struct {
@@ -49,9 +54,7 @@ type UsageService struct {
 }
 
 type SettingsService struct {
-	env      Environment
-	autoSync *usageAutoSyncRuntime
-	mu       sync.Mutex
+	env Environment
 }
 
 type Services struct {
@@ -65,6 +68,7 @@ type Services struct {
 	Settings *SettingsService
 	changes  *ChangeNotifier
 	autoSync *usageAutoSyncRuntime
+	quota    *codexQuotaRuntime
 }
 
 type DashboardResult struct {
@@ -161,17 +165,19 @@ type ApplyCodexProfileImportRequest struct {
 func NewServices(info app.Info, env Environment, startupErr error) Services {
 	changes := NewChangeNotifier()
 	autoSync := newUsageAutoSyncRuntime(env)
+	quota := newCodexQuotaRuntime(env)
 	return Services{
 		App:      &AppService{info: info, env: env, startupErr: startupErr, changes: changes},
-		Codex:    &CodexService{env: env, changes: changes},
+		Codex:    &CodexService{env: env, changes: changes, autoSync: autoSync, quota: quota},
 		Profile:  &ProfileService{env: env},
-		Switch:   &SwitchService{env: env, changes: changes},
+		Switch:   &SwitchService{env: env, changes: changes, quota: quota},
 		Doctor:   &DoctorService{env: env, changes: changes},
-		Backup:   &BackupService{env: env, changes: changes},
+		Backup:   &BackupService{env: env, changes: changes, quota: quota},
 		Usage:    &UsageService{env: env, autoSync: autoSync},
-		Settings: &SettingsService{env: env, autoSync: autoSync},
+		Settings: &SettingsService{env: env},
 		changes:  changes,
 		autoSync: autoSync,
+		quota:    quota,
 	}
 }
 
@@ -185,6 +191,14 @@ func (s Services) StartUsageAutoSync(ctx context.Context, emitter func(UsageAuto
 
 func (s Services) StopUsageAutoSync() {
 	s.autoSync.Stop()
+}
+
+func (s Services) StartCodexQuotaRuntime(ctx context.Context, emitter func(CodexQuotaRuntimeStatus)) {
+	s.quota.Start(ctx, emitter)
+}
+
+func (s Services) StopCodexQuotaRuntime() {
+	s.quota.Stop()
 }
 
 func Bootstrap(ctx context.Context, env Environment) error {
@@ -286,6 +300,39 @@ func (s *CodexService) ListProfiles(ctx context.Context) (app.CodexProfileListRe
 
 func (s *CodexService) ShowProfile(ctx context.Context, profileID string) (app.CodexProfileDetail, error) {
 	return app.GetCodexProfile(ctx, app.GetCodexProfileRequest{ConfigDir: s.env.ConfigDir, ProfileID: profileID})
+}
+
+func (s *CodexService) GetSettings(ctx context.Context) (app.CodexSettings, error) {
+	return app.GetCodexSettings(ctx, app.CodexSettingsRequest{ConfigDir: s.env.ConfigDir})
+}
+
+func (s *CodexService) UpdateSettings(ctx context.Context, req app.UpdateCodexSettingsRequest) (app.CodexSettings, error) {
+	// Persistence and both in-process schedulers advance together so a slower
+	// older request cannot restore stale runtime intervals after a newer write.
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	req.ConfigDir = s.env.ConfigDir
+	settings, err := app.UpdateCodexSettings(ctx, req)
+	if err != nil {
+		return app.CodexSettings{}, err
+	}
+	if req.UsageSyncIntervalSeconds != nil {
+		s.autoSync.SetInterval(settings.UsageSyncIntervalSeconds)
+	}
+	if err := s.quota.Reload(ctx); err != nil {
+		// Persistence already committed. Surface scheduler reload failures through
+		// its redacted runtime status instead of misreporting the save as failed.
+		s.quota.recordRuntimeError(err)
+	}
+	return settings, nil
+}
+
+func (s *CodexService) ReadProfileQuota(ctx context.Context, profileID string) (app.CodexProfileQuota, error) {
+	return s.quota.ReadProfileQuota(ctx, profileID)
+}
+
+func (s *CodexService) QuotaRuntimeStatus(ctx context.Context) CodexQuotaRuntimeStatus {
+	return s.quota.Status()
 }
 
 func (s *CodexService) CreateProfile(ctx context.Context, req CreateCodexProfileRequest) (app.CodexProfileSaveResult, error) {
@@ -535,19 +582,8 @@ func (s *SettingsService) Get(ctx context.Context) (app.DesktopSettings, error) 
 }
 
 func (s *SettingsService) Update(ctx context.Context, req app.UpdateDesktopSettingsRequest) (app.DesktopSettings, error) {
-	// Serialize persistence with the runtime timer update so concurrent Wails
-	// requests cannot apply an older interval after a newer transaction commits.
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	req.ConfigDir = s.env.ConfigDir
-	settings, err := app.UpdateDesktopSettings(ctx, req)
-	if err != nil {
-		return app.DesktopSettings{}, err
-	}
-	if req.UsageSyncIntervalSeconds != nil {
-		s.autoSync.SetInterval(settings.UsageSyncIntervalSeconds)
-	}
-	return settings, nil
+	return app.UpdateDesktopSettings(ctx, req)
 }
 
 func (s *AppService) notifyMutationResult(kind string, source string, providerID string, profileID string, operationID string, err error) {
@@ -556,10 +592,16 @@ func (s *AppService) notifyMutationResult(kind string, source string, providerID
 
 func (s *CodexService) notifyMutationResult(kind string, source string, providerID string, profileID string, operationID string, err error) {
 	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
+	if err == nil && kind == DesktopChangeCodexProfileChanged {
+		reloadCodexQuotaRuntime(s.quota)
+	}
 }
 
 func (s *SwitchService) notifyMutationResult(kind string, source string, providerID string, profileID string, operationID string, err error) {
 	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
+	if err == nil && providerID == codexconfig.ProviderID {
+		reloadCodexQuotaRuntime(s.quota)
+	}
 }
 
 func (s *DoctorService) notifyMutationResult(kind string, source string, providerID string, profileID string, operationID string, err error) {
@@ -568,6 +610,20 @@ func (s *DoctorService) notifyMutationResult(kind string, source string, provide
 
 func (s *BackupService) notifyMutationResult(kind string, source string, providerID string, profileID string, operationID string, err error) {
 	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
+	if err == nil && providerID == codexconfig.ProviderID {
+		reloadCodexQuotaRuntime(s.quota)
+	}
+}
+
+func reloadCodexQuotaRuntime(runtime *codexQuotaRuntime) {
+	if runtime == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := runtime.Reload(ctx); err != nil {
+		runtime.recordRuntimeError(err)
+	}
 }
 
 func notifyMutationResult(changes *ChangeNotifier, kind string, source string, providerID string, profileID string, operationID string, err error) {

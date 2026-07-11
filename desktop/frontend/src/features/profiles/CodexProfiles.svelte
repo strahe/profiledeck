@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { onDestroy, tick } from "svelte";
-	import { Dialogs, type CancellablePromise } from "@wailsio/runtime";
+	import { onMount, tick } from "svelte";
+	import { Dialogs, Events, type CancellablePromise } from "@wailsio/runtime";
 	import { push } from "svelte-spa-router";
 	import { _, locale } from "svelte-i18n";
 	import { toast } from "svelte-sonner";
@@ -17,12 +17,14 @@
 		UpdateCodexConfigSetRequest,
 		UpdateCodexProfileMetadataRequest,
 	} from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
+	import type { CodexQuotaRuntimeStatus } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend/models";
 	import type {
 		CodexConfigSet,
 		CodexDetectResult,
 		CodexProfileDetail,
 		CodexProfileExportResult,
 		CodexProfileImportPlan,
+		CodexProfileQuota,
 		CodexProfileSaveResult,
 		CodexProfileSummary,
 		SwitchPlan,
@@ -76,6 +78,10 @@
 	let detail = $state<CodexProfileDetail | null>(null);
 	let detailLoading = $state(false);
 	let detailError = $state("");
+	let quotaByProfileID = $state<Record<string, CodexProfileQuota>>({});
+	let requestedQuotaProfileIDs = $state<string[]>([]);
+	let runtimeQuotaLoadingProfileIDs = $state<string[]>([]);
+	let quotaLoadingProfileIDs = $derived(Array.from(new Set([...requestedQuotaProfileIDs, ...runtimeQuotaLoadingProfileIDs])));
 	let routeKey = "";
 	let routeSequence = 0;
 
@@ -142,9 +148,16 @@
 		void openUseByProfileID(useRequest.profileID).finally(() => onUseRequestHandled(useRequest.sequence));
 	});
 
-	onDestroy(() => {
-		cancelAll();
-		cancelDetect();
+	onMount(() => {
+		void loadQuotaRuntimeStatus();
+		const off = Events.On("profiledeck:codex-quota-status", (event) => {
+			applyQuotaRuntimeStatus(event.data as CodexQuotaRuntimeStatus);
+		});
+		return () => {
+			off();
+			cancelAll();
+			cancelDetect();
+		};
 	});
 
 	async function enterRoute(next: CodexProfileRoute) {
@@ -297,6 +310,57 @@
 			if (!isCancelError(error)) configSetsError = formatError(error);
 		} finally {
 			configSetsLoading = false;
+		}
+	}
+
+	async function loadQuotaRuntimeStatus() {
+		try {
+			applyQuotaRuntimeStatus(await track("quota-runtime-status", CodexService.QuotaRuntimeStatus()));
+		} catch (error) {
+			if (!isCancelError(error)) showError(error);
+		}
+	}
+
+	function applyQuotaRuntimeStatus(status: CodexQuotaRuntimeStatus | null | undefined) {
+		if (!status) return;
+		const next = { ...quotaByProfileID };
+		const runtimeProfileIDs = new Set((status.profiles ?? []).map((value) => value.profile_id));
+		for (const profileID of Object.keys(next)) {
+			if (!runtimeProfileIDs.has(profileID)) delete next[profileID];
+		}
+		for (const profileStatus of status.profiles ?? []) {
+			if (!profileStatus.last_task && !profileStatus.last_completed_at_unix_ms && !profileStatus.snapshot) {
+				delete next[profileStatus.profile_id];
+				continue;
+			}
+			// Keepalive updates auth freshness but does not read rate limits. Do not
+			// present it as a quota result or replace an existing quota snapshot.
+			if (profileStatus.last_task !== "quota") continue;
+			if (!profileStatus.last_completed_at_unix_ms && !profileStatus.snapshot) continue;
+			const summary = profiles.find((profile) => profile.profile.id === profileStatus.profile_id);
+			next[profileStatus.profile_id] = {
+				profile_id: profileStatus.profile_id,
+				credential_id: summary?.credential_id,
+				status: profileStatus.status,
+				snapshot: profileStatus.snapshot,
+			};
+		}
+		quotaByProfileID = next;
+		runtimeQuotaLoadingProfileIDs = (status.profiles ?? [])
+			.filter((value) => value.running && value.last_task === "quota")
+			.map((value) => value.profile_id);
+	}
+
+	async function refreshProfileQuota(profileID: string) {
+		if (!profileID || quotaLoadingProfileIDs.includes(profileID)) return;
+		requestedQuotaProfileIDs = [...requestedQuotaProfileIDs, profileID];
+		try {
+			const quota = await track(`profile-quota:${profileID}`, CodexService.ReadProfileQuota(profileID));
+			quotaByProfileID = { ...quotaByProfileID, [quota.profile_id]: quota };
+		} catch (error) {
+			if (!isCancelError(error)) showError(error);
+		} finally {
+			requestedQuotaProfileIDs = requestedQuotaProfileIDs.filter((value) => value !== profileID);
 		}
 	}
 
@@ -503,7 +567,22 @@
 	function showResultWarnings(result: CodexProfileSaveResult) { if (result.warnings?.length) toast.warning(translate("notice.profileWarnings.title"), { description: result.warnings.join(" ") }); }
 
 	function profileListItem(summary: CodexProfileSummary): CodexProfileListItem {
-		return { summary, id: summary.profile.id, name: summary.profile.name || summary.profile.id, description: summary.profile.description || "", updated: formatRelativeTime(summary.updated_at_unix_ms), account: summary.codex_account_id || "", configSet: summary.config_set_name || summary.config_set_id || "" };
+		return {
+			summary,
+			id: summary.profile.id,
+			name: summary.profile.name || summary.profile.id,
+			description: summary.profile.description || "",
+			updated: formatRelativeTime(summary.updated_at_unix_ms),
+			account: summary.codex_account_id || "",
+			configSet: summary.config_set_name || summary.config_set_id || "",
+			quota: quotaForSummary(summary),
+			quotaLoading: quotaLoadingProfileIDs.includes(summary.profile.id),
+		};
+	}
+	function quotaForSummary(summary: CodexProfileSummary): CodexProfileQuota | null {
+		const quota = quotaByProfileID[summary.profile.id];
+		if (!quota) return null;
+		return (quota.credential_id ?? "") === (summary.credential_id ?? "") ? quota : null;
 	}
 	function formatRelativeTime(value: number | undefined): string {
 		if (!value) return "—";
@@ -521,7 +600,21 @@
 
 {#if route.kind === "list"}
 	<div class="mx-auto w-full max-w-5xl">
-		<ProfileList profiles={listItems} loading={loadingProfiles} error={profileError} busy={!!busyAction || useBuilding || useApplying} onNew={() => push("/codex/profiles/new")} onConfigSets={() => push("/codex/config-sets")} onExportAll={() => exportProfiles()} onImport={chooseProfileImport} onExport={(profile) => exportProfiles([profile.id])} onUse={openUse} onDetails={(profile) => push(`/codex/profiles/${encodeURIComponent(profile.id)}`)} onFork={(profile) => push(`/codex/profiles/${encodeURIComponent(profile.id)}/fork`)} />
+		<ProfileList
+			profiles={listItems}
+			loading={loadingProfiles}
+			error={profileError}
+			busy={!!busyAction || useBuilding || useApplying}
+			onNew={() => push("/codex/profiles/new")}
+			onConfigSets={() => push("/codex/config-sets")}
+			onExportAll={() => exportProfiles()}
+			onImport={chooseProfileImport}
+			onExport={(profile) => exportProfiles([profile.id])}
+			onRefreshQuota={(profile) => refreshProfileQuota(profile.id)}
+			onUse={openUse}
+			onDetails={(profile) => push(`/codex/profiles/${encodeURIComponent(profile.id)}`)}
+			onFork={(profile) => push(`/codex/profiles/${encodeURIComponent(profile.id)}/fork`)}
+		/>
 	</div>
 {:else if route.kind === "config-sets"}
 	<ConfigSetPage {configSets} loading={configSetsLoading} error={configSetsError} busy={!!busyAction} formatUpdated={formatRelativeTime} onBack={() => push("/codex/profiles")} onCreate={() => openConfigDialog("create")} onCopy={(value) => openConfigDialog("copy", value)} onEdit={(value) => openConfigDialog("edit", value)} onDelete={deleteConfigSet} />
@@ -532,7 +625,19 @@
 {:else if detailError || !detail}
 	<div class="mx-auto w-full max-w-3xl"><Alert.Root variant="destructive"><AlertTriangleIcon data-icon="inline-start" /><Alert.Title>{$_("profilePages.errorTitle")}</Alert.Title><Alert.Description>{detailError || $_("errors.profileNotReady")}</Alert.Description></Alert.Root></div>
 {:else if route.kind === "detail"}
-	<ProfileDetail {detail} {busyAction} updated={formatRelativeTime(detail.summary.updated_at_unix_ms)} onUse={() => openUse(profileListItem(detail!.summary))} onFork={() => push(`/codex/profiles/${encodeURIComponent(detail!.summary.profile.id)}/fork`)} onEdit={openEdit} onSaveCurrent={() => (saveCurrentOpen = true)} onSetConfig={openSetConfig} />
+	<ProfileDetail
+		{detail}
+		{busyAction}
+		updated={formatRelativeTime(detail.summary.updated_at_unix_ms)}
+		quota={quotaForSummary(detail.summary)}
+		quotaLoading={quotaLoadingProfileIDs.includes(detail.summary.profile.id)}
+		onRefreshQuota={() => refreshProfileQuota(detail!.summary.profile.id)}
+		onUse={() => openUse(profileListItem(detail!.summary))}
+		onFork={() => push(`/codex/profiles/${encodeURIComponent(detail!.summary.profile.id)}/fork`)}
+		onEdit={openEdit}
+		onSaveCurrent={() => (saveCurrentOpen = true)}
+		onSetConfig={openSetConfig}
+	/>
 {:else}
 	<ProfileEditorPage mode="fork" {detail} {detectResult} busy={!!busyAction} bind:profileID bind:profileName bind:profileDescription bind:configMode bind:credentialBinding bind:configBinding bind:newConfigSetID bind:newConfigSetName idError={displayedIDError} nameError={displayedNameError} descriptionError={displayedDescriptionError} onCancel={() => push(`/codex/profiles/${encodeURIComponent(detail!.summary.profile.id)}`)} onSubmit={forkProfile} />
 {/if}

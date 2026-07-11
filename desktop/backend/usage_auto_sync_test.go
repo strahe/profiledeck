@@ -83,10 +83,10 @@ func TestUsageAutoSyncStartupLoadDoesNotOverwriteNewerInterval(t *testing.T) {
 	runtime, ticker := newTestUsageAutoSyncRuntime()
 	loadStarted := make(chan struct{})
 	releaseLoad := make(chan struct{})
-	runtime.loadSettings = func(context.Context) (app.DesktopSettings, error) {
+	runtime.loadSettings = func(context.Context) (app.CodexSettings, error) {
 		close(loadStarted)
 		<-releaseLoad
-		return app.DesktopSettings{UsageSyncIntervalSeconds: 15}, nil
+		return app.CodexSettings{UsageSyncIntervalSeconds: 15}, nil
 	}
 	createdIntervals := make(chan time.Duration, 1)
 	runtime.newTicker = func(interval time.Duration) usageAutoSyncTicker {
@@ -238,8 +238,8 @@ func newTestUsageAutoSyncRuntime() (*usageAutoSyncRuntime, *fakeUsageAutoSyncTic
 		ch:     make(chan time.Time),
 		resets: make(chan time.Duration, 4),
 	}
-	runtime.loadSettings = func(context.Context) (app.DesktopSettings, error) {
-		return app.DesktopSettings{UsageSyncIntervalSeconds: app.DesktopUsageSyncIntervalDefault}, nil
+	runtime.loadSettings = func(context.Context) (app.CodexSettings, error) {
+		return app.CodexSettings{UsageSyncIntervalSeconds: app.CodexUsageSyncIntervalDefault}, nil
 	}
 	runtime.newTicker = func(time.Duration) usageAutoSyncTicker { return ticker }
 	return runtime, ticker

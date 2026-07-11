@@ -81,10 +81,25 @@ func main() {
 	hideMainWindowOnUserClose(mainWindow)
 	setupTray(desktopCtx, wailsApp, mainWindow, services)
 	setupUsageAutoSync(desktopCtx, wailsApp, services)
+	setupCodexQuotaRuntime(desktopCtx, wailsApp, services)
 
 	if err := wailsApp.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func setupCodexQuotaRuntime(ctx context.Context, wailsApp *application.App, services backend.Services) {
+	removeStartedHandler := wailsApp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		// Profile quota and auth keepalive automation is process-scoped. It stays
+		// active while the window is hidden, and stops when the tray app exits.
+		services.StartCodexQuotaRuntime(ctx, func(status backend.CodexQuotaRuntimeStatus) {
+			wailsApp.Event.Emit(backend.CodexQuotaStatusEventName, status)
+		})
+	})
+	wailsApp.OnShutdown(func() {
+		removeStartedHandler()
+		services.StopCodexQuotaRuntime()
+	})
 }
 
 func setupUsageAutoSync(ctx context.Context, wailsApp *application.App, services backend.Services) {

@@ -22,7 +22,7 @@ It contains:
 
 ## SQLite database
 
-`profiledeck.db` stores ProfileDeck application data. For Codex, it stores raw `auth.json` payloads in hidden credential records and complete `config.toml` payloads in Config Sets. These are the long-lived resource states; the files in `$CODEX_HOME` are working copies of the active Profile.
+`profiledeck.db` stores ProfileDeck application data. For Codex, it stores raw `auth.json` payloads in hidden credential records, complete `config.toml` payloads in Config Sets, and local per-Profile automation settings. Credentials and Config Sets are the long-lived resource states; the files in `$CODEX_HOME` are working copies of the active Profile. Account-limit snapshots are not stored in the database.
 
 Each Config Set is limited to 16 MiB and validated against its SHA-256 hash. The database payload may contain tokens or other sensitive configuration even when its column is not named as a secret.
 
@@ -38,7 +38,7 @@ Backup commands show metadata such as path, action, hash, and mode. They do not 
 
 `profiledeck codex profile export` is an explicit sensitive export mode for local backup and database rebuilds. Its JSON bundle contains raw Codex `auth.json` and complete Config Set payloads. ProfileDeck requires an explicit output path, writes atomically, refuses symlink targets, and sets the file to `0600` on POSIX systems. It does not create or change the selected parent directory.
 
-Import accepts only a private regular file, validates its format, version, hashes, auth JSON, TOML, references, and conflicts before writing, then applies all database changes in one transaction. It never uses `tokens.account_id` to merge credentials. Import does not set active state or write Codex working files.
+Import accepts only a private regular file, validates its format, version, hashes, auth JSON, TOML, references, and conflicts before writing, then applies all database changes in one transaction. It never uses `tokens.account_id` to merge credentials. Import does not set active state, include local automation settings, or write Codex working files. Imported Profiles start with automatic limit refresh and login keepalive disabled.
 
 Keep sensitive bundles outside the ProfileDeck runtime before deleting a development database. Do not commit or share them.
 
@@ -59,6 +59,18 @@ profiledeck doctor
 ```
 
 Export and import command output remains metadata-only. Only the explicitly selected bundle file contains raw payloads.
+
+## Codex limits and login keepalive
+
+Manual refresh and opt-in automation normally use the installed `codex app-server`. ProfileDeck initializes a short-lived stdio session and invokes Codex's native account methods. Remote plugins, apps, analytics, memories, and app instructions are disabled for this process so the request does not warm unrelated network features. Profile-controlled model-provider URLs never receive the hidden ChatGPT token.
+
+The active credential runs against its real `CODEX_HOME` while ProfileDeck holds the shared switch lock. If Codex rotates its managed OAuth tokens, ProfileDeck reads the updated `auth.json` and captures it into the credential bound by the current `credential_id`. Inactive credentials run from a temporary `CODEX_HOME` with `0700` directory permissions and a `0600` `auth.json`; a changed payload updates the database only when the original credential hash still matches. A concurrent credential replacement wins. `tokens.account_id` is never used for identity, ownership, deduplication, or token updates.
+
+If app-server is unavailable or incompatible, a manual single-Profile refresh can use the fixed ChatGPT Codex quota endpoint as a read-only fallback. The fallback does not refresh or write OAuth tokens. Automatic limit refresh and login keepalive do not use this fallback.
+
+Automatic network work is disabled by default and runs only while the Desktop/tray process is alive. A global serial worker handles one credential at a time, spaces different credentials, and deduplicates shared credentials. Managed-token keepalive uses Codex's native refresh path. External `chatgptAuthTokens` credentials can query limits but cannot use native keepalive; API-key and other login modes are unsupported.
+
+Limit snapshots remain in process memory. Runtime events and Desktop DTOs contain Profile IDs, timestamps, next-run times, result states, and mapped limit snapshots only. They do not contain tokens, temporary paths, credential payload hashes, or raw app-server errors.
 
 ## What ProfileDeck does not store
 

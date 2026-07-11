@@ -92,6 +92,24 @@ profiledeck switch codex work --yes
 
 `plan` 只读。只有 `switch`、`rollback` 和 `recover` 会写 Codex 目标文件。无效或缺失的工作副本不会被捕获；plan 会给出警告，backup 会保留文件系统现场。
 
+## 查看使用限额
+
+Desktop 的 Profiles 页面可以读取已保存登录状态当前的 ChatGPT Codex 限额。可在单个 Profile 行或详情页点击 **刷新限额**；页面不提供“全部刷新”。
+
+列表显示各限额窗口的剩余百分比和重置时间。详情页还会显示已使用百分比、套餐、限额状态、credits、支出控制、可用重置次数，以及服务返回的其他计量限额。`used_percent` 表示已使用比例，因此剩余比例为 `100 - used_percent`。
+
+手动刷新通常会启动已安装的 `codex app-server`，调用其原生账号限额方法。Codex 可以按自身 token 规则刷新托管 OAuth 登录。Active credential 若产生新的 `auth.json`，ProfileDeck 会按当前绑定的 `credential_id` 签回；inactive credential 会在私有临时 Codex home 中运行，并通过 payload hash compare-and-swap 更新。`tokens.account_id` 仍然只用于展示，不参与归属判断。
+
+如果 app-server 缺失或协议不兼容，手动刷新会回退到固定的只读 ChatGPT Codex 限额端点。回退请求不会刷新或写回 token。Profile 自定义的 model-provider URL 不会收到已保存的 ChatGPT token。
+
+在 **Codex > 设置** 中，每个 Profile 的自动限额周期可设为关闭、5、10、30 或 60 分钟，默认关闭。ProfileDeck 同一时间只请求一个 credential，在不同 credentials 之间增加间隔，并按共享 credential 去重；有效周期取所有绑定 Profiles 中最短的已启用周期。首次执行会分散到完整周期内，后续周期会加入时间抖动。
+
+托管 ChatGPT 登录还可以启用 **保持登录可用**。未启用自动限额时，ProfileDeck 会在 access token 临近过期时请求 Codex 刷新；无法读取过期时间时，则按上次刷新后八天调度。外部 `chatgptAuthTokens` 登录可以查询限额，但不支持原生保活。refresh token 已过期、被复用或撤销时，自动任务会暂停到 credential 内容变化；瞬时失败会使用逐级退避。
+
+自动任务只在 ProfileDeck 打开或隐藏到托盘时运行。退出应用后不会继续，也无法在服务端撤销 refresh token 后保持登录。串行原生调用会避免同时批量请求多个 credentials，但不能保证服务端无法关联账号。
+
+限额快照只保存在进程内存中，与 Usage 页面中的离线 session 分析相互独立。它不是账单余额，也不会把本地 session 归因到 Profile 或账号。
+
 ## 备份与恢复 Profile
 
 导出前先保存 active 工作副本中的有效变化，并把 bundle 写到准备删除的 runtime 目录之外：
@@ -120,4 +138,4 @@ profiledeck codex profile import apply ./profiledeck-codex-profiles.json \
   --yes
 ```
 
-缺失资源会被创建，相同资源会被跳过；任何同 ID 差异都会阻止整次导入。导入会使用当前 `CODEX_HOME`，在一个数据库事务中重建 Profile targets。它不会恢复 active 状态，也不会写入 `auth.json` 或 `config.toml`；导入后仍通过正常的 plan 和 switch 流程激活 Profile。
+缺失资源会被创建，相同资源会被跳过；任何同 ID 差异都会阻止整次导入。导入会使用当前 `CODEX_HOME`，在一个数据库事务中重建 Profile targets。它不会恢复 active 状态或自动任务设置，也不会写入 `auth.json` 或 `config.toml`；导入后的自动限额和保活均默认关闭。之后仍通过正常的 plan 和 switch 流程激活 Profile。

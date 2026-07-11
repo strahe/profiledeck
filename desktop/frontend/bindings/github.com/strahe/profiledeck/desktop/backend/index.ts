@@ -22,6 +22,8 @@ export {
 
 export type {
     ApplyCodexProfileImportRequest,
+    CodexProfileQuotaRuntimeStatus,
+    CodexQuotaRuntimeStatus,
     CopyCodexConfigSetRequest,
     CreateCodexConfigSetRequest,
     CreateCodexProfileRequest,

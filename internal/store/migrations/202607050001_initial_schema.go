@@ -32,6 +32,15 @@ func upInitialSchema(ctx context.Context, db *bun.DB) error {
 			created_at_unix_ms INTEGER NOT NULL,
 			updated_at_unix_ms INTEGER NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS provider_profile_settings (
+			profile_id TEXT NOT NULL,
+			provider_id TEXT NOT NULL,
+			quota_refresh_interval_seconds INTEGER NOT NULL DEFAULT 0 CHECK (quota_refresh_interval_seconds IN (0, 300, 600, 1800, 3600)),
+			auth_keepalive_enabled INTEGER NOT NULL DEFAULT 0 CHECK (auth_keepalive_enabled IN (0, 1)),
+			updated_at_unix_ms INTEGER NOT NULL,
+			PRIMARY KEY (profile_id, provider_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_provider_profile_settings_provider_id ON provider_profile_settings(provider_id)`,
 		`CREATE TABLE IF NOT EXISTS settings (
 			key TEXT PRIMARY KEY,
 			value_json TEXT NOT NULL,
@@ -100,6 +109,8 @@ func downInitialSchema(ctx context.Context, db *bun.DB) error {
 		`DROP TABLE IF EXISTS operations`,
 		`DROP TABLE IF EXISTS active_states`,
 		`DROP TABLE IF EXISTS settings`,
+		`DROP INDEX IF EXISTS idx_provider_profile_settings_provider_id`,
+		`DROP TABLE IF EXISTS provider_profile_settings`,
 		`DROP TABLE IF EXISTS profiles`,
 		`DROP INDEX IF EXISTS idx_providers_enabled`,
 		`DROP INDEX IF EXISTS idx_providers_adapter_id`,

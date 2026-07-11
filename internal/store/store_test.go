@@ -15,6 +15,10 @@ import (
 	"time"
 )
 
+func testPayloadSHA256(payload string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(payload)))
+}
+
 func TestMigrateCreatesInitialSchema(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
@@ -34,6 +38,7 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 		"bun_migrations",
 		"providers",
 		"profiles",
+		"provider_profile_settings",
 		"settings",
 		"active_states",
 		"operations",
@@ -49,6 +54,7 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 	for _, index := range []string{
 		"idx_providers_adapter_id",
 		"idx_providers_enabled",
+		"idx_provider_profile_settings_provider_id",
 		"idx_operations_status",
 		"idx_operations_operation_type",
 		"idx_provider_credentials_provider_id",
@@ -322,12 +328,14 @@ func TestProviderCredentialCRUD(t *testing.T) {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
 
+	createdPayload := `{"tokens":{"account_id":"Team/Shared","access_token":"raw"}}`
+	createdHash := testPayloadSHA256(createdPayload)
 	created, err := db.UpsertProviderCredential(ctx, UpsertProviderCredentialParams{
 		ID:             " cred-work ",
 		ProviderID:     "codex",
 		CredentialKind: "codex-auth-json",
-		PayloadJSON:    `{"tokens":{"account_id":"Team/Shared","access_token":"raw"}}`,
-		PayloadSHA256:  "hash-a",
+		PayloadJSON:    createdPayload,
+		PayloadSHA256:  createdHash,
 	})
 	if err != nil {
 		t.Fatalf("expected credential create to succeed, got %v", err)
@@ -339,30 +347,33 @@ func TestProviderCredentialCRUD(t *testing.T) {
 		t.Fatalf("expected default metadata JSON object, got %q", created.MetadataJSON)
 	}
 
+	updatedPayload := `{"tokens":{"account_id":"Team/Shared","access_token":"new"}}`
+	updatedHash := testPayloadSHA256(updatedPayload)
 	updated, err := db.UpsertProviderCredential(ctx, UpsertProviderCredentialParams{
 		ID:             "cred-work",
 		ProviderID:     "codex",
 		CredentialKind: "codex-auth-json",
-		PayloadJSON:    `{"tokens":{"account_id":"Team/Shared","access_token":"new"}}`,
-		PayloadSHA256:  "hash-b",
+		PayloadJSON:    updatedPayload,
+		PayloadSHA256:  updatedHash,
 		MetadataJSON:   `{"source":"test"}`,
 	})
 	if err != nil {
 		t.Fatalf("expected credential update to succeed, got %v", err)
 	}
-	if updated.PayloadJSON != `{"tokens":{"account_id":"Team/Shared","access_token":"new"}}` || updated.PayloadSHA256 != "hash-b" {
+	if updated.PayloadJSON != updatedPayload || updated.PayloadSHA256 != updatedHash {
 		t.Fatalf("unexpected updated credential: %#v", updated)
 	}
 	if updated.CreatedAtUnixMS != created.CreatedAtUnixMS || updated.UpdatedAtUnixMS < created.UpdatedAtUnixMS {
 		t.Fatalf("unexpected credential timestamps: created=%#v updated=%#v", created, updated)
 	}
 
+	personalPayload := `{"tokens":{"account_id":"Team/Shared","access_token":"personal"}}`
 	_, err = db.UpsertProviderCredential(ctx, UpsertProviderCredentialParams{
 		ID:             "cred-personal",
 		ProviderID:     "codex",
 		CredentialKind: "codex-auth-json",
-		PayloadJSON:    `{"tokens":{"account_id":"Team/Shared","access_token":"personal"}}`,
-		PayloadSHA256:  "hash-c",
+		PayloadJSON:    personalPayload,
+		PayloadSHA256:  testPayloadSHA256(personalPayload),
 	})
 	if err != nil {
 		t.Fatalf("expected a second opaque credential with the same Codex account id to succeed, got %v", err)
@@ -376,12 +387,13 @@ func TestProviderCredentialCRUD(t *testing.T) {
 		t.Fatalf("unexpected credential list: %#v", list)
 	}
 
+	blankIDPayload := `{"tokens":{"account_id":"work","access_token":"raw"}}`
 	_, err = db.UpsertProviderCredential(ctx, UpsertProviderCredentialParams{
 		ID:             "  ",
 		ProviderID:     "codex",
 		CredentialKind: "codex-auth-json",
-		PayloadJSON:    `{"tokens":{"account_id":"work","access_token":"raw"}}`,
-		PayloadSHA256:  "hash",
+		PayloadJSON:    blankIDPayload,
+		PayloadSHA256:  testPayloadSHA256(blankIDPayload),
 	})
 	if err == nil {
 		t.Fatalf("expected blank credential id to be rejected")
@@ -415,12 +427,79 @@ func TestProviderCredentialRejectsInvalidPayloads(t *testing.T) {
 				ProviderID:     "codex",
 				CredentialKind: tc.credentialKind,
 				PayloadJSON:    tc.payload,
-				PayloadSHA256:  "hash",
+				PayloadSHA256:  testPayloadSHA256(tc.payload),
 			})
 			if err == nil {
 				t.Fatalf("expected credential payload to be rejected")
 			}
 		})
+	}
+
+	validPayload := `{"tokens":{"access_token":"raw"}}`
+	for _, tc := range []struct {
+		name string
+		hash string
+	}{
+		{name: "invalid hash", hash: "not-a-sha256"},
+		{name: "mismatched hash", hash: testPayloadSHA256(`{"tokens":{}}`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := db.UpsertProviderCredential(ctx, UpsertProviderCredentialParams{
+				ID:             "cred-work",
+				ProviderID:     "codex",
+				CredentialKind: "codex-auth-json",
+				PayloadJSON:    validPayload,
+				PayloadSHA256:  tc.hash,
+			})
+			if err == nil {
+				t.Fatalf("expected credential payload hash to be rejected")
+			}
+		})
+	}
+}
+
+func TestCompareAndSwapProviderCredentialRejectsStalePayload(t *testing.T) {
+	ctx := context.Background()
+	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
+	defer closeTestStore(t, db)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations, got %v", err)
+	}
+	payload := `{"tokens":{"account_id":"display","access_token":"old"}}`
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(payload)))
+	if _, err := db.UpsertProviderCredential(ctx, UpsertProviderCredentialParams{
+		ID: "credential", ProviderID: "codex", CredentialKind: "codex-auth-json",
+		PayloadJSON: payload, PayloadSHA256: hash,
+	}); err != nil {
+		t.Fatalf("expected credential fixture, got %v", err)
+	}
+	rotated := `{"tokens":{"account_id":"display","access_token":"new","refresh_token":"rotated"}}`
+	rotatedHash := fmt.Sprintf("%x", sha256.Sum256([]byte(rotated)))
+	updated, swapped, err := db.CompareAndSwapProviderCredential(ctx, hash, UpsertProviderCredentialParams{
+		ID: "credential", ProviderID: "codex", CredentialKind: "codex-auth-json",
+		PayloadJSON: rotated, PayloadSHA256: rotatedHash,
+	})
+	if err != nil || !swapped || updated.PayloadSHA256 != rotatedHash {
+		t.Fatalf("expected credential CAS, updated=%#v swapped=%v err=%v", updated, swapped, err)
+	}
+	concurrent := `{"tokens":{"account_id":"display","access_token":"concurrent"}}`
+	concurrentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(concurrent)))
+	if _, err := db.UpsertProviderCredential(ctx, UpsertProviderCredentialParams{
+		ID: "credential", ProviderID: "codex", CredentialKind: "codex-auth-json",
+		PayloadJSON: concurrent, PayloadSHA256: concurrentHash,
+	}); err != nil {
+		t.Fatalf("expected concurrent replacement, got %v", err)
+	}
+	_, swapped, err = db.CompareAndSwapProviderCredential(ctx, rotatedHash, UpsertProviderCredentialParams{
+		ID: "credential", ProviderID: "codex", CredentialKind: "codex-auth-json",
+		PayloadJSON: rotated, PayloadSHA256: rotatedHash,
+	})
+	if err != nil || swapped {
+		t.Fatalf("expected stale CAS not to overwrite, swapped=%v err=%v", swapped, err)
+	}
+	current, err := db.GetProviderCredential(ctx, "credential")
+	if err != nil || current.PayloadSHA256 != concurrentHash {
+		t.Fatalf("expected concurrent payload to win, credential=%#v err=%v", current, err)
 	}
 }
 
@@ -1209,13 +1288,14 @@ func TestSwitchOperationLifecycle(t *testing.T) {
 
 	configPayload := "model = \"gpt-5\"\n"
 	configHash := fmt.Sprintf("%x", sha256.Sum256([]byte(configPayload)))
+	credentialPayload := `{"token":"hidden"}`
 	if err := db.CompleteSwitchOperation(ctx, CompleteSwitchOperationParams{
 		ID:           "switch-1",
 		ProfileID:    "profile-a",
 		ProviderID:   "provider-a",
 		MetadataJSON: `{"checkpoint":"complete"}`,
 		CredentialUpdates: []UpsertProviderCredentialParams{{
-			ID: "credential-a", ProviderID: "provider-a", CredentialKind: "json", PayloadJSON: `{"token":"hidden"}`, PayloadSHA256: "credential-hash",
+			ID: "credential-a", ProviderID: "provider-a", CredentialKind: "json", PayloadJSON: credentialPayload, PayloadSHA256: testPayloadSHA256(credentialPayload),
 		}},
 		ConfigSetUpdates: []UpsertProviderConfigSetParams{{
 			ID: "config-a", ProviderID: "provider-a", ConfigKind: "toml", Name: "Config A", PayloadText: configPayload, PayloadSHA256: configHash,
@@ -1395,6 +1475,41 @@ func TestSettingCRUD(t *testing.T) {
 	_, err = db.UpsertSetting(ctx, UpsertSettingParams{Key: "desktop.language", ValueJSON: `"auto" "extra"`})
 	if err == nil {
 		t.Fatalf("expected multiple JSON values to fail")
+	}
+}
+
+func TestProviderProfileSettingsDefaultsValidationAndProfileDeleteCleanup(t *testing.T) {
+	ctx := context.Background()
+	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
+	defer closeTestStore(t, db)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations, got %v", err)
+	}
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: `{}`}); err != nil {
+		t.Fatalf("expected provider fixture, got %v", err)
+	}
+	if _, err := db.CreateProfile(ctx, CreateProfileParams{ID: "work", Name: "Work", MetadataJSON: `{}`}); err != nil {
+		t.Fatalf("expected profile fixture, got %v", err)
+	}
+	if _, err := db.GetProviderProfileSetting(ctx, "work", "codex"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected absent settings to represent defaults, got %v", err)
+	}
+	created, err := db.UpsertProviderProfileSetting(ctx, UpsertProviderProfileSettingParams{
+		ProfileID: "work", ProviderID: "codex", QuotaRefreshIntervalSeconds: 600, AuthKeepaliveEnabled: true,
+	})
+	if err != nil || created.QuotaRefreshIntervalSeconds != 600 || !created.AuthKeepaliveEnabled {
+		t.Fatalf("unexpected provider Profile setting: %#v, %v", created, err)
+	}
+	if _, err := db.UpsertProviderProfileSetting(ctx, UpsertProviderProfileSettingParams{
+		ProfileID: "work", ProviderID: "codex", QuotaRefreshIntervalSeconds: 900,
+	}); err == nil {
+		t.Fatal("expected unsupported interval rejection")
+	}
+	if err := db.DeleteProfile(ctx, "work"); err != nil {
+		t.Fatalf("expected profile delete with local settings cleanup, got %v", err)
+	}
+	if _, err := db.GetProviderProfileSetting(ctx, "work", "codex"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected deleted Profile settings cleanup, got %v", err)
 	}
 }
 

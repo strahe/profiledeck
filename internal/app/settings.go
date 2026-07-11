@@ -9,13 +9,11 @@ import (
 )
 
 const (
-	DesktopLanguageAuto             = "auto"
-	DesktopLanguageZhCN             = "zh-CN"
-	DesktopLanguageEnUS             = "en-US"
-	DesktopUsageSyncIntervalDefault = 15
+	DesktopLanguageAuto = "auto"
+	DesktopLanguageZhCN = "zh-CN"
+	DesktopLanguageEnUS = "en-US"
 
-	desktopLanguageSettingKey          = "desktop.language"
-	desktopUsageSyncIntervalSettingKey = "desktop.usage_sync_interval_seconds"
+	desktopLanguageSettingKey = "desktop.language"
 )
 
 type DesktopSettingsRequest struct {
@@ -23,14 +21,12 @@ type DesktopSettingsRequest struct {
 }
 
 type UpdateDesktopSettingsRequest struct {
-	ConfigDir                string  `json:"config_dir"`
-	Language                 *string `json:"language,omitempty"`
-	UsageSyncIntervalSeconds *int    `json:"usage_sync_interval_seconds,omitempty"`
+	ConfigDir string  `json:"config_dir"`
+	Language  *string `json:"language,omitempty"`
 }
 
 type DesktopSettings struct {
-	Language                 string `json:"language"`
-	UsageSyncIntervalSeconds int    `json:"usage_sync_interval_seconds"`
+	Language string `json:"language"`
 }
 
 func GetDesktopSettings(ctx context.Context, req DesktopSettingsRequest) (DesktopSettings, error) {
@@ -63,23 +59,8 @@ func UpdateDesktopSettings(ctx context.Context, req UpdateDesktopSettingsRequest
 			}
 			current.Language = language
 		}
-		if req.UsageSyncIntervalSeconds != nil {
-			interval, appErr := normalizeDesktopUsageSyncInterval(*req.UsageSyncIntervalSeconds)
-			if appErr != nil {
-				return appErr
-			}
-			current.UsageSyncIntervalSeconds = interval
-		}
-
-		// Partial desktop setting updates share one transaction so independent
-		// controls cannot overwrite each other with a stale full-settings value.
 		if req.Language != nil {
 			if err := upsertDesktopSetting(ctx, txStore, desktopLanguageSettingKey, current.Language); err != nil {
-				return err
-			}
-		}
-		if req.UsageSyncIntervalSeconds != nil {
-			if err := upsertDesktopSetting(ctx, txStore, desktopUsageSyncIntervalSettingKey, current.UsageSyncIntervalSeconds); err != nil {
 				return err
 			}
 		}
@@ -97,11 +78,7 @@ func getDesktopSettings(ctx context.Context, db *store.Store) (DesktopSettings, 
 	if err != nil {
 		return DesktopSettings{}, err
 	}
-	interval, err := getDesktopUsageSyncInterval(ctx, db)
-	if err != nil {
-		return DesktopSettings{}, err
-	}
-	return DesktopSettings{Language: language, UsageSyncIntervalSeconds: interval}, nil
+	return DesktopSettings{Language: language}, nil
 }
 
 func getDesktopLanguage(ctx context.Context, db *store.Store) (string, error) {
@@ -132,35 +109,6 @@ func normalizeDesktopLanguage(value string) (string, *AppError) {
 		return value, nil
 	default:
 		return "", NewError(ErrorSettingInvalid, "unsupported desktop language").WithDetail("language", value)
-	}
-}
-
-func getDesktopUsageSyncInterval(ctx context.Context, db *store.Store) (int, error) {
-	setting, err := db.GetSetting(ctx, desktopUsageSyncIntervalSettingKey)
-	if errors.Is(err, store.ErrNotFound) {
-		return DesktopUsageSyncIntervalDefault, nil
-	}
-	if err != nil {
-		return 0, WrapError(ErrorStoreStatusFailed, "failed to load desktop usage sync interval", err)
-	}
-
-	var interval int
-	if err := json.Unmarshal([]byte(setting.ValueJSON), &interval); err != nil {
-		return 0, WrapError(ErrorSettingInvalid, "desktop usage sync interval is invalid", err)
-	}
-	normalized, appErr := normalizeDesktopUsageSyncInterval(interval)
-	if appErr != nil {
-		return 0, appErr
-	}
-	return normalized, nil
-}
-
-func normalizeDesktopUsageSyncInterval(value int) (int, *AppError) {
-	switch value {
-	case 5, 15, 30, 60:
-		return value, nil
-	default:
-		return 0, NewError(ErrorSettingInvalid, "unsupported desktop usage sync interval").WithDetail("usage_sync_interval_seconds", value)
 	}
 }
 

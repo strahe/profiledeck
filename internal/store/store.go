@@ -200,6 +200,14 @@ type Setting struct {
 	UpdatedAtUnixMS int64
 }
 
+type ProviderProfileSetting struct {
+	ProfileID                   string
+	ProviderID                  string
+	QuotaRefreshIntervalSeconds int
+	AuthKeepaliveEnabled        bool
+	UpdatedAtUnixMS             int64
+}
+
 type CreateProfileParams struct {
 	ID           string
 	Name         string
@@ -380,6 +388,13 @@ type UpsertSettingParams struct {
 	ValueJSON string
 }
 
+type UpsertProviderProfileSettingParams struct {
+	ProfileID                   string
+	ProviderID                  string
+	QuotaRefreshIntervalSeconds int
+	AuthKeepaliveEnabled        bool
+}
+
 type UsageSummary struct {
 	ProviderID              string
 	Sources                 []string
@@ -517,6 +532,20 @@ var initialTableSpecs = []tableSpec{
 			{name: "metadata_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
 			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
 			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
+		},
+	},
+	{
+		name: "provider_profile_settings",
+		columns: []columnSpec{
+			{name: "profile_id", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "provider_id", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "quota_refresh_interval_seconds", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+			{name: "auth_keepalive_enabled", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
+		},
+		checks: []string{
+			"CHECK (quota_refresh_interval_seconds IN (0, 300, 600, 1800, 3600))",
+			"CHECK (auth_keepalive_enabled IN (0, 1))",
 		},
 	},
 	{
@@ -662,6 +691,7 @@ var initialTableSpecs = []tableSpec{
 var initialIndexSpecs = []indexSpec{
 	{name: "idx_providers_adapter_id", table: "providers", columns: []string{"adapter_id"}},
 	{name: "idx_providers_enabled", table: "providers", columns: []string{"enabled"}},
+	{name: "idx_provider_profile_settings_provider_id", table: "provider_profile_settings", columns: []string{"provider_id"}},
 	{name: "idx_operations_status", table: "operations", columns: []string{"status"}},
 	{name: "idx_operations_operation_type", table: "operations", columns: []string{"operation_type"}},
 	{name: "idx_profile_targets_profile_id", table: "profile_targets", columns: []string{"profile_id"}},
@@ -952,8 +982,9 @@ func (s *Store) DeleteProvider(ctx context.Context, id string) error {
 		DELETE FROM providers
 		WHERE id = ?
 			AND NOT EXISTS (SELECT 1 FROM profile_targets WHERE provider_id = ?)
+			AND NOT EXISTS (SELECT 1 FROM provider_profile_settings WHERE provider_id = ?)
 			AND NOT EXISTS (SELECT 1 FROM active_states WHERE scope_type = ? AND scope_id = ?)
-	`, id, id, ActiveStateScopeProvider, id)
+	`, id, id, id, ActiveStateScopeProvider, id)
 	if err != nil {
 		return err
 	}
@@ -1075,6 +1106,16 @@ func (s *Store) UpdateProfile(ctx context.Context, params UpdateProfileParams) (
 }
 
 func (s *Store) DeleteProfile(ctx context.Context, id string) error {
+	if !s.transactional {
+		return s.WithTransaction(ctx, func(txStore *Store) error {
+			return txStore.DeleteProfile(ctx, id)
+		})
+	}
+	// Profile automation is local runtime preference data. Remove it in the
+	// same transaction as the Profile so failed/in-use deletes keep settings.
+	if _, err := s.executor().ExecContext(ctx, `DELETE FROM provider_profile_settings WHERE profile_id = ?`, id); err != nil {
+		return err
+	}
 	result, err := s.executor().ExecContext(ctx, `
 		DELETE FROM profiles
 		WHERE id = ?
@@ -1342,6 +1383,94 @@ func (s *Store) GetSetting(ctx context.Context, key string) (Setting, error) {
 	return setting, err
 }
 
+func (s *Store) DeleteSetting(ctx context.Context, key string) error {
+	result, err := s.executor().ExecContext(ctx, `DELETE FROM settings WHERE key = ?`, strings.TrimSpace(key))
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err != nil {
+		return err
+	} else if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) GetProviderProfileSetting(ctx context.Context, profileID string, providerID string) (ProviderProfileSetting, error) {
+	row := s.executor().QueryRowContext(ctx, `
+		SELECT profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms
+		FROM provider_profile_settings
+		WHERE profile_id = ? AND provider_id = ?
+	`, strings.TrimSpace(profileID), strings.TrimSpace(providerID))
+	setting, err := scanProviderProfileSetting(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ProviderProfileSetting{}, ErrNotFound
+	}
+	return setting, err
+}
+
+func (s *Store) ListProviderProfileSettings(ctx context.Context, providerID string) ([]ProviderProfileSetting, error) {
+	rows, err := s.executor().QueryContext(ctx, `
+		SELECT profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms
+		FROM provider_profile_settings
+		WHERE provider_id = ?
+		ORDER BY profile_id ASC
+	`, strings.TrimSpace(providerID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	settings := []ProviderProfileSetting{}
+	for rows.Next() {
+		setting, err := scanProviderProfileSetting(rows)
+		if err != nil {
+			return nil, err
+		}
+		settings = append(settings, setting)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return settings, nil
+}
+
+func (s *Store) UpsertProviderProfileSetting(ctx context.Context, params UpsertProviderProfileSettingParams) (ProviderProfileSetting, error) {
+	profileID := strings.TrimSpace(params.ProfileID)
+	providerID := strings.TrimSpace(params.ProviderID)
+	if profileID == "" || providerID == "" {
+		return ProviderProfileSetting{}, errors.New("provider profile setting profile_id and provider_id are required")
+	}
+	switch params.QuotaRefreshIntervalSeconds {
+	case 0, 300, 600, 1800, 3600:
+	default:
+		return ProviderProfileSetting{}, errors.New("provider profile quota refresh interval is unsupported")
+	}
+	if _, err := s.GetProfile(ctx, profileID); err != nil {
+		return ProviderProfileSetting{}, err
+	}
+	if _, err := s.GetProvider(ctx, providerID); err != nil {
+		return ProviderProfileSetting{}, err
+	}
+	keepalive := 0
+	if params.AuthKeepaliveEnabled {
+		keepalive = 1
+	}
+	now := time.Now().UnixMilli()
+	_, err := s.executor().ExecContext(ctx, `
+		INSERT INTO provider_profile_settings
+			(profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(profile_id, provider_id) DO UPDATE SET
+			quota_refresh_interval_seconds = excluded.quota_refresh_interval_seconds,
+			auth_keepalive_enabled = excluded.auth_keepalive_enabled,
+			updated_at_unix_ms = excluded.updated_at_unix_ms
+	`, profileID, providerID, params.QuotaRefreshIntervalSeconds, keepalive, now)
+	if err != nil {
+		return ProviderProfileSetting{}, err
+	}
+	return s.GetProviderProfileSetting(ctx, profileID, providerID)
+}
+
 func (s *Store) UpsertSetting(ctx context.Context, params UpsertSettingParams) (Setting, error) {
 	if err := validateSettingParams(params); err != nil {
 		return Setting{}, err
@@ -1410,7 +1539,7 @@ func (s *Store) UpsertProviderCredential(ctx context.Context, params UpsertProvi
 		params.ProviderID,
 		params.CredentialKind,
 		params.PayloadJSON,
-		params.PayloadSHA256,
+		strings.ToLower(params.PayloadSHA256),
 		metadataJSON,
 		now,
 		now,
@@ -1419,6 +1548,41 @@ func (s *Store) UpsertProviderCredential(ctx context.Context, params UpsertProvi
 		return ProviderCredential{}, err
 	}
 	return s.GetProviderCredential(ctx, id)
+}
+
+func (s *Store) CompareAndSwapProviderCredential(ctx context.Context, expectedPayloadSHA256 string, params UpsertProviderCredentialParams) (ProviderCredential, bool, error) {
+	if err := validateProviderCredentialParams(params); err != nil {
+		return ProviderCredential{}, false, err
+	}
+	expected := strings.ToLower(strings.TrimSpace(expectedPayloadSHA256))
+	if digest, err := hex.DecodeString(expected); err != nil || len(digest) != sha256.Size {
+		return ProviderCredential{}, false, errors.New("expected provider credential payload sha256 is invalid")
+	}
+	now := time.Now().UnixMilli()
+	metadataJSON := params.MetadataJSON
+	if metadataJSON == "" {
+		metadataJSON = "{}"
+	}
+	result, err := s.executor().ExecContext(ctx, `
+		UPDATE provider_credentials SET
+			payload_json = ?, payload_sha256 = ?, metadata_json = ?, updated_at_unix_ms = ?
+		WHERE id = ? AND provider_id = ? AND credential_kind = ? AND payload_sha256 = ?
+	`, params.PayloadJSON, strings.ToLower(params.PayloadSHA256), metadataJSON, now, strings.TrimSpace(params.ID), params.ProviderID, params.CredentialKind, expected)
+	if err != nil {
+		return ProviderCredential{}, false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return ProviderCredential{}, false, err
+	}
+	if rows == 0 {
+		if _, err := s.GetProviderCredential(ctx, params.ID); err != nil {
+			return ProviderCredential{}, false, err
+		}
+		return ProviderCredential{}, false, nil
+	}
+	credential, err := s.GetProviderCredential(ctx, params.ID)
+	return credential, true, err
 }
 
 func validateProviderCredentialParams(params UpsertProviderCredentialParams) error {
@@ -1433,6 +1597,14 @@ func validateProviderCredentialParams(params UpsertProviderCredentialParams) err
 	}
 	if len(params.PayloadJSON) > maxProviderCredentialPayloadBytes {
 		return fmt.Errorf("provider credential payload is too large")
+	}
+	digest, err := hex.DecodeString(params.PayloadSHA256)
+	if err != nil || len(digest) != sha256.Size {
+		return fmt.Errorf("provider credential payload sha256 is invalid")
+	}
+	actual := sha256.Sum256([]byte(params.PayloadJSON))
+	if !strings.EqualFold(params.PayloadSHA256, hex.EncodeToString(actual[:])) {
+		return fmt.Errorf("provider credential payload sha256 does not match payload")
 	}
 	decoder := json.NewDecoder(strings.NewReader(params.PayloadJSON))
 	decoder.UseNumber()
@@ -3103,7 +3275,12 @@ func (s *Store) providerReferenceCount(ctx context.Context, providerID string) (
 		return 0, err
 	}
 
-	return targetCount + activeStateCount + operationCount, nil
+	var settingCount int
+	if err := s.executor().QueryRowContext(ctx, "SELECT COUNT(1) FROM provider_profile_settings WHERE provider_id = ?", providerID).Scan(&settingCount); err != nil {
+		return 0, err
+	}
+
+	return targetCount + activeStateCount + operationCount + settingCount, nil
 }
 
 func (s *Store) providerOperationReferenceCount(ctx context.Context, providerID string) (int, error) {
@@ -3170,6 +3347,22 @@ func scanProfile(row rowScanner) (Profile, error) {
 		return Profile{}, err
 	}
 	return profile, nil
+}
+
+func scanProviderProfileSetting(row rowScanner) (ProviderProfileSetting, error) {
+	var setting ProviderProfileSetting
+	var keepalive int
+	if err := row.Scan(
+		&setting.ProfileID,
+		&setting.ProviderID,
+		&setting.QuotaRefreshIntervalSeconds,
+		&keepalive,
+		&setting.UpdatedAtUnixMS,
+	); err != nil {
+		return ProviderProfileSetting{}, err
+	}
+	setting.AuthKeepaliveEnabled = keepalive != 0
+	return setting, nil
 }
 
 func scanProfileTarget(row rowScanner) (ProfileTarget, error) {

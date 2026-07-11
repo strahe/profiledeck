@@ -38,12 +38,13 @@
 	import { cn } from "$lib/utils";
 	import CodexProfiles from "../profiles/CodexProfiles.svelte";
 	import type { CodexProfileRoute, ProfileUseRequest } from "../profiles/types";
+	import CodexSettings from "../settings/CodexSettings.svelte";
 	import UsagePage from "../usage/UsagePage.svelte";
 
 	type AgentID = "codex" | "claude" | "gemini" | "opencode";
 	type PlaceholderAgentID = Exclude<AgentID, "codex">;
-	type WorkspaceTab = "profiles" | "health" | "usage";
-	type WorkspaceView = WorkspaceTab | "settings";
+	type WorkspaceTab = "profiles" | "health" | "usage" | "settings";
+	type WorkspaceView = WorkspaceTab | "global-settings";
 	type StatusVariant = "ok" | "warn" | "muted";
 	type Platform = "macos" | "windows" | "linux";
 
@@ -99,6 +100,7 @@
 		{ id: "profiles", labelKey: "tabs.profiles" },
 		{ id: "health", labelKey: "tabs.health" },
 		{ id: "usage", labelKey: "tabs.usage" },
+		{ id: "settings", labelKey: "tabs.settings" },
 	];
 	const agentOrder: AgentID[] = ["codex", "claude", "gemini", "opencode"];
 	const desktopChangeKind = { codexProfileChanged: "codex-profile-changed" } as const;
@@ -146,9 +148,7 @@
 	let loadingProfiles = $state(false);
 	let actionBusy = $state("");
 	let languageBusy = $state(false);
-	let usageSyncIntervalBusy = $state(false);
 	let languagePreference = $state<DesktopLanguage>("auto");
-	let usageSyncInterval = $state(15);
 	let lastToast = "";
 	let invalidRoute = "";
 
@@ -156,6 +156,7 @@
 	let detectResult = $state<CodexDetectResult | null>(null);
 	let doctorResult = $state<DoctorResult | null>(null);
 	let codexProfileSummaries = $state<CodexProfileSummary[]>([]);
+	let codexProfilesRevision = $state(0);
 	let codexConfigSets = $state<CodexConfigSet[]>([]);
 	let dashboardError = $state("");
 	let detectError = $state("");
@@ -175,7 +176,7 @@
 	$effect(() => {
 		const route = workspaceRoute;
 		selectedView = route.view;
-		if (route.view !== "settings") selectedTab = route.view;
+		if (route.view !== "global-settings") selectedTab = route.view;
 		if (route.profile.kind !== "list" && route.view === "profiles") selectedAgent = "codex";
 		if (route.valid) {
 			invalidRoute = "";
@@ -243,34 +244,10 @@
 		try {
 			const settings = await track("settings", SettingsService.Get());
 			languagePreference = applyDesktopLanguagePreference(settings.language);
-			usageSyncInterval = settings.usage_sync_interval_seconds;
 			updateRefreshSummary();
 		} catch (error) {
 			if (!isCancelError(error)) showError(error);
 		}
-	}
-
-	async function changeUsageSyncInterval(value: string) {
-		const next = normalizeUsageSyncInterval(value);
-		if (next === null || (next === usageSyncInterval && !usageSyncIntervalBusy)) return;
-		const previous = usageSyncInterval;
-		usageSyncInterval = next;
-		usageSyncIntervalBusy = true;
-		try {
-			const settings = await track("settings-usage-sync", SettingsService.Update({ config_dir: "", usage_sync_interval_seconds: next }));
-			usageSyncInterval = settings.usage_sync_interval_seconds;
-			showNotice(translate("notice.settingsSaved.title"), translate("notice.settingsSaved.description"));
-		} catch (error) {
-			usageSyncInterval = previous;
-			if (!isCancelError(error)) showError(error);
-		} finally {
-			usageSyncIntervalBusy = false;
-		}
-	}
-
-	function normalizeUsageSyncInterval(value: string): number | null {
-		const parsed = Number(value);
-		return parsed === 5 || parsed === 15 || parsed === 30 || parsed === 60 ? parsed : null;
 	}
 
 	async function changeLanguage(value: string) {
@@ -294,7 +271,7 @@
 	}
 
 	async function navigateToView(view: WorkspaceView) {
-		if (view === "settings") await push("/settings");
+		if (view === "global-settings") await push("/settings");
 		else await push(`/codex/${view}`);
 	}
 
@@ -320,6 +297,7 @@
 		try {
 			const result = await track("codex-profiles", CodexService.ListProfiles());
 			codexProfileSummaries = result.profiles ?? [];
+			codexProfilesRevision += 1;
 			profileError = "";
 		} catch (error) {
 			if (!isCancelError(error)) profileError = formatError(error);
@@ -418,6 +396,7 @@
 		if (next.doctor) doctorResult = next.doctor;
 		if (next.codex_profiles?.profiles) {
 			codexProfileSummaries = next.codex_profiles.profiles;
+			codexProfilesRevision += 1;
 			profileError = "";
 		}
 		if (next.codex_config_sets?.config_sets) codexConfigSets = next.codex_config_sets.config_sets;
@@ -515,7 +494,8 @@
 		}
 		if (path === "/codex/health") return { view: "health", profile: { kind: "list", profileID: "" }, valid: true };
 		if (path === "/codex/usage") return { view: "usage", profile: { kind: "list", profileID: "" }, valid: true };
-		if (path === "/settings") return { view: "settings", profile: { kind: "list", profileID: "" }, valid: true };
+		if (path === "/codex/settings") return { view: "settings", profile: { kind: "list", profileID: "" }, valid: true };
+		if (path === "/settings") return { view: "global-settings", profile: { kind: "list", profileID: "" }, valid: true };
 		return { ...list(), valid: false };
 	}
 
@@ -605,7 +585,7 @@
 						onclick={() => selectAgent(agentID)}
 						class={cn(
 							"flex w-full flex-col gap-1 rounded-md px-2.5 py-2 text-left transition-colors",
-							selectedView !== "settings" && selectedAgent === agentID ? "bg-background shadow-sm ring-1 ring-border" : "hover:bg-accent",
+							selectedView !== "global-settings" && selectedAgent === agentID ? "bg-background shadow-sm ring-1 ring-border" : "hover:bg-accent",
 						)}
 					>
 						<div class="flex items-center justify-between gap-2">
@@ -620,8 +600,8 @@
 			<div class="no-drag border-t p-2">
 				<button
 					type="button"
-					onclick={() => navigateToView("settings")}
-					class={cn("w-full rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-accent", selectedView === "settings" ? "bg-background shadow-sm ring-1 ring-border" : "text-muted-foreground")}
+					onclick={() => navigateToView("global-settings")}
+					class={cn("w-full rounded-md px-2.5 py-1.5 text-left text-xs hover:bg-accent", selectedView === "global-settings" ? "bg-background shadow-sm ring-1 ring-border" : "text-muted-foreground")}
 				>
 					{$_("nav.settings")}
 				</button>
@@ -631,14 +611,14 @@
 		<main class="flex min-h-0 min-w-0 flex-col bg-background">
 			<div class="drag-region flex h-[50px] shrink-0 items-center justify-between gap-3 border-b px-4">
 				<div class="flex min-w-0 items-center gap-2">
-					<h1 class="text-base font-semibold tracking-tight">{selectedView === "settings" ? $_("settings.title") : currentAgent.name}</h1>
-					{#if selectedView !== "settings"}
+					<h1 class="text-base font-semibold tracking-tight">{selectedView === "global-settings" ? $_("settings.title") : currentAgent.name}</h1>
+					{#if selectedView !== "global-settings"}
 						<Badge variant={currentAgent.detected ? "secondary" : "destructive"}>{currentAgent.detected ? $_("status.detected") : $_("status.notDetected")}</Badge>
 						{#if currentAgent.current}<Badge variant="outline">{currentAgent.current}</Badge>{/if}
 					{/if}
 				</div>
 				<div class="no-drag flex shrink-0 items-center gap-2">
-					{#if selectedView !== "settings"}
+					{#if selectedView !== "global-settings"}
 						<Button size="sm" variant="outline" disabled={loading} onclick={refreshSelectedAgent}>
 							{#if loading && selectedAgent === "codex"}<Spinner data-icon="inline-start" />{/if}
 							{$_("actions.refresh")}
@@ -654,7 +634,7 @@
 				</div>
 			</div>
 
-			{#if selectedView !== "settings" && showDiagnostics()}
+			{#if selectedView !== "global-settings" && showDiagnostics()}
 				<div class="border-b bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
 					<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
 						<span class="font-medium text-foreground">{$_("diagnostics.codexService")}</span>
@@ -663,8 +643,8 @@
 				</div>
 			{/if}
 
-			{#if selectedView === "settings"}
-				<div class="min-h-0 flex-1 overflow-auto p-4">{@render SettingsView()}</div>
+			{#if selectedView === "global-settings"}
+				<div class="min-h-0 flex-1 overflow-auto p-4">{@render GlobalSettingsView()}</div>
 			{:else}
 				<Tabs.Root bind:value={selectedTab} class="flex min-h-0 flex-1 flex-col">
 					<div class="shrink-0 border-b px-4">
@@ -705,6 +685,13 @@
 								{@render EmptyState($_("usage.unsupportedProviderTitle"), $_("usage.unsupportedProviderDescription", { values: { agent: currentAgent.name } }))}
 							{/if}
 						</Tabs.Content>
+						<Tabs.Content value="settings" class="m-0">
+							{#if selectedAgent === "codex"}
+								<CodexSettings profilesRevision={codexProfilesRevision} {showError} {showNotice} />
+							{:else}
+								{@render EmptyState($_("settings.unsupportedToolTitle"), $_("settings.unsupportedToolDescription", { values: { agent: currentAgent.name } }))}
+							{/if}
+						</Tabs.Content>
 					</div>
 				</Tabs.Root>
 			{/if}
@@ -712,7 +699,7 @@
 	</div>
 </div>
 
-{#snippet SettingsView()}
+{#snippet GlobalSettingsView()}
 	<div class="mx-auto max-w-3xl overflow-hidden rounded-lg border bg-card">
 		<div class="border-b px-4 py-3">
 			<div class="text-sm font-semibold">{$_("settings.title")}</div>
@@ -735,23 +722,6 @@
 					{#if languageBusy}<Spinner />{/if}
 				</div>
 				<Field.FieldDescription>{$_("settings.language.description")}</Field.FieldDescription>
-			</Field.Field>
-			<Field.Field>
-				<Field.FieldLabel for="usage-sync-interval">{$_("settings.usageSync.label")}</Field.FieldLabel>
-				<div class="flex items-center gap-2">
-					<Select.Root type="single" value={String(usageSyncInterval)} onValueChange={changeUsageSyncInterval}>
-						<Select.Trigger id="usage-sync-interval" disabled={usageSyncIntervalBusy}>{$_("settings.usageSync.seconds", { values: { count: usageSyncInterval } })}</Select.Trigger>
-						<Select.Content>
-							<Select.Group>
-								{#each [5, 15, 30, 60] as seconds (seconds)}
-									<Select.Item value={String(seconds)} label={$_("settings.usageSync.seconds", { values: { count: seconds } })} />
-								{/each}
-							</Select.Group>
-						</Select.Content>
-					</Select.Root>
-					{#if usageSyncIntervalBusy}<Spinner />{/if}
-				</div>
-				<Field.FieldDescription>{$_("settings.usageSync.description")}</Field.FieldDescription>
 			</Field.Field>
 		</Field.FieldGroup>
 	</div>

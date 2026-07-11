@@ -45,6 +45,10 @@ export function ForkProfile(req: $models.ForkCodexProfileRequest): $CancellableP
     return $Call.ByID(2400690215, req);
 }
 
+export function GetSettings(): $CancellablePromise<app$0.CodexSettings> {
+    return $Call.ByID(2021969151);
+}
+
 export function InspectProfileImport(inputPath: string): $CancellablePromise<app$0.CodexProfileImportPlan> {
     return $Call.ByID(3289700062, inputPath);
 }
@@ -55,6 +59,14 @@ export function ListConfigSets(): $CancellablePromise<app$0.CodexConfigSetListRe
 
 export function ListProfiles(): $CancellablePromise<app$0.CodexProfileListResult> {
     return $Call.ByID(2936238732);
+}
+
+export function QuotaRuntimeStatus(): $CancellablePromise<$models.CodexQuotaRuntimeStatus> {
+    return $Call.ByID(3480057456);
+}
+
+export function ReadProfileQuota(profileID: string): $CancellablePromise<app$0.CodexProfileQuota> {
+    return $Call.ByID(2588960257, profileID);
 }
 
 export function SaveActiveProfileState(): $CancellablePromise<app$0.CodexProfileStateSaveResult> {
@@ -79,4 +91,8 @@ export function UpdateConfigSet(req: $models.UpdateCodexConfigSetRequest): $Canc
 
 export function UpdateProfileMetadata(req: $models.UpdateCodexProfileMetadataRequest): $CancellablePromise<app$0.Profile> {
     return $Call.ByID(1493912893, req);
+}
+
+export function UpdateSettings(req: app$0.UpdateCodexSettingsRequest): $CancellablePromise<app$0.CodexSettings> {
+    return $Call.ByID(2932380298, req);
 }

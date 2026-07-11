@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
@@ -27,6 +28,18 @@ func TestCodexProfileExportImportRoundTripIsDeterministicAndInactive(t *testing.
 	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: sourceConfigDir, CodexDir: codexDir, ProfileID: "personal"}); err != nil {
 		t.Fatalf("expected second profile create to succeed, got %v", err)
 	}
+	sourceDB, err := openHealthyStore(ctx, sourceConfigDir, false)
+	if err != nil {
+		t.Fatalf("expected source settings store, got %v", err)
+	}
+	if _, err := sourceDB.UpsertProviderProfileSetting(ctx, store.UpsertProviderProfileSettingParams{
+		ProfileID: "work", ProviderID: codexconfig.ProviderID,
+		QuotaRefreshIntervalSeconds: 300, AuthKeepaliveEnabled: true,
+	}); err != nil {
+		sourceDB.Close()
+		t.Fatalf("expected local automation fixture, got %v", err)
+	}
+	sourceDB.Close()
 	unboundConfig := "model = \"gpt-unbound\"\n"
 	if _, err := CreateCodexConfigSet(ctx, CreateCodexConfigSetRequest{
 		ConfigDir: sourceConfigDir, CodexDir: codexDir, ConfigSetID: "unbound", Name: "Unbound", ConfigContent: &unboundConfig,
@@ -61,6 +74,9 @@ func TestCodexProfileExportImportRoundTripIsDeterministicAndInactive(t *testing.
 	secondRaw, _ := os.ReadFile(secondPath)
 	if string(firstRaw) != string(secondRaw) || first.SHA256 != second.SHA256 {
 		t.Fatalf("expected unchanged exports to be byte-identical")
+	}
+	if strings.Contains(string(firstRaw), "quota_refresh_interval_seconds") || strings.Contains(string(firstRaw), "auth_keepalive_enabled") {
+		t.Fatal("expected local automation settings to stay out of sensitive Profile export")
 	}
 	selected, err := ExportCodexProfiles(ctx, ExportCodexProfilesRequest{
 		ConfigDir: sourceConfigDir, ProfileIDs: []string{"work"}, OutputPath: filepath.Join(exportDir, "work.json"),
@@ -101,6 +117,15 @@ func TestCodexProfileExportImportRoundTripIsDeterministicAndInactive(t *testing.
 	}
 	if profiles.Profiles[0].CredentialID == profiles.Profiles[1].CredentialID {
 		t.Fatalf("expected duplicate display account ids to retain distinct opaque credentials")
+	}
+	importedSettings, err := GetCodexSettings(ctx, CodexSettingsRequest{ConfigDir: targetConfigDir})
+	if err != nil || len(importedSettings.Profiles) != 2 {
+		t.Fatalf("expected imported Profile settings, settings=%#v err=%v", importedSettings, err)
+	}
+	for _, profileSettings := range importedSettings.Profiles {
+		if profileSettings.QuotaRefreshIntervalSeconds != 0 || profileSettings.AuthKeepaliveEnabled {
+			t.Fatalf("expected imported automation disabled, got %#v", profileSettings)
+		}
 	}
 	configSets, err := ListCodexConfigSets(ctx, ListCodexConfigSetsRequest{ConfigDir: targetConfigDir})
 	if err != nil || len(configSets.ConfigSets) != 2 {

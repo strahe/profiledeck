@@ -182,6 +182,25 @@ export interface CodexProfileListResult {
     "profiles": CodexProfileSummary[] | null;
 }
 
+export interface CodexProfileQuota {
+    "profile_id": string;
+    "credential_id"?: string;
+    "status": CodexProfileQuotaStatus;
+    "snapshot"?: CodexQuotaSnapshot | null;
+}
+
+export enum CodexProfileQuotaStatus {
+    /**
+     * The Go zero value for the underlying type of the enum.
+     */
+    $zero = "",
+
+    CodexProfileQuotaAvailable = "available",
+    CodexProfileQuotaAuthRequired = "auth_required",
+    CodexProfileQuotaUnsupported = "unsupported",
+    CodexProfileQuotaUnavailable = "unavailable",
+};
+
 export interface CodexProfileSaveResult {
     "operation_id": string;
     "provider": Provider;
@@ -192,6 +211,18 @@ export interface CodexProfileSaveResult {
     "config_path": string;
     "auth_path": string;
     "warnings"?: string[] | null;
+}
+
+export interface CodexProfileSettings {
+    "profile_id": string;
+    "profile_name": string;
+    "credential_reference_count": number;
+    "quota_refresh_interval_seconds": number;
+    "auth_keepalive_enabled": boolean;
+    "auth_mode": string;
+    "quota_supported": boolean;
+    "auth_keepalive_supported": boolean;
+    "updated_at_unix_ms": number;
 }
 
 export interface CodexProfileStateSaveResult {
@@ -221,9 +252,63 @@ export interface CodexProfileSummary {
     "warnings"?: string[] | null;
 }
 
+export interface CodexQuotaCredits {
+    "has_credits": boolean;
+    "unlimited": boolean;
+    "balance"?: string | null;
+}
+
+export interface CodexQuotaRateLimit {
+    "id": string;
+    "name"?: string;
+    "allowed": boolean;
+    "limit_reached": boolean;
+    "primary_window"?: CodexQuotaWindow | null;
+    "secondary_window"?: CodexQuotaWindow | null;
+}
+
+export interface CodexQuotaSnapshot {
+    "fetched_at_unix_ms": number;
+    "plan_type"?: string;
+    "rate_limit"?: CodexQuotaRateLimit | null;
+    "additional_rate_limits": CodexQuotaRateLimit[] | null;
+    "credits"?: CodexQuotaCredits | null;
+    "spend_control"?: CodexQuotaSpendControl | null;
+    "rate_limit_reached_type"?: string;
+    "reset_credits_available_count"?: number | null;
+}
+
+export interface CodexQuotaSpendControl {
+    "reached": boolean;
+    "individual_limit"?: CodexQuotaSpendControlLimit | null;
+}
+
+export interface CodexQuotaSpendControlLimit {
+    "source"?: string;
+    "limit": string;
+    "used": string;
+    "remaining": string;
+    "used_percent": number;
+    "remaining_percent": number;
+    "reset_after_seconds": number;
+    "reset_at_unix_seconds": number;
+}
+
+export interface CodexQuotaWindow {
+    "used_percent": number;
+    "remaining_percent": number;
+    "limit_window_seconds": number;
+    "reset_after_seconds": number;
+    "reset_at_unix_seconds": number;
+}
+
+export interface CodexSettings {
+    "usage_sync_interval_seconds": number;
+    "profiles": CodexProfileSettings[] | null;
+}
+
 export interface DesktopSettings {
     "language": string;
-    "usage_sync_interval_seconds": number;
 }
 
 export interface DoctorFinding {
@@ -438,10 +523,17 @@ export interface TextPreview {
     "truncated": boolean;
 }
 
+export interface UpdateCodexSettingsRequest {
+    "config_dir": string;
+    "profile_id"?: string;
+    "usage_sync_interval_seconds"?: number | null;
+    "quota_refresh_interval_seconds"?: number | null;
+    "auth_keepalive_enabled"?: boolean | null;
+}
+
 export interface UpdateDesktopSettingsRequest {
     "config_dir": string;
     "language"?: string | null;
-    "usage_sync_interval_seconds"?: number | null;
 }
 
 export interface UsageAggregateSummary {

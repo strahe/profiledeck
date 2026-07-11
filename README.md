@@ -2,7 +2,7 @@
 
 Safe profile switching for AI coding tools.
 
-ProfileDeck is currently a Go CLI and macOS desktop MVP with a Codex-first workflow. A Codex Profile combines a hidden login credential with a reusable Config Set, while guarded transactions switch their on-disk working copies, preserve valid local changes, and support recovery. ProfileDeck also imports local Codex session logs for offline time, model, session, and API-equivalent cost analysis.
+ProfileDeck is currently a Go CLI and macOS desktop MVP with a Codex-first workflow. A Codex Profile combines a hidden login credential with a reusable Config Set, while guarded transactions switch their on-disk working copies, preserve valid local changes, and support recovery. ProfileDeck imports local Codex session logs for offline analysis and can read current ChatGPT Codex limits for individual Profiles.
 
 ## Documentation
 
@@ -49,7 +49,7 @@ macOS desktop builds target macOS 14.0 by default. Override it with `MACOS_MIN_V
 
 During desktop development, set `PROFILEDECK_CONFIG_DIR` to a temporary directory when you need to avoid touching the normal ProfileDeck runtime.
 
-The desktop app persists its language and usage-sync preferences. Language supports Auto, Simplified Chinese, and English. Usage sync runs while ProfileDeck is open or hidden in the tray; the available intervals are 5, 15, 30, and 60 seconds, with 15 seconds as the default.
+Global Desktop settings contain the language preference: Auto, Simplified Chinese, or English. Codex-specific settings contain the local usage-sync interval and per-Profile account-limit automation. Usage sync runs while ProfileDeck is open or hidden in the tray; the available intervals are 5, 15, 30, and 60 seconds, with 15 seconds as the default. Account-limit refresh and login keepalive are off by default.
 
 ## Codex Quick Start
 
@@ -73,4 +73,4 @@ Stored Codex auth and complete Config Set payloads are sensitive. ProfileDeck st
 
 Codex Profile exports are explicit sensitive backups. They contain raw `auth.json` and complete `config.toml` payloads in a deterministic JSON file with `0600` permissions on POSIX systems. Keep the file outside the runtime directory before deleting a development database.
 
-Usage analysis stays local and aggregate-only. The Desktop Usage page defaults to an API-equivalent cost trend and can switch to token trends. It does not query account quotas or infer which Profile, credential, or ChatGPT account produced a session.
+Usage analysis stays local and aggregate-only. The Desktop Usage page defaults to an API-equivalent cost trend and can switch to token trends; it never infers which Profile, credential, or ChatGPT account produced a session. The Desktop Profiles page reads one saved credential at a time on manual refresh. Optional per-Profile automation uses the installed `codex app-server`, runs serially while ProfileDeck remains open or in the tray, and deduplicates shared hidden credentials. Limit snapshots remain in process memory and do not change the offline usage report.

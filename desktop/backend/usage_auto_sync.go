@@ -75,7 +75,7 @@ type usageAutoSyncRuntime struct {
 	now             func() time.Time
 	newTicker       func(time.Duration) usageAutoSyncTicker
 	timeout         time.Duration
-	loadSettings    func(context.Context) (app.DesktopSettings, error)
+	loadSettings    func(context.Context) (app.CodexSettings, error)
 	syncCodex       func(context.Context) (app.UsageSyncResult, error)
 }
 
@@ -89,8 +89,8 @@ func newUsageAutoSyncRuntime(env Environment) *usageAutoSyncRuntime {
 		},
 		timeout: usageAutoSyncTimeout,
 	}
-	runtime.loadSettings = func(ctx context.Context) (app.DesktopSettings, error) {
-		return app.GetDesktopSettings(ctx, app.DesktopSettingsRequest{ConfigDir: env.ConfigDir})
+	runtime.loadSettings = func(ctx context.Context) (app.CodexSettings, error) {
+		return app.GetCodexSettings(ctx, app.CodexSettingsRequest{ConfigDir: env.ConfigDir})
 	}
 	runtime.syncCodex = func(ctx context.Context) (app.UsageSyncResult, error) {
 		return app.UsageSyncCodex(ctx, app.UsageSyncCodexRequest{ConfigDir: env.ConfigDir, CodexDir: env.CodexDir})
@@ -100,7 +100,7 @@ func newUsageAutoSyncRuntime(env Environment) *usageAutoSyncRuntime {
 
 func defaultUsageAutoSyncStatus() UsageAutoSyncStatus {
 	return UsageAutoSyncStatus{
-		IntervalSeconds: app.DesktopUsageSyncIntervalDefault,
+		IntervalSeconds: app.CodexUsageSyncIntervalDefault,
 		Outcome:         UsageAutoSyncOutcomeIdle,
 	}
 }
@@ -177,7 +177,7 @@ func (r *usageAutoSyncRuntime) SetInterval(interval int) {
 func (r *usageAutoSyncRuntime) run(ctx context.Context) {
 	defer r.loopWG.Done()
 
-	interval := app.DesktopUsageSyncIntervalDefault
+	interval := app.CodexUsageSyncIntervalDefault
 	r.mu.RLock()
 	loadRevision := r.intervalRevision
 	r.mu.RUnlock()

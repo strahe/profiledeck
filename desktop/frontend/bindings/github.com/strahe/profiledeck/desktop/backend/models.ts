@@ -11,6 +11,24 @@ export interface ApplyCodexProfileImportRequest {
     "confirm": boolean;
 }
 
+export interface CodexProfileQuotaRuntimeStatus {
+    "profile_id": string;
+    "running": boolean;
+    "last_task"?: string;
+    "last_started_at_unix_ms": number;
+    "last_completed_at_unix_ms": number;
+    "last_success_at_unix_ms": number;
+    "next_run_at_unix_ms": number;
+    "status": app$0.CodexProfileQuotaStatus;
+    "snapshot"?: app$0.CodexQuotaSnapshot | null;
+    "error_code"?: string;
+}
+
+export interface CodexQuotaRuntimeStatus {
+    "app_server_status": string;
+    "profiles": CodexProfileQuotaRuntimeStatus[] | null;
+}
+
 export interface CopyCodexConfigSetRequest {
     "source_config_set_id": string;
     "config_set_id": string;

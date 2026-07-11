@@ -6,6 +6,7 @@
 	import GitForkIcon from "@lucide/svelte/icons/git-fork";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import PlusIcon from "@lucide/svelte/icons/plus";
+	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
 	import UploadIcon from "@lucide/svelte/icons/upload";
 
@@ -17,7 +18,9 @@
 	import { Button } from "$lib/components/ui/button";
 	import { Separator } from "$lib/components/ui/separator";
 	import { Skeleton } from "$lib/components/ui/skeleton";
+	import { Spinner } from "$lib/components/ui/spinner";
 
+	import ProfileQuotaSummary from "./ProfileQuotaSummary.svelte";
 	import type { CodexProfileListItem } from "./types";
 
 	let {
@@ -33,6 +36,7 @@
 		onExportAll,
 		onImport,
 		onExport,
+		onRefreshQuota,
 	}: {
 		profiles: CodexProfileListItem[];
 		loading: boolean;
@@ -46,6 +50,7 @@
 		onExportAll: () => void;
 		onImport: () => void;
 		onExport: (profile: CodexProfileListItem) => void;
+		onRefreshQuota: (profile: CodexProfileListItem) => void;
 	} = $props();
 </script>
 
@@ -148,9 +153,20 @@
 								{#if profile.configSet}<Badge variant="outline">{profile.configSet}</Badge>{/if}
 								<span>{profile.updated}</span>
 							</div>
+							<ProfileQuotaSummary quota={profile.quota} loading={profile.quotaLoading} />
 						</div>
 
 						<div class="flex shrink-0 items-center gap-2">
+							<Button
+								size="icon-sm"
+								variant="outline"
+								disabled={busy || profile.quotaLoading}
+								onclick={() => onRefreshQuota(profile)}
+								aria-label={$_("actions.refreshProfileQuota", { values: { profile: profile.name } })}
+								title={$_("actions.refreshProfileQuota", { values: { profile: profile.name } })}
+							>
+								{#if profile.quotaLoading}<Spinner />{:else}<RefreshCwIcon />{/if}
+							</Button>
 							{#if !profile.summary.active}
 								<Button size="sm" disabled={busy} onclick={() => onUse(profile)}>{$_("actions.useProfile")}</Button>
 							{/if}

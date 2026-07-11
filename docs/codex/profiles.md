@@ -92,6 +92,24 @@ profiledeck switch codex work --yes
 
 `plan` is read-only. `switch`, `rollback`, and `recover` are the only paths that write Codex target files. Invalid or missing working copies are not captured; the plan reports a warning and the backup retains the filesystem state.
 
+## Read Usage Limits
+
+The Desktop Profiles page can read the current ChatGPT Codex rate limits for saved login states. Use **Refresh limits** on one Profile row or on its detail page. There is no refresh-all action.
+
+The list shows each returned window's remaining percentage and reset time. The detail page also shows consumed percentage, plan, limit state, credits, spend controls, earned resets, and additional metered limits when the service returns them. `used_percent` is consumed capacity, so the remaining value is `100 - used_percent`.
+
+Manual refresh normally starts the installed `codex app-server` and calls its native account rate-limit method. Codex may refresh a managed OAuth login according to its own token rules. ProfileDeck captures a changed active `auth.json` back into the credential currently bound by `credential_id`; inactive credentials run in a private temporary Codex home and update through a payload-hash compare-and-swap. `tokens.account_id` remains display metadata and is never used for this ownership decision.
+
+If app-server is missing or its protocol is incompatible, manual refresh falls back to the fixed, read-only ChatGPT Codex quota endpoint. The fallback does not refresh or write tokens. Profile-controlled model-provider URLs never receive the saved ChatGPT token.
+
+Under **Codex > Settings**, automatic limit refresh can be set to Off, 5, 10, 30, or 60 minutes for each Profile. It is off by default. ProfileDeck runs one credential request at a time, spaces different credentials, and deduplicates shared credentials using the shortest enabled interval. The first automatic run is spread across a full interval and later runs include timing jitter.
+
+Managed ChatGPT logins can also enable **Keep login available**. When automatic limit refresh is off, ProfileDeck asks Codex to refresh near the access-token expiry time, or eight days after the last recorded refresh when the token expiry cannot be read. External `chatgptAuthTokens` logins can query limits but cannot use native keepalive. Expired, reused, or revoked refresh tokens pause automatic work until the credential changes; transient failures use increasing retry delays.
+
+Automatic tasks run only while ProfileDeck is open or hidden in the tray. They do not run after the application exits, and they cannot preserve a login after the service revokes its refresh token. The serial native call pattern reduces simultaneous multi-credential requests but does not guarantee that a service cannot associate accounts.
+
+Limit snapshots stay in process memory. They are separate from the offline session analysis on the Usage page, are not billing balances, and do not attribute local sessions to a Profile or account.
+
 ## Back Up and Restore Profiles
 
 Save valid active working-copy changes before export, then write the bundle outside any runtime directory you plan to delete:
@@ -120,4 +138,4 @@ profiledeck codex profile import apply ./profiledeck-codex-profiles.json \
   --yes
 ```
 
-Missing resources are created, identical resources are skipped, and any same-ID difference blocks the whole import. Import uses the current `CODEX_HOME` to rebuild Profile targets in one database transaction. It does not restore active state or write `auth.json` or `config.toml`; use the normal plan and switch flow after import.
+Missing resources are created, identical resources are skipped, and any same-ID difference blocks the whole import. Import uses the current `CODEX_HOME` to rebuild Profile targets in one database transaction. It does not restore active state, automation settings, or write `auth.json` or `config.toml`; imported Profiles start with automatic limit refresh and keepalive disabled. Use the normal plan and switch flow after import.

@@ -1,10 +1,10 @@
 # Codex 用量与成本
 
-ProfileDeck 导入本地 Codex session 用量，并按时间、模型和唯一 session 数提供离线分析。它不会查询账号额度，也不会把用量归因到 Profile、credential 或 ChatGPT account。
+ProfileDeck 导入本地 Codex session 用量，并按时间、模型和唯一 session 数提供离线分析。这套分析不会查询账号限额，也不会把用量归因到 Profile、credential 或 ChatGPT account。Desktop Profile 页面的限额快照是独立功能；无论手动刷新还是显式启用自动刷新，都不属于 usage 导入或报告。
 
 ## Desktop 自动同步
 
-Desktop 启动后会立即同步一次，并在 ProfileDeck 保持运行或隐藏到托盘时继续后台同步。可以在 **设置 > 用量同步间隔** 中选择 5、15、30 或 60 秒，默认值为 15 秒。
+Desktop 启动后会立即同步一次，并在 ProfileDeck 保持运行或隐藏到托盘时继续后台同步。可以在 **Codex > 设置 > 本地用量同步间隔** 中选择 5、15、30 或 60 秒，默认值为 15 秒。
 
 同步不会重叠。如果上一次扫描尚未结束，当前周期会被跳过。失败后会在下一个周期重试。Usage 页面只显示最新状态，不会反复弹出通知。
 
@@ -78,4 +78,4 @@ GPT-5.6 Sol、Terra 和 Luna 具有独立的 [cache-write 价格](https://develo
 
 报告始终展示已知成本小计。只要选中范围内存在未知价格事件，整体状态就是 `unknown`；否则，只要有计费维度缺失，状态就是 `partial`。定价覆盖率为已定价 tokens 除以总 tokens。同步可以在精确模型进入支持目录后回填原本未知的历史事件，但不会重算已经具有 estimated 或 partial 成本的事件。
 
-这些数值只是 API 等价估算，不是订阅账单、账号额度或真实 ChatGPT 用量余额。ProfileDeck 不查询 provider billing API、未公开 ChatGPT 接口、余额或 relay 服务。
+这些数值只是 API 等价估算，不是订阅账单、账号限额或真实 ChatGPT 用量余额。Usage 导入和报告不会查询 provider billing API、余额或 relay 服务。Profile 页面中的限额快照是独立的运行时视图，不会作为账单或 session 归因数据。

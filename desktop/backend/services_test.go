@@ -92,7 +92,7 @@ func TestSettingsServicePersistsDesktopPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected settings get to succeed, got %v", err)
 	}
-	if initial.Language != app.DesktopLanguageAuto || initial.UsageSyncIntervalSeconds != app.DesktopUsageSyncIntervalDefault {
+	if initial.Language != app.DesktopLanguageAuto {
 		t.Fatalf("unexpected default settings: %#v", initial)
 	}
 
@@ -101,24 +101,12 @@ func TestSettingsServicePersistsDesktopPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected settings update to succeed, got %v", err)
 	}
-	if updated.Language != app.DesktopLanguageEnUS || updated.UsageSyncIntervalSeconds != app.DesktopUsageSyncIntervalDefault {
+	if updated.Language != app.DesktopLanguageEnUS {
 		t.Fatalf("unexpected language update: %#v", updated)
-	}
-
-	interval := 30
-	updated, err = services.Settings.Update(ctx, app.UpdateDesktopSettingsRequest{UsageSyncIntervalSeconds: &interval})
-	if err != nil {
-		t.Fatalf("expected interval update to succeed, got %v", err)
-	}
-	if updated.Language != app.DesktopLanguageEnUS || updated.UsageSyncIntervalSeconds != interval {
-		t.Fatalf("unexpected interval update: %#v", updated)
-	}
-	if status := services.Usage.AutoSyncStatus(ctx); status.IntervalSeconds != interval || status.Outcome != UsageAutoSyncOutcomeIdle {
-		t.Fatalf("expected runtime interval update, got %#v", status)
 	}
 }
 
-func TestSettingsServiceKeepsConcurrentIntervalUpdatesConsistent(t *testing.T) {
+func TestCodexSettingsServiceKeepsConcurrentUsageIntervalUpdatesConsistent(t *testing.T) {
 	ctx := context.Background()
 	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil)
 	if _, err := services.App.Initialize(ctx); err != nil {
@@ -134,7 +122,7 @@ func TestSettingsServiceKeepsConcurrentIntervalUpdatesConsistent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, err := services.Settings.Update(ctx, app.UpdateDesktopSettingsRequest{UsageSyncIntervalSeconds: &interval})
+			_, err := services.Codex.UpdateSettings(ctx, app.UpdateCodexSettingsRequest{UsageSyncIntervalSeconds: &interval})
 			errorsByUpdate <- err
 		}()
 	}
@@ -147,7 +135,7 @@ func TestSettingsServiceKeepsConcurrentIntervalUpdatesConsistent(t *testing.T) {
 		}
 	}
 
-	persisted, err := services.Settings.Get(ctx)
+	persisted, err := services.Codex.GetSettings(ctx)
 	if err != nil {
 		t.Fatalf("expected settings reload to succeed, got %v", err)
 	}

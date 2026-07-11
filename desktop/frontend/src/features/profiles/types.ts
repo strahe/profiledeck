@@ -1,4 +1,4 @@
-import type { CodexConfigSet, CodexProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+import type { CodexConfigSet, CodexProfileQuota, CodexProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
 
 export type CodexProfileRoute =
 	| { kind: "list"; profileID: "" }
@@ -15,6 +15,8 @@ export type CodexProfileListItem = {
 	updated: string;
 	account: string;
 	configSet: string;
+	quota: CodexProfileQuota | null;
+	quotaLoading: boolean;
 };
 
 export type ProfileUseRequest = {

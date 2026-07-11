@@ -1,10 +1,10 @@
 # Codex Usage and Cost
 
-ProfileDeck imports local Codex session usage and provides offline analysis by time, model, and session count. It does not query account quotas or attribute usage to a Profile, credential, or ChatGPT account.
+ProfileDeck imports local Codex session usage and provides offline analysis by time, model, and session count. This analysis does not query account quotas or attribute usage to a Profile, credential, or ChatGPT account. The separate rate-limit snapshot on Desktop Profile pages, whether refreshed manually or by opt-in automation, is not part of usage import or reporting.
 
 ## Automatic Desktop sync
 
-The Desktop app syncs once after startup, then continues in the background while ProfileDeck is open or hidden in the tray. Set the interval to 5, 15, 30, or 60 seconds under **Settings > Usage sync interval**. The default is 15 seconds.
+The Desktop app syncs once after startup, then continues in the background while ProfileDeck is open or hidden in the tray. Set the interval to 5, 15, 30, or 60 seconds under **Codex > Settings > Local usage sync interval**. The default is 15 seconds.
 
 Syncs never overlap. If one scan is still running when the next interval arrives, that interval is skipped. A failed scan is retried at the next interval. The Usage page shows the latest status without repeating notifications.
 
@@ -78,4 +78,4 @@ GPT-5.6 Sol, Terra, and Luna have separate [cache-write pricing](https://develop
 
 The report always shows the known subtotal. If any selected event has unknown pricing, the overall status is `unknown`; otherwise, any incomplete billing dimension makes it `partial`. Pricing coverage is priced tokens divided by total tokens. Sync can backfill previously unknown events when their exact model gains a supported catalog entry, but it does not recalculate events that already have an estimated or partial cost.
 
-These values are API-equivalent estimates, not subscription billing, account quotas, or actual ChatGPT usage balances. ProfileDeck does not query provider billing APIs, private ChatGPT endpoints, balances, or relay services.
+These values are API-equivalent estimates, not subscription billing, account quotas, or actual ChatGPT usage balances. Usage import and reports do not query provider billing APIs, balances, or relay services. Profile rate-limit snapshots are a separate runtime view and are never used as billing or session-attribution data.

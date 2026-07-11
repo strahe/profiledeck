@@ -15,20 +15,24 @@
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 
-	import type { CodexProfileDetail } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { CodexProfileDetail, CodexProfileQuota } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import ProfileQuotaCard from "./ProfileQuotaCard.svelte";
 
 	interface Props {
 		detail: CodexProfileDetail;
 		busyAction: string;
 		updated: string;
+		quota: CodexProfileQuota | null;
+		quotaLoading: boolean;
 		onUse: () => void;
 		onFork: () => void;
 		onEdit: () => void;
 		onSaveCurrent: () => void;
 		onSetConfig: () => void;
+		onRefreshQuota: () => void;
 	}
 
-	let { detail, busyAction, updated, onUse, onFork, onEdit, onSaveCurrent, onSetConfig }: Props = $props();
+	let { detail, busyAction, updated, quota, quotaLoading, onUse, onFork, onEdit, onSaveCurrent, onSetConfig, onRefreshQuota }: Props = $props();
 	let profileName = $derived(detail.summary.profile.name || detail.summary.profile.id);
 </script>
 
@@ -137,5 +141,7 @@
 				</dl>
 			</Card.Content>
 		</Card.Root>
+
+		<ProfileQuotaCard {quota} loading={quotaLoading} disabled={!!busyAction} onRefresh={onRefreshQuota} />
 	</div>
 </div>
