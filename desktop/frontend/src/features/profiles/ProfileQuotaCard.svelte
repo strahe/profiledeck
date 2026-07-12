@@ -5,7 +5,6 @@
 	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
 
 	import IconAction from "$lib/components/app/IconAction.svelte";
-	import InfoTooltip from "$lib/components/app/InfoTooltip.svelte";
 	import * as Alert from "$lib/components/ui/alert";
 	import * as Card from "$lib/components/ui/card";
 	import * as Empty from "$lib/components/ui/empty";
@@ -65,9 +64,12 @@
 		});
 	}
 
-	function humanize(value: string): string {
-		if (!value) return "—";
-		return value.replaceAll("_", " ");
+	function formatPlanType(value: string): string {
+		return value
+			.split(/[_-]+/)
+			.filter(Boolean)
+			.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+			.join(" ");
 	}
 
 	function limitBlocked(limit: CodexQuotaRateLimit): boolean {
@@ -82,10 +84,8 @@
 
 <Card.Root class="lg:col-span-2">
 	<Card.Header>
-		<Card.Title class="flex items-center gap-1">
-			<span>{$_("quota.title")}</span>
-			<InfoTooltip content={$_("quota.description")} subject={$_("quota.title")} />
-		</Card.Title>
+		<Card.Title>{$_("quota.title")}</Card.Title>
+		<Card.Description>{$_("quota.description")}</Card.Description>
 		<Card.Action>
 			<IconAction
 				label={$_("actions.refreshQuota")}
@@ -124,7 +124,7 @@
 			{@const snapshot = quota.snapshot}
 			<div class="flex flex-col gap-5">
 				<div class="flex flex-wrap items-center gap-2">
-					{#if snapshot.plan_type}<Badge variant="outline">{snapshot.plan_type}</Badge>{/if}
+					{#if snapshot.plan_type}<Badge variant="outline">{formatPlanType(snapshot.plan_type)}</Badge>{/if}
 					{#if snapshot.rate_limit}
 						<Badge variant={limitBlocked(snapshot.rate_limit) ? "destructive" : "secondary"}>
 							{limitBlocked(snapshot.rate_limit) ? $_("quota.limitReached") : $_("quota.available")}
@@ -139,15 +139,9 @@
 					<p class="text-sm text-muted-foreground">{$_("quota.noWindows")}</p>
 				{/if}
 
-				{#if snapshot.rate_limit_reached_type || snapshot.credits || snapshot.spend_control || snapshot.reset_credits_available_count != null}
+				{#if snapshot.credits || snapshot.spend_control || snapshot.reset_credits_available_count != null}
 					<Separator />
 					<dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-						{#if snapshot.rate_limit_reached_type}
-							<div class="flex min-w-0 flex-col gap-1">
-								<dt class="text-xs text-muted-foreground">{$_("quota.limitReason")}</dt>
-								<dd class="truncate text-sm capitalize">{humanize(snapshot.rate_limit_reached_type)}</dd>
-							</div>
-						{/if}
 						{#if snapshot.credits}
 							<div class="flex min-w-0 flex-col gap-1">
 								<dt class="text-xs text-muted-foreground">{$_("quota.credits")}</dt>
@@ -192,7 +186,7 @@
 						{#each snapshot.additional_rate_limits as limit, index (`${limit.id}:${index}`)}
 							<div class="flex flex-col gap-2">
 								<div class="flex items-center gap-2">
-									<span class="text-sm font-medium">{limit.name || humanize(limit.id)}</span>
+									<span class="text-sm font-medium">{limit.name || $_("quota.additionalLimit")}</span>
 									<Badge variant={limitBlocked(limit) ? "destructive" : "secondary"}>{limitBlocked(limit) ? $_("quota.limitReached") : $_("quota.available")}</Badge>
 								</div>
 								{@render RateLimitWindows(limit)}
@@ -208,18 +202,18 @@
 {#snippet RateLimitWindows(limit: CodexQuotaRateLimit)}
 	{#if limit.primary_window || limit.secondary_window}
 		<div class="grid gap-3 sm:grid-cols-2">
-			{#if limit.primary_window}{@render WindowPanel($_("quota.primaryWindow"), limit.primary_window)}{/if}
-			{#if limit.secondary_window}{@render WindowPanel($_("quota.secondaryWindow"), limit.secondary_window)}{/if}
+			{#if limit.primary_window}{@render WindowPanel(limit.primary_window)}{/if}
+			{#if limit.secondary_window}{@render WindowPanel(limit.secondary_window)}{/if}
 		</div>
 	{:else}
 		<p class="text-sm text-muted-foreground">{$_("quota.noWindows")}</p>
 	{/if}
 {/snippet}
 
-{#snippet WindowPanel(label: string, window: CodexQuotaWindow)}
+{#snippet WindowPanel(window: CodexQuotaWindow)}
 	<div class="flex flex-col gap-3 rounded-lg border p-3">
 		<div class="flex items-center justify-between gap-2">
-			<span class="text-xs font-medium text-muted-foreground">{label} · {formatWindow(window.limit_window_seconds)}</span>
+			<span class="text-xs font-medium text-muted-foreground">{formatWindow(window.limit_window_seconds)}</span>
 			<span class="text-sm font-medium">{formatPercent(window.remaining_percent)}%</span>
 		</div>
 		<Progress value={window.remaining_percent} aria-label={$_("quota.remaining", { values: { value: formatPercent(window.remaining_percent) } })} />

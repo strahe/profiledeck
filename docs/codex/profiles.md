@@ -1,17 +1,12 @@
 # Codex Profiles
 
-A Codex Profile combines two independently shareable resources:
+A Codex Profile saves one Codex login and one Config Set. This lets you switch accounts and settings together while still editing the active settings in Codex itself.
 
-- a hidden credential containing the desired `$CODEX_HOME/auth.json` payload;
-- a Config Set containing the complete desired `$CODEX_HOME/config.toml` payload.
+A Config Set covers only the user-level `config.toml`. Sessions, logs, skills, plugin caches, project `.codex/config.toml` files, and system policy are not included.
 
-The files on disk are working copies of the active Profile. ProfileDeck stores long-lived state in `profiledeck.db`, checks valid working-copy changes back into the active bindings during a switch, and writes only the resources whose bindings change.
+## Prerequisite
 
-Config Sets cover only the user-level `config.toml`. Sessions, logs, skills, plugin caches, project `.codex/config.toml` files, and system policy remain outside this model. Codex `tokens.account_id` is display metadata only and never determines identity or binding behavior.
-
-## Requirements
-
-Codex must use file credentials. If `$CODEX_HOME/auth.json` is missing, add this to `$CODEX_HOME/config.toml` and log in again:
+Codex must use file credentials. If `$CODEX_HOME/auth.json` is missing, add this to `$CODEX_HOME/config.toml` and sign in again:
 
 ```toml
 cli_auth_credentials_store = "file"
@@ -21,11 +16,11 @@ cli_auth_credentials_store = "file"
 codex login
 ```
 
-## Create Profiles
+## Create a Profile
 
-In Desktop, use **Save Current Codex as a New Profile**. Profile ID is the stable, immutable CLI and route key; Name is the user-facing label. ProfileDeck enables this action only when both current Codex files are valid, while existing saved Profiles remain available when the source files are missing or invalid.
+In Desktop, choose **Save Current Codex as a New Profile**. The Profile ID is used in CLI commands and links and cannot be changed later. The name is what ProfileDeck displays throughout the app.
 
-The first Profile captures the current files, creates a Config Set named `shared`, creates a hidden credential, and becomes active:
+The first Profile saves the current Codex login and settings, creates a Config Set named `shared`, and becomes current:
 
 ```bash
 profiledeck init
@@ -33,14 +28,14 @@ profiledeck codex detect
 profiledeck codex profile create work
 ```
 
-Later Profiles reuse the active Config Set by default. Log in with another Codex account, then create another Profile to capture a separate credential without duplicating configuration:
+Later Profiles reuse the current Config Set by default. To add another login without copying the settings, sign in to Codex with that account and create another Profile:
 
 ```bash
 codex login
 profiledeck codex profile create personal
 ```
 
-To preserve the current config as an independent Config Set, create the Profile with a new Config Set ID:
+To save the current settings as a separate Config Set, provide a new ID:
 
 ```bash
 profiledeck codex profile create client \
@@ -50,7 +45,7 @@ profiledeck codex profile create client \
 
 ## Manage Config Sets
 
-Config Set commands expose summaries and metadata, never raw TOML:
+Config Set commands show names and summaries without printing complete Codex settings:
 
 ```bash
 profiledeck codex config-set list
@@ -61,7 +56,9 @@ profiledeck codex config-set update local --description "Local models"
 profiledeck codex config-set delete local --yes
 ```
 
-`create` captures the current `config.toml`. A Config Set can be renamed, including `shared`, and can be deleted only when no Profile references it. Rebind an inactive Profile with:
+`create` saves the current `config.toml`. Any Config Set, including `shared`, can be renamed. A Config Set can be deleted only when no Profile uses it.
+
+Choose a different Config Set for an inactive Profile with:
 
 ```bash
 profiledeck codex profile set-config work shared
@@ -69,7 +66,7 @@ profiledeck codex profile set-config work shared
 
 ## Fork a Profile
 
-Forking requires explicit choices for both resources. At least one resource must be copied so the result is not only an alias of the source:
+Forking creates a new Profile and lets you share or copy its login and Config Set. At least one item must be copied so the new Profile can change independently:
 
 ```bash
 profiledeck codex profile fork work client-login \
@@ -82,9 +79,9 @@ profiledeck codex profile fork work client-config \
   --new-config-set client-config
 ```
 
-## Save and Switch
+## Save and switch
 
-Switching automatically captures valid external changes to the active credential and Config Set. `save-current` is an explicit safety action before logging in again or replacing a working copy:
+Before switching, ProfileDeck preserves valid changes made to the current Codex login or settings. Use `save-current` before signing in to a different account or replacing the current Codex files when you want to save explicitly:
 
 ```bash
 profiledeck codex profile save-current
@@ -92,47 +89,45 @@ profiledeck plan codex work
 profiledeck switch codex work --yes
 ```
 
-In Desktop, the corresponding action is **Update from Current Codex** on the active Profile detail page. It updates the active hidden credential and Config Set from the current working copies after a fresh source validation.
+In Desktop, use **Update from Current Codex** on the current Profile detail page.
 
-`plan` is read-only. `switch`, `rollback`, and `recover` are the only paths that write Codex target files. Invalid or missing working copies are not captured; the plan reports a warning and the backup retains the filesystem state.
+`plan` is read-only. It shows the files that would change with sensitive values hidden. A switch creates a backup first and stops without writing if a required file is missing, invalid, unsupported, or changed after review.
 
-## Read Usage Limits
+## Check usage limits
 
-The Desktop Profiles page can read the current ChatGPT Codex rate limits for saved login states. At Desktop startup, ProfileDeck reads the active Profile once after active state is available; it does not read inactive Profiles or repeat the request when the page is reopened. Use **Refresh limits** on one Profile row or on its detail page for later reads. There is no refresh-all action.
+The Desktop Profiles page can check current ChatGPT Codex limits for a saved login. At startup, ProfileDeck checks the current Profile once. It does not check inactive Profiles or repeat the request when you reopen the page.
 
-The list shows each returned window's remaining percentage and reset time. The detail page also shows consumed percentage, plan, limit state, credits, spend controls, earned resets, and additional metered limits when the service returns them. `used_percent` is consumed capacity, so the remaining value is `100 - used_percent`.
+Use **Refresh limits** on one Profile row or detail page for a later check. There is no refresh-all action. The list shows the remaining percentage and reset time for each period; the detail page shows any additional limit information provided by Codex.
 
-Manual refresh normally starts the installed `codex app-server` and calls its native account rate-limit method. Codex may refresh a managed OAuth login according to its own token rules. ProfileDeck captures a changed active `auth.json` back into the credential currently bound by `credential_id`; inactive credentials run in a private temporary Codex home and update through a payload-hash compare-and-swap. `tokens.account_id` remains display metadata and is never used for this ownership decision.
+When the saved sign-in method supports renewal, checking limits may also renew the Codex login. Some external sign-in methods can provide limits but cannot be renewed automatically. If automatic Codex updates are unavailable, a manual limit check may still work without changing the saved login.
 
-If app-server is missing or its protocol is incompatible, manual refresh falls back to the fixed, read-only ChatGPT Codex quota endpoint. The fallback does not refresh or write tokens. Profile-controlled model-provider URLs never receive the saved ChatGPT token.
+Set automatic limit refresh to Off, 5, 10, 30, or 60 minutes on the Profile detail page or under **Codex Settings**. The setting is off by default and changes in either place appear in the other.
 
-On a Profile detail page or under **Codex Settings**, automatic limit refresh can be set to Off, 5, 10, 30, or 60 minutes. Both entry points edit the same persisted setting and update immediately. It is off by default. ProfileDeck runs one credential request at a time, spaces different credentials, and deduplicates shared credentials using the shortest enabled interval. The first automatic run is spread across a full interval and later runs include timing jitter.
+Managed ChatGPT logins can also enable **Renew sign-in automatically**. Automatic limit refresh already includes sign-in renewal, so this option is mainly useful when automatic limit refresh is off.
 
-Managed ChatGPT logins can also enable **Keep login available**. When automatic limit refresh is off, ProfileDeck asks Codex to refresh near the access-token expiry time, or eight days after the last recorded refresh when the token expiry cannot be read. External `chatgptAuthTokens` logins can query limits but cannot use native keepalive. Expired, reused, or revoked refresh tokens pause automatic work until the credential changes; transient failures use increasing retry delays.
+Automatic updates run only while ProfileDeck is open or hidden in the tray. They stop when ProfileDeck exits and cannot keep a login active after the service revokes it.
 
-Automatic tasks run only while ProfileDeck is open or hidden in the tray. They do not run after the application exits, and they cannot preserve a login after the service revokes its refresh token. The serial native call pattern reduces simultaneous multi-credential requests but does not guarantee that a service cannot associate accounts.
+Limit information is temporary, is not written to `profiledeck.db`, and is separate from the local Usage report. It is not a billing balance and does not connect local sessions to a Profile or account.
 
-Limit snapshots stay in process memory. They are separate from the offline session analysis on the Usage page, are not billing balances, and do not attribute local sessions to a Profile or account.
+## Back up and restore Profiles
 
-## Back Up and Restore Profiles
-
-Update the active Profile from valid current working-copy changes before export, then write the bundle outside any runtime directory you plan to delete:
+Save current changes before exporting, and keep the backup outside any ProfileDeck data directory you plan to delete:
 
 ```bash
 profiledeck codex profile save-current
 profiledeck codex profile export --output ./profiledeck-codex-profiles.json
 ```
 
-The default export includes every Codex Profile, referenced hidden credential, and Config Set, including unreferenced Config Sets. Pass one or more Profile IDs to export only those Profiles and their dependencies:
+Without Profile IDs, export includes all Codex Profiles and Config Sets. Provide one or more Profile IDs to export only those Profiles and the logins and Config Sets they need:
 
 ```bash
 profiledeck codex profile export work personal \
   --output ./selected-codex-profiles.json
 ```
 
-The JSON bundle contains raw `auth.json` and complete `config.toml` payloads. ProfileDeck writes it with `0600` permissions on POSIX systems and does not print payloads in command output. Keep it private.
+The JSON backup contains complete Codex sign-in data and settings. ProfileDeck writes it with `0600` permissions on POSIX systems and does not print the sensitive contents in command output. Anyone with the file may be able to access your account, so keep it private.
 
-After initializing a new database, inspect the import before applying it:
+After initializing a new database, inspect the backup before importing it:
 
 ```bash
 profiledeck init
@@ -142,4 +137,4 @@ profiledeck codex profile import apply ./profiledeck-codex-profiles.json \
   --yes
 ```
 
-Missing resources are created, identical resources are skipped, and any same-ID difference blocks the whole import. Import uses the current `CODEX_HOME` to rebuild Profile targets in one database transaction. It does not restore active state, automation settings, or write `auth.json` or `config.toml`; imported Profiles start with automatic limit refresh and keepalive disabled. Use the normal plan and switch flow after import.
+Import adds missing data, skips identical data, and makes no changes if an existing ID has different content. It does not make a Profile current, restore automatic-update settings, or write `auth.json` or `config.toml`. Review and apply a normal switch when you are ready to use an imported Profile.

@@ -8,6 +8,7 @@
 	import { Badge } from "$lib/components/ui/badge";
 	import { buttonVariants } from "$lib/components/ui/button";
 	import * as Table from "$lib/components/ui/table";
+	import { translate } from "$lib/i18n";
 
 	let {
 		operations,
@@ -33,6 +34,21 @@
 	function copyID(value: string) {
 		void navigator.clipboard?.writeText(value);
 	}
+
+	function statusLabel(status: string): string {
+		if (status === "failed") return translate("diagnosticsPage.operationStatus.failed");
+		if (status === "pending") return translate("diagnosticsPage.operationStatus.pending");
+		return translate("diagnosticsPage.operationStatus.incomplete");
+	}
+
+	function operationMessage(operation: DoctorOperation): string {
+		if (operation.recovery_status === "recoverable") return translate("diagnosticsPage.operationMessage.recoverable");
+		if (operation.reason.startsWith("operation_may_be_in_progress")) return translate("diagnosticsPage.operationMessage.mayBeRunning");
+		if (operation.recovery_status === "unrecoverable") return translate("diagnosticsPage.operationMessage.unrecoverable");
+		if (operation.recovery_status === "unknown") return translate("diagnosticsPage.operationMessage.unknownRecovery");
+		if (operation.status === "failed") return translate("diagnosticsPage.operationMessage.failed");
+		return translate("diagnosticsPage.operationMessage.incomplete");
+	}
 </script>
 
 <Table.Root>
@@ -54,9 +70,9 @@
 						<IconAction label={$_("actions.copyOperationID")} variant="ghost" onclick={() => copyID(operation.id)}><ClipboardIcon /></IconAction>
 					</div>
 				</Table.Cell>
-				<Table.Cell><Badge variant={statusBadgeVariant(operation.level)}>{operation.status}</Badge></Table.Cell>
+				<Table.Cell><Badge variant={statusBadgeVariant(operation.level)}>{statusLabel(operation.status)}</Badge></Table.Cell>
 				<Table.Cell class="font-mono text-xs">{operation.profile_id ? shortID(operation.profile_id) : "—"}</Table.Cell>
-				<Table.Cell class="max-w-sm text-sm text-muted-foreground">{operation.recovery_reason || operation.reason || operation.error_message || "—"}</Table.Cell>
+				<Table.Cell class="max-w-sm text-sm text-muted-foreground">{operationMessage(operation)}</Table.Cell>
 				<Table.Cell class="text-right">
 					{#if operation.recovery_status === "recoverable"}
 						<AlertDialog.Root>

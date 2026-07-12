@@ -1,57 +1,52 @@
 # Concepts
 
-ProfileDeck separates application state from target tool files.
-
-## Application store
-
-`profiledeck.db` is the SQLite source of truth for ProfileDeck-owned data:
-
-- providers
-- profiles
-- active state
-- profile targets
-- switch and rollback operation records
-- hidden Codex auth credentials
-- Codex Config Sets
-- imported usage events and cursors
-
-Target tool files remain owned by their tools. ProfileDeck writes them only through switch and rollback operations.
+ProfileDeck saves the parts of an AI coding tool setup that you want to switch together.
 
 ## Provider
 
-A provider represents an AI tool integration. The implemented adapters are:
+A provider is an AI tool integration. ProfileDeck currently supports:
 
-- `codex` for Codex profile switching.
-- `generic` for manually configured target files.
-
-Providers can be enabled or disabled.
+- `codex` for the guided Codex workflow;
+- `generic` for advanced workflows that manage explicitly selected local files.
 
 ## Profile
 
-A profile is a named desired state. A single profile can contain one or more provider targets. A Codex Profile binds one hidden auth credential and one Config Set; either resource may be shared with other Profiles.
+A Profile is a named setup you can activate. A Codex Profile contains:
 
-## Target
+- a saved Codex login;
+- a Config Set with the Codex settings that should be used with that login.
 
-A target maps a profile to a file path, format, strategy, and desired value. Plans are built from targets, but targets are not written directly. `switch` rebuilds the plan under a lock, verifies file hashes, creates a backup, then writes target files atomically.
+The login and Config Set can be shared independently. For example, two Profiles can use the same settings with different logins, or the same login with different settings.
 
-## Codex hidden credential
+## Current Profile
 
-Codex auth credentials are internal lifecycle objects, not user-managed accounts. A hidden credential stores the latest desired `auth.json` payload and may be shared by multiple profiles. Codex `tokens.account_id` is parsed only for display metadata and never used as a ProfileDeck identity or merge key.
+The current Profile is the setup Codex is using now. Its `auth.json` and `config.toml` files remain normal Codex files, so you can keep using Codex as usual.
 
-## Codex Config Set
+Before switching, ProfileDeck preserves valid changes made to the current Codex files. If a required file is missing or invalid, ProfileDeck shows a warning and does not silently save it.
 
-A Config Set stores one complete desired `$CODEX_HOME/config.toml` payload. The first Codex Profile creates `shared`; the name is editable and has no special runtime behavior. Config Sets are ProfileDeck application data and can be deleted only when unreferenced.
+## Saved login
 
-## Codex working copies
+A saved login contains the Codex sign-in data used by one or more Profiles. It is not managed as a separate account inside ProfileDeck.
 
-The active Profile's `auth.json` and `config.toml` are working copies. A switch captures valid external changes into the active bindings before materializing different target bindings. Invalid or missing copies are not captured.
+ProfileDeck may show the final characters of the Codex Account ID to help distinguish logins. This value is informational only and is never used to decide which saved login should be updated or shared.
 
-## Target files
+## Config Set
 
-Target files are external files such as:
+A Config Set contains one complete user-level Codex configuration. The first Profile creates a Config Set named `shared`; you can rename it, copy it, or create separate Config Sets for Profiles that need different settings.
 
-- `$CODEX_HOME/config.toml`
-- `$CODEX_HOME/auth.json`
-- manually configured JSON, TOML, env, or text files
+A Config Set can be deleted only when no Profile uses it.
 
-ProfileDeck never writes these files from UI or CRUD commands. Writes happen through `switch`, `rollback`, or `recover`; create, fork, rebind, and save-current operations update ProfileDeck application data only.
+## Codex files
+
+ProfileDeck works with:
+
+- `$CODEX_HOME/config.toml` for the current Codex settings;
+- `$CODEX_HOME/auth.json` for the current Codex login.
+
+Skills, plugin caches, project `.codex/config.toml` files, sessions, logs, and system policy are not part of a Config Set.
+
+ProfileDeck changes these files only after you review and apply a switch, rollback, or recovery action. Creating, editing, forking, or importing a Profile changes saved ProfileDeck data only.
+
+## Local ProfileDeck data
+
+Profiles, Config Sets, saved logins, settings, usage reports, and operation history are stored locally in `profiledeck.db`. Target tools continue to own their own files.

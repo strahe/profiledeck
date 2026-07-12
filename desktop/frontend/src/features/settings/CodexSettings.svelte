@@ -35,7 +35,7 @@
 		</Alert.Root>
 	{/if}
 
-	<SectionCard title={$_("codexSettings.usageSync.title")} help={$_("codexSettings.usageSync.description")}>
+	<SectionCard title={$_("codexSettings.usageSync.title")} description={$_("codexSettings.usageSync.description")}>
 		<SettingsRow label={$_("codexSettings.usageSync.label")} forID="codex-usage-sync">
 			{#snippet control()}
 				{#if controller.isBusy("usage")}<Spinner />{/if}
@@ -57,7 +57,7 @@
 		</SettingsRow>
 	</SectionCard>
 
-	<SectionCard title={$_("codexSettings.profiles.title")} contentClass="px-0">
+	<SectionCard title={$_("codexSettings.profiles.title")} description={$_("codexSettings.profiles.description")} contentClass="px-0">
 		{#if controller.loading}
 			<div class="flex justify-center py-10"><Spinner /></div>
 		{:else if !controller.settings?.profiles?.length}

@@ -1,10 +1,9 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
 	import CheckCircleIcon from "@lucide/svelte/icons/circle-check";
-	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 
-	import type { DoctorResult } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { DoctorFinding, DoctorResult } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
 	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
 	import OperationTable from "$lib/components/app/OperationTable.svelte";
 	import SectionCard from "$lib/components/app/SectionCard.svelte";
@@ -13,6 +12,7 @@
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button, buttonVariants } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
+	import { translate } from "$lib/i18n";
 
 	let {
 		doctor,
@@ -43,6 +43,70 @@
 		if (normalized === "warn" || normalized === "warning") return "secondary";
 		return "outline";
 	}
+
+	const findingCopyByID: Record<string, string> = {
+		database_not_initialized: "databaseNotInitialized",
+		database_inspect_failed: "databaseUnavailable",
+		database_open_failed: "databaseUnavailable",
+		database_status_failed: "databaseUnavailable",
+		database_schema_unhealthy: "databaseUnavailable",
+		operation_list_failed: "operationCheckFailed",
+		codex_provider_check_failed: "codexSetupUnavailable",
+		codex_preset_v2_invalid: "codexSetupUnavailable",
+		codex_binding_check_failed: "profileDataUnavailable",
+		codex_config_binding_missing: "profileSettingsUnavailable",
+		codex_config_binding_invalid: "profileSettingsUnavailable",
+		codex_config_set_invalid: "profileSettingsUnavailable",
+		codex_login_binding_missing: "profileLoginUnavailable",
+		codex_login_binding_invalid: "profileLoginUnavailable",
+		codex_login_state_invalid: "profileLoginUnavailable",
+		codex_config_set_check_failed: "configSetsUnavailable",
+		database_permissions_weak: "databasePermissions",
+		backups_permissions_weak: "backupPermissions",
+		codex_auth_target_permissions_weak: "loginPermissions",
+		codex_auth_target_permission_check_failed: "permissionsCheckFailed",
+		database_permissions_weak_inspect_failed: "permissionsCheckFailed",
+		backups_permissions_weak_inspect_failed: "permissionsCheckFailed",
+		codex_auth_target_permissions_weak_inspect_failed: "permissionsCheckFailed",
+	};
+
+	function findingCopyKey(finding: DoctorFinding): string {
+		return findingCopyByID[finding.id] ?? "unknown";
+	}
+
+	function findingTitle(finding: DoctorFinding): string {
+		return translate(`diagnosticsPage.finding.${findingCopyKey(finding)}Title`);
+	}
+
+	function findingDescription(finding: DoctorFinding): string {
+		return translate(`diagnosticsPage.finding.${findingCopyKey(finding)}Description`);
+	}
+
+	function findingReference(finding: DoctorFinding): string {
+		const profileID = String(finding.details?.profile_id ?? "");
+		if (profileID) return translate("diagnosticsPage.finding.affectedProfile", { value: profileID });
+		const configSetID = String(finding.details?.config_set_id ?? "");
+		if (configSetID) return translate("diagnosticsPage.finding.affectedConfigSet", { value: configSetID });
+		return "";
+	}
+
+	function levelLabel(level: string): string {
+		return level.toLowerCase() === "error"
+			? translate("diagnosticsPage.level.actionRequired")
+			: translate("diagnosticsPage.level.warning");
+	}
+
+	function lockDescription(reason: string): string {
+		if (["malformed_lock_file", "stale_lock_candidate", "applied_operation_lock_residue"].includes(reason)) {
+			return translate("diagnosticsPage.lock.repairable");
+		}
+		if (["lock_may_be_active", "os_lock_not_free", "pending_operation"].includes(reason)) {
+			return translate("diagnosticsPage.lock.active");
+		}
+		if (reason === "database_unavailable") return translate("diagnosticsPage.lock.databaseUnavailable");
+		if (reason === "lock_file_read_failed") return translate("diagnosticsPage.lock.unreadable");
+		return translate("diagnosticsPage.lock.unknown");
+	}
 </script>
 
 <ContentContainer class="max-w-4xl">
@@ -66,10 +130,11 @@
 			<SectionCard title={$_("diagnosticsPage.findings")} contentClass="flex flex-col gap-3">
 				{#each findings as finding (finding.id)}
 					<div class="flex items-start gap-3 rounded-lg border p-3">
-						<Badge variant={findingVariant(finding.level)}>{finding.level}</Badge>
+						<Badge variant={findingVariant(finding.level)}>{levelLabel(finding.level)}</Badge>
 						<div class="min-w-0">
-							<div class="text-sm font-medium">{finding.id}</div>
-							<p class="mt-1 text-sm text-muted-foreground">{finding.message}</p>
+							<div class="text-sm font-medium">{findingTitle(finding)}</div>
+							<p class="mt-1 text-sm text-muted-foreground">{findingDescription(finding)}</p>
+							{#if findingReference(finding)}<p class="mt-1 font-mono text-xs text-muted-foreground">{findingReference(finding)}</p>{/if}
 						</div>
 					</div>
 				{/each}
@@ -77,13 +142,9 @@
 		{/if}
 
 		{#if lockNeedsAttention}
-			<SectionCard title={$_("diagnosticsPage.lock.title")} description={doctor.lock.reason}>
+			<SectionCard title={$_("diagnosticsPage.lock.title")} description={lockDescription(doctor.lock.reason)}>
 				<div class="flex flex-wrap items-center justify-between gap-3">
-					<div class="flex items-center gap-2 text-sm">
-						<ShieldAlertIcon class="size-4 text-muted-foreground" />
-						<Badge variant={doctor.lock.level.toLowerCase() === "error" ? "destructive" : "secondary"}>{doctor.lock.level}</Badge>
-						<span class="text-muted-foreground">{doctor.lock.pid_state} · {doctor.lock.os_lock_state}</span>
-					</div>
+					<Badge variant={doctor.lock.level.toLowerCase() === "error" ? "destructive" : "secondary"}>{levelLabel(doctor.lock.level)}</Badge>
 					{#if doctor.lock.repairable}
 						<AlertDialog.Root>
 							<AlertDialog.Trigger disabled={!!actionBusy} class={buttonVariants({ variant: "outline", size: "sm" })}>
@@ -106,7 +167,7 @@
 		{/if}
 
 		{#if operations.length}
-			<SectionCard title={$_("diagnosticsPage.operations")} help={$_("diagnosticsPage.operationsDescription")} contentClass="px-0">
+			<SectionCard title={$_("diagnosticsPage.operations")} description={$_("diagnosticsPage.operationsDescription")} contentClass="px-0">
 				<OperationTable {operations} {actionBusy} {onRecover} />
 			</SectionCard>
 		{/if}

@@ -1,39 +1,40 @@
 # 恢复操作
 
-ProfileDeck 会记录 switch 和 rollback operation，因此中断的写入可以被检查和恢复。
+切换或回滚没有完成、Profile 切换被阻止，或本地数据需要处理时，请使用诊断功能。
 
-## 诊断
+## 检查诊断信息
 
 ```bash
 profiledeck doctor
 profiledeck doctor --json
 ```
 
-`doctor` 报告：
+诊断会检查：
 
-- 数据库初始化和 schema 健康状况
-- 待处理 (pending) 和失败的操作
-- 切换锁 (switch lock) 状态
-- 失效锁 (stale lock) 是否可修复
-- 敏感路径权限警告
+- ProfileDeck 是否可以读取本地数据；
+- 未完成或失败的更改；
+- 是否可能还有其他 ProfileDeck 更改正在运行；
+- 敏感本地文件是否仅当前用户可访问。
 
-## 修复 stale lock
+Desktop 会用面向用户的语言显示相同问题，并且只在可以安全继续时提供操作。
+
+## 恢复 Profile 切换功能
 
 ```bash
 profiledeck doctor repair-lock --yes
 ```
 
-只有明确 stale 的 lock file 才能修复。如果 lock owner 仍然看起来活跃，或 lock 无法被验证，repair 会被拒绝。
+只有诊断明确表示可以安全恢复时才使用此命令。其他更改可能仍在进行，或当前情况无法确认时，ProfileDeck 会拒绝执行。
 
-## 恢复失败 switch
+## 恢复失败的切换
 
 ```bash
 profiledeck recover <switch-operation-id> --yes
 ```
 
-recover 使用失败 switch operation 的 backup checkpoint。它用于不完整的 switch，不是常规撤销操作。
+恢复会使用失败切换前保存的备份。它适用于被中断或失败的切换，不是常规撤销操作。
 
-## 回滚已应用 switch
+## 回滚成功的切换
 
 ```bash
 profiledeck backup list
@@ -41,4 +42,4 @@ profiledeck backup show <backup-id>
 profiledeck rollback <backup-id> --yes
 ```
 
-rollback 从 backup 恢复目标文件，并同步更新 ProfileDeck 当前激活状态 (active state) 和操作历史。恢复前也会为当前状态创建新的备份。
+回滚会从备份中还原文件和所选 Profile。恢复旧状态前，ProfileDeck 也会先备份当前文件。

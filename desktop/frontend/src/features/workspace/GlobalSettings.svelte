@@ -4,6 +4,7 @@
 	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
 	import SectionCard from "$lib/components/app/SectionCard.svelte";
 	import SettingsRow from "$lib/components/app/SettingsRow.svelte";
+	import * as Field from "$lib/components/ui/field";
 	import * as Select from "$lib/components/ui/select";
 	import { Spinner } from "$lib/components/ui/spinner";
 	import type { DesktopLanguage } from "$lib/i18n";
@@ -27,7 +28,7 @@
 
 <ContentContainer class="max-w-3xl">
 	<SectionCard title={$_("settings.preferences.title")}>
-		<div class="flex flex-col gap-1">
+		<Field.FieldGroup>
 			<SettingsRow label={$_("settings.language.label")} description={$_("settings.language.description")} forID="desktop-language">
 				{#snippet control()}
 					{#if languageBusy}<Spinner />{/if}
@@ -59,6 +60,6 @@
 					</Select.Root>
 				{/snippet}
 			</SettingsRow>
-		</div>
+		</Field.FieldGroup>
 	</SectionCard>
 </ContentContainer>

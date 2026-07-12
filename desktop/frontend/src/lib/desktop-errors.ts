@@ -1,5 +1,7 @@
 import { CancelError } from "@wailsio/runtime";
 
+import { translate } from "$lib/i18n";
+
 type DesktopErrorShape = {
 	Code?: string;
 	Message?: string;
@@ -11,6 +13,61 @@ type DesktopErrorShape = {
 	cause?: unknown;
 	Cause?: unknown;
 };
+
+const userErrorKeys: Record<string, string> = {
+	INVALID_RUNTIME_PATH: "errors.dataFolderInvalid",
+	RUNTIME_INIT_FAILED: "errors.localDataUnavailable",
+	STORE_INIT_FAILED: "errors.localDataUnavailable",
+	STORE_OPEN_FAILED: "errors.localDataUnavailable",
+	STORE_MIGRATION_FAILED: "errors.localDataUnavailable",
+	STORE_NOT_INITIALIZED: "errors.dataNotInitialized",
+	STORE_SCHEMA_INVALID: "errors.localDataUnavailable",
+	STORE_STATUS_FAILED: "errors.localDataUnavailable",
+	CONFIRMATION_REQUIRED: "errors.confirmationRequired",
+	PROVIDER_EXISTS: "errors.providerExists",
+	PROVIDER_IN_USE: "errors.providerInUse",
+	PROVIDER_INVALID: "errors.providerInvalid",
+	PROVIDER_NOT_FOUND: "errors.providerNotFound",
+	PROVIDER_DISABLED: "errors.providerDisabled",
+	PROFILE_EXISTS: "errors.profileExists",
+	PROFILE_IN_USE: "errors.profileInUse",
+	PROFILE_INVALID: "errors.profileInvalid",
+	PROFILE_NOT_FOUND: "errors.profileNotFound",
+	PLAN_BUILD_FAILED: "errors.switchPreviewFailed",
+	ADAPTER_NOT_FOUND: "errors.providerInvalid",
+	TARGET_INVALID: "errors.switchUnsupported",
+	TARGET_EXISTS: "errors.fileAlreadyManaged",
+	TARGET_NOT_FOUND: "errors.fileNotFound",
+	TARGET_READ_FAILED: "errors.fileReadFailed",
+	LOCK_ACQUIRE_FAILED: "errors.switchBusy",
+	SWITCH_PLAN_UNSUPPORTED: "errors.switchUnsupported",
+	TARGET_CHANGED: "errors.targetChanged",
+	BACKUP_FAILED: "errors.backupFailed",
+	BACKUP_INVALID: "errors.backupInvalid",
+	BACKUP_NOT_FOUND: "errors.backupNotFound",
+	ROLLBACK_UNSUPPORTED: "errors.rollbackUnavailable",
+	RECOVERY_UNSUPPORTED: "errors.recoveryUnavailable",
+	TARGET_WRITE_FAILED: "errors.fileWriteFailed",
+	LOCK_REPAIR_UNSAFE: "errors.switchRepairUnsafe",
+	USAGE_INVALID: "errors.usageUnavailable",
+	USAGE_IMPORT_FAILED: "errors.usageUnavailable",
+	CODEX_INVALID: "errors.codexNotReady",
+	SETTING_INVALID: "errors.settingInvalid",
+	EXPORT_FAILED: "errors.exportFailed",
+	IMPORT_INVALID: "errors.importInvalid",
+	IMPORT_CONFLICT: "errors.importConflict",
+	IMPORT_PLAN_CHANGED: "errors.importChanged",
+	OPERATION_CREATE_FAILED: "errors.operationFailed",
+	OPERATION_UPDATE_FAILED: "errors.operationFailed",
+	COMMAND_FAILED: "errors.operationFailed",
+	DESKTOP_ERROR: "errors.operationFailed",
+};
+
+function userErrorMessage(code: string, fallback: string): string {
+	if (code === "CANCELED") return "";
+	const key = userErrorKeys[code];
+	return key ? translate(key) : fallback;
+}
 
 export function desktopErrorCode(value: unknown): string {
 	if (!value) return "";
@@ -41,24 +98,18 @@ export function desktopErrorDetails(value: unknown): Record<string, unknown> | n
 
 export function desktopErrorMessage(value: unknown, fallback: string): string {
 	if (!value) return "";
-	if (typeof value === "string") return value.trim() === "{}" ? fallback : value;
-	if (Array.isArray(value)) return value.map((item) => desktopErrorMessage(item, fallback)).filter(Boolean).join("\n");
-	const typed = value as DesktopErrorShape;
-	const cause = typed.cause ?? typed.Cause;
-	if (cause && cause !== value) {
-		const causeMessage = desktopErrorMessage(cause, fallback);
-		if (causeMessage) return causeMessage;
+	if (typeof value === "string") {
+		const text = value.trim();
+		if (!text || text === "{}") return fallback;
+		const code = /^([A-Z][A-Z0-9_]+)(?::|$)/.exec(text)?.[1];
+		// Backend messages can contain implementation details; only structured codes cross the UI boundary.
+		return code ? userErrorMessage(code, fallback) : fallback;
 	}
-	const code = typed.code || typed.Code || "";
-	const message = typed.message || typed.Message || "";
-	if (code && message) return `${code}: ${message}`;
-	if (message) return message;
-	try {
-		const json = JSON.stringify(value);
-		return json === "{}" ? fallback : json;
-	} catch {
-		return String(value);
+	if (Array.isArray(value)) {
+		return [...new Set(value.map((item) => desktopErrorMessage(item, fallback)).filter(Boolean))].join("\n");
 	}
+	const code = desktopErrorCode(value);
+	return code ? userErrorMessage(code, fallback) : fallback;
 }
 
 export function isDesktopErrorCode(value: unknown, code: string): boolean {

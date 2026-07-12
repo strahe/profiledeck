@@ -1,6 +1,6 @@
 # Switching
 
-Switching is the only normal path that writes target tool files.
+Switching is the normal way to change the files used by Codex or another configured tool.
 
 ## Preview
 
@@ -9,19 +9,19 @@ profiledeck plan codex work
 profiledeck plan codex work --json
 ```
 
-The plan is read-only. It includes:
+The preview is read-only. It shows:
 
-- target path
-- action: `create`, `update`, `noop`, or `unsupported`
-- status reason
-- before and desired SHA-256 hashes
-- redacted previews
-- resource bindings and redacted working-copy capture summaries
-- plan fingerprint
+- each file that may change;
+- whether the file will be created, updated, left unchanged, or cannot be changed;
+- why that action was selected;
+- before and after SHA-256 hashes;
+- previews with sensitive values hidden;
+- warnings that need review;
+- a plan fingerprint for applying exactly what was reviewed.
 
-Sensitive-looking values are redacted. Codex auth previews are fully redacted, and raw credential or Config Set payloads never appear in capture summaries.
+Codex sign-in contents are always hidden. Complete saved login and Config Set data never appears in the preview.
 
-For Codex, the fingerprint covers the source and destination bindings, target file hashes, and hashes of valid working-copy state waiting to be captured. A changed working copy therefore invalidates a previously reviewed plan.
+The fingerprint represents the reviewed Profile and current file state. If a relevant file or saved Profile changes after preview, ProfileDeck rejects that fingerprint before writing anything.
 
 ## Apply
 
@@ -29,7 +29,7 @@ For Codex, the fingerprint covers the source and destination bindings, target fi
 profiledeck switch codex work --yes
 ```
 
-For stricter apply, pass the fingerprint from a previous plan:
+To require an exact match with a previous preview, pass its fingerprint:
 
 ```bash
 profiledeck switch codex work \
@@ -37,29 +37,25 @@ profiledeck switch codex work \
   --yes
 ```
 
-If the rebuilt plan does not match the expected fingerprint, the switch fails before writing targets.
+## What ProfileDeck protects
 
-## Safety pipeline
+Before changing files, ProfileDeck:
 
-`switch` performs these steps:
+1. checks that no other ProfileDeck change is still running;
+2. rechecks the current files and the reviewed switch;
+3. preserves valid changes made to the current Codex login and settings;
+4. creates a backup;
+5. changes only the files that need updating;
+6. records the selected Profile as current only after the files are updated successfully.
 
-1. Create a pending operation record.
-2. Acquire the ProfileDeck switch lock.
-3. Rebuild the plan from current database bindings and target files, staging valid Codex working-copy captures.
-4. Verify target file hashes.
-5. Create a backup checkpoint.
-6. Verify hashes again.
-7. Write changed files atomically.
-8. Commit captures, active state, and the applied operation in one database transaction.
+ProfileDeck stops without applying the switch when it cannot safely confirm the files, the backup, or the reviewed state. Missing, invalid, symbolic-link, and unsupported files are shown as warnings or blocking errors instead of being silently saved.
 
-When a Codex binding is unchanged, its valid working copy is captured without rewriting the file. When a binding changes, the old valid working copy is staged before the target resource is materialized. A working copy that already matches the target resource is not assigned to the old binding. Missing, invalid, symlinked, or non-regular files are never silently stored; plans warn or block according to the safety risk.
-
-If the operation fails, ProfileDeck keeps the failed operation record for `doctor` and `recover`.
+If a switch is interrupted or fails after it starts, the Diagnostics page keeps it visible and offers recovery only when a usable backup is available.
 
 ## Backups
 
-Every applied switch stores a backup manifest under the runtime backup directory. Backup manifests include paths, actions, hashes, modes, and relative backup entries. They do not include raw desired content in normal command output.
+Every successful switch saves a backup under the ProfileDeck data directory. Backup commands show file paths, actions, hashes, and permissions without printing sensitive file contents.
 
-Codex backups may contain previous `auth.json` and `config.toml` content. Treat the backup directory as sensitive.
+Codex backups may contain previous `auth.json` and `config.toml` contents. Treat the backup directory as sensitive.
 
-Rollback and recovery restore target files and previous active state. They do not undo valid credential or Config Set state already captured by an applied switch.
+Rollback and recovery restore files and the previously selected Profile. Changes already saved to a Profile login or Config Set remain saved.

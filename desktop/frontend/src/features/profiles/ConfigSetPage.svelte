@@ -49,7 +49,7 @@
 </script>
 
 <ContentContainer>
-	<PageHeader title={$_("configSets.title")} help={$_("configSets.description")}>
+	<PageHeader title={$_("configSets.title")} description={$_("configSets.description")}>
 		{#snippet meta()}
 			<Button variant="link" class="h-auto w-fit p-0 text-muted-foreground" onclick={onBack}>
 				<ArrowLeftIcon data-icon="inline-start" />{$_("actions.backToProfiles")}

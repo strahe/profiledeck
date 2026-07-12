@@ -10,21 +10,21 @@ All commands accept the global option:
 
 | Command | Purpose |
 | --- | --- |
-| `backup` | Inspect ProfileDeck backups. |
+| `backup` | View ProfileDeck backups. |
 | `codex` | Manage Codex provider profiles. |
-| `doctor` | Diagnose ProfileDeck runtime state. |
-| `init` | Initialize the application store. |
-| `plan` | Build a read-only switch plan. |
+| `doctor` | Check local data, file permissions, and interrupted changes. |
+| `init` | Create ProfileDeck's local data. |
+| `plan` | Preview a Profile switch without changing files. |
 | `provider` | Manage AI tool providers. |
 | `profile` | Manage ProfileDeck profiles and targets. |
-| `recover` | Recover a failed switch from its backup checkpoint. |
-| `rollback` | Roll back an applied switch backup. |
-| `status` | Print application store status. |
+| `recover` | Restore files from the backup saved before a failed switch. |
+| `rollback` | Undo an applied switch with its backup. |
+| `status` | Show ProfileDeck setup status. |
 | `switch` | Apply a profile switch. |
 | `usage` | Import and analyze local token usage. |
 | `version` | Print version information. |
 
-## Core runtime
+## Setup and status
 
 ```bash
 profiledeck init [--json]
@@ -54,13 +54,13 @@ profiledeck codex config-set update <config-set-id> [--name NAME] [--description
 profiledeck codex config-set delete <config-set-id> --yes [--json]
 ```
 
-The first `profile create` captures current Codex files into a hidden credential and the `shared` Config Set. Later creates reuse the active Config Set unless `--new-config-set` is supplied. `fork` requires both binding choices and at least one `copy-new`; copying config also requires `--new-config-set`. `save-current` captures both active working copies, and `set-config` accepts only an inactive Profile.
+The first `profile create` saves the current Codex login and settings and creates the `shared` Config Set. Later creates reuse the current Config Set unless `--new-config-set` is supplied. `fork` requires both sharing choices and at least one `copy-new`; copying settings also requires `--new-config-set`. `save-current` saves the current Codex login and settings, and `set-config` accepts only an inactive Profile.
 
-`config-set create` captures the current `config.toml`. List and show commands return summaries only; they never expose raw auth or raw TOML. Delete requires an unreferenced Config Set.
+`config-set create` saves the current `config.toml`. List and show commands return summaries only; they never expose complete sign-in data or TOML. Delete requires a Config Set that no Profile uses.
 
-`profile export` is an explicit sensitive backup. With no Profile IDs it exports every Codex Profile, every referenced hidden credential, and all Config Sets, including unreferenced sets. With Profile IDs it exports only those Profiles and their dependency closure. Run `save-current` first when the active working copies changed. `--output` is required so the bundle can be kept outside a runtime directory that will be deleted; `--force` is required to replace an existing file.
+`profile export` creates a sensitive backup. With no Profile IDs it exports every Codex Profile and Config Set. With Profile IDs it exports only those Profiles and the logins and Config Sets they need. Run `save-current` first when the current Codex login or settings changed. `--output` is required so the backup can be kept outside a ProfileDeck data directory that will be deleted; `--force` is required to replace an existing file.
 
-The bundle contains raw `auth.json` and complete `config.toml` payloads. ProfileDeck writes it atomically with `0600` permissions on POSIX systems and never prints those payloads to stdout. `import inspect` validates the bundle and reports `create`, `unchanged`, and `conflict` actions. `import apply` requires the reviewed fingerprint and rejects every differing same-ID conflict without partial writes. Import restores database resources only: it does not set active state or write Codex working files.
+The backup contains complete Codex sign-in data and settings. ProfileDeck writes it with `0600` permissions on POSIX systems and never prints the sensitive contents to stdout. `import inspect` checks the backup and reports `create`, `unchanged`, and `conflict` actions. `import apply` requires the reviewed fingerprint and makes no changes when an existing ID has different content. Import does not make a Profile current or write Codex files.
 
 ## Switching
 
@@ -79,7 +79,7 @@ profiledeck usage summary [--provider codex] [--json]
 profiledeck usage report [--provider codex] [--range today|7d|30d|all] [--json]
 ```
 
-Only Codex local session usage is supported currently. `sync codex` remains the manual entry point for CLI-only workflows; the Desktop app syncs automatically at its configured interval. `report` defaults to `7d`; human output prints the aggregate summary, time trend, and model statistics in that order. JSON output includes the resolved local-time range, import health, and static pricing provenance. Existing `summary` output remains the lightweight all-time contract.
+Only local Codex usage is supported currently. `sync codex` is the manual entry point for CLI-only workflows; the Desktop app syncs automatically at its configured interval. `report` defaults to `7d`; human output prints the overall summary, time trend, and model statistics. JSON output also includes the resolved local-time range, import status, and pricing source. `summary` provides a shorter all-time view.
 
 ## Provider and profile CRUD
 
@@ -107,7 +107,7 @@ profiledeck profile target update <profile-id> <provider-id> <target-id> [--path
 profiledeck profile target delete <profile-id> <provider-id> <target-id> --yes [--json]
 ```
 
-Generic target CRUD cannot create, update, or delete Codex preset targets. Use the Codex commands above for credential and Config Set bindings.
+Generic target commands cannot create, update, or delete the files managed by Codex Profiles. Use the Codex commands above for saved logins and Config Sets.
 
 ## Backup and recovery
 

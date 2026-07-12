@@ -12,19 +12,19 @@
 | --- | --- |
 | `backup` | 查看 ProfileDeck 备份。 |
 | `codex` | 管理 Codex provider 的 profile。 |
-| `doctor` | 诊断 ProfileDeck 运行状态。 |
-| `init` | 初始化应用数据库。 |
-| `plan` | 构建只读切换计划。 |
+| `doctor` | 检查本地数据、文件权限和未完成的更改。 |
+| `init` | 创建 ProfileDeck 本地数据。 |
+| `plan` | 预览 Profile 切换，不修改文件。 |
 | `provider` | 管理 AI 工具 provider。 |
 | `profile` | 管理 ProfileDeck profile 和 target。 |
-| `recover` | 从备份检查点恢复失败的 switch。 |
-| `rollback` | 回滚已应用的 switch 备份。 |
-| `status` | 打印应用数据库状态。 |
+| `recover` | 使用失败切换前保存的备份恢复文件。 |
+| `rollback` | 使用备份撤销已完成的切换。 |
+| `status` | 查看 ProfileDeck 初始化状态。 |
 | `switch` | 应用 profile 切换。 |
 | `usage` | 导入并分析本地 token 用量。 |
 | `version` | 打印版本信息。 |
 
-## Runtime 基础命令
+## 初始化与状态
 
 ```bash
 profiledeck init [--json]
@@ -54,13 +54,13 @@ profiledeck codex config-set update <config-set-id> [--name NAME] [--description
 profiledeck codex config-set delete <config-set-id> --yes [--json]
 ```
 
-第一次 `profile create` 会把当前 Codex 文件捕获为隐藏 credential 和 `shared` Config Set。后续创建默认复用 active Config Set，除非传入 `--new-config-set`。`fork` 必须指定两个绑定选项，且至少一项为 `copy-new`；复制配置时还必须提供 `--new-config-set`。`save-current` 捕获两个 active 工作副本；`set-config` 只接受 inactive Profile。
+第一次 `profile create` 会保存当前 Codex 登录和设置，并创建 `shared` Config Set。后续创建默认复用当前 Config Set，除非传入 `--new-config-set`。`fork` 必须指定两个共享选项，且至少一项为 `copy-new`；复制设置时还必须提供 `--new-config-set`。`save-current` 保存当前 Codex 登录和设置；`set-config` 只接受非当前 Profile。
 
-`config-set create` 捕获当前 `config.toml`。List 和 show 只返回摘要，不暴露 raw auth 或 raw TOML。只有未被引用的 Config Set 才能删除。
+`config-set create` 保存当前 `config.toml`。List 和 show 只返回摘要，不暴露完整登录数据或 TOML。只有未被任何 Profile 使用的 Config Set 才能删除。
 
-`profile export` 是显式敏感备份。不指定 Profile ID 时，它会导出全部 Codex Profiles、所有被引用的隐藏 credential，以及包括未绑定配置集在内的全部 Config Sets。指定 Profile ID 时，只导出这些 Profiles 及其依赖闭包。如果 active 工作副本有变化，请先运行 `save-current`。`--output` 必填，便于把 bundle 放到即将删除的 runtime 目录之外；覆盖已有文件必须传入 `--force`。
+`profile export` 会创建敏感备份。不指定 Profile ID 时，它会导出全部 Codex Profiles 和 Config Sets。指定 Profile ID 时，只导出这些 Profiles 及其需要的登录和 Config Sets。当前 Codex 登录或设置有变化时，请先运行 `save-current`。`--output` 必填，便于把备份放到即将删除的 ProfileDeck 数据目录之外；覆盖已有文件必须传入 `--force`。
 
-bundle 包含 raw `auth.json` 和完整 `config.toml` payload。ProfileDeck 会原子写入文件，并在 POSIX 系统上设置 `0600` 权限；stdout 不会打印这些 payload。`import inspect` 会校验 bundle 并报告 `create`、`unchanged` 和 `conflict`。`import apply` 必须提供审核过的 fingerprint；只要同 ID 内容不同，就会拒绝整次导入，不产生部分写入。导入只恢复数据库资源，不设置 active 状态，也不写 Codex 工作文件。
+备份包含完整的 Codex 登录数据和设置。ProfileDeck 会在 POSIX 系统上以 `0600` 权限写入文件；stdout 不会打印敏感内容。`import inspect` 会检查备份并报告 `create`、`unchanged` 和 `conflict`。`import apply` 必须提供审核过的 fingerprint；已有 ID 的内容不同时，不会写入任何更改。导入不会把 Profile 设为当前，也不会写入 Codex 文件。
 
 ## 切换
 
@@ -79,7 +79,7 @@ profiledeck usage summary [--provider codex] [--json]
 profiledeck usage report [--provider codex] [--range today|7d|30d|all] [--json]
 ```
 
-当前只支持 Codex 本地 session 用量。`sync codex` 继续作为纯 CLI 场景的手动入口；Desktop 会按设置的间隔自动同步。`report` 默认使用 `7d`；人类可读输出依次显示总体摘要、时间趋势和模型统计。JSON 输出还包含解析后的本地时间范围、导入健康状态和静态定价来源。原有 `summary` 输出继续作为轻量全量契约。
+当前只支持本地 Codex 用量。`sync codex` 是纯 CLI 场景的手动入口；Desktop 会按设置的间隔自动同步。`report` 默认使用 `7d`；人类可读输出显示总体摘要、时间趋势和模型统计。JSON 输出还包含本地时间范围、导入状态和定价来源。`summary` 提供更精简的全量视图。
 
 ## Provider 与 profile CRUD
 
@@ -107,7 +107,7 @@ profiledeck profile target update <profile-id> <provider-id> <target-id> [--path
 profiledeck profile target delete <profile-id> <provider-id> <target-id> --yes [--json]
 ```
 
-Generic target CRUD 不能创建、修改或删除 Codex preset target。Credential 与 Config Set 绑定必须使用上面的 Codex 命令。
+Generic target 命令不能创建、修改或删除 Codex Profile 管理的文件。已保存登录和 Config Set 必须使用上面的 Codex 命令管理。
 
 ## 备份与恢复
 

@@ -1,6 +1,6 @@
 # 切换流程
 
-switch 是正常情况下唯一会写入目标工具文件的路径。
+切换是修改 Codex 或其他已配置工具文件的正常方式。
 
 ## 预览
 
@@ -9,19 +9,19 @@ profiledeck plan codex work
 profiledeck plan codex work --json
 ```
 
-plan 是只读操作，包含：
+预览是只读操作，会显示：
 
-- 目标路径 (target path)
-- 操作行为 (action)：`create`、`update`、`noop` 或 `unsupported`
-- 状态原因 (status reason)
-- 变更前后的 SHA-256 哈希值 (before/desired hash)
-- 脱敏预览 (redacted preview)
-- 资源绑定与脱敏工作副本捕获摘要
-- 计划指纹 (plan fingerprint)
+- 可能发生变化的每个文件；
+- 文件将被创建、更新、保持不变，还是无法修改；
+- 选择该操作的原因；
+- 变更前后的 SHA-256 哈希；
+- 隐藏敏感值的预览；
+- 需要审核的警告；
+- 用于精确应用已审核内容的 plan fingerprint。
 
-敏感值会被脱敏。Codex auth preview 始终整体脱敏，credential 或 Config Set 的 raw payload 不会进入捕获摘要。
+Codex 登录内容始终隐藏。完整的已保存登录和 Config Set 数据不会出现在预览中。
 
-对 Codex 来说，fingerprint 同时覆盖源与目标绑定、目标文件 hash，以及等待捕获的有效工作副本 hash。因此工作副本变化会使之前审阅的 plan 失效。
+Fingerprint 代表已审核的 Profile 和当前文件状态。如果相关文件或已保存的 Profile 在预览后发生变化，ProfileDeck 会在写入前拒绝该 fingerprint。
 
 ## 应用
 
@@ -29,7 +29,7 @@ plan 是只读操作，包含：
 profiledeck switch codex work --yes
 ```
 
-如果希望严格应用之前看到的 plan，可以传入 fingerprint：
+要确保应用内容与之前的预览完全一致，请传入 fingerprint：
 
 ```bash
 profiledeck switch codex work \
@@ -37,29 +37,25 @@ profiledeck switch codex work \
   --yes
 ```
 
-如果锁内重建出的 plan 与预期 fingerprint 不一致，switch 会在写文件前失败。
+## ProfileDeck 如何保护切换
 
-## 安全流程
+修改文件前，ProfileDeck 会：
 
-`switch` 执行以下步骤：
+1. 检查是否还有其他 ProfileDeck 更改正在进行；
+2. 重新检查当前文件和已审核的切换内容；
+3. 保留当前 Codex 登录和设置中的有效更改；
+4. 创建备份；
+5. 只修改需要更新的文件；
+6. 文件全部更新成功后，才把所选 Profile 记录为当前 Profile。
 
-1. 创建待处理操作记录 (pending operation record)。
-2. 获取 ProfileDeck switch lock。
-3. 根据当前数据库绑定和目标文件重建 plan，并暂存有效 Codex 工作副本捕获。
-4. 校验目标文件 hash。
-5. 创建 backup checkpoint。
-6. 再次校验 hash。
-7. 原子写入发生变化的文件。
-8. 在同一个数据库事务中提交捕获、active state 和 applied operation。
+ProfileDeck 无法安全确认文件、备份或已审核状态时，会停止且不应用切换。缺失、无效、符号链接或不支持的文件会显示警告或阻止操作，不会被静默保存。
 
-Codex 绑定不变时，有效工作副本会被捕获但不会重写文件。绑定变化时，会先暂存旧资源的有效工作副本，再写入目标资源。如果工作副本已经与目标资源一致，不会把它误存到旧绑定。缺失、无效、symlink 或非普通文件不会被静默存储；plan 会根据风险给出警告或阻止切换。
-
-如果操作失败，ProfileDeck 会保留失败操作记录 (failed operation record)，供 `doctor` 和 `recover` 使用。
+切换开始后被中断或失败时，诊断页面会保留记录；只有存在可用备份时才会提供恢复操作。
 
 ## 备份
 
-每次成功应用的 switch 都会在 runtime backup 目录保存 backup manifest。manifest 包含路径、action、hash、mode 和相对备份条目。常规命令输出不会包含 raw desired content。
+每次成功切换都会在 ProfileDeck 数据目录中保存备份。备份命令会显示文件路径、操作、哈希和权限，但不会打印敏感文件内容。
 
-Codex 备份可能包含之前的 `auth.json` 和 `config.toml` 内容。backup 目录应按敏感数据处理。
+Codex 备份可能包含之前的 `auth.json` 和 `config.toml` 内容，请按敏感数据保护备份目录。
 
-Rollback 和 recovery 会恢复目标文件及之前的 active state，但不会撤销已由 applied switch 捕获的有效 credential 或 Config Set 状态。
+回滚和恢复会还原文件以及之前选择的 Profile。已经保存到 Profile 登录或 Config Set 中的更改仍会保留。

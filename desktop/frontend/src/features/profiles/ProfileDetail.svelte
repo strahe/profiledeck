@@ -20,6 +20,7 @@
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { Button } from "$lib/components/ui/button";
 	import { Spinner } from "$lib/components/ui/spinner";
+	import { joinUserMessages, profileWarningMessage } from "$lib/user-facing-messages";
 	import ProfileAutomationSettings from "../settings/ProfileAutomationSettings.svelte";
 	import { useCodexRuntime } from "../settings/codex-runtime.svelte.js";
 	import ProfileQuotaCard from "./ProfileQuotaCard.svelte";
@@ -103,7 +104,7 @@
 		<Alert.Root>
 			<TriangleAlertIcon data-icon="inline-start" />
 			<Alert.Title>{$_("profilePages.detail.warningTitle")}</Alert.Title>
-			<Alert.Description>{detail.summary.warnings.join(" ")}</Alert.Description>
+			<Alert.Description>{joinUserMessages(detail.summary.warnings, profileWarningMessage)}</Alert.Description>
 		</Alert.Root>
 	{/if}
 
@@ -140,7 +141,7 @@
 
 	<ProfileQuotaCard {quota} loading={quotaLoading} disabled={!!busyAction} onRefresh={onRefreshQuota} />
 
-	<SectionCard title={$_("profilePages.detail.automation")} help={$_("profilePages.detail.automationDescription")}>
+	<SectionCard title={$_("profilePages.detail.automation")} description={$_("profilePages.detail.automationDescription")}>
 		{#if runtime.loading}
 			<div class="flex justify-center py-6"><Spinner /></div>
 		{:else if automation}

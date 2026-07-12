@@ -1,57 +1,52 @@
 # 核心概念
 
-ProfileDeck 将应用状态和目标工具文件分开管理。
-
-## 应用数据库
-
-`profiledeck.db` 是 ProfileDeck 自有数据的 SQLite source of truth：
-
-- 服务商 (providers)
-- 配置集 (profiles)
-- 当前激活状态 (active state)
-- 配置目标 (profile targets)
-- 切换与回滚操作记录 (switch/rollback records)
-- Codex 隐藏 auth credential
-- Codex Config Set
-- 已导入的用量事件 (usage events) 和游标 (cursors)
-
-目标工具文件仍归对应工具所有。ProfileDeck 只会通过 switch 和 rollback 流程写入这些文件。
+ProfileDeck 保存需要一起切换的 AI 编程工具登录与设置。
 
 ## Provider
 
-provider 表示一个 AI 工具集成。当前实现的 adapter 是：
+Provider 表示一种 AI 工具集成。ProfileDeck 当前支持：
 
-- `codex`：用于 Codex profile 切换。
-- `generic`：用于手动配置的目标文件。
-
-provider 可以启用或禁用。
+- `codex`：引导式 Codex 工作流；
+- `generic`：管理用户明确选择的本地文件，适合高级工作流。
 
 ## Profile
 
-profile 是一个命名的期望状态。一个 profile 可以包含一个或多个 provider target。Codex Profile 绑定一个隐藏 auth credential 和一个 Config Set；两个资源都可以与其他 Profile 共享。
+Profile 是一套可以激活的命名设置。一个 Codex Profile 包含：
 
-## Target
+- 一份已保存的 Codex 登录；
+- 一个 Config Set，保存与该登录一起使用的 Codex 设置。
 
-target 将某个 profile 映射到文件路径、格式、策略和期望值。plan 从 target 构建，但 target 不会被直接写入。`switch` 会在锁内重建 plan，校验文件 hash，创建备份，然后原子写入目标文件。
+登录和 Config Set 可以分别共享。例如，两个 Profile 可以使用相同设置和不同登录，也可以使用相同登录和不同设置。
 
-## Codex 隐藏 credential
+## 当前 Profile
 
-Codex auth credential 是内部生命周期对象，不是用户管理的账号。隐藏 credential 保存最新的 `auth.json` 期望 payload，并可被多个 profile 共享。Codex `tokens.account_id` 只解析为展示 metadata，绝不作为 ProfileDeck identity 或合并依据。
+当前 Profile 是 Codex 正在使用的设置。它的 `auth.json` 和 `config.toml` 仍是普通 Codex 文件，可以继续在 Codex 中正常使用和修改。
 
-## Codex Config Set
+切换前，ProfileDeck 会保留当前 Codex 文件中的有效更改。必需文件缺失或无效时，ProfileDeck 会显示警告，不会静默保存这些内容。
 
-Config Set 保存一份完整的 `$CODEX_HOME/config.toml` 期望 payload。第一个 Codex Profile 会创建 `shared`；该名称可修改，在运行时没有特殊行为。Config Set 属于 ProfileDeck 应用数据，只有未被引用时才能删除。
+## 已保存登录
 
-## Codex 工作副本
+已保存登录包含一个或多个 Profile 使用的 Codex 登录数据。ProfileDeck 不会把它作为单独账号交给用户管理。
 
-Active Profile 的 `auth.json` 与 `config.toml` 是工作副本。切换会先把有效外部变化捕获到 active 绑定，再写入不同的目标绑定；无效或缺失的副本不会被捕获。
+ProfileDeck 可能显示 Codex Account ID 的末尾字符，帮助区分不同登录。这个值仅用于展示，不会决定更新或共享哪一份登录。
 
-## 目标文件
+## Config Set
 
-目标文件是外部工具文件，例如：
+Config Set 包含一份完整的用户级 Codex 配置。第一个 Profile 会创建名为 `shared` 的 Config Set；可以重命名、复制，或为需要不同设置的 Profile 新建独立 Config Set。
 
-- `$CODEX_HOME/config.toml`
-- `$CODEX_HOME/auth.json`
-- 手动配置的 JSON、TOML、env 或 text 文件
+只有未被任何 Profile 使用的 Config Set 才能删除。
 
-ProfileDeck 不会通过 UI 或 CRUD 命令直接写这些文件。写入只发生在 `switch`、`rollback` 或 `recover` 中；create、fork、rebind 和 save-current 只更新 ProfileDeck 应用数据。
+## Codex 文件
+
+ProfileDeck 使用：
+
+- `$CODEX_HOME/config.toml`：当前 Codex 设置；
+- `$CODEX_HOME/auth.json`：当前 Codex 登录。
+
+Skills、plugin 缓存、项目 `.codex/config.toml`、sessions、logs 和系统策略不属于 Config Set。
+
+只有在用户审核并应用切换、回滚或恢复操作后，ProfileDeck 才会修改这些文件。创建、编辑、Fork 或导入 Profile 只会改变 ProfileDeck 中已保存的数据。
+
+## ProfileDeck 本地数据
+
+Profiles、Config Sets、已保存登录、设置、用量报告和操作历史都保存在本地 `profiledeck.db` 中。目标工具仍然拥有自己的文件。

@@ -24,6 +24,7 @@
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { Spinner } from "$lib/components/ui/spinner";
 	import * as Tooltip from "$lib/components/ui/tooltip";
+	import { joinUserMessages, profileWarningMessage } from "$lib/user-facing-messages";
 	import { cn } from "$lib/utils";
 
 	import ProfileQuotaFreshness from "./ProfileQuotaFreshness.svelte";
@@ -92,10 +93,8 @@
 
 <Card.Root size="sm">
 	<Card.Header>
-		<Card.Title class="flex items-center gap-1">
-			<span>{$_("profilePages.list.title")}</span>
-			<InfoTooltip content={$_("profilePages.list.description")} subject={$_("profilePages.list.title")} />
-		</Card.Title>
+		<Card.Title>{$_("profilePages.list.title")}</Card.Title>
+		<Card.Description>{$_("profilePages.list.description")}</Card.Description>
 		<Card.Action>
 			<div class="flex items-center gap-2">
 				<DropdownMenu.Root>
@@ -248,7 +247,7 @@
 						<Alert.Root>
 							<TriangleAlertIcon data-icon="inline-start" />
 							<Alert.Title>{$_("profilePages.list.warningTitle")}</Alert.Title>
-							<Alert.Description>{profile.summary.warnings.join(" ")}</Alert.Description>
+							<Alert.Description>{joinUserMessages(profile.summary.warnings, profileWarningMessage)}</Alert.Description>
 						</Alert.Root>
 					{/if}
 				</div>

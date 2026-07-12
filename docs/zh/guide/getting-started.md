@@ -44,7 +44,7 @@ profiledeck init
 profiledeck status
 ```
 
-`init` 会创建 ProfileDeck 运行目录和 SQLite 应用数据库。默认运行根目录是：
+`init` 会创建 ProfileDeck 本地数据和备份目录。默认数据目录是：
 
 ```text
 <os-user-config-dir>/profiledeck
@@ -56,13 +56,13 @@ profiledeck status
 <os-user-config-dir>/profiledeck/profiledeck.db
 ```
 
-使用 `--config-dir` 可以把运行目录放到另一个用户配置目录下：
+使用 `--config-dir` 可以把 ProfileDeck 数据放到另一个用户配置目录下：
 
 ```bash
 profiledeck --config-dir /tmp/profiledeck-dev init
 ```
 
-在 POSIX 系统上，ProfileDeck 会尽力为 runtime、backup、export、log 和 lock 目录设置较严格的权限。
+在 POSIX 系统上，ProfileDeck 会尽力限制本地数据和备份目录的访问权限。
 
 ## 第一个 Codex profile
 

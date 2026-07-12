@@ -2,7 +2,7 @@
 
 Safe profile switching for AI coding tools.
 
-ProfileDeck is currently a Go CLI and macOS desktop MVP with a Codex-first workflow. A Codex Profile combines a hidden login credential with a reusable Config Set, while guarded transactions switch their on-disk working copies, preserve valid local changes, and support recovery. ProfileDeck imports local Codex session logs for offline analysis and can read current ChatGPT Codex limits for individual Profiles.
+ProfileDeck is a Go CLI and macOS desktop app with a Codex-first workflow. A Codex Profile saves one login and one reusable Config Set, so you can switch accounts and settings together, preserve valid changes made in Codex, and recover from interrupted switches. ProfileDeck also turns local Codex activity into usage reports and can check current ChatGPT Codex limits for individual Profiles.
 
 ## Documentation
 
@@ -63,9 +63,9 @@ During desktop development, set `PROFILEDECK_CONFIG_DIR` to a temporary director
 PROFILEDECK_CONFIG_DIR=/tmp/profiledeck-dev PROFILEDECK_CODEX_DIR=/tmp/profiledeck-codex wails3 dev
 ```
 
-Global Desktop settings contain language and appearance preferences. Appearance defaults to System, and the Agent sidebar starts expanded; both appearance and sidebar state persist in `profiledeck.db`. The sidebar currently lists the implemented Codex Agent, can collapse to icons, and keeps global Settings and Diagnostics in its footer. The selected Agent's Profiles, Usage, and Settings remain secondary navigation within its workspace. Diagnostics replaces the former Codex-specific health view and shows only actionable findings, lock issues, and incomplete operations when attention is required.
+Global Desktop settings let you choose the language and appearance. Appearance defaults to System, and the Agent sidebar remembers whether it is expanded. The sidebar lists Codex and keeps global Settings and Diagnostics in its footer. Diagnostics shows only issues that need attention and offers recovery when it is safe.
 
-Codex-specific settings contain the local usage-sync interval and per-Profile account-limit automation. The same automation controls are also available on each Profile detail page and stay synchronized. Usage sync runs while ProfileDeck is open or hidden in the tray; the available intervals are 5, 15, 30, and 60 seconds, with 15 seconds as the default. Account-limit refresh and login keepalive are off by default.
+Codex settings let you choose how often Usage reports update and whether each Profile refreshes limits or renews its sign-in automatically. Per-Profile options also appear on the Profile detail page. Usage reports update while ProfileDeck is open or hidden in the tray; the available intervals are 5, 15, 30, and 60 seconds, with 15 seconds as the default. Automatic limit refresh and sign-in renewal are off by default.
 
 ## Codex Quick Start
 
@@ -85,8 +85,8 @@ profiledeck usage report --range 7d
 
 Codex profile switching requires file credentials. If `$CODEX_HOME/auth.json` is missing, set `cli_auth_credentials_store = "file"` in `$CODEX_HOME/config.toml` and run `codex login` again.
 
-Stored Codex auth and complete Config Set payloads are sensitive. ProfileDeck stores them locally in `profiledeck.db`; switch backups may contain previous `auth.json` and `config.toml` content.
+Saved Codex logins and Config Sets are sensitive. ProfileDeck stores them locally in `profiledeck.db`; switch backups may contain previous `auth.json` and `config.toml` content.
 
-Codex Profile exports are explicit sensitive backups. They contain raw `auth.json` and complete `config.toml` payloads in a deterministic JSON file with `0600` permissions on POSIX systems. Keep the file outside the runtime directory before deleting a development database.
+Codex Profile exports are sensitive backups. They contain complete Codex sign-in data and settings in a JSON file with `0600` permissions on POSIX systems. Keep the file private and outside the ProfileDeck data directory before deleting a development database.
 
-Usage analysis stays local and aggregate-only. The Desktop Usage page defaults to an API-equivalent cost trend and can switch to token trends; it never infers which Profile, credential, or ChatGPT account produced a session. The Desktop Profiles page reads one saved credential at a time on manual refresh. Optional per-Profile automation uses the installed `codex app-server`, runs serially while ProfileDeck remains open or in the tray, and deduplicates shared hidden credentials. Limit snapshots remain in process memory and do not change the offline usage report.
+Usage analysis stays local and aggregate-only. The Desktop Usage page defaults to an API-equivalent cost trend and can switch to token trends; it never guesses which Profile or ChatGPT account produced a session. Limit checks are separate from Usage reports. Optional per-Profile limit refresh and sign-in renewal are off by default and run only while ProfileDeck is open or hidden in the tray.

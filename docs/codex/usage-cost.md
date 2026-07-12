@@ -1,6 +1,6 @@
 # Codex Usage and Cost
 
-ProfileDeck imports local Codex session usage and provides offline analysis by time, model, and session count. This analysis does not query account quotas or attribute usage to a Profile, credential, or ChatGPT account. The separate rate-limit snapshot on Desktop Profile pages—whether read once for the active Profile at startup, refreshed manually, or updated by opt-in automation—is not part of usage import or reporting.
+ProfileDeck imports local Codex activity and provides offline analysis by time, model, and session count. It does not query account limits or guess which Profile or ChatGPT account produced a session. Limit checks on Desktop Profile pages are a separate feature and never change Usage reports.
 
 ## Automatic Desktop sync
 
@@ -27,9 +27,7 @@ If `CODEX_HOME` is not set, it falls back to `~/.codex`. Use `--codex-dir` for a
 profiledeck usage sync codex --codex-dir /path/to/codex-home
 ```
 
-Each file's derived events and import cursor are committed together. Repeated imports are idempotent, and moving or copying a session into `archived_sessions` does not count it twice. Forked sessions can contain copied ancestor usage with different paths, line positions, and timestamps; ProfileDeck counts that ancestry once by stable session event identity while keeping post-fork usage distinct. Invalid, oversized, and unsupported lines are counted without storing their raw content.
-
-The importer does not automatically reprocess unchanged files after parser changes.
+Repeated syncs do not count the same usage twice, including sessions moved or copied into `archived_sessions`. When a forked session contains earlier usage from its parent, ProfileDeck counts that earlier usage once and keeps new post-fork usage separate. Invalid, oversized, and unsupported records are skipped and reported without storing their contents.
 
 ## Summary
 
@@ -48,7 +46,7 @@ The summary includes:
 - estimated cost in USD when all events can be fully priced
 - unknown cost event count
 
-If any event has unknown or partial cost, `estimated_cost_usd` is null in JSON output and the cost status is `unknown`. This preserves the legacy summary contract; use the report for partial-cost details and known subtotals.
+If any record has unknown or partial cost, `estimated_cost_usd` is null in JSON output and the cost status is `unknown`. Use the report for partial-cost details and the known subtotal.
 
 ## Report
 
@@ -68,7 +66,7 @@ The default range is `7d`. Available ranges are:
 
 Calendar boundaries use the machine's local time zone, including daylight-saving transitions. Empty buckets are included. Records without a timestamp are included in all-time totals and model statistics, reported separately, and excluded from trends.
 
-Reports include records, unique session count, fresh and cached input, output, total tokens, cache hit rate, known cost subtotal, token-weighted pricing coverage, model statistics, and import cursor health. The Desktop Usage page defaults to the known API-equivalent cost trend and can switch the same native SVG chart to token usage. Hovering or focusing a bucket shows its exact values next to the bucket.
+Reports include records, unique session count, fresh and cached input, output, total tokens, cache hit rate, known cost subtotal, token-weighted pricing coverage, model statistics, and import status. The Desktop Usage page defaults to the known API-equivalent cost trend and can switch to token usage. Hovering or focusing a time period shows its exact values.
 
 ## Estimation limits
 
@@ -76,6 +74,6 @@ Costs are local estimates based on exact model names and a static table of [Open
 
 GPT-5.6 Sol, Terra, and Luna have separate [cache-write pricing](https://developers.openai.com/api/docs/guides/prompt-caching#requirements), but Codex session logs do not expose cache-write token counts. ProfileDeck therefore calculates their Standard input, cached-input, and output base cost, leaves any cache-write-specific portion unpriced, and marks affected events as `partial`.
 
-The report always shows the known subtotal. If any selected event has unknown pricing, the overall status is `unknown`; otherwise, any incomplete billing dimension makes it `partial`. Pricing coverage is priced tokens divided by total tokens. Sync can backfill previously unknown events when their exact model gains a supported catalog entry, but it does not recalculate events that already have an estimated or partial cost.
+The report always shows the known subtotal. If any selected record has unknown pricing, the overall status is `unknown`; otherwise, any missing cost component makes it `partial`. Pricing coverage is the share of tokens with a known price.
 
-These values are API-equivalent estimates, not subscription billing, account quotas, or actual ChatGPT usage balances. Usage import and reports do not query provider billing APIs, balances, or relay services. Profile rate-limit snapshots are a separate runtime view and are never used as billing or session-attribution data.
+These values are API-equivalent estimates, not subscription billing, account limits, or actual ChatGPT balances. Usage reports do not query provider billing APIs, balances, or relay services. Profile limit checks are separate and are never used for billing or session attribution.

@@ -1,52 +1,44 @@
 # Data and Security
 
-ProfileDeck manages local files and local secrets. Treat its runtime directory as sensitive.
+ProfileDeck manages local files and Codex sign-in data. Treat its data directory and backups as sensitive.
 
-## Runtime data
+## Local data
 
-The runtime root is:
+The default data directory is:
 
 ```text
 <os-user-config-dir>/profiledeck
 ```
 
-It contains:
+It contains the application database, backups, exports, and operational files. `--config-dir` changes the user config directory used for this location.
 
-- `profiledeck.db`
-- `backups/`
-- `exports/`
-- `logs/`
-- `locks/`
+`profiledeck.db` stores Profiles, Config Sets, saved Codex logins, settings, usage reports, and operation history. Complete `auth.json` and `config.toml` contents may be stored because they are required to restore and switch Profiles.
 
-`--config-dir` changes the base user config directory used to resolve this runtime root.
+The database is not encrypted at rest. ProfileDeck restricts file permissions on POSIX systems when possible, but anyone who can read your local files may be able to read saved Codex sign-in data.
 
-## SQLite database
-
-`profiledeck.db` stores ProfileDeck application data. For Codex, it stores raw `auth.json` payloads in hidden credential records, complete `config.toml` payloads in Config Sets, and local per-Profile automation settings. Credentials and Config Sets are the long-lived resource states; the files in `$CODEX_HOME` are working copies of the active Profile. Account-limit snapshots are not stored in the database.
-
-Each Config Set is limited to 16 MiB and validated against its SHA-256 hash. The database payload may contain tokens or other sensitive configuration even when its column is not named as a secret.
-
-The database is not encrypted at rest. File permissions are tightened on POSIX systems when possible, but local filesystem access remains the security boundary.
+Current account-limit information is temporary and is not stored in the database.
 
 ## Backups
 
-Switch and rollback backups may contain previous target file content. For Codex, that can include raw `auth.json` and `config.toml`.
+Switch and rollback backups may contain previous tool files. Codex backups can include complete `auth.json` and `config.toml` contents.
 
-Backup commands show metadata such as path, action, hash, and mode. They do not print raw auth content in normal output.
+Backup commands show file names, actions, hashes, and permissions without printing sensitive file contents. Keep the backup directory private.
 
 ## Sensitive Profile exports
 
-`profiledeck codex profile export` is an explicit sensitive export mode for local backup and database rebuilds. Its JSON bundle contains raw Codex `auth.json` and complete Config Set payloads. ProfileDeck requires an explicit output path, writes atomically, refuses symlink targets, and sets the file to `0600` on POSIX systems. It does not create or change the selected parent directory.
+`profiledeck codex profile export` creates a sensitive local backup. The JSON file contains complete Codex sign-in data and settings. Anyone with the file may be able to access your account.
 
-Import accepts only a private regular file, validates its format, version, hashes, auth JSON, TOML, references, and conflicts before writing, then applies all database changes in one transaction. It never uses `tokens.account_id` to merge credentials. Import does not set active state, include local automation settings, or write Codex working files. Imported Profiles start with automatic limit refresh and login keepalive disabled.
+ProfileDeck requires an explicit output path, refuses symbolic-link destinations, and writes the file with `0600` permissions on POSIX systems. It does not create or change the selected parent directory.
 
-Keep sensitive bundles outside the ProfileDeck runtime before deleting a development database. Do not commit or share them.
+Import checks the backup and reports conflicts before making changes. It does not make a Profile current, restore automatic-update settings, or write Codex files. Imported Profiles start with automatic limit refresh and sign-in renewal disabled.
+
+Keep exported backups outside any ProfileDeck data directory you plan to delete. Do not commit or share them.
 
 ## Redaction
 
-ProfileDeck redacts sensitive-looking values in previews and command output. Codex auth previews are always fully redacted. Config Set and Profile APIs expose metadata summaries, never raw TOML or auth payloads.
+ProfileDeck hides sensitive-looking values in previews, normal command output, logs, errors, and result summaries. Codex sign-in previews are always fully hidden.
 
-The following commands are metadata-only and do not print raw auth:
+These commands show summaries only and do not print complete Codex sign-in data:
 
 ```bash
 profiledeck codex profile list
@@ -58,26 +50,22 @@ profiledeck backup show <backup-id>
 profiledeck doctor
 ```
 
-Export and import command output remains metadata-only. Only the explicitly selected bundle file contains raw payloads.
+Export and import command output also remains summary-only. Only the explicitly selected backup file contains the complete sign-in data and settings.
 
-## Codex limits and login keepalive
+## Limit checks and sign-in renewal
 
-Single-Profile reads, including the active Profile startup read and manual refresh, plus opt-in automation normally use the installed `codex app-server`. ProfileDeck initializes a short-lived stdio session and invokes Codex's native account methods. Remote plugins, apps, analytics, memories, and app instructions are disabled for this process so the request does not warm unrelated network features. Profile-controlled model-provider URLs never receive the hidden ChatGPT token.
+Checking a Profile's limits contacts Codex or OpenAI using that Profile's saved sign-in. Profile-controlled model-provider URLs never receive the saved ChatGPT sign-in token.
 
-The active credential runs against its real `CODEX_HOME` while ProfileDeck holds the shared switch lock. If Codex rotates its managed OAuth tokens, ProfileDeck reads the updated `auth.json` and captures it into the credential bound by the current `credential_id`. Inactive credentials run from a temporary `CODEX_HOME` with `0700` directory permissions and a `0600` `auth.json`; a changed payload updates the database only when the original credential hash still matches. A concurrent credential replacement wins. `tokens.account_id` is never used for identity, ownership, deduplication, or token updates.
+Automatic limit refresh and sign-in renewal are off by default and run only while ProfileDeck is open or hidden in the tray. Desktop also checks the current Profile once at startup and does not repeat that check when you navigate between pages.
 
-If app-server is unavailable or incompatible, a single-Profile UI read can use the fixed ChatGPT Codex quota endpoint as a read-only fallback. This includes the active Profile startup read and manual refresh. The fallback does not refresh or write OAuth tokens. Recurring automatic limit refresh and login keepalive do not use this fallback.
+Supported managed logins may be renewed during a limit check. Some external sign-in methods can provide limits but cannot be renewed automatically. If automatic Codex updates are unavailable, a manual check may still work without changing the saved login.
 
-Recurring automatic network work is disabled by default and runs only while the Desktop/tray process is alive. Independently, Desktop reads the active Profile once at startup and does not repeat that read during navigation. A global serial worker handles one credential at a time, spaces different credentials, and deduplicates shared credentials. Managed-token keepalive uses Codex's native refresh path. External `chatgptAuthTokens` credentials can query limits but cannot use native keepalive; API-key and other login modes are unsupported.
+Limit information is kept only while ProfileDeck is running. Limit checks do not display or record raw sign-in tokens or temporary file locations.
 
-Limit snapshots remain in process memory. Runtime events and Desktop DTOs contain Profile IDs, timestamps, next-run times, result states, and mapped limit snapshots only. They do not contain tokens, temporary paths, credential payload hashes, or raw app-server errors.
+## Usage data ProfileDeck does not store
 
-## What ProfileDeck does not store
+Usage reports store token counts, cost estimates, model names, and time information. ProfileDeck does not store raw Codex session records, prompts, completions, API keys, or full source paths as Usage data.
 
-ProfileDeck usage import stores derived token and cost records, validated model labels, safe or derived session identifiers for distinct counts, stable hashed event identities, and hashed path-based cursor keys. A stable event identity is scoped by provider and source, then derived from the safe session identifier, per-session usage order, model, and token counts; it excludes paths, timestamps, prompts, and completions. ProfileDeck does not persist raw Codex JSONL events, prompts, completions, full source paths, or API keys as usage metadata or report output. Import errors expose at most a basename, hashed source key, and sanitized filesystem error.
+Usage reports contain aggregate results only. Local Codex activity cannot reliably identify which Profile or ChatGPT account served a request, so ProfileDeck does not guess or publish account-level usage.
 
-Usage reports expose aggregates only. Local logs cannot reliably identify the Profile, hidden credential, or ChatGPT account that served a request, so ProfileDeck does not infer or publish account-level usage.
-
-Desktop automatic-sync status contains the configured interval, timestamps, an outcome, aggregate error counts, and a redacted error code/message when needed. It does not emit session paths, cursor keys, or raw importer errors to the UI event stream.
-
-Config Set v1 does not capture skills, plugin installation caches, project `.codex/config.toml` files, or system policy.
+Config Sets do not include skills, plugin caches, project `.codex/config.toml` files, or system policy.

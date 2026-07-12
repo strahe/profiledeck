@@ -1,6 +1,6 @@
 # Codex 用量与成本
 
-ProfileDeck 导入本地 Codex session 用量，并按时间、模型和唯一 session 数提供离线分析。这套分析不会查询账号限额，也不会把用量归因到 Profile、credential 或 ChatGPT account。Desktop Profile 页面的限额快照是独立功能；无论来自 active Profile 启动读取、手动刷新还是显式启用的自动刷新，都不属于 usage 导入或报告。
+ProfileDeck 导入本地 Codex 活动，并按时间、模型和 session 数提供离线分析。它不会查询账号限额，也不会猜测某个 session 来自哪个 Profile 或 ChatGPT 账号。Desktop Profile 页面的限额检查是独立功能，不会改变用量报告。
 
 ## Desktop 自动同步
 
@@ -27,9 +27,7 @@ $CODEX_HOME/archived_sessions/*.jsonl
 profiledeck usage sync codex --codex-dir /path/to/codex-home
 ```
 
-每个文件的派生事件和 import cursor 在同一事务中提交。重复导入保持幂等；把 session 移动或复制到 `archived_sessions` 不会重复计数。分叉 session 可能包含路径、行位置和时间戳均已变化的祖先用量副本；ProfileDeck 使用稳定的 session event identity 只计算一次祖先用量，同时保留分叉后的新用量。无效、超长或不支持的行只记录数量，不保存 raw 内容。
-
-parser 变化后不会自动重扫未变化的文件。
+重复同步不会重复计算相同用量，包括移动或复制到 `archived_sessions` 的 session。Fork session 包含来源 session 的早期用量时，ProfileDeck 只计算一次早期用量，并单独保留 Fork 后的新用量。无效、过大或不支持的记录会被跳过并计数，不会保存其内容。
 
 ## 汇总
 
@@ -48,7 +46,7 @@ summary 包含：
 - 所有事件都能完整估价时的 USD 估算成本
 - unknown cost event count
 
-如果任一事件成本未知或只有部分估算，JSON 输出中的 `estimated_cost_usd` 为 null，cost status 为 `unknown`。这是为了保持旧 summary 契约；部分成本详情和已知小计请使用 report。
+如果任一记录的成本未知或只有部分估算，JSON 输出中的 `estimated_cost_usd` 为 null，cost status 为 `unknown`。部分成本详情和已知小计请使用 report。
 
 ## 分析报告
 
@@ -68,7 +66,7 @@ profiledeck usage report --range all
 
 自然日边界使用机器本地时区，并正确处理夏令时。趋势会补齐空桶。没有时间戳的记录会进入全量汇总和模型统计，单独报告数量，但不进入趋势。
 
-报告包含记录数、唯一 session 数、新输入与缓存输入、输出、总 tokens、缓存命中率、已知成本小计、按 token 加权的定价覆盖率、模型统计和 import cursor 健康摘要。Desktop Usage 页面默认显示已知 API 等价成本趋势，也可以在同一个原生 SVG 图表中切换到 Token 趋势。鼠标悬停或键盘聚焦时间桶时，准确数值会显示在时间桶旁边。
+报告包含记录数、唯一 session 数、新输入与缓存输入、输出、总 Tokens、缓存命中率、已知成本小计、按 Token 加权的定价覆盖率、模型统计和导入状态。Desktop Usage 页面默认显示已知 API 等价成本趋势，也可以切换到 Token 趋势。鼠标悬停或键盘聚焦某个时间段时，会显示准确数值。
 
 ## 估算限制
 
@@ -76,6 +74,6 @@ profiledeck usage report --range all
 
 GPT-5.6 Sol、Terra 和 Luna 具有独立的 [cache-write 价格](https://developers.openai.com/api/docs/guides/prompt-caching#requirements)，但 Codex session 日志没有提供 cache-write token 数量。因此，ProfileDeck 只计算其 Standard input、cached-input 和 output 基础成本，无法估价可能存在的 cache-write 特有部分，并将受影响事件标记为 `partial`。
 
-报告始终展示已知成本小计。只要选中范围内存在未知价格事件，整体状态就是 `unknown`；否则，只要有计费维度缺失，状态就是 `partial`。定价覆盖率为已定价 tokens 除以总 tokens。同步可以在精确模型进入支持目录后回填原本未知的历史事件，但不会重算已经具有 estimated 或 partial 成本的事件。
+报告始终展示已知成本小计。只要选中范围内存在未知价格记录，整体状态就是 `unknown`；否则，只要有成本部分缺失，状态就是 `partial`。定价覆盖率表示具有已知价格的 Tokens 占比。
 
-这些数值只是 API 等价估算，不是订阅账单、账号限额或真实 ChatGPT 用量余额。Usage 导入和报告不会查询 provider billing API、余额或 relay 服务。Profile 页面中的限额快照是独立的运行时视图，不会作为账单或 session 归因数据。
+这些数值只是 API 等价估算，不是订阅账单、账号限额或真实 ChatGPT 余额。用量报告不会查询 Provider 账单 API、余额或 relay 服务。Profile 限额检查相互独立，不会用于账单或 session 归因。

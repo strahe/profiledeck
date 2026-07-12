@@ -13,6 +13,7 @@
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
 	import { Spinner } from "$lib/components/ui/spinner";
+	import { translate } from "$lib/i18n";
 
 	import type { CodexDetectResult, CodexProfileDetail } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
 	import ProfileForm from "./ProfileForm.svelte";
@@ -75,6 +76,11 @@
 	let forkValid = $derived(mode !== "fork" || credentialBinding === "copy-new" || configBinding === "copy-new");
 	let submitReady = $derived(!idError && !nameError && !descriptionError && forkValid && (!needsNewConfigSet || (!!newConfigSetID.trim() && !!newConfigSetName.trim())) && (mode === "fork" || sourceReady));
 	let title = $derived(mode === "new" ? $_("profilePages.new.title") : $_("profilePages.fork.title", { values: { profile: detail?.summary.profile.name || detail?.summary.profile.id || "" } }));
+
+	function sourceStatusLabel(value: string | undefined): string {
+		const status = value === "valid" || value === "invalid" || value === "unreadable" ? value : "missing";
+		return translate(`sourceStatus.${status}`);
+	}
 </script>
 
 <div class="mx-auto flex w-full max-w-4xl flex-col gap-4">
@@ -95,11 +101,11 @@
 		<Card.Root>
 			<Card.Header><Card.Title>{$_("profilePages.source.title")}</Card.Title><Card.Description>{$_("profilePages.source.description")}</Card.Description></Card.Header>
 			<Card.Content class="flex flex-wrap gap-2">
-				<Badge variant={detectResult?.config_status === "valid" ? "secondary" : "destructive"}>config.toml · {detectResult?.config_status || "missing"}</Badge>
-				<Badge variant={detectResult?.auth_status === "valid" ? "secondary" : "destructive"}>auth.json · {detectResult?.auth_status || "missing"}</Badge>
+				<Badge variant={detectResult?.config_status === "valid" ? "secondary" : "destructive"}>config.toml · {sourceStatusLabel(detectResult?.config_status)}</Badge>
+				<Badge variant={detectResult?.auth_status === "valid" ? "secondary" : "destructive"}>auth.json · {sourceStatusLabel(detectResult?.auth_status)}</Badge>
 				{#if !sourceReady}
 					<Alert.Root variant="destructive" class="basis-full">
-						<Alert.Description>{$_("profilePages.source.statusDescription", { values: { config: detectResult?.config_status || "missing", auth: detectResult?.auth_status || "missing" } })}</Alert.Description>
+						<Alert.Description>{$_("profilePages.source.statusDescription", { values: { config: sourceStatusLabel(detectResult?.config_status), auth: sourceStatusLabel(detectResult?.auth_status) } })}</Alert.Description>
 						<Alert.Action>
 							<div class="flex gap-2">
 								<Button size="xs" variant="outline" onclick={onRetrySource}><RefreshCwIcon />{$_("actions.retry")}</Button>
@@ -130,7 +136,7 @@
 					</Field.FieldLabel>
 				</RadioGroup.Root>
 			{:else if mode === "new"}
-				<div class="flex items-center gap-2 text-sm"><Badge variant="outline">shared</Badge><span class="text-muted-foreground">config.toml</span></div>
+				<div class="flex items-center gap-2 text-sm"><Badge variant="outline">shared</Badge><span class="text-muted-foreground">{$_("profilePages.configChoice.codexSettings")}</span></div>
 			{:else}
 				<div class="grid gap-4 md:grid-cols-2">
 					<Field.FieldSet><Field.FieldLegend>{$_("profilePages.fork.credentialBinding")}</Field.FieldLegend><RadioGroup.Root bind:value={credentialBinding} class="flex flex-col gap-2"><Field.FieldLabel><RadioGroup.Item value="share-parent" />{$_("profilePages.fork.shareParent")}</Field.FieldLabel><Field.FieldLabel><RadioGroup.Item value="copy-new" />{$_("profilePages.fork.copyNew")}</Field.FieldLabel></RadioGroup.Root></Field.FieldSet>

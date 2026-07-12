@@ -1,14 +1,14 @@
 # ProfileDeck
 
-ProfileDeck safely switches local AI coding tool profiles. The current implementation is Codex-first: a Profile combines a hidden login credential with a reusable Config Set, while the transaction pipeline switches their working copies, preserves valid local changes, and supports recovery.
+ProfileDeck safely switches local AI coding tool Profiles. The current implementation is Codex-first: each Profile saves a Codex login and a reusable Config Set, so accounts and settings can be switched together.
 
 ## Current capabilities
 
 - Create a Codex Profile from `$CODEX_HOME/config.toml` and `$CODEX_HOME/auth.json`.
-- Share credentials and complete Config Sets independently across Profiles.
-- Automatically capture valid working-copy changes while switching through lock, hash guard, backup, and atomic writes.
+- Share saved logins and Config Sets independently across Profiles.
+- Preview every switch, preserve valid changes made in Codex, create a backup first, and stop if the reviewed files changed.
 - Import active and archived Codex session JSONL, then analyze local-time trends, models, sessions, cache usage, and API-equivalent estimated cost.
-- Inspect backups, diagnose runtime state, recover failed switches, and rollback applied switches.
+- Inspect backups, find problems that block switching, recover failed switches, and undo an applied switch.
 - Manage generic providers, profiles, and target files for advanced local workflows.
 
 ## Quick start
@@ -27,8 +27,8 @@ Codex must use file credentials for profile switching. If `$CODEX_HOME/auth.json
 
 ## Documentation map
 
-- [Getting Started](/guide/getting-started) covers local build, runtime initialization, and command shortcuts.
-- [Codex Profiles](/codex/profiles) covers credentials, Config Sets, and working-copy behavior.
+- [Getting Started](/guide/getting-started) covers local build, initial setup, and command shortcuts.
+- [Codex Profiles](/codex/profiles) covers saved logins, Config Sets, switching, limits, and backups.
 - [Codex Usage and Cost](/codex/usage-cost) covers offline imports, reports, and estimation limits.
 - [Switching](/operations/switching) explains plan, apply, backups, and safety checks.
 - [Data and Security](/reference/data-security) describes stored secrets, backups, and redaction boundaries.

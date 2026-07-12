@@ -11,6 +11,7 @@
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { Spinner } from "$lib/components/ui/spinner";
+	import { joinUserMessages, switchWarningMessage } from "$lib/user-facing-messages";
 
 	import type { PlanOperation, SwitchPlan } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
 	import type { CodexProfileListItem } from "./types";
@@ -51,7 +52,13 @@
 	}
 
 	function operationWarnings(operation: PlanOperation): string[] {
-		return operation.warnings ?? [];
+		return [...new Set((operation.warnings ?? []).map(switchWarningMessage))];
+	}
+
+	function targetLabel(targetID: string): string {
+		if (targetID === "auth") return $_("useDialog.loginFile");
+		if (targetID === "config") return $_("useDialog.settingsFile");
+		return $_("useDialog.codexFile");
 	}
 
 	function preview(operation: PlanOperation, side: "before" | "after"): string {
@@ -116,7 +123,7 @@
 				<Alert.Root>
 					<AlertTriangleIcon data-icon="inline-start" />
 					<Alert.Title>{$_("useDialog.planWarnings")}</Alert.Title>
-					<Alert.Description>{plan.warnings.join(" ")}</Alert.Description>
+					<Alert.Description>{joinUserMessages(plan.warnings, switchWarningMessage)}</Alert.Description>
 				</Alert.Root>
 			{/if}
 
@@ -148,7 +155,7 @@
 									<Badge variant={operation.action === "unsupported" ? "destructive" : operation.action === "noop" ? "secondary" : "outline"}>
 										{actionLabel(operation.action)}
 									</Badge>
-									<span class="shrink-0 font-medium">{operation.target_id}</span>
+									<span class="shrink-0 font-medium">{targetLabel(operation.target_id)}</span>
 									<span class="truncate font-mono text-xs text-muted-foreground">{operation.path}</span>
 								</div>
 							</Accordion.Trigger>

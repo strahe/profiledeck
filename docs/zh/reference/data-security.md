@@ -1,52 +1,44 @@
 # 数据与安全
 
-ProfileDeck 管理本地文件和本地 secret。请把 runtime 目录按敏感数据处理。
+ProfileDeck 管理本地文件和 Codex 登录数据。请把数据目录和备份按敏感数据保护。
 
-## Runtime 数据
+## 本地数据
 
-runtime root 是：
+默认数据目录是：
 
 ```text
 <os-user-config-dir>/profiledeck
 ```
 
-其中包含：
+其中包含应用数据库、备份、导出文件和运行所需文件。`--config-dir` 会改变此位置使用的用户配置目录。
 
-- `profiledeck.db`
-- `backups/`
-- `exports/`
-- `logs/`
-- `locks/`
+`profiledeck.db` 保存 Profiles、Config Sets、Codex 登录、设置、用量报告和操作历史。为了恢复和切换 Profile，数据库可能保存完整的 `auth.json` 和 `config.toml` 内容。
 
-`--config-dir` 会改变用于解析 runtime root 的用户配置目录。
+数据库不会做静态加密。ProfileDeck 会在 POSIX 系统上尽力限制文件权限，但能够读取本地文件的人也可能读取已保存的 Codex 登录数据。
 
-## SQLite 数据库
-
-`profiledeck.db` 保存 ProfileDeck 应用数据。对 Codex 来说，它会在隐藏 credential 记录中保存 raw `auth.json` payload，在 Config Set 中保存完整 `config.toml` payload，并保存每个 Profile 的本机自动任务设置。Credential 与 Config Set 是资源的长期状态；`$CODEX_HOME` 中的文件是 active Profile 的工作副本。账号限额快照不会写入数据库。
-
-每个 Config Set 限制为 16 MiB，并校验 SHA-256 hash。即使数据库列名不表示 secret，payload 仍可能包含 token 或其他敏感配置。
-
-数据库不会做静态加密。在 POSIX 系统上，ProfileDeck 会尽力收紧文件权限，但本地文件系统访问权限仍然是安全边界。
+当前账号限额信息只是临时显示，不会写入数据库。
 
 ## 备份
 
-switch 和 rollback 备份可能包含之前的目标文件内容。对 Codex 来说，这可能包括 raw `auth.json` 和 `config.toml`。
+切换和回滚备份可能包含之前的工具文件。Codex 备份可能包含完整的 `auth.json` 和 `config.toml` 内容。
 
-backup 命令展示 path、action、hash 和 mode 等 metadata，不会在常规输出中打印 raw auth content。
+备份命令会显示文件名、操作、哈希和权限，但不会打印敏感文件内容。请保护好备份目录。
 
 ## 敏感 Profile 导出
 
-`profiledeck codex profile export` 是用于本地备份和数据库重建的显式敏感导出模式。它的 JSON bundle 包含 raw Codex `auth.json` 与完整 Config Set payload。ProfileDeck 要求显式指定输出路径，采用原子写入，拒绝 symlink 目标，并在 POSIX 系统上把文件权限设置为 `0600`。它不会创建或修改用户选择的父目录。
+`profiledeck codex profile export` 会创建敏感本地备份。JSON 文件包含完整的 Codex 登录数据和设置。获得文件的人可能可以访问你的账号。
 
-导入只接受私有的普通文件。写入前会校验格式、版本、hash、auth JSON、TOML、引用和冲突，然后在一个事务中应用全部数据库变更。它不会使用 `tokens.account_id` 合并 credential，不会包含本机自动任务设置，也不会设置 active 状态或写 Codex 工作文件。导入后的 Profile 默认关闭自动限额刷新和登录保活。
+ProfileDeck 要求显式指定输出路径，拒绝符号链接目标，并在 POSIX 系统上以 `0600` 权限写入文件。它不会创建或修改用户选择的父目录。
 
-删除开发数据库前，请把敏感 bundle 放到 ProfileDeck runtime 之外。不要提交或分享该文件。
+导入会先检查备份并报告冲突，再执行更改。它不会把 Profile 设为当前、恢复自动更新设置，也不会写入 Codex 文件。导入后的 Profile 默认关闭自动刷新限额和登录续期。
+
+请把导出备份放在准备删除的 ProfileDeck 数据目录之外。不要提交或分享这些文件。
 
 ## 脱敏
 
-ProfileDeck 会在 preview 和命令输出中脱敏看起来敏感的值。Codex auth preview 始终整体脱敏。Config Set 与 Profile API 只暴露 metadata 摘要，不输出 raw TOML 或 auth payload。
+ProfileDeck 会在预览、常规命令输出、日志、错误和结果摘要中隐藏敏感值。Codex 登录预览始终完全隐藏。
 
-以下命令只输出 metadata，不打印 raw auth：
+以下命令只显示摘要，不会打印完整 Codex 登录数据：
 
 ```bash
 profiledeck codex profile list
@@ -58,26 +50,22 @@ profiledeck backup show <backup-id>
 profiledeck doctor
 ```
 
-导出和导入命令的输出仍然只有 metadata；只有用户显式选择的 bundle 文件包含 raw payload。
+导出和导入命令的输出也只有摘要。只有用户明确选择的备份文件包含完整登录数据和设置。
 
-## Codex 限额与登录保活
+## 限额检查与登录续期
 
-单 Profile 读取（包括 active Profile 启动读取和手动刷新）以及显式启用的自动任务，通常使用已安装的 `codex app-server`。ProfileDeck 会初始化短生命周期的 stdio session，并调用 Codex 原生账号方法。该进程会关闭 remote plugins、apps、analytics、memories 和 app instructions，避免启动无关网络功能。Profile 自定义的 model-provider URL 不会收到隐藏 ChatGPT token。
+检查 Profile 限额时，ProfileDeck 会使用该 Profile 已保存的登录连接 Codex 或 OpenAI。Profile 自定义的 model-provider URL 不会收到已保存的 ChatGPT 登录 Token。
 
-Active credential 会在 ProfileDeck 持有共享 switch lock 时使用真实 `CODEX_HOME`。如果 Codex 轮换托管 OAuth token，ProfileDeck 会读取更新后的 `auth.json`，并按当前 `credential_id` 签回绑定的 credential。Inactive credential 使用临时 `CODEX_HOME`，目录权限为 `0700`，`auth.json` 权限为 `0600`；只有原 credential hash 未变化时才会更新数据库，并发产生的新 credential 内容优先。`tokens.account_id` 不参与 identity、归属、去重或 token 更新判断。
+自动刷新限额和登录续期默认关闭，并且只在 ProfileDeck 打开或隐藏到托盘时运行。Desktop 还会在启动时检查一次当前 Profile；页面导航不会重复检查。
 
-如果 app-server 不可用或协议不兼容，单 Profile UI 读取可以回退到固定的只读 ChatGPT Codex 限额端点，包括 active Profile 启动读取和手动刷新。该回退不会刷新或写回 OAuth token。周期自动限额和登录保活不会使用此回退。
+受支持的托管登录可能会在检查限额时续期。部分外部登录方式可以提供限额，但无法自动续期。如果 Codex 自动更新不可用，手动检查仍可能以不修改已保存登录的方式工作。
 
-周期自动网络任务默认关闭，并且只在 Desktop/托盘进程运行时生效。除此之外，Desktop 会在启动时读取一次 active Profile，页面导航不会重复触发。全局串行 worker 同一时间只处理一个 credential，在不同 credentials 之间增加间隔，并对共享 credential 去重。托管 token 保活使用 Codex 原生刷新路径。外部 `chatgptAuthTokens` credential 可以查询限额，但不能原生保活；API key 等其他登录方式不支持。
+限额信息只在 ProfileDeck 运行期间保留。限额检查不会显示或记录原始登录 Token 或临时文件位置。
 
-限额快照只保存在进程内存。运行时事件与 Desktop DTO 只包含 Profile ID、时间、下次执行时间、结果状态和映射后的限额快照，不包含 token、临时路径、credential payload hash 或 raw app-server error。
+## 用量功能不会保存的数据
 
-## ProfileDeck 不保存什么
+用量报告会保存 Token 数、成本估算、模型名称和时间信息。ProfileDeck 不会把原始 Codex session 记录、prompt、completion、API key 或完整来源路径保存为用量数据。
 
-ProfileDeck usage import 保存派生的 token 与 cost 记录、校验后的模型标签、用于唯一计数的安全或派生 session 标识、稳定的 event identity hash，以及基于路径 hash 的 cursor key。稳定 event identity 先按 provider 和 source 隔离，再由安全 session 标识、session 内用量顺序、模型和 token 数派生；它不包含路径、时间戳、prompt 或 completion。ProfileDeck 不会把 raw Codex JSONL events、prompts、completions、完整来源路径或 API keys 作为 usage metadata 或报告输出持久化。导入错误最多暴露 basename、hash 后的 source key 和已清理的文件系统错误。
+用量报告只包含聚合结果。本地 Codex 活动无法可靠识别实际请求来自哪个 Profile 或 ChatGPT 账号，因此 ProfileDeck 不会猜测或发布账号级用量。
 
-用量报告只暴露聚合结果。本地日志无法可靠识别实际服务请求的 Profile、隐藏 credential 或 ChatGPT account，因此 ProfileDeck 不推断或发布账号级用量。
-
-Desktop 自动同步状态只包含配置间隔、时间戳、结果状态、聚合错误数量，以及按需提供的脱敏错误 code/message；不会向 UI 事件流发送 session 路径、cursor key 或 raw importer error。
-
-Config Set v1 不捕获 skills、plugin 安装缓存、项目 `.codex/config.toml` 或系统策略。
+Config Set 不包含 skills、plugin 缓存、项目 `.codex/config.toml` 或系统策略。

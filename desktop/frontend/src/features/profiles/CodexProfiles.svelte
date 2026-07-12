@@ -40,6 +40,7 @@
 	import { Textarea } from "$lib/components/ui/textarea";
 	import { desktopErrorDetails, desktopErrorMessage, isCancelError, isDesktopErrorCode } from "$lib/desktop-errors";
 	import { currentDesktopLocale, translate } from "$lib/i18n";
+	import { joinUserMessages, profileChangeWarningMessage } from "$lib/user-facing-messages";
 
 	import ConfigSetDialog from "./ConfigSetDialog.svelte";
 	import ConfigSetPage from "./ConfigSetPage.svelte";
@@ -283,7 +284,7 @@
 			const result = await track("profile-save-current", CodexService.SaveActiveProfileState());
 			saveCurrentOpen = false;
 			await Promise.all([refreshProfiles(), refreshConfigSets(), detail ? loadDetail(detail.summary.profile.id) : Promise.resolve()]);
-			if (result.warnings?.length) toast.warning(translate("notice.profileWarnings.title"), { description: result.warnings.join(" ") });
+			if (result.warnings?.length) toast.warning(translate("notice.profileWarnings.title"), { description: joinUserMessages(result.warnings, profileChangeWarningMessage) });
 			showNotice(translate("notice.profileSaved.title"), translate("notice.profileSaved.description"));
 		});
 	}
@@ -467,7 +468,7 @@
 			profile = listItems.find((item) => item.id === id);
 		}
 		if (profile) await openUse(profile);
-		else showError(translate("errors.codexProfileNotFound", { profile: id }));
+		else showError({ code: "PROFILE_NOT_FOUND" });
 	}
 
 	async function confirmUse() {
@@ -521,7 +522,7 @@
 
 	function cancelAction(key: string) { inFlight.get(key)?.cancel("replaced"); inFlight.delete(key); }
 	function cancelAll() { for (const promise of inFlight.values()) promise.cancel("route-change"); inFlight.clear(); }
-	function showResultWarnings(result: CodexProfileSaveResult) { if (result.warnings?.length) toast.warning(translate("notice.profileWarnings.title"), { description: result.warnings.join(" ") }); }
+	function showResultWarnings(result: CodexProfileSaveResult) { if (result.warnings?.length) toast.warning(translate("notice.profileWarnings.title"), { description: joinUserMessages(result.warnings, profileChangeWarningMessage) }); }
 
 	function profileListItem(summary: CodexProfileSummary): CodexProfileListItem {
 		const quota = runtime.quotaForSummary(summary);
@@ -558,8 +559,8 @@
 	function sourceStatusDescription(value: CodexDetectResult | null = detectResult): string {
 		if (!value && detectError) return detectError;
 		return translate("profilePages.source.statusDescription", {
-			config: value?.config_status || "missing",
-			auth: value?.auth_status || "missing",
+			config: translate(`sourceStatus.${value?.config_status || "missing"}`),
+			auth: translate(`sourceStatus.${value?.auth_status || "missing"}`),
 		});
 	}
 	function isSourceReady(value: CodexDetectResult | null | undefined): boolean {

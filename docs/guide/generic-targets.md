@@ -1,6 +1,6 @@
 # Generic Targets
 
-Generic targets are lower-level building blocks for advanced local workflows. Most Codex users should start with `profiledeck codex profile create`.
+Generic targets let advanced users switch local configuration files for tools that do not have a dedicated ProfileDeck workflow. Most Codex users should start with `profiledeck codex profile create`.
 
 ## Create provider and profile
 
@@ -9,7 +9,7 @@ profiledeck provider create my-tool --adapter generic --name "My Tool"
 profiledeck profile create work --name "Work"
 ```
 
-## Add a target
+## Add a configuration file
 
 ```bash
 profiledeck profile target add work settings \
@@ -31,7 +31,7 @@ Target paths must be absolute.
 | `toml-merge` | `toml` | JSON object converted to TOML and merged. |
 | `env-merge` | `env` | JSON object with string values converted to env assignments. |
 
-Merge strategies need the existing file content during planning. Invalid existing JSON, TOML, or env content causes plan generation to fail.
+Merge strategies read the existing file when preparing the preview. If the file is not valid JSON, TOML, or env content, ProfileDeck stops and asks you to fix it before switching.
 
 ## Preview and apply
 
@@ -40,7 +40,7 @@ profiledeck plan my-tool work
 profiledeck switch my-tool work --yes
 ```
 
-The plan shows redacted previews and SHA-256 hashes. Symlink targets are not followed and are reported as unsupported.
+The preview hides sensitive values. For safety, ProfileDeck does not change files reached through symbolic links.
 
 ## Update and inspect
 
@@ -51,4 +51,4 @@ profiledeck profile target list work
 profiledeck profile target show work my-tool settings
 ```
 
-CRUD commands update ProfileDeck state only. They do not write target files.
+These commands save the file rules in ProfileDeck but do not change the tool's files. Files change only when you run `profiledeck switch`.

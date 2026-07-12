@@ -44,7 +44,7 @@ profiledeck init
 profiledeck status
 ```
 
-`init` creates the ProfileDeck runtime directory and SQLite application store. By default, the runtime root is:
+`init` creates ProfileDeck's local data and backup folders. By default, the data directory is:
 
 ```text
 <os-user-config-dir>/profiledeck
@@ -56,13 +56,13 @@ The application database is stored at:
 <os-user-config-dir>/profiledeck/profiledeck.db
 ```
 
-Use `--config-dir` to place the runtime under a different user config directory:
+Use `--config-dir` to place ProfileDeck data under a different user config directory:
 
 ```bash
 profiledeck --config-dir /tmp/profiledeck-dev init
 ```
 
-ProfileDeck creates runtime, backup, export, log, and lock directories with restrictive permissions on POSIX systems when possible.
+ProfileDeck restricts access to its local data and backup folders on POSIX systems when possible.
 
 ## First Codex profile
 

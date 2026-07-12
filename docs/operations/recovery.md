@@ -1,29 +1,30 @@
 # Recovery
 
-ProfileDeck records switch and rollback operations so interrupted writes can be inspected and recovered.
+Use Diagnostics when a switch or rollback does not finish, Profile switching is blocked, or local data needs attention.
 
-## Diagnose
+## Check Diagnostics
 
 ```bash
 profiledeck doctor
 profiledeck doctor --json
 ```
 
-`doctor` reports:
+Diagnostics checks:
 
-- database initialization and schema health
-- pending and failed operations
-- switch lock status
-- stale lock repair eligibility
-- sensitive path permission warnings
+- whether ProfileDeck can read its local data;
+- changes that did not finish or failed;
+- whether another ProfileDeck change may still be running;
+- whether sensitive local files are private.
 
-## Repair a stale lock
+Desktop shows the same issues in user-facing language and offers an action only when it is safe to continue.
+
+## Restore Profile switching
 
 ```bash
 profiledeck doctor repair-lock --yes
 ```
 
-Only clearly stale lock files are repairable. If the lock owner still appears active or the lock cannot be verified, repair is rejected.
+Use this only when Diagnostics says Profile switching can be restored safely. ProfileDeck refuses the command when another change may still be running or the situation cannot be verified.
 
 ## Recover a failed switch
 
@@ -31,9 +32,9 @@ Only clearly stale lock files are repairable. If the lock owner still appears ac
 profiledeck recover <switch-operation-id> --yes
 ```
 
-Recovery uses the failed switch operation's backup checkpoint. It is intended for incomplete switches, not for normal undo.
+Recovery uses the backup saved before the failed switch. Use it for an interrupted or failed switch, not as a normal undo action.
 
-## Roll back an applied switch
+## Roll back a successful switch
 
 ```bash
 profiledeck backup list
@@ -41,4 +42,4 @@ profiledeck backup show <backup-id>
 profiledeck rollback <backup-id> --yes
 ```
 
-Rollback restores target files from a backup and updates ProfileDeck active state and operation history. It also creates its own backup of the current state before restoring.
+Rollback restores the files and selected Profile from a backup. ProfileDeck also backs up the current files before restoring the older state.

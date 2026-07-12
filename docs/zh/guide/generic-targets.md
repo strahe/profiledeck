@@ -1,6 +1,6 @@
 # 通用目标文件
 
-generic targets 是高级本地流程的底层构建块。大多数 Codex 用户应该优先使用 `profiledeck codex profile create`。
+通用目标适合需要为尚无专用支持的工具切换本地配置文件的高级用户。大多数 Codex 用户应优先使用 `profiledeck codex profile create`。
 
 ## 创建 provider 和 profile
 
@@ -9,7 +9,7 @@ profiledeck provider create my-tool --adapter generic --name "My Tool"
 profiledeck profile create work --name "Work"
 ```
 
-## 添加 target
+## 添加配置文件
 
 ```bash
 profiledeck profile target add work settings \
@@ -20,7 +20,7 @@ profiledeck profile target add work settings \
   --value-json '{"model":"gpt-5.3-codex"}'
 ```
 
-目标路径 (target path) 必须是绝对路径。
+目标路径必须是绝对路径。
 
 ## 支持的格式和策略
 
@@ -31,7 +31,7 @@ profiledeck profile target add work settings \
 | `toml-merge` | `toml` | 转换为 TOML 后合并的 JSON object。 |
 | `env-merge` | `env` | string value 的 JSON object，会转换为 env assignment。 |
 
-merge 策略在 plan 阶段需要读取现有文件内容。现有 JSON、TOML 或 env 内容无效时，plan 会失败。
+合并策略会在准备预览时读取现有文件。如果文件不是有效的 JSON、TOML 或 env 内容，ProfileDeck 会停止切换并提示你先修复文件。
 
 ## 预览和应用
 
@@ -40,7 +40,7 @@ profiledeck plan my-tool work
 profiledeck switch my-tool work --yes
 ```
 
-plan 会显示脱敏 preview 和 SHA-256 hash。符号链接 target 不会被跟随，会被报告为 unsupported。
+预览中的敏感值会被隐藏。出于安全考虑，ProfileDeck 不会修改通过符号链接访问的文件。
 
 ## 更新和查看
 
@@ -51,4 +51,4 @@ profiledeck profile target list work
 profiledeck profile target show work my-tool settings
 ```
 
-CRUD 命令只更新 ProfileDeck 状态，不写目标文件。
+这些命令只在 ProfileDeck 中保存文件规则，不会立即修改工具文件。只有运行 `profiledeck switch` 后，文件才会改变。
