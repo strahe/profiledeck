@@ -1,6 +1,6 @@
 # Data and Security
 
-ProfileDeck manages local files and Codex sign-in data. Treat its data directory and backups as sensitive.
+ProfileDeck manages local files and hidden sign-in data for supported tools. Treat its data directory and backups as sensitive.
 
 ## Local data
 
@@ -12,9 +12,9 @@ The default data directory is:
 
 It contains the application database, backups, exports, and operational files. `--config-dir` changes the user config directory used for this location.
 
-`profiledeck.db` stores Profiles, Config Sets, saved Codex logins, settings, usage reports, and operation history. Complete `auth.json` and `config.toml` contents may be stored because they are required to restore and switch Profiles.
+`profiledeck.db` stores Profiles, Config Sets, saved Codex and Antigravity logins, settings, usage reports, and operation history. Complete Codex `auth.json` and `config.toml` contents and Antigravity agy v2 login payloads may be stored because they are required to restore and switch Profiles.
 
-The database is not encrypted at rest. ProfileDeck restricts file permissions on POSIX systems when possible, but anyone who can read your local files may be able to read saved Codex sign-in data.
+The database is not encrypted at rest. ProfileDeck restricts file permissions on POSIX systems when possible, but anyone who can read your local files may be able to read saved sign-in data.
 
 Current account-limit information is temporary and is not stored in the database.
 
@@ -22,7 +22,9 @@ Current account-limit information is temporary and is not stored in the database
 
 Switch and rollback backups may contain previous tool files. Codex backups can include complete `auth.json` and `config.toml` contents.
 
-Backup commands show file names, actions, hashes, and permissions without printing sensitive file contents. Keep the backup directory private.
+For file targets, backup commands show file names, actions, hashes, and permissions without printing sensitive file contents. Keep the backup directory private.
+
+Antigravity switch backups may contain the previous login in a private payload file. Public plan and backup summaries omit the system credential location, payload, and payload hashes.
 
 ## Sensitive Profile exports
 
@@ -30,7 +32,7 @@ Backup commands show file names, actions, hashes, and permissions without printi
 
 ProfileDeck requires an explicit output path, refuses symbolic-link destinations, and writes the file with `0600` permissions on POSIX systems. It does not create or change the selected parent directory.
 
-Import checks the backup and reports conflicts before making changes. It does not make a Profile current, restore automatic-update settings, or write Codex files. Imported Profiles start with automatic limit refresh and sign-in renewal disabled.
+Import checks the backup and reports conflicts before making changes. When it attaches Codex bindings to an existing global Profile, it preserves that Profile's name and description. It does not make a Profile current, restore automatic-update settings, or write Codex files. Imported Profiles start with automatic limit refresh and sign-in renewal disabled.
 
 Keep exported backups outside any ProfileDeck data directory you plan to delete. Do not commit or share them.
 
@@ -38,7 +40,7 @@ Keep exported backups outside any ProfileDeck data directory you plan to delete.
 
 ProfileDeck hides sensitive-looking values in previews, normal command output, logs, errors, and result summaries. Codex sign-in previews are always fully hidden.
 
-These commands show summaries only and do not print complete Codex sign-in data:
+These commands show summaries only and do not print complete saved sign-in payloads or Config Set contents:
 
 ```bash
 profiledeck codex profile list
@@ -46,6 +48,9 @@ profiledeck codex profile show <profile-id>
 profiledeck codex config-set list
 profiledeck codex config-set show <config-set-id>
 profiledeck plan codex <profile-id>
+profiledeck antigravity profile list
+profiledeck antigravity profile show <profile-id>
+profiledeck plan antigravity <profile-id>
 profiledeck backup show <backup-id>
 profiledeck doctor
 ```
@@ -69,3 +74,5 @@ Usage reports store token counts, cost estimates, model names, and time informat
 Usage reports contain aggregate results only. Local Codex activity cannot reliably identify which Profile or ChatGPT account served a request, so ProfileDeck does not guess or publish account-level usage.
 
 Config Sets do not include skills, plugin caches, project `.codex/config.toml` files, or system policy.
+
+ProfileDeck supports only Antigravity agy v2 consumer OAuth payloads. It does not perform Antigravity OAuth login, import Manager data, or expose account identity fields for matching.

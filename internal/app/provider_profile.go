@@ -155,11 +155,12 @@ func CreateProvider(ctx context.Context, req CreateProviderRequest) (Provider, e
 		return Provider{}, appErr
 	}
 
-	db, err := openHealthyStore(ctx, req.ConfigDir, false)
+	db, lock, _, err := openLockedMaintenanceStore(ctx, req.ConfigDir, "provider-create")
 	if err != nil {
 		return Provider{}, err
 	}
 	defer db.Close()
+	defer lock.Release()
 
 	provider, err := db.CreateProvider(ctx, store.CreateProviderParams{
 		ID:           id,
@@ -179,12 +180,19 @@ func UpdateProvider(ctx context.Context, req UpdateProviderRequest) (Provider, e
 	if appErr != nil {
 		return Provider{}, appErr
 	}
+	if managedProviderUsesTypedBindings(id) && (params.AdapterID != nil || params.MetadataJSON != nil) {
+		// Managed adapters derive external target identity from Provider metadata.
+		// Generic updates must not retarget those files or credential-store entries.
+		return Provider{}, NewError(ErrorProviderInvalid, "managed Provider adapter and metadata can only be changed through Provider profile services").
+			WithDetail("provider_id", id)
+	}
 
-	db, err := openHealthyStore(ctx, req.ConfigDir, false)
+	db, lock, _, err := openLockedMaintenanceStore(ctx, req.ConfigDir, "provider-update")
 	if err != nil {
 		return Provider{}, err
 	}
 	defer db.Close()
+	defer lock.Release()
 
 	params.ID = id
 	provider, err := db.UpdateProvider(ctx, params)
@@ -203,11 +211,12 @@ func DeleteProvider(ctx context.Context, req DeleteProviderRequest) (DeleteResul
 		return DeleteResult{}, NewError(ErrorConfirmationRequired, "provider delete requires confirmation")
 	}
 
-	db, err := openHealthyStore(ctx, req.ConfigDir, false)
+	db, lock, _, err := openLockedMaintenanceStore(ctx, req.ConfigDir, "provider-delete")
 	if err != nil {
 		return DeleteResult{}, err
 	}
 	defer db.Close()
+	defer lock.Release()
 
 	if err := db.DeleteProvider(ctx, id); err != nil {
 		return DeleteResult{}, mapProviderStoreError(err)

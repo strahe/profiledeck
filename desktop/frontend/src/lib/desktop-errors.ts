@@ -52,6 +52,7 @@ const userErrorKeys: Record<string, string> = {
 	USAGE_INVALID: "errors.usageUnavailable",
 	USAGE_IMPORT_FAILED: "errors.usageUnavailable",
 	CODEX_INVALID: "errors.codexNotReady",
+	ANTIGRAVITY_INVALID: "errors.antigravityNotReady",
 	SETTING_INVALID: "errors.settingInvalid",
 	EXPORT_FAILED: "errors.exportFailed",
 	IMPORT_INVALID: "errors.importInvalid",

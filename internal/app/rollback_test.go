@@ -399,6 +399,32 @@ func TestShowBackupMissingIDReturnsNotFound(t *testing.T) {
 	assertAppErrorCode(t, err, ErrorBackupNotFound)
 }
 
+func TestRollbackTargetsRejectDuplicateLocators(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared.json")
+	_, err := rollbackTargetsFromMetadata(switchOperationMetadata{
+		ProviderID: "generic",
+		Targets: []switchOperationTargetMetadata{
+			{TargetID: "first", BackendID: targetBackendFile, Path: path, Action: planActionNoop, DesiredSHA256: sha256HexString("first")},
+			{TargetID: "second", BackendID: targetBackendFile, Path: path, Action: planActionNoop, DesiredSHA256: sha256HexString("second")},
+		},
+	}, switchBackupManifest{}, t.TempDir())
+	assertAppErrorCode(t, err, ErrorBackupInvalid)
+	if err == nil || strings.Contains(err.Error(), sha256HexString(targetBackendFile+"\x00"+path)) {
+		t.Fatalf("expected duplicate locator error without locator fingerprint, got %v", err)
+	}
+}
+
+func TestRollbackTargetsRejectDuplicateTargetIDs(t *testing.T) {
+	_, err := rollbackTargetsFromMetadata(switchOperationMetadata{
+		ProviderID: "generic",
+		Targets: []switchOperationTargetMetadata{
+			{TargetID: "same", BackendID: targetBackendFile, Path: filepath.Join(t.TempDir(), "first.json"), Action: planActionNoop, DesiredSHA256: sha256HexString("first")},
+			{TargetID: "same", BackendID: targetBackendFile, Path: filepath.Join(t.TempDir(), "second.json"), Action: planActionNoop, DesiredSHA256: sha256HexString("second")},
+		},
+	}, switchBackupManifest{}, t.TempDir())
+	assertAppErrorCode(t, err, ErrorBackupInvalid)
+}
+
 func TestApplyRollbackRejectsChangedActiveState(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()

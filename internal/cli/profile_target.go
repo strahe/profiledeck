@@ -331,7 +331,11 @@ func writePlan(w io.Writer, plan app.SwitchPlan) error {
 	if len(plan.Operations) > 0 {
 		tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
 		for _, op := range plan.Operations {
-			if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", op.TargetID, op.Action, op.StatusReason, op.Path); err != nil {
+			location := op.Path
+			if location == "" {
+				location = op.TargetLabel
+			}
+			if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", op.TargetID, op.Action, op.StatusReason, location); err != nil {
 				return err
 			}
 		}

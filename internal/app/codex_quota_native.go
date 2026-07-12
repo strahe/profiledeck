@@ -183,7 +183,7 @@ func prepareCodexCredentialHome(ctx context.Context, db *store.Store, summaries 
 		if !summary.Active || summary.CredentialID != credentialID {
 			continue
 		}
-		targets, err := db.ListProfileTargets(ctx, summary.Profile.ID, codexconfig.ProviderID, true)
+		targets, err := storedCodexBindingTargets(ctx, db, summary.Profile.ID)
 		if err != nil {
 			return codexconfig.Home{}, "", false, func() {}, WrapError(ErrorStoreStatusFailed, "failed to list active Codex targets", err)
 		}

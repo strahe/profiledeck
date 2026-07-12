@@ -36,6 +36,12 @@ export interface CopyCodexConfigSetRequest {
     "description"?: string;
 }
 
+export interface CreateAntigravityProfileRequest {
+    "profile_id": string;
+    "name"?: string | null;
+    "description"?: string | null;
+}
+
 export interface CreateCodexConfigSetRequest {
     "config_set_id": string;
     "name": string;
@@ -61,6 +67,7 @@ export interface DashboardResult {
     "active_states": app$0.ActiveProviderState[] | null;
     "codex_profiles"?: app$0.CodexProfileListResult | null;
     "codex_config_sets"?: app$0.CodexConfigSetListResult | null;
+    "antigravity_profiles"?: app$0.AntigravityProfileListResult | null;
     "usage"?: app$0.UsageSummaryResult | null;
     "startup_error"?: DesktopError | null;
     "generated_at_unix_ms": number;
@@ -100,6 +107,12 @@ export interface SwitchApplyRequest {
     "profile_id": string;
     "expected_plan_fingerprint": string;
     "confirm": boolean;
+}
+
+export interface UpdateAntigravityProfileRequest {
+    "profile_id": string;
+    "name"?: string | null;
+    "description"?: string | null;
 }
 
 export interface UpdateCodexConfigSetRequest {

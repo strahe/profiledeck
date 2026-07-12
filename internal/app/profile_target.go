@@ -9,8 +9,10 @@ import (
 	"io"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 
+	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/store"
@@ -102,15 +104,16 @@ func CreateProfileTarget(ctx context.Context, req CreateProfileTargetRequest) (P
 	if appErr != nil {
 		return ProfileTarget{}, appErr
 	}
-	if normalized.ProviderID == codexconfig.ProviderID {
-		return ProfileTarget{}, codexManagedTargetMutationError(normalized.TargetID)
+	if managedProviderUsesTypedBindings(normalized.ProviderID) {
+		return ProfileTarget{}, managedProviderTargetMutationError(normalized.ProviderID, normalized.TargetID)
 	}
 
-	db, err := openHealthyStore(ctx, req.ConfigDir, false)
+	db, lock, _, err := openLockedMaintenanceStore(ctx, req.ConfigDir, "profile-target-create")
 	if err != nil {
 		return ProfileTarget{}, err
 	}
 	defer db.Close()
+	defer lock.Release()
 
 	if _, err := db.GetProfile(ctx, normalized.ProfileID); err != nil {
 		return ProfileTarget{}, mapProfileStoreError(err)
@@ -134,18 +137,19 @@ func UpdateProfileTarget(ctx context.Context, req UpdateProfileTargetRequest) (P
 	if appErr != nil {
 		return ProfileTarget{}, appErr
 	}
-	if ids.ProviderID == codexconfig.ProviderID {
-		return ProfileTarget{}, codexManagedTargetMutationError(ids.TargetID)
+	if managedProviderUsesTypedBindings(ids.ProviderID) {
+		return ProfileTarget{}, managedProviderTargetMutationError(ids.ProviderID, ids.TargetID)
 	}
 	if req.Path == nil && req.Format == nil && req.Strategy == nil && req.ValueJSON == nil && req.Enabled == nil && req.MetadataJSON == nil {
 		return ProfileTarget{}, NewError(ErrorTargetInvalid, "profile target update requires at least one changed field")
 	}
 
-	db, err := openHealthyStore(ctx, req.ConfigDir, false)
+	db, lock, _, err := openLockedMaintenanceStore(ctx, req.ConfigDir, "profile-target-update")
 	if err != nil {
 		return ProfileTarget{}, err
 	}
 	defer db.Close()
+	defer lock.Release()
 
 	existing, err := db.GetProfileTarget(ctx, ids.ProfileID, ids.ProviderID, ids.TargetID)
 	if err != nil {
@@ -199,9 +203,9 @@ func ListProfileTargets(ctx context.Context, req ListProfileTargetsRequest) ([]P
 	}
 	defer db.Close()
 
-	targets, err := db.ListProfileTargets(ctx, profileID, providerID, req.IncludeDisabled)
+	targets, err := profileTargetsForRead(ctx, db, profileID, providerID, req.IncludeDisabled)
 	if err != nil {
-		return nil, WrapError(ErrorStoreStatusFailed, "failed to list profile targets", err)
+		return nil, err
 	}
 	result := make([]ProfileTarget, 0, len(targets))
 	for _, target := range targets {
@@ -226,6 +230,18 @@ func GetProfileTarget(ctx context.Context, req GetProfileTargetRequest) (Profile
 	}
 	defer db.Close()
 
+	if managedProviderUsesTypedBindings(ids.ProviderID) {
+		targets, err := profileTargetsForRead(ctx, db, ids.ProfileID, ids.ProviderID, true)
+		if err != nil {
+			return ProfileTarget{}, err
+		}
+		for _, target := range targets {
+			if target.TargetID == ids.TargetID {
+				return profileTargetFromStore(target)
+			}
+		}
+		return ProfileTarget{}, mapTargetStoreError(store.ErrNotFound)
+	}
 	target, err := db.GetProfileTarget(ctx, ids.ProfileID, ids.ProviderID, ids.TargetID)
 	if err != nil {
 		return ProfileTarget{}, mapTargetStoreError(err)
@@ -233,23 +249,61 @@ func GetProfileTarget(ctx context.Context, req GetProfileTargetRequest) (Profile
 	return profileTargetFromStore(target)
 }
 
+func profileTargetsForRead(ctx context.Context, db *store.Store, profileID, providerID string, includeDisabled bool) ([]store.ProfileTarget, error) {
+	storedTargets, err := db.ListProfileTargets(ctx, profileID, providerID, includeDisabled)
+	if err != nil {
+		return nil, WrapError(ErrorStoreStatusFailed, "failed to list profile targets", err)
+	}
+	// Managed resources do not live in profile_targets. Ignore any raw managed
+	// rows and synthesize only Codex's established file-target read contract;
+	// Keyring locators never cross the generic Target API.
+	targets := make([]store.ProfileTarget, 0, len(storedTargets)+2)
+	for _, target := range storedTargets {
+		if !managedProviderUsesTypedBindings(target.ProviderID) {
+			targets = append(targets, target)
+		}
+	}
+	if providerID == "" || providerID == codexconfig.ProviderID {
+		_, providerErr := db.GetProvider(ctx, codexconfig.ProviderID)
+		switch {
+		case providerErr == nil:
+			managed, err := storedCodexBindingTargets(ctx, db, profileID)
+			if err != nil {
+				return nil, err
+			}
+			targets = append(targets, managed...)
+		case errors.Is(providerErr, store.ErrNotFound):
+		default:
+			return nil, WrapError(ErrorStoreStatusFailed, "failed to inspect Codex profile targets", providerErr)
+		}
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].ProviderID != targets[j].ProviderID {
+			return targets[i].ProviderID < targets[j].ProviderID
+		}
+		return targets[i].TargetID < targets[j].TargetID
+	})
+	return targets, nil
+}
+
 func DeleteProfileTarget(ctx context.Context, req DeleteProfileTargetRequest) (DeleteResult, error) {
 	ids, appErr := normalizeProfileTargetIDs(req.ProfileID, req.ProviderID, req.TargetID)
 	if appErr != nil {
 		return DeleteResult{}, appErr
 	}
-	if ids.ProviderID == codexconfig.ProviderID {
-		return DeleteResult{}, codexManagedTargetMutationError(ids.TargetID)
+	if managedProviderUsesTypedBindings(ids.ProviderID) {
+		return DeleteResult{}, managedProviderTargetMutationError(ids.ProviderID, ids.TargetID)
 	}
 	if !req.Confirm {
 		return DeleteResult{}, NewError(ErrorConfirmationRequired, "profile target delete requires confirmation")
 	}
 
-	db, err := openHealthyStore(ctx, req.ConfigDir, false)
+	db, lock, _, err := openLockedMaintenanceStore(ctx, req.ConfigDir, "profile-target-delete")
 	if err != nil {
 		return DeleteResult{}, err
 	}
 	defer db.Close()
+	defer lock.Release()
 
 	if err := db.DeleteProfileTarget(ctx, ids.ProfileID, ids.ProviderID, ids.TargetID); err != nil {
 		return DeleteResult{}, mapTargetStoreError(err)
@@ -257,9 +311,13 @@ func DeleteProfileTarget(ctx context.Context, req DeleteProfileTargetRequest) (D
 	return DeleteResult{ID: ids.TargetID, Deleted: true}, nil
 }
 
-func codexManagedTargetMutationError(targetID string) *AppError {
-	return NewError(ErrorTargetInvalid, "Codex preset targets can only be changed through Codex profile services").
-		WithDetail("provider_id", codexconfig.ProviderID).
+func managedProviderUsesTypedBindings(providerID string) bool {
+	return providerID == codexconfig.ProviderID || providerID == agyconfig.ProviderID
+}
+
+func managedProviderTargetMutationError(providerID, targetID string) *AppError {
+	return NewError(ErrorTargetInvalid, "managed Provider targets can only be changed through Provider profile services").
+		WithDetail("provider_id", providerID).
 		WithDetail("target_id", targetID)
 }
 
@@ -388,6 +446,30 @@ func ensureProfileTargetPathOwnership(ctx context.Context, db *store.Store, path
 			WithDetail("owner_profile_id", target.ProfileID).
 			WithDetail("owner_provider_id", target.ProviderID).
 			WithDetail("owner_target_id", target.TargetID)
+	}
+	if providerID != codexconfig.ProviderID {
+		provider, err := db.GetProvider(ctx, codexconfig.ProviderID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return WrapError(ErrorStoreStatusFailed, "failed to inspect managed target path ownership", err)
+		}
+		if err == nil {
+			metadata, metadataErr := codexpreset.DecodeProviderMetadata(provider.MetadataJSON)
+			if metadataErr == nil && metadata.Compatible() {
+				for managedTargetID, managedPath := range map[string]string{
+					codexconfig.TargetID: metadata.ConfigPath, codexconfig.AuthTargetID: metadata.AuthPath,
+				} {
+					if pathKey != targetPathOwnershipKey(managedPath) {
+						continue
+					}
+					// Typed Codex bindings derive their working paths from provider
+					// metadata, so generic target rows cannot be their ownership index.
+					return NewError(ErrorTargetAlreadyExists, "target path is reserved by a managed Provider target").
+						WithDetail("path", path).
+						WithDetail("owner_provider_id", codexconfig.ProviderID).
+						WithDetail("owner_target_id", managedTargetID)
+				}
+			}
+		}
 	}
 	return nil
 }

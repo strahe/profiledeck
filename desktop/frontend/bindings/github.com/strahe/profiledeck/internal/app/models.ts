@@ -11,6 +11,42 @@ export interface ActiveProviderState {
     "profile_available": boolean;
 }
 
+export interface AntigravityDetectResult {
+    "provider_id": string;
+    "adapter_id": string;
+    "credential_status": string;
+    "profiledeck_initialized": boolean;
+    "provider_exists": boolean;
+    "provider_compatible": boolean;
+    "warnings": string[] | null;
+}
+
+export interface AntigravityProfileDetail {
+    "summary": AntigravityProfileSummary;
+}
+
+export interface AntigravityProfileListResult {
+    "profiles": AntigravityProfileSummary[] | null;
+}
+
+export interface AntigravityProfileSaveResult {
+    "operation_id": string;
+    "summary": AntigravityProfileSummary;
+    "warnings": string[] | null;
+}
+
+export interface AntigravityProfileSummary {
+    "profile": Profile;
+    "provider_id": string;
+    "credential_id": string;
+    "credential_reference_count": number;
+    "expires_at_unix_ms"?: number;
+    "active": boolean;
+    "active_operation_id"?: string;
+    "updated_at_unix_ms": number;
+    "warnings"?: string[] | null;
+}
+
 export interface ApplyRollbackResult {
     "operation_id": string;
     "status": string;
@@ -54,6 +90,8 @@ export interface BackupDetail {
 
 export interface BackupEntrySummary {
     "target_id": string;
+    "backend_id": string;
+    "target_label": string;
     "path": string;
     "action": string;
     "existed": boolean;
@@ -404,6 +442,8 @@ export interface PlanOperation {
     "provider_id": string;
     "profile_id": string;
     "target_id": string;
+    "backend_id": string;
+    "target_label": string;
     "path": string;
     "format": string;
     "strategy": string;
@@ -490,6 +530,7 @@ export interface StateCapture {
     "resource_name"?: string;
     "stored_sha256": string;
     "current_sha256": string;
+    "changed"?: boolean;
 }
 
 export interface StatusResult {

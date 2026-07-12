@@ -1,6 +1,8 @@
 # 通用目标文件
 
-通用目标适合需要为尚无专用支持的工具切换本地配置文件的高级用户。大多数 Codex 用户应优先使用 `profiledeck codex profile create`。
+通用目标适合需要为尚无专用支持的工具切换本地配置文件的高级用户。Codex 和 Antigravity 用户应使用各自的 Profile 命令；generic target CRUD 不能修改这些托管绑定。
+
+专用流程也负责管理 `codex` 和 `antigravity` Provider 的 adapter 与 metadata。通用 Provider 更新只能更改它们的显示名称或启用状态。
 
 ## 创建 provider 和 profile
 

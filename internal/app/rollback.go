@@ -82,6 +82,8 @@ type BackupSummary struct {
 
 type BackupEntrySummary struct {
 	TargetID     string `json:"target_id"`
+	BackendID    string `json:"backend_id"`
+	TargetLabel  string `json:"target_label"`
 	Path         string `json:"path"`
 	Action       string `json:"action"`
 	Existed      bool   `json:"existed"`
@@ -107,6 +109,8 @@ type rollbackOperationMetadata struct {
 
 type rollbackTargetMetadata struct {
 	TargetID       string `json:"target_id"`
+	BackendID      string `json:"backend_id"`
+	TargetLabel    string `json:"target_label"`
 	Path           string `json:"path"`
 	Action         string `json:"action"`
 	ExpectedSHA256 string `json:"expected_sha256,omitempty"`
@@ -124,6 +128,8 @@ type rollbackSource struct {
 
 type rollbackTarget struct {
 	TargetID      string
+	BackendID     string
+	TargetLabel   string
 	Path          string
 	Action        string
 	FileExists    bool
@@ -132,6 +138,7 @@ type rollbackTarget struct {
 	BackupRelPath string
 	Mode          os.FileMode
 	HasMode       bool
+	Spec          targetSpec
 }
 
 func ApplyRollback(ctx context.Context, req ApplyRollbackRequest) (ApplyRollbackResult, error) {
@@ -422,7 +429,11 @@ func loadRollbackSource(ctx context.Context, db *store.Store, paths runtime.Path
 		return rollbackSource{}, err
 	}
 
-	targets, err := rollbackTargetsFromMetadata(metadata, manifest, backupPath)
+	adapter, err := rollbackAdapter(ctx, db, metadata)
+	if err != nil {
+		return rollbackSource{}, err
+	}
+	targets, err := rollbackTargetsFromMetadataWithAdapter(metadata, manifest, backupPath, adapter)
 	if err != nil {
 		return rollbackSource{}, err
 	}
@@ -485,6 +496,10 @@ func validateRollbackManifest(manifest switchBackupManifest, metadata switchOper
 }
 
 func rollbackTargetsFromMetadata(metadata switchOperationMetadata, manifest switchBackupManifest, backupPath string) ([]rollbackTarget, error) {
+	return rollbackTargetsFromMetadataWithAdapter(metadata, manifest, backupPath, nil)
+}
+
+func rollbackTargetsFromMetadataWithAdapter(metadata switchOperationMetadata, manifest switchBackupManifest, backupPath string, adapter planAdapter) ([]rollbackTarget, error) {
 	entries := map[string]switchBackupEntry{}
 	for _, entry := range manifest.Entries {
 		if entry.TargetID == "" {
@@ -497,17 +512,48 @@ func rollbackTargetsFromMetadata(metadata switchOperationMetadata, manifest swit
 	}
 
 	targets := make([]rollbackTarget, 0, len(metadata.Targets))
+	seenTargetIDs := make(map[string]struct{}, len(metadata.Targets))
+	seenLocators := make(map[string]string, len(metadata.Targets))
 	for _, target := range metadata.Targets {
-		if target.TargetID == "" || target.Path == "" || target.DesiredSHA256 == "" {
+		backendID := target.BackendID
+		if backendID == "" {
+			backendID = targetBackendFile
+		}
+		if target.TargetID == "" || target.DesiredSHA256 == "" || (backendID == targetBackendFile && target.Path == "") {
 			return nil, NewError(ErrorRollbackUnsupported, "source switch target metadata is incomplete").WithDetail("target_id", target.TargetID)
 		}
+		if _, exists := seenTargetIDs[target.TargetID]; exists {
+			return nil, NewError(ErrorBackupInvalid, "source switch metadata contains duplicate target IDs").WithDetail("target_id", target.TargetID)
+		}
+		seenTargetIDs[target.TargetID] = struct{}{}
+		var spec targetSpec
+		var err error
+		if backendID == targetBackendFile {
+			spec, err = resolveFileTargetSpec(target.TargetID, backendID, target.Path, target.TargetLabel)
+		} else if adapter == nil {
+			err = NewError(ErrorRollbackUnsupported, "source switch adapter is unavailable").WithDetail("backend_id", backendID)
+		} else {
+			spec, err = adapter.ResolveTargetSpec(metadata.ProviderID, target.TargetID, backendID, target.Path, target.TargetLabel)
+		}
+		if err != nil {
+			return nil, err
+		}
+		locatorKey := spec.BackendID() + "\x00" + spec.LocatorFingerprint()
+		if firstTargetID, exists := seenLocators[locatorKey]; exists {
+			return nil, NewError(ErrorBackupInvalid, "source switch metadata contains duplicate target locators").
+				WithDetail("target_id", target.TargetID).WithDetail("first_target_id", firstTargetID)
+		}
+		seenLocators[locatorKey] = target.TargetID
 		rollbackTarget := rollbackTarget{
 			TargetID:      target.TargetID,
+			BackendID:     backendID,
+			TargetLabel:   target.TargetLabel,
 			Path:          target.Path,
 			Action:        target.Action,
 			FileExists:    target.FileExists,
 			BeforeSHA256:  target.BeforeSHA256,
 			DesiredSHA256: target.DesiredSHA256,
+			Spec:          spec,
 		}
 		switch target.Action {
 		case planActionCreate, planActionUpdate:
@@ -548,6 +594,34 @@ func rollbackTargetsFromMetadata(metadata switchOperationMetadata, manifest swit
 	return targets, nil
 }
 
+func switchMetadataNeedsAdapter(metadata switchOperationMetadata) bool {
+	for _, target := range metadata.Targets {
+		backendID := firstNonEmpty(target.BackendID, targetBackendFile)
+		if backendID != targetBackendFile {
+			return true
+		}
+	}
+	return false
+}
+
+func rollbackAdapter(ctx context.Context, db *store.Store, metadata switchOperationMetadata) (planAdapter, error) {
+	if !switchMetadataNeedsAdapter(metadata) {
+		return nil, nil
+	}
+	provider, err := db.GetProvider(ctx, metadata.ProviderID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, NewError(ErrorRollbackUnsupported, "source switch Provider is unavailable").WithDetail("provider_id", metadata.ProviderID)
+	}
+	if err != nil {
+		return nil, WrapError(ErrorStoreStatusFailed, "failed to read source switch Provider", err)
+	}
+	adapter, ok := planAdapters[provider.AdapterID]
+	if !ok {
+		return nil, NewError(ErrorRollbackUnsupported, "source switch adapter is unavailable").WithDetail("adapter_id", provider.AdapterID)
+	}
+	return adapter, nil
+}
+
 func validateSourceBackupFiles(ctx context.Context, backupPath string, targets []rollbackTarget) error {
 	for _, target := range targets {
 		if target.Action != planActionUpdate {
@@ -569,7 +643,15 @@ func validateSourceBackupFiles(ctx context.Context, backupPath string, targets [
 }
 
 func validateRollbackEntry(target switchOperationTargetMetadata, entry switchBackupEntry) error {
-	if entry.Path != target.Path || entry.Action != target.Action || entry.BeforeSHA256 != target.BeforeSHA256 {
+	targetBackend := target.BackendID
+	if targetBackend == "" {
+		targetBackend = targetBackendFile
+	}
+	entryBackend := entry.BackendID
+	if entryBackend == "" {
+		entryBackend = targetBackendFile
+	}
+	if entryBackend != targetBackend || entry.Path != target.Path || entry.Action != target.Action || entry.BeforeSHA256 != target.BeforeSHA256 {
 		return NewError(ErrorBackupInvalid, "backup manifest entry does not match source target").WithDetail("target_id", target.TargetID)
 	}
 	switch target.Action {
@@ -617,19 +699,23 @@ func verifyRollbackTargets(ctx context.Context, targets []rollbackTarget) error 
 }
 
 func verifyRollbackTarget(ctx context.Context, target rollbackTarget) error {
+	backend, ok := targetBackends[target.BackendID]
+	if !ok {
+		return NewError(ErrorRollbackUnsupported, "target backend is unavailable").WithDetail("backend_id", target.BackendID)
+	}
+	state, err := backend.Inspect(ctx, target.Spec)
+	if err != nil {
+		return err
+	}
 	if target.Action == planActionCreate {
-		state, err := targetfs.Inspect(ctx, target.Path)
-		if err != nil {
-			return mapTargetFSError(err)
-		}
 		if !state.Exists {
 			return nil
 		}
-		if state.IsSymlink || state.IsDir || !state.IsRegular {
-			return mapTargetFSError(targetfs.NewError(targetfs.KindTargetChanged, "target is not a regular file").WithDetail("target_id", target.TargetID).WithDetail("path", target.Path))
+		if state.IsSymlink {
+			return NewError(ErrorTargetChanged, "target is not writable").WithDetail("target_id", target.TargetID)
 		}
-		if state.SHA256 != target.DesiredSHA256 {
-			return mapTargetFSError(targetfs.NewError(targetfs.KindTargetChanged, "target content changed").WithDetail("target_id", target.TargetID).WithDetail("path", target.Path))
+		if state.Fingerprint != target.DesiredSHA256 {
+			return NewError(ErrorTargetChanged, "target content changed").WithDetail("target_id", target.TargetID)
 		}
 		return nil
 	}
@@ -637,77 +723,82 @@ func verifyRollbackTarget(ctx context.Context, target rollbackTarget) error {
 		_, err := rollbackUpdateAlreadyRestored(ctx, target)
 		return err
 	}
-	err := targetfs.VerifyExpected(ctx, targetfs.ExpectedTarget{
-		TargetID: target.TargetID,
-		Path:     target.Path,
-		Exists:   target.FileExists,
-		SHA256:   target.DesiredSHA256,
-	})
-	if err != nil {
-		return mapTargetFSError(err)
-	}
-	return nil
+	return backend.Verify(ctx, target.Spec, targetSnapshot{Exists: target.FileExists, Fingerprint: target.DesiredSHA256})
 }
 
 func rollbackUpdateAlreadyRestored(ctx context.Context, target rollbackTarget) (bool, error) {
-	state, err := targetfs.Inspect(ctx, target.Path)
+	backend, ok := targetBackends[target.BackendID]
+	if !ok {
+		return false, NewError(ErrorRollbackUnsupported, "target backend is unavailable").WithDetail("backend_id", target.BackendID)
+	}
+	state, err := backend.Inspect(ctx, target.Spec)
 	if err != nil {
-		return false, mapTargetFSError(err)
+		return false, err
 	}
 	if !state.Exists {
-		return false, mapTargetFSError(targetfs.NewError(targetfs.KindTargetChanged, "target disappeared").WithDetail("target_id", target.TargetID).WithDetail("path", target.Path))
+		return false, NewError(ErrorTargetChanged, "target disappeared").WithDetail("target_id", target.TargetID)
 	}
-	if state.IsSymlink || state.IsDir || !state.IsRegular {
-		return false, mapTargetFSError(targetfs.NewError(targetfs.KindTargetChanged, "target is not a regular file").WithDetail("target_id", target.TargetID).WithDetail("path", target.Path))
+	if state.IsSymlink {
+		return false, NewError(ErrorTargetChanged, "target is not writable").WithDetail("target_id", target.TargetID)
 	}
-	if state.SHA256 == target.DesiredSHA256 {
+	if state.Fingerprint == target.DesiredSHA256 {
 		return false, nil
 	}
-	if target.BeforeSHA256 != "" && state.SHA256 == target.BeforeSHA256 {
+	if target.BeforeSHA256 != "" && state.Fingerprint == target.BeforeSHA256 {
 		return true, nil
 	}
-	return false, mapTargetFSError(targetfs.NewError(targetfs.KindTargetChanged, "target content changed").WithDetail("target_id", target.TargetID).WithDetail("path", target.Path))
+	return false, NewError(ErrorTargetChanged, "target content changed").WithDetail("target_id", target.TargetID)
 }
 
 func createRollbackCurrentBackup(ctx context.Context, paths runtime.Paths, operationID string, source rollbackSource) (switchBackup, error) {
 	backupPath := filepath.Join(paths.Backups, operationID)
 	filesPath := filepath.Join(backupPath, "files")
+	secretsPath := filepath.Join(backupPath, "secrets")
 	if err := os.MkdirAll(filesPath, 0o700); err != nil {
 		return switchBackup{}, WrapError(ErrorBackupFailed, "failed to create rollback backup directory", err).WithDetail("path", backupPath)
 	}
+	if err := os.MkdirAll(secretsPath, 0o700); err != nil {
+		return switchBackup{}, WrapError(ErrorBackupFailed, "failed to create rollback credential backup directory", err)
+	}
 	chmodBestEffort(backupPath, 0o700)
 	chmodBestEffort(filesPath, 0o700)
+	chmodBestEffort(secretsPath, 0o700)
 
 	backup := switchBackup{Path: backupPath, Entries: []switchBackupEntry{}}
 	for _, target := range source.Targets {
 		if target.Action != planActionCreate && target.Action != planActionUpdate {
 			continue
 		}
-		state, err := targetfs.Inspect(ctx, target.Path)
+		backend, ok := targetBackends[target.BackendID]
+		if !ok {
+			return switchBackup{}, NewError(ErrorBackupFailed, "target backend is unavailable").WithDetail("backend_id", target.BackendID)
+		}
+		state, err := backend.Inspect(ctx, target.Spec)
 		if err != nil {
-			return switchBackup{}, mapTargetFSError(err)
+			return switchBackup{}, err
 		}
 		entry := switchBackupEntry{
-			TargetID: target.TargetID,
-			Path:     target.Path,
-			Action:   target.Action,
-			Existed:  state.Exists,
+			TargetID: target.TargetID, BackendID: target.BackendID, TargetLabel: target.TargetLabel,
+			Path: target.Path, Action: target.Action, Existed: state.Exists,
 		}
 		if state.Exists {
-			if state.IsSymlink || state.IsDir || !state.IsRegular {
-				return switchBackup{}, NewError(ErrorBackupFailed, "target is not a regular file").WithDetail("target_id", target.TargetID).WithDetail("path", target.Path)
+			if state.IsSymlink {
+				return switchBackup{}, NewError(ErrorBackupFailed, "target is not writable").WithDetail("target_id", target.TargetID)
 			}
-			entry.BeforeSHA256 = state.SHA256
+			entry.BeforeSHA256 = state.Fingerprint
 			entry.Mode = fileModeString(state.Mode)
-			relPath := filepath.Join("files", target.TargetID+".bak")
-			copiedSHA, err := copyBackupFile(ctx, target.Path, filepath.Join(backupPath, relPath))
+			directory := "files"
+			if target.Spec.Sensitive() && target.BackendID != targetBackendFile {
+				directory = "secrets"
+			}
+			relPath := filepath.Join(directory, target.TargetID+".bak")
+			copiedSHA, err := backend.Backup(ctx, target.Spec, state, filepath.Join(backupPath, relPath))
 			if err != nil {
 				return switchBackup{}, err
 			}
-			if copiedSHA != state.SHA256 {
+			if copiedSHA != state.Fingerprint {
 				return switchBackup{}, NewError(ErrorBackupFailed, "rollback backup hash does not match current target hash").
-					WithDetail("target_id", target.TargetID).
-					WithDetail("path", target.Path)
+					WithDetail("target_id", target.TargetID)
 			}
 			entry.BackupRelPath = filepath.ToSlash(relPath)
 		}
@@ -732,6 +823,11 @@ func applyRollbackTargets(ctx context.Context, db *store.Store, operationID, las
 	var counts RollbackCounts
 	processed := []string{}
 	for _, target := range source.Targets {
+		backend, ok := targetBackends[target.BackendID]
+		if !ok {
+			return counts, processed, failRollbackWithProcessed(ctx, db, operationID, lastMetadata, metadataBase, counts, processed,
+				NewError(ErrorRollbackUnsupported, "target backend is unavailable").WithDetail("backend_id", target.BackendID))
+		}
 		switch target.Action {
 		case planActionUpdate:
 			alreadyRestored, err := rollbackUpdateAlreadyRestored(ctx, target)
@@ -744,33 +840,15 @@ func applyRollbackTargets(ctx context.Context, db *store.Store, operationID, las
 				break
 			}
 			backupFile := filepath.Join(source.BackupPath, target.BackupRelPath)
-			err = targetfs.AtomicWriteFile(ctx, targetfs.AtomicWriteFileRequest{
-				Expected: targetfs.ExpectedTarget{
-					TargetID: target.TargetID,
-					Path:     target.Path,
-					Exists:   true,
-					SHA256:   target.DesiredSHA256,
-				},
-				SourcePath:   backupFile,
-				SourceSHA256: target.BeforeSHA256,
-				Mode:         target.Mode,
-				UseMode:      target.HasMode,
-			})
+			err = backend.Restore(ctx, target.Spec, targetSnapshot{Exists: true, Fingerprint: target.DesiredSHA256},
+				backupFile, target.BeforeSHA256, target.Mode, target.HasMode)
 			if err != nil {
 				return counts, processed, failRollbackWithProcessed(ctx, db, operationID, lastMetadata, metadataBase, counts, processed, err)
 			}
 			counts.Restore++
 			processed = append(processed, target.TargetID)
 		case planActionCreate:
-			removed, err := targetfs.GuardedRemove(ctx, targetfs.GuardedRemoveRequest{
-				Expected: targetfs.ExpectedTarget{
-					TargetID: target.TargetID,
-					Path:     target.Path,
-					Exists:   true,
-					SHA256:   target.DesiredSHA256,
-				},
-				AllowMissing: true,
-			})
+			removed, err := backend.Remove(ctx, target.Spec, targetSnapshot{Exists: true, Fingerprint: target.DesiredSHA256}, true)
 			if err != nil {
 				return counts, processed, failRollbackWithProcessed(ctx, db, operationID, lastMetadata, metadataBase, counts, processed, err)
 			}
@@ -830,6 +908,8 @@ func rollbackTargetMetadataList(targets []rollbackTarget) []rollbackTargetMetada
 	for _, target := range targets {
 		result = append(result, rollbackTargetMetadata{
 			TargetID:       target.TargetID,
+			BackendID:      target.BackendID,
+			TargetLabel:    target.TargetLabel,
 			Path:           target.Path,
 			Action:         target.Action,
 			ExpectedSHA256: target.DesiredSHA256,
@@ -933,14 +1013,22 @@ func rollbackUnsupportedReason(ctx context.Context, db *store.Store, paths runti
 func backupEntrySummaries(entries []switchBackupEntry) []BackupEntrySummary {
 	result := make([]BackupEntrySummary, 0, len(entries))
 	for _, entry := range entries {
-		result = append(result, BackupEntrySummary{
+		summary := BackupEntrySummary{
 			TargetID:     entry.TargetID,
+			BackendID:    firstNonEmpty(entry.BackendID, targetBackendFile),
+			TargetLabel:  entry.TargetLabel,
 			Path:         entry.Path,
 			Action:       entry.Action,
 			Existed:      entry.Existed,
 			BeforeSHA256: entry.BeforeSHA256,
 			Mode:         entry.Mode,
-		})
+		}
+		if summary.BackendID != targetBackendFile {
+			summary.Path = ""
+			summary.BeforeSHA256 = ""
+			summary.Mode = ""
+		}
+		result = append(result, summary)
 	}
 	return result
 }

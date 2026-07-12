@@ -61,6 +61,16 @@
 		codex_login_binding_invalid: "profileLoginUnavailable",
 		codex_login_state_invalid: "profileLoginUnavailable",
 		codex_config_set_check_failed: "configSetsUnavailable",
+		antigravity_provider_check_failed: "antigravitySetupUnavailable",
+		antigravity_agy_v2_invalid: "antigravitySetupUnavailable",
+		antigravity_binding_check_failed: "antigravityProfileDataUnavailable",
+		antigravity_active_state_check_failed: "antigravityProfileDataUnavailable",
+		antigravity_profile_missing: "antigravityProfileDataUnavailable",
+		antigravity_login_binding_invalid: "antigravityProfileDataUnavailable",
+		antigravity_login_state_invalid: "antigravityLoginUnavailable",
+		antigravity_login_unavailable: "antigravityLoginUnavailable",
+		antigravity_login_missing: "antigravityLoginUnavailable",
+		antigravity_login_invalid: "antigravityLoginUnavailable",
 		database_permissions_weak: "databasePermissions",
 		backups_permissions_weak: "backupPermissions",
 		codex_auth_target_permissions_weak: "loginPermissions",
@@ -97,7 +107,7 @@
 	}
 
 	function lockDescription(reason: string): string {
-		if (["malformed_lock_file", "stale_lock_candidate", "applied_operation_lock_residue"].includes(reason)) {
+		if (["malformed_lock_file", "stale_lock_candidate", "applied_operation_lock_residue", "maintenance_lock_residue"].includes(reason)) {
 			return translate("diagnosticsPage.lock.repairable");
 		}
 		if (["lock_may_be_active", "os_lock_not_free", "pending_operation"].includes(reason)) {
@@ -128,7 +138,7 @@
 	{:else if doctor}
 		{#if findings.length}
 			<SectionCard title={$_("diagnosticsPage.findings")} contentClass="flex flex-col gap-3">
-				{#each findings as finding (finding.id)}
+				{#each findings as finding (`${finding.id}:${finding.details?.profile_id ?? ""}:${finding.details?.config_set_id ?? ""}`)}
 					<div class="flex items-start gap-3 rounded-lg border p-3">
 						<Badge variant={findingVariant(finding.level)}>{levelLabel(finding.level)}</Badge>
 						<div class="min-w-0">

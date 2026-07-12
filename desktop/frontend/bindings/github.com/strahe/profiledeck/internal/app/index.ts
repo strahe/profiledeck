@@ -8,6 +8,11 @@ export {
 
 export type {
     ActiveProviderState,
+    AntigravityDetectResult,
+    AntigravityProfileDetail,
+    AntigravityProfileListResult,
+    AntigravityProfileSaveResult,
+    AntigravityProfileSummary,
     ApplyRollbackResult,
     ApplySwitchResult,
     BackupDetail,

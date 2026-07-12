@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	"github.com/strahe/profiledeck/internal/store"
 )
 
 func TestCodexSwitchSharedConfigWritesOnlyAuthAndCapturesRefresh(t *testing.T) {
@@ -168,6 +169,118 @@ func TestCodexSwitchAlreadyMatchingTargetDoesNotPolluteOutgoingBindings(t *testi
 	secondConfigAfter, _ := db.GetProviderConfigSet(ctx, second.Summary.ConfigSetID)
 	if secondCredentialAfter.PayloadSHA256 != secondCredentialBefore.PayloadSHA256 || secondConfigAfter.PayloadSHA256 != secondConfigBefore.PayloadSHA256 {
 		t.Fatalf("expected outgoing bindings to remain unchanged")
+	}
+}
+
+func TestCodexSwitchDoesNotCaptureKnownOtherProfileIntoActiveProfile(t *testing.T) {
+	ctx, configDir, codexDir := setupCodexSwitchProfiles(t, true)
+	if _, err := ApplySwitch(ctx, ApplySwitchRequest{
+		ConfigDir: configDir, ProviderID: codexconfig.ProviderID, ProfileID: "first", Confirm: true,
+	}); err != nil {
+		t.Fatalf("expected first Profile to become active, got %v", err)
+	}
+	first, err := GetCodexProfile(ctx, GetCodexProfileRequest{ConfigDir: configDir, ProfileID: "first"})
+	if err != nil {
+		t.Fatalf("expected first detail, got %v", err)
+	}
+	second, err := GetCodexProfile(ctx, GetCodexProfileRequest{ConfigDir: configDir, ProfileID: "second"})
+	if err != nil {
+		t.Fatalf("expected second detail, got %v", err)
+	}
+	db, err := openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatalf("expected store open, got %v", err)
+	}
+	firstCredentialBefore, _ := db.GetProviderCredential(ctx, first.Summary.CredentialID)
+	firstConfigBefore, _ := db.GetProviderConfigSet(ctx, first.Summary.ConfigSetID)
+	secondCredentialBefore, _ := db.GetProviderCredential(ctx, second.Summary.CredentialID)
+	secondConfigBefore, _ := db.GetProviderConfigSet(ctx, second.Summary.ConfigSetID)
+	_ = db.Close()
+	writeCodexProfileFixture(t, codexDir, secondConfigBefore.PayloadText, secondCredentialBefore.PayloadJSON)
+
+	plan, err := BuildPlan(ctx, BuildPlanRequest{
+		ConfigDir: configDir, ProviderID: codexconfig.ProviderID, ProfileID: "first",
+	})
+	if err != nil {
+		t.Fatalf("expected restore plan, got %v", err)
+	}
+	if len(plan.StateCaptures) != 0 {
+		t.Fatalf("expected known other working copies not to be captured, got %#v", plan.StateCaptures)
+	}
+	assertCodexPlanAction(t, plan, codexconfig.AuthTargetID, planActionUpdate)
+	assertCodexPlanAction(t, plan, codexconfig.TargetID, planActionUpdate)
+	if _, err := ApplySwitch(ctx, ApplySwitchRequest{
+		ConfigDir: configDir, ProviderID: codexconfig.ProviderID, ProfileID: "first",
+		ExpectedPlanFingerprint: plan.PlanFingerprint, Confirm: true,
+	}); err != nil {
+		t.Fatalf("expected first Profile restore, got %v", err)
+	}
+	db, err = openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatalf("expected store reopen, got %v", err)
+	}
+	defer db.Close()
+	firstCredentialAfter, _ := db.GetProviderCredential(ctx, first.Summary.CredentialID)
+	firstConfigAfter, _ := db.GetProviderConfigSet(ctx, first.Summary.ConfigSetID)
+	secondCredentialAfter, _ := db.GetProviderCredential(ctx, second.Summary.CredentialID)
+	secondConfigAfter, _ := db.GetProviderConfigSet(ctx, second.Summary.ConfigSetID)
+	if firstCredentialAfter.PayloadSHA256 != firstCredentialBefore.PayloadSHA256 || firstConfigAfter.PayloadSHA256 != firstConfigBefore.PayloadSHA256 ||
+		secondCredentialAfter.PayloadSHA256 != secondCredentialBefore.PayloadSHA256 || secondConfigAfter.PayloadSHA256 != secondConfigBefore.PayloadSHA256 {
+		t.Fatalf("expected Codex Profile resources to remain distinct")
+	}
+}
+
+func TestCodexSwitchCanLeaveActiveProfileWithUnsupportedBindings(t *testing.T) {
+	ctx, configDir, codexDir := setupCodexSwitchProfiles(t, true)
+	second, err := GetCodexProfile(ctx, GetCodexProfileRequest{ConfigDir: configDir, ProfileID: "second"})
+	if err != nil {
+		t.Fatalf("expected second detail, got %v", err)
+	}
+	db, err := openHealthyStore(ctx, configDir, false)
+	if err != nil {
+		t.Fatalf("expected store open, got %v", err)
+	}
+	credentialBefore, err := db.GetProviderCredential(ctx, second.Summary.CredentialID)
+	if err != nil {
+		t.Fatalf("expected second credential, got %v", err)
+	}
+	if _, err := db.UpsertProfileCredentialBinding(ctx, store.UpsertProfileCredentialBindingParams{
+		ProfileID: "second", ProviderID: codexconfig.ProviderID,
+		SlotID: "unsupported", CredentialID: second.Summary.CredentialID,
+	}); err != nil {
+		t.Fatalf("expected unsupported binding setup, got %v", err)
+	}
+	_ = db.Close()
+	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.AuthFileName), []byte(`{"tokens":{"account_id":"second","access_token":"unknown-refresh"}}`), 0o600); err != nil {
+		t.Fatalf("expected refreshed auth setup, got %v", err)
+	}
+
+	plan, err := BuildPlan(ctx, BuildPlanRequest{ConfigDir: configDir, ProviderID: codexconfig.ProviderID, ProfileID: "first"})
+	if err != nil {
+		t.Fatalf("expected switch-away plan despite unsupported active binding, got %v", err)
+	}
+	if !hasWarning(plan.Warnings, "bindings are unsupported") {
+		t.Fatalf("expected unsupported active binding warning, got %#v", plan.Warnings)
+	}
+	for _, capture := range plan.StateCaptures {
+		if capture.ResourceKind == codexCaptureKindCredential {
+			t.Fatalf("expected ambiguous active login not to be captured, got %#v", plan.StateCaptures)
+		}
+	}
+	if _, err := ApplySwitch(ctx, ApplySwitchRequest{
+		ConfigDir: configDir, ProviderID: codexconfig.ProviderID, ProfileID: "first",
+		ExpectedPlanFingerprint: plan.PlanFingerprint, Confirm: true,
+	}); err != nil {
+		t.Fatalf("expected switch away from invalid active Profile, got %v", err)
+	}
+	db, err = openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatalf("expected store reopen, got %v", err)
+	}
+	defer db.Close()
+	credentialAfter, err := db.GetProviderCredential(ctx, second.Summary.CredentialID)
+	if err != nil || credentialAfter.PayloadSHA256 != credentialBefore.PayloadSHA256 {
+		t.Fatalf("expected ambiguous active credential to remain unchanged, got %#v err=%v", credentialAfter, err)
 	}
 }
 

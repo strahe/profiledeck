@@ -8,9 +8,7 @@
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
-	import UploadIcon from "@lucide/svelte/icons/upload";
 
 	import IconAction from "$lib/components/app/IconAction.svelte";
 	import InfoTooltip from "$lib/components/app/InfoTooltip.svelte";
@@ -23,7 +21,6 @@
 	import { Separator } from "$lib/components/ui/separator";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { Spinner } from "$lib/components/ui/spinner";
-	import * as Tooltip from "$lib/components/ui/tooltip";
 	import { joinUserMessages, profileWarningMessage } from "$lib/user-facing-messages";
 	import { cn } from "$lib/utils";
 
@@ -36,39 +33,27 @@
 		loading,
 		error,
 		busy,
-		canCreate,
-		sourceChecked,
-		sourceDescription,
+		canCreate = false,
 		onNew,
 		onUse,
 		onDetails,
 		onFork,
-		onConfigSets,
-		onExportAll,
-		onImport,
 		onExport,
 		onRefreshQuota,
 		onRetrySource,
-		onDiagnostics,
 	}: {
 		profiles: CodexProfileListItem[];
 		loading: boolean;
 		error: string;
 		busy: boolean;
-		canCreate: boolean;
-		sourceChecked: boolean;
-		sourceDescription: string;
-		onNew: () => void;
+		canCreate?: boolean;
+		onNew?: () => void;
 		onUse: (profile: CodexProfileListItem) => void;
 		onDetails: (profile: CodexProfileListItem) => void;
 		onFork: (profile: CodexProfileListItem) => void;
-		onConfigSets: () => void;
-		onExportAll: () => void;
-		onImport: () => void;
 		onExport: (profile: CodexProfileListItem) => void;
 		onRefreshQuota: (profile: CodexProfileListItem) => void;
-		onRetrySource: () => void;
-		onDiagnostics: () => void;
+		onRetrySource?: () => void;
 	} = $props();
 
 	let nowUnixMS = $state(Date.now());
@@ -92,72 +77,7 @@
 </script>
 
 <Card.Root size="sm">
-	<Card.Header>
-		<Card.Title>{$_("profilePages.list.title")}</Card.Title>
-		<Card.Description>{$_("profilePages.list.description")}</Card.Description>
-		<Card.Action>
-			<div class="flex items-center gap-2">
-				<DropdownMenu.Root>
-					<DropdownMenu.Trigger>
-						{#snippet child({ props })}
-							<Button {...props} size="icon-sm" variant="outline" aria-label={$_("actions.more")}>
-								<MoreHorizontalIcon />
-							</Button>
-						{/snippet}
-					</DropdownMenu.Trigger>
-					<DropdownMenu.Content align="end">
-						<DropdownMenu.Group>
-							<DropdownMenu.Item onSelect={onConfigSets}><SlidersHorizontalIcon />{$_("actions.configSets")}</DropdownMenu.Item>
-							<DropdownMenu.Item onSelect={onExportAll}><DownloadIcon />{$_("actions.exportAllProfiles")}</DropdownMenu.Item>
-							<DropdownMenu.Item onSelect={onImport}><UploadIcon />{$_("actions.importProfiles")}</DropdownMenu.Item>
-						</DropdownMenu.Group>
-					</DropdownMenu.Content>
-				</DropdownMenu.Root>
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						{#snippet child({ props })}
-							<Button
-								{...props}
-								size="sm"
-								aria-disabled={busy || !canCreate}
-								class="aria-disabled:opacity-50"
-								onclick={(event) => {
-									if (busy || !canCreate) {
-										event.preventDefault();
-										return;
-									}
-									onNew();
-								}}
-								aria-label={$_("actions.saveAsNewProfile")}
-							>
-								<PlusIcon data-icon="inline-start" />
-								{$_("actions.saveCurrentShort")}
-							</Button>
-						{/snippet}
-					</Tooltip.Trigger>
-					<Tooltip.Content>{$_("actions.saveAsNewProfile")}</Tooltip.Content>
-				</Tooltip.Root>
-			</div>
-		</Card.Action>
-	</Card.Header>
-
 	<Card.Content class="px-0">
-		{#if sourceChecked && !canCreate}
-			<div class="px-4 pb-4">
-				<Alert.Root variant="destructive">
-					<TriangleAlertIcon data-icon="inline-start" />
-					<Alert.Title>{$_("profilePages.source.notReadyTitle")}</Alert.Title>
-					<Alert.Description>{sourceDescription}</Alert.Description>
-					<Alert.Action>
-						<div class="flex gap-2">
-							<Button size="xs" variant="outline" onclick={onRetrySource}>{$_("actions.retry")}</Button>
-							<Button size="xs" variant="outline" onclick={onDiagnostics}>{$_("nav.diagnostics")}</Button>
-						</div>
-					</Alert.Action>
-				</Alert.Root>
-			</div>
-		{/if}
-
 		{#if loading}
 			<div class="flex flex-col gap-3 px-4 pb-4">
 				{#each [1, 2, 3] as item (item)}

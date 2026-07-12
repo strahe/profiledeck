@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/targetfs"
@@ -62,6 +63,7 @@ type StateCapture struct {
 	ResourceName  string `json:"resource_name,omitempty"`
 	StoredSHA256  string `json:"stored_sha256"`
 	CurrentSHA256 string `json:"current_sha256"`
+	Changed       bool   `json:"changed,omitempty"`
 }
 
 type PlanProvider struct {
@@ -77,22 +79,28 @@ type PlanProfile struct {
 }
 
 type PlanOperation struct {
-	ProviderID     string      `json:"provider_id"`
-	ProfileID      string      `json:"profile_id"`
-	TargetID       string      `json:"target_id"`
-	Path           string      `json:"path"`
-	Format         string      `json:"format"`
-	Strategy       string      `json:"strategy"`
-	Action         string      `json:"action"`
-	StatusReason   string      `json:"status_reason"`
-	FileExists     bool        `json:"file_exists"`
-	IsSymlink      bool        `json:"is_symlink"`
-	BeforeSHA256   string      `json:"before_sha256"`
-	DesiredSHA256  string      `json:"desired_sha256"`
-	BeforePreview  TextPreview `json:"before_preview"`
-	DesiredPreview TextPreview `json:"desired_preview"`
-	AfterPreview   TextPreview `json:"after_preview"`
-	Warnings       []string    `json:"warnings"`
+	ProviderID                string      `json:"provider_id"`
+	ProfileID                 string      `json:"profile_id"`
+	TargetID                  string      `json:"target_id"`
+	BackendID                 string      `json:"backend_id"`
+	TargetLabel               string      `json:"target_label"`
+	Path                      string      `json:"path"`
+	Format                    string      `json:"format"`
+	Strategy                  string      `json:"strategy"`
+	Action                    string      `json:"action"`
+	StatusReason              string      `json:"status_reason"`
+	FileExists                bool        `json:"file_exists"`
+	IsSymlink                 bool        `json:"is_symlink"`
+	BeforeSHA256              string      `json:"before_sha256"`
+	DesiredSHA256             string      `json:"desired_sha256"`
+	BeforePreview             TextPreview `json:"before_preview"`
+	DesiredPreview            TextPreview `json:"desired_preview"`
+	AfterPreview              TextPreview `json:"after_preview"`
+	Warnings                  []string    `json:"warnings"`
+	locatorFingerprint        string
+	privateBeforeFingerprint  string
+	privateDesiredFingerprint string
+	sensitive                 bool
 }
 
 type applyPlan struct {
@@ -108,11 +116,25 @@ type applyPlanOperation struct {
 	BeforeMode     os.FileMode
 	DesiredMode    os.FileMode
 	UseDesiredMode bool
+	Spec           targetSpec
+	Snapshot       targetSnapshot
 }
 
 type planAdapter interface {
 	ID() string
-	Build(ctx context.Context, input planAdapterInput) (planAdapterResult, error)
+	Prepare(ctx context.Context, input planAdapterInput) (planAdapterPrepared, error)
+	Finalize(ctx context.Context, input planAdapterInput, prepared planAdapterPrepared, snapshots map[string]targetSnapshot) (planAdapterResult, error)
+	ResolveTargetSpec(providerID, targetID, backendID, path, label string) (targetSpec, error)
+}
+
+type preparedTarget struct {
+	Spec targetSpec
+	Data any
+}
+
+type planAdapterPrepared struct {
+	Targets []preparedTarget
+	Data    any
 }
 
 type planAdapterResult struct {
@@ -136,6 +158,7 @@ type planAdapterInput struct {
 var planAdapters = map[string]planAdapter{
 	"generic":             genericPlanAdapter{},
 	codexconfig.AdapterID: codexPlanAdapter{},
+	agyconfig.AdapterID:   antigravityPlanAdapter{},
 }
 
 func BuildPlan(ctx context.Context, req BuildPlanRequest) (SwitchPlan, error) {
@@ -174,6 +197,9 @@ func buildApplyPlan(ctx context.Context, db *store.Store, providerID, profileID 
 	if !provider.Enabled {
 		return applyPlan{}, NewError(ErrorProviderDisabled, "provider is disabled")
 	}
+	if appErr := validateManagedProviderAdapter(provider); appErr != nil {
+		return applyPlan{}, appErr
+	}
 
 	adapter, ok := planAdapters[provider.AdapterID]
 	if !ok {
@@ -184,13 +210,32 @@ func buildApplyPlan(ctx context.Context, db *store.Store, providerID, profileID 
 	if err != nil {
 		return applyPlan{}, WrapError(ErrorStoreStatusFailed, "failed to list profile targets", err)
 	}
+	if provider.AdapterID == codexconfig.AdapterID {
+		targets, err = storedCodexBindingTargets(ctx, db, profile.ID)
+		if err != nil {
+			return applyPlan{}, err
+		}
+	}
 
-	adapterResult, err := adapter.Build(ctx, planAdapterInput{
+	input := planAdapterInput{
 		Provider: provider,
 		Profile:  profile,
 		Targets:  targets,
 		Store:    db,
-	})
+	}
+	prepared, err := adapter.Prepare(ctx, input)
+	if err != nil {
+		var appErr *AppError
+		if errors.As(err, &appErr) {
+			return applyPlan{}, appErr
+		}
+		return applyPlan{}, WrapError(ErrorPlanBuildFailed, "failed to prepare switch plan", err)
+	}
+	snapshots, err := inspectPreparedTargets(ctx, prepared.Targets)
+	if err != nil {
+		return applyPlan{}, err
+	}
+	adapterResult, err := adapter.Finalize(ctx, input, prepared, snapshots)
 	if err != nil {
 		var appErr *AppError
 		if errors.As(err, &appErr) {
@@ -198,10 +243,13 @@ func buildApplyPlan(ctx context.Context, db *store.Store, providerID, profileID 
 		}
 		return applyPlan{}, WrapError(ErrorPlanBuildFailed, "failed to build switch plan", err)
 	}
+	if appErr := validateFinalizedPlanResult(input, prepared, snapshots, adapterResult); appErr != nil {
+		return applyPlan{}, appErr
+	}
 
 	publicOperations := make([]PlanOperation, 0, len(adapterResult.Operations))
 	for _, op := range adapterResult.Operations {
-		publicOperations = append(publicOperations, op.PlanOperation)
+		publicOperations = append(publicOperations, publicPlanOperation(op.PlanOperation))
 	}
 	plan := SwitchPlan{
 		CreatedAtUnixMS: time.Now().UnixMilli(),
@@ -221,7 +269,10 @@ func buildApplyPlan(ctx context.Context, db *store.Store, providerID, profileID 
 		Operations:    publicOperations,
 		Warnings:      adapterResult.Warnings,
 	}
+	// Fingerprint the complete internal state before removing secret-derived
+	// capture hashes from the public DTO.
 	plan.PlanFingerprint = fingerprintSwitchPlan(plan)
+	plan.StateCaptures = publicStateCaptures(adapterResult.StateCaptures, adapterResult.Operations)
 	return applyPlan{
 		SwitchPlan:        plan,
 		Operations:        adapterResult.Operations,
@@ -230,18 +281,180 @@ func buildApplyPlan(ctx context.Context, db *store.Store, providerID, profileID 
 	}, nil
 }
 
+func validateFinalizedPlanResult(input planAdapterInput, prepared planAdapterPrepared, snapshots map[string]targetSnapshot, result planAdapterResult) *AppError {
+	if len(result.Operations) != len(prepared.Targets) {
+		return NewError(ErrorPlanBuildFailed, "finalized switch plan operation count does not match prepared targets")
+	}
+	preparedSpecs := make(map[string]targetSpec, len(prepared.Targets))
+	for _, target := range prepared.Targets {
+		if target.Spec == nil {
+			return NewError(ErrorPlanBuildFailed, "prepared switch target spec is missing")
+		}
+		preparedSpecs[target.Spec.TargetID()] = target.Spec
+	}
+	seen := make(map[string]struct{}, len(result.Operations))
+	for _, operation := range result.Operations {
+		if operation.Spec == nil {
+			return NewError(ErrorPlanBuildFailed, "finalized switch target spec is missing").WithDetail("target_id", operation.TargetID)
+		}
+		targetID := operation.Spec.TargetID()
+		preparedSpec, ok := preparedSpecs[targetID]
+		if !ok || operation.TargetID != targetID {
+			return NewError(ErrorPlanBuildFailed, "finalized switch target was not prepared").WithDetail("target_id", operation.TargetID)
+		}
+		if _, exists := seen[targetID]; exists {
+			return NewError(ErrorPlanBuildFailed, "finalized switch plan contains duplicate target IDs").WithDetail("target_id", targetID)
+		}
+		seen[targetID] = struct{}{}
+		if operation.Spec.BackendID() != preparedSpec.BackendID() ||
+			operation.Spec.LocatorFingerprint() != preparedSpec.LocatorFingerprint() ||
+			operation.BackendID != preparedSpec.BackendID() ||
+			operation.locatorFingerprint != preparedSpec.LocatorFingerprint() ||
+			operation.TargetLabel != preparedSpec.SafeLabel() ||
+			operation.sensitive != preparedSpec.Sensitive() {
+			return NewError(ErrorPlanBuildFailed, "finalized switch target does not match prepared target").WithDetail("target_id", targetID)
+		}
+		if fileSpec, ok := preparedSpec.(fileTargetSpec); ok {
+			if operation.Path != fileSpec.Path {
+				return NewError(ErrorPlanBuildFailed, "finalized file path does not match prepared target").WithDetail("target_id", targetID)
+			}
+		} else if operation.Path != "" || operation.Format != "" || operation.Strategy != "" {
+			return NewError(ErrorPlanBuildFailed, "finalized non-file target contains file details").WithDetail("target_id", targetID)
+		}
+		expectedSnapshot, ok := snapshots[targetID]
+		if !ok || operation.Snapshot != expectedSnapshot || operation.FileExists != expectedSnapshot.Exists || operation.IsSymlink != expectedSnapshot.IsSymlink {
+			return NewError(ErrorPlanBuildFailed, "finalized switch snapshot does not match inspected target").WithDetail("target_id", targetID)
+		}
+		if operation.ProviderID != input.Provider.ID || operation.ProfileID != input.Profile.ID {
+			return NewError(ErrorPlanBuildFailed, "finalized switch operation scope is invalid").WithDetail("target_id", targetID)
+		}
+		switch operation.Action {
+		case planActionCreate, planActionUpdate, planActionNoop:
+			desiredFingerprint := sha256HexString(operation.DesiredContent)
+			if firstNonEmpty(operation.privateBeforeFingerprint, operation.BeforeSHA256) != expectedSnapshot.Fingerprint ||
+				firstNonEmpty(operation.privateDesiredFingerprint, operation.DesiredSHA256) != desiredFingerprint {
+				return NewError(ErrorPlanBuildFailed, "finalized switch content fingerprint is invalid").WithDetail("target_id", targetID)
+			}
+			switch operation.Action {
+			case planActionCreate:
+				if expectedSnapshot.Exists {
+					return NewError(ErrorPlanBuildFailed, "finalized create operation targets existing state").WithDetail("target_id", targetID)
+				}
+			case planActionUpdate:
+				if !expectedSnapshot.Exists {
+					return NewError(ErrorPlanBuildFailed, "finalized update operation targets missing state").WithDetail("target_id", targetID)
+				}
+			case planActionNoop:
+				if !expectedSnapshot.Exists || expectedSnapshot.Fingerprint != desiredFingerprint {
+					return NewError(ErrorPlanBuildFailed, "finalized no-op does not match inspected target").WithDetail("target_id", targetID)
+				}
+			}
+		case planActionUnsupported:
+		default:
+			return NewError(ErrorPlanBuildFailed, "finalized switch action is invalid").WithDetail("target_id", targetID)
+		}
+	}
+	for _, update := range result.CredentialUpdates {
+		if update.ProviderID != input.Provider.ID {
+			return NewError(ErrorPlanBuildFailed, "finalized credential capture has invalid Provider scope")
+		}
+	}
+	for _, update := range result.ConfigSetUpdates {
+		if update.ProviderID != input.Provider.ID {
+			return NewError(ErrorPlanBuildFailed, "finalized Config Set capture has invalid Provider scope")
+		}
+	}
+	return nil
+}
+
+func validateManagedProviderAdapter(provider store.Provider) *AppError {
+	switch provider.ID {
+	case codexconfig.ProviderID:
+		if provider.AdapterID != codexconfig.AdapterID {
+			return NewError(ErrorCodexInvalid, "Codex provider uses an incompatible adapter")
+		}
+	case agyconfig.ProviderID:
+		if provider.AdapterID != agyconfig.AdapterID {
+			return NewError(ErrorAntigravityInvalid, "Antigravity provider uses an incompatible adapter")
+		}
+	}
+	return nil
+}
+
+func publicStateCaptures(captures []StateCapture, operations []applyPlanOperation) []StateCapture {
+	redactHashes := false
+	for _, operation := range operations {
+		if operation.sensitive && operation.BackendID != targetBackendFile {
+			redactHashes = true
+			break
+		}
+	}
+	if !redactHashes {
+		return captures
+	}
+	public := make([]StateCapture, len(captures))
+	copy(public, captures)
+	for index := range public {
+		public[index].StoredSHA256 = ""
+		public[index].CurrentSHA256 = ""
+	}
+	return public
+}
+
+func publicPlanOperation(operation PlanOperation) PlanOperation {
+	if !operation.sensitive || operation.BackendID == targetBackendFile {
+		return operation
+	}
+	// Non-file secrets are internal planning inputs. Adapters may provide them
+	// for fingerprints and apply, but public plans expose only safe identity,
+	// action, status, warnings, and the adapter-provided label.
+	operation.Path = ""
+	operation.Format = ""
+	operation.Strategy = ""
+	operation.FileExists = false
+	operation.IsSymlink = false
+	operation.BeforeSHA256 = ""
+	operation.DesiredSHA256 = ""
+	operation.BeforePreview = TextPreview{}
+	operation.DesiredPreview = TextPreview{}
+	operation.AfterPreview = TextPreview{}
+	return operation
+}
+
 type genericPlanAdapter struct{}
 
 func (genericPlanAdapter) ID() string {
 	return "generic"
 }
 
-func (genericPlanAdapter) Build(ctx context.Context, input planAdapterInput) (planAdapterResult, error) {
+func (genericPlanAdapter) ResolveTargetSpec(_, targetID, backendID, path, label string) (targetSpec, error) {
+	return resolveFileTargetSpec(targetID, backendID, path, label)
+}
+
+func (genericPlanAdapter) Prepare(_ context.Context, input planAdapterInput) (planAdapterPrepared, error) {
+	targets := make([]preparedTarget, 0, len(input.Targets))
+	for _, target := range input.Targets {
+		targets = append(targets, preparedTarget{
+			Spec: fileTargetSpec{
+				ID: target.TargetID, Path: target.Path,
+				NeedsContent: targetStrategyNeedsContent(target.Strategy), Label: target.Path,
+			},
+			Data: target,
+		})
+	}
+	return planAdapterPrepared{Targets: targets}, nil
+}
+
+func (genericPlanAdapter) Finalize(_ context.Context, input planAdapterInput, prepared planAdapterPrepared, snapshots map[string]targetSnapshot) (planAdapterResult, error) {
 	operations := make([]applyPlanOperation, 0, len(input.Targets))
 	warnings := []string{}
 	seenWarnings := map[string]struct{}{}
-	for _, target := range input.Targets {
-		op, err := buildGenericPlanOperation(ctx, input.Provider, input.Profile, target)
+	for _, item := range prepared.Targets {
+		target, ok := item.Data.(store.ProfileTarget)
+		if !ok {
+			return planAdapterResult{}, NewError(ErrorPlanBuildFailed, "generic plan target is invalid")
+		}
+		op, err := buildGenericPlanOperationFromSnapshot(input.Provider, input.Profile, target, item.Spec, snapshots[target.TargetID])
 		if err != nil {
 			return planAdapterResult{}, err
 		}
@@ -258,22 +471,31 @@ func (genericPlanAdapter) Build(ctx context.Context, input planAdapterInput) (pl
 }
 
 func buildGenericPlanOperation(ctx context.Context, provider store.Provider, profile store.Profile, target store.ProfileTarget) (applyPlanOperation, error) {
-	op := applyPlanOperation{
-		PlanOperation: PlanOperation{
-			ProviderID: provider.ID,
-			ProfileID:  profile.ID,
-			TargetID:   target.TargetID,
-			Path:       target.Path,
-			Format:     target.Format,
-			Strategy:   target.Strategy,
-		},
-	}
-
-	before, err := readTargetForPlan(ctx, target.Path, targetStrategyNeedsContent(target.Strategy))
+	spec := fileTargetSpec{ID: target.TargetID, Path: target.Path, NeedsContent: targetStrategyNeedsContent(target.Strategy), Label: target.Path}
+	snapshot, err := (fileTargetBackend{}).Inspect(ctx, spec)
 	if err != nil {
 		return applyPlanOperation{}, err
 	}
-	op.FileExists = before.FileExists
+	return buildGenericPlanOperationFromSnapshot(provider, profile, target, spec, snapshot)
+}
+
+func buildGenericPlanOperationFromSnapshot(provider store.Provider, profile store.Profile, target store.ProfileTarget, spec targetSpec, before targetSnapshot) (applyPlanOperation, error) {
+	op := applyPlanOperation{
+		PlanOperation: PlanOperation{
+			ProviderID:         provider.ID,
+			ProfileID:          profile.ID,
+			TargetID:           target.TargetID,
+			BackendID:          spec.BackendID(),
+			TargetLabel:        spec.SafeLabel(),
+			Path:               target.Path,
+			Format:             target.Format,
+			Strategy:           target.Strategy,
+			locatorFingerprint: spec.LocatorFingerprint(),
+			sensitive:          spec.Sensitive(),
+		},
+		Spec: spec, Snapshot: before,
+	}
+	op.FileExists = before.Exists
 	op.IsSymlink = before.IsSymlink
 	op.BeforeMode = before.Mode
 	if before.IsSymlink {
@@ -282,12 +504,15 @@ func buildGenericPlanOperation(ctx context.Context, provider store.Provider, pro
 		op.Warnings = append(op.Warnings, "target path is a symlink and will not be followed")
 		return op, nil
 	}
-	if before.FileExists {
-		op.BeforeSHA256 = before.SHA256
+	if before.Exists {
+		op.BeforeSHA256 = before.Fingerprint
 		op.BeforePreview = before.Preview
 	}
 
-	content, warnings, err := desiredTargetContent(target, before)
+	content, warnings, err := desiredTargetContent(target, targetPlanRead{
+		FileExists: before.Exists, IsSymlink: before.IsSymlink, SHA256: before.Fingerprint,
+		Mode: before.Mode, Preview: before.Preview, Content: before.Content,
+	})
 	if err != nil {
 		return applyPlanOperation{}, err
 	}
@@ -301,10 +526,12 @@ func buildGenericPlanOperation(ctx context.Context, provider store.Provider, pro
 	op.DesiredContent = content
 	op.Warnings = append(op.Warnings, warnings...)
 	op.DesiredSHA256 = sha256HexString(content)
+	op.privateBeforeFingerprint = before.Fingerprint
+	op.privateDesiredFingerprint = op.DesiredSHA256
 	op.DesiredPreview = previewSensitiveText(content)
 	op.AfterPreview = op.DesiredPreview
 
-	if !before.FileExists {
+	if !before.Exists {
 		op.Action = planActionCreate
 		op.StatusReason = planReasonTargetMissing
 		return op, nil
@@ -398,6 +625,8 @@ func fingerprintSwitchPlan(plan SwitchPlan) string {
 		ProviderID    string   `json:"provider_id"`
 		ProfileID     string   `json:"profile_id"`
 		TargetID      string   `json:"target_id"`
+		BackendID     string   `json:"backend_id"`
+		Locator       string   `json:"locator_fingerprint"`
 		Path          string   `json:"path"`
 		Format        string   `json:"format"`
 		Strategy      string   `json:"strategy"`
@@ -425,6 +654,8 @@ func fingerprintSwitchPlan(plan SwitchPlan) string {
 			ProviderID:    op.ProviderID,
 			ProfileID:     op.ProfileID,
 			TargetID:      op.TargetID,
+			BackendID:     op.BackendID,
+			Locator:       op.locatorFingerprint,
 			Path:          op.Path,
 			Format:        op.Format,
 			Strategy:      op.Strategy,
@@ -432,8 +663,8 @@ func fingerprintSwitchPlan(plan SwitchPlan) string {
 			StatusReason:  op.StatusReason,
 			FileExists:    op.FileExists,
 			IsSymlink:     op.IsSymlink,
-			BeforeSHA256:  op.BeforeSHA256,
-			DesiredSHA256: op.DesiredSHA256,
+			BeforeSHA256:  firstNonEmpty(op.privateBeforeFingerprint, op.BeforeSHA256),
+			DesiredSHA256: firstNonEmpty(op.privateDesiredFingerprint, op.DesiredSHA256),
 			Warnings:      op.Warnings,
 		})
 	}
@@ -451,6 +682,15 @@ func fingerprintSwitchPlan(plan SwitchPlan) string {
 		return ""
 	}
 	return sha256Hex(raw)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 type contextReader struct {

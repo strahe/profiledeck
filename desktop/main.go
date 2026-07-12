@@ -25,8 +25,9 @@ var (
 )
 
 const (
-	trayDashboardUnavailableLabel     = "Dashboard unavailable. Open ProfileDeck for details."
-	trayCodexProfilesUnavailableLabel = "Unable to load Codex profiles. Open ProfileDeck for details."
+	trayDashboardUnavailableLabel           = "Dashboard unavailable. Open ProfileDeck for details."
+	trayCodexProfilesUnavailableLabel       = "Unable to load Codex profiles. Open ProfileDeck for details."
+	trayAntigravityProfilesUnavailableLabel = "Unable to load Antigravity profiles. Open ProfileDeck for details."
 )
 
 //go:embed all:frontend/dist
@@ -46,6 +47,7 @@ func main() {
 		Description: "Provider/profile switcher and local usage tracker for AI coding tools",
 		Services: []application.Service{
 			application.NewService(services.App),
+			application.NewService(services.Antigravity),
 			application.NewService(services.Codex),
 			application.NewService(services.Profile),
 			application.NewService(services.Switch),

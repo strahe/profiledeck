@@ -11,6 +11,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/strahe/profiledeck/desktop/backend"
+	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 )
@@ -103,6 +104,46 @@ func TestBuildTrayMenuUsesDashboardCodexProfiles(t *testing.T) {
 			t.Fatalf("expected profile id fallback label, got %q", got)
 		}
 	})
+}
+
+func TestBuildTrayMenuUsesDashboardAntigravityProfiles(t *testing.T) {
+	t.Run("unavailable", func(t *testing.T) {
+		menu := buildTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{})
+		submenu := requireMenuSubmenu(t, menu, "Antigravity Profiles")
+		if got := submenu.ItemAt(0).Label(); got != trayAntigravityProfilesUnavailableLabel {
+			t.Fatalf("expected unavailable Antigravity label, got %q", got)
+		}
+	})
+
+	t.Run("profiles", func(t *testing.T) {
+		menu := buildTrayMenu(dashboardWithAntigravityProfiles(
+			antigravityProfileSummary("work", "Work", true),
+			antigravityProfileSummary("personal", "", false),
+		), nil, trayMenuActions{})
+		submenu := requireMenuSubmenu(t, menu, "Antigravity Profiles")
+		if got := submenu.ItemAt(0).Label(); got != "Work" || !submenu.ItemAt(0).Checked() {
+			t.Fatalf("expected active Antigravity Profile, got label=%q checked=%t", got, submenu.ItemAt(0).Checked())
+		}
+		if got := submenu.ItemAt(1).Label(); got != "personal" {
+			t.Fatalf("expected Antigravity Profile id fallback, got %q", got)
+		}
+	})
+}
+
+func TestTrayControllerOpensAntigravitySwitch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ui := newFakeTrayUI()
+	controller := newTrayController(ctx, backend.NewServices(app.DefaultInfo(), backend.Environment{ConfigDir: t.TempDir()}, nil), ui)
+	controller.openSwitch(agyconfig.ProviderID, "work")
+	event := waitForEvent(t, ui)
+	if event.name != "profiledeck:open-switch" || len(event.data) != 1 {
+		t.Fatalf("expected Antigravity switch event, got %#v", event)
+	}
+	payload, ok := event.data[0].(map[string]string)
+	if !ok || payload["provider_id"] != agyconfig.ProviderID || payload["profile_id"] != "work" {
+		t.Fatalf("unexpected Antigravity switch payload: %#v", event.data)
+	}
 }
 
 func TestTrayControllerRefreshDropsStaleDashboard(t *testing.T) {
@@ -341,6 +382,10 @@ func dashboardWithCodexProfiles(profiles ...app.CodexProfileSummary) backend.Das
 	}
 }
 
+func dashboardWithAntigravityProfiles(profiles ...app.AntigravityProfileSummary) backend.DashboardResult {
+	return backend.DashboardResult{AntigravityProfiles: &app.AntigravityProfileListResult{Profiles: profiles}}
+}
+
 func codexProfileSummary(profileID, name string, active bool) app.CodexProfileSummary {
 	return app.CodexProfileSummary{
 		Profile: app.Profile{
@@ -349,5 +394,11 @@ func codexProfileSummary(profileID, name string, active bool) app.CodexProfileSu
 		},
 		ProviderID: codexconfig.ProviderID,
 		Active:     active,
+	}
+}
+
+func antigravityProfileSummary(profileID, name string, active bool) app.AntigravityProfileSummary {
+	return app.AntigravityProfileSummary{
+		Profile: app.Profile{ID: profileID, Name: name}, ProviderID: agyconfig.ProviderID, Active: active,
 	}
 }

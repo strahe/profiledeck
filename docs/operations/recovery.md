@@ -42,4 +42,4 @@ profiledeck backup show <backup-id>
 profiledeck rollback <backup-id> --yes
 ```
 
-Rollback restores the files and selected Profile from a backup. ProfileDeck also backs up the current files before restoring the older state.
+Rollback restores the external targets and selected Profile from a backup. ProfileDeck also backs up the current target state before restoring the older state. This applies to Codex files and Antigravity system credentials.

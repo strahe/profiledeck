@@ -121,9 +121,13 @@ func TestCodexProfileCreateRejectsInvalidProviderMetadata(t *testing.T) {
 		ProfileID: "work",
 	})
 	assertAppErrorCode(t, err, ErrorStoreSchemaInvalid)
+	_, err = ExportCodexProfiles(ctx, ExportCodexProfilesRequest{
+		ConfigDir: configDir, OutputPath: filepath.Join(t.TempDir(), "profiles.json"),
+	})
+	assertAppErrorCode(t, err, ErrorExportFailed)
 }
 
-func TestCodexPlanRejectsMutatedPresetTargetPath(t *testing.T) {
+func TestCodexPlanIgnoresGenericTargetPath(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
@@ -144,8 +148,10 @@ func TestCodexPlanRejectsMutatedPresetTargetPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected store open to succeed, got %v", err)
 	}
-	if _, err := db.UpdateProfileTarget(ctx, store.UpdateProfileTargetParams{
-		ProfileID: "work", ProviderID: codexconfig.ProviderID, TargetID: codexconfig.TargetID, Path: &mutatedPath,
+	if _, err := db.CreateProfileTarget(ctx, store.CreateProfileTargetParams{
+		ProfileID: "work", ProviderID: codexconfig.ProviderID, TargetID: codexconfig.TargetID,
+		Path: mutatedPath, PathKey: targetPathOwnershipKey(mutatedPath), Format: targetFormatTOML,
+		Strategy: targetStrategyReplaceFile, ValueJSON: `{}`, Enabled: true, MetadataJSON: `{}`,
 	}); err != nil {
 		_ = db.Close()
 		t.Fatalf("expected target mutation setup to succeed, got %v", err)
@@ -154,12 +160,85 @@ func TestCodexPlanRejectsMutatedPresetTargetPath(t *testing.T) {
 		t.Fatalf("expected store close to succeed, got %v", err)
 	}
 
-	_, err = BuildPlan(ctx, BuildPlanRequest{
+	plan, err := BuildPlan(ctx, BuildPlanRequest{
 		ConfigDir:  configDir,
 		ProviderID: codexconfig.ProviderID,
 		ProfileID:  "work",
 	})
+	if err != nil {
+		t.Fatalf("expected typed Codex bindings to ignore generic target path, got %v", err)
+	}
+	for _, operation := range plan.Operations {
+		if operation.Path == mutatedPath {
+			t.Fatalf("expected generic target path not to enter Codex plan: %#v", plan.Operations)
+		}
+	}
+}
+
+func TestCodexPlanRejectsUnsupportedTypedSlot(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"remote-work","access_token":"secret"}}`)
+	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
+		ConfigDir: configDir, CodexDir: codexDir, ProfileID: "work",
+	}); err != nil {
+		t.Fatalf("expected Codex profile create to succeed, got %v", err)
+	}
+	db, err := openHealthyStore(ctx, configDir, false)
+	if err != nil {
+		t.Fatalf("expected store open to succeed, got %v", err)
+	}
+	authBinding, err := db.GetProfileCredentialBinding(ctx, "work", codexconfig.ProviderID, codexpreset.CredentialSlotAuth)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("expected auth binding, got %v", err)
+	}
+	if _, err := db.UpsertProfileCredentialBinding(ctx, store.UpsertProfileCredentialBindingParams{
+		ProfileID: "work", ProviderID: codexconfig.ProviderID,
+		SlotID: "unsupported", CredentialID: authBinding.CredentialID,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("expected unsupported binding fixture, got %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("expected store close, got %v", err)
+	}
+	_, err = BuildPlan(ctx, BuildPlanRequest{
+		ConfigDir: configDir, ProviderID: codexconfig.ProviderID, ProfileID: "work",
+	})
 	assertAppErrorCode(t, err, ErrorCodexInvalid)
+}
+
+func TestCodexProfileCreateCanAttachToExistingGlobalProfile(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	if _, err := CreateProfile(ctx, CreateProfileRequest{
+		ConfigDir: configDir, ID: "shared", Name: "Shared Profile", Description: "Used by multiple Agents",
+	}); err != nil {
+		t.Fatalf("expected global Profile create to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"tokens":{"account_id":"display","access_token":"token"}}`)
+	result, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
+		ConfigDir: configDir, CodexDir: codexDir, ProfileID: "shared",
+	})
+	if err != nil {
+		t.Fatalf("expected Codex bindings to attach, got %v", err)
+	}
+	if result.Profile.Name != "Shared Profile" || result.Profile.Description != "Used by multiple Agents" {
+		t.Fatalf("expected existing global Profile metadata to remain unchanged, got %#v", result.Profile)
+	}
+	_, err = CreateCodexProfile(ctx, CreateCodexProfileRequest{
+		ConfigDir: configDir, CodexDir: codexDir, ProfileID: "shared",
+	})
+	assertAppErrorCode(t, err, ErrorProfileAlreadyExists)
 }
 
 func TestCodexProfileCreateRejectsConflictingProviderAndHome(t *testing.T) {
@@ -206,7 +285,7 @@ func TestCodexProfileCreateRejectsConflictingProviderAndHome(t *testing.T) {
 	assertAppErrorCode(t, err, ErrorCodexInvalid)
 }
 
-func TestCodexLegacyManagedProfileIsHiddenAndRejected(t *testing.T) {
+func TestCodexGenericManagedTargetIsNotAProfileBinding(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
@@ -264,8 +343,8 @@ func TestCodexLegacyManagedProfileIsHiddenAndRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected profile list to succeed, got %v", err)
 	}
-	if len(list.Profiles) != 1 || !hasWarning(list.Profiles[0].Warnings, "config set binding is invalid") {
-		t.Fatalf("expected legacy managed profile to be reported as invalid, got %#v", list.Profiles)
+	if len(list.Profiles) != 0 {
+		t.Fatalf("expected generic targets not to create Codex profiles, got %#v", list.Profiles)
 	}
 
 	_, err = BuildPlan(ctx, BuildPlanRequest{
@@ -276,7 +355,7 @@ func TestCodexLegacyManagedProfileIsHiddenAndRejected(t *testing.T) {
 	assertAppErrorCode(t, err, ErrorCodexInvalid)
 }
 
-func TestCodexLegacyAccountRefAuthProfileIsHiddenAndRejected(t *testing.T) {
+func TestCodexGenericAccountRefTargetIsNotAProfileBinding(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
@@ -368,8 +447,8 @@ func TestCodexLegacyAccountRefAuthProfileIsHiddenAndRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected profile list to succeed, got %v", err)
 	}
-	if len(list.Profiles) != 1 || !hasWarning(list.Profiles[0].Warnings, "login binding is invalid") {
-		t.Fatalf("expected legacy account-ref auth profile to be reported as invalid, got %#v", list.Profiles)
+	if len(list.Profiles) != 0 {
+		t.Fatalf("expected generic targets not to create Codex profiles, got %#v", list.Profiles)
 	}
 
 	_, err = BuildPlan(ctx, BuildPlanRequest{

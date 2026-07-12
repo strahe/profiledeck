@@ -167,7 +167,11 @@ func writeBackupDetail(w io.Writer, detail app.BackupDetail) error {
 	}
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
 	for _, entry := range detail.Entries {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\texisted=%t\t%s\n", entry.TargetID, entry.Action, entry.Existed, entry.Path); err != nil {
+		location := entry.Path
+		if location == "" {
+			location = entry.TargetLabel
+		}
+		if _, err := fmt.Fprintf(tw, "%s\t%s\texisted=%t\t%s\n", entry.TargetID, entry.Action, entry.Existed, location); err != nil {
 			return err
 		}
 	}

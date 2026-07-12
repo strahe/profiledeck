@@ -83,3 +83,16 @@ profiledeck switch codex work --yes
 Codex profile 切换要求 Codex home 中存在 `$CODEX_HOME/auth.json`。
 
 第一个 Profile 会创建并激活名为 `shared` 的 Config Set。后续 Profile 默认复用 active Config Set，因此新增登录状态通常只需先登录对应账号，再次执行 `codex profile create`。如果当前 `config.toml` 应成为独立 Config Set，使用 `--new-config-set <id>`。
+
+## 第一个 Antigravity Profile
+
+先通过 Antigravity agy v2 登录，然后运行：
+
+```bash
+profiledeck antigravity detect
+profiledeck antigravity profile create work
+profiledeck plan antigravity work
+profiledeck switch antigravity work --yes
+```
+
+ProfileDeck 只支持 agy v2 consumer OAuth 登录，不会发起 OAuth 登录，也不会导入 Antigravity Manager 数据。

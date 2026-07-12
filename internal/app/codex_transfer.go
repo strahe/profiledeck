@@ -243,7 +243,17 @@ func ImportCodexProfiles(ctx context.Context, req ImportCodexProfilesRequest) (C
 
 func buildCodexProfileBundle(ctx context.Context, db *store.Store, profileIDs []string) (profilebundle.Bundle, error) {
 	fullExport := len(profileIDs) == 0
-	targets, err := db.ListProfileTargetsByProvider(ctx, codexconfig.ProviderID)
+	provider, err := db.GetProvider(ctx, codexconfig.ProviderID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return profilebundle.Bundle{}, mapProviderStoreError(err)
+	}
+	if err == nil {
+		metadata, metadataErr := codexpreset.DecodeProviderMetadata(provider.MetadataJSON)
+		if provider.AdapterID != codexconfig.AdapterID || metadataErr != nil || !metadata.Compatible() {
+			return profilebundle.Bundle{}, NewError(ErrorCodexInvalid, "stored Codex provider metadata is invalid")
+		}
+	}
+	targets, err := allStoredCodexBindingTargets(ctx, db)
 	if err != nil {
 		return profilebundle.Bundle{}, err
 	}
@@ -380,7 +390,7 @@ func planCodexProviderImport(ctx context.Context, db *store.Store, home codexcon
 		_ = provider
 	}
 	if item.Action != CodexProfileImportActionConflict {
-		targets, err := db.ListProfileTargetsByProvider(ctx, codexconfig.ProviderID)
+		targets, err := allStoredCodexBindingTargets(ctx, db)
 		if err != nil {
 			item.Action, item.Reason = CodexProfileImportActionConflict, "targets_inspect_failed"
 		} else {
@@ -445,11 +455,12 @@ func planCodexProfileImport(ctx context.Context, db *store.Store, incoming profi
 		Kind: CodexProfileImportKindProfile, ID: incoming.ID, Name: incoming.Name,
 		CredentialID: incoming.CredentialID, ConfigSetID: incoming.ConfigSetID,
 	}
-	existing, err := db.GetProfile(ctx, incoming.ID)
+	_, err := db.GetProfile(ctx, incoming.ID)
 	if errors.Is(err, store.ErrNotFound) {
-		targets, targetErr := db.ListProfileTargets(ctx, incoming.ID, codexconfig.ProviderID, true)
-		if targetErr != nil || len(targets) > 0 {
-			item.Action, item.Reason = CodexProfileImportActionConflict, "profile_orphaned_targets"
+		credentialBindings, credentialErr := db.ListProfileCredentialBindings(ctx, incoming.ID, codexconfig.ProviderID)
+		configBindings, configErr := db.ListProfileConfigSetBindings(ctx, incoming.ID, codexconfig.ProviderID)
+		if credentialErr != nil || configErr != nil || len(credentialBindings) > 0 || len(configBindings) > 0 {
+			item.Action, item.Reason = CodexProfileImportActionConflict, "profile_orphaned_bindings"
 		} else {
 			item.Action = CodexProfileImportActionCreate
 		}
@@ -459,7 +470,19 @@ func planCodexProfileImport(ctx context.Context, db *store.Store, incoming profi
 		item.Action, item.Reason = CodexProfileImportActionConflict, "profile_inspect_failed"
 		return item
 	}
-	targets, err := db.ListProfileTargets(ctx, incoming.ID, codexconfig.ProviderID, true)
+	credentialBindings, credentialErr := db.ListProfileCredentialBindings(ctx, incoming.ID, codexconfig.ProviderID)
+	configBindings, configErr := db.ListProfileConfigSetBindings(ctx, incoming.ID, codexconfig.ProviderID)
+	if credentialErr != nil || configErr != nil {
+		item.Action, item.Reason = CodexProfileImportActionConflict, "profile_bindings_inspect_failed"
+		return item
+	}
+	if len(credentialBindings) == 0 && len(configBindings) == 0 {
+		// Profiles are global composition objects. Importing a new Codex facet
+		// preserves metadata already owned by the existing Profile.
+		item.Action, item.Reason = CodexProfileImportActionCreate, "attach_existing_profile"
+		return item
+	}
+	targets, err := storedCodexBindingTargets(ctx, db, incoming.ID)
 	if err != nil {
 		item.Action, item.Reason = CodexProfileImportActionConflict, "profile_bindings_inspect_failed"
 		return item
@@ -471,8 +494,9 @@ func planCodexProfileImport(ctx context.Context, db *store.Store, incoming profi
 	}
 	credentialID, credentialErr := codexCredentialIDFromTarget(authTarget)
 	configSetID, configErr := codexConfigSetIDFromTarget(configTarget)
-	if credentialErr == nil && configErr == nil && existing.Name == incoming.Name && existing.Description == incoming.Description &&
-		credentialID == incoming.CredentialID && configSetID == incoming.ConfigSetID {
+	if credentialErr == nil && configErr == nil && credentialID == incoming.CredentialID && configSetID == incoming.ConfigSetID {
+		// Display metadata belongs to the global Profile and may differ because
+		// another Provider workspace updated it after this bundle was created.
 		item.Action = CodexProfileImportActionUnchanged
 		return item
 	}
@@ -514,7 +538,12 @@ func applyCodexProfileBundle(ctx context.Context, db *store.Store, home codexcon
 		if actions[CodexProfileImportKindProfile+"\x00"+profile.ID] != CodexProfileImportActionCreate {
 			continue
 		}
-		stored, err := upsertCodexProfile(ctx, db, profile.ID, codexProfileFields{CreateName: profile.Name, CreateDescription: profile.Description}, false)
+		_, profileErr := db.GetProfile(ctx, profile.ID)
+		hasProfile := profileErr == nil
+		if profileErr != nil && !errors.Is(profileErr, store.ErrNotFound) {
+			return mapProfileStoreError(profileErr)
+		}
+		stored, err := upsertCodexProfile(ctx, db, profile.ID, managedProfileFields{CreateName: profile.Name, CreateDescription: profile.Description}, hasProfile)
 		if err != nil {
 			return err
 		}
@@ -607,13 +636,12 @@ func rejectUnsafeCodexExportPath(ctx context.Context, db *store.Store, configDir
 			return NewError(ErrorExportFailed, "Codex profile bundle cannot replace ProfileDeck runtime state").WithDetail("path", outputPath)
 		}
 	}
-	targets, err := db.ListProfileTargetsByProvider(ctx, codexconfig.ProviderID)
-	if err != nil {
-		return WrapError(ErrorExportFailed, "failed to inspect Codex target paths", err)
-	}
-	for _, target := range targets {
-		if sameCleanPath(outputPath, target.Path) {
-			return NewError(ErrorExportFailed, "Codex profile bundle cannot replace a Codex working file").WithDetail("path", outputPath)
+	home, err := codexStoredHome(ctx, db)
+	if err == nil {
+		for _, targetPath := range []string{home.ConfigPath, home.AuthPath} {
+			if sameCleanPath(outputPath, targetPath) {
+				return NewError(ErrorExportFailed, "Codex profile bundle cannot replace a Codex working file").WithDetail("path", outputPath)
+			}
 		}
 	}
 	return nil

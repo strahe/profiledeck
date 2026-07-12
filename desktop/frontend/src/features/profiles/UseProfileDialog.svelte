@@ -14,11 +14,13 @@
 	import { joinUserMessages, switchWarningMessage } from "$lib/user-facing-messages";
 
 	import type { PlanOperation, SwitchPlan } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
-	import type { CodexProfileListItem } from "./types";
+	import type { SwitchProfileItem } from "./types";
 
 	let {
 		open = $bindable(false),
 		profile,
+		agent = "Codex",
+		mode = "codex",
 		currentProfile,
 		plan,
 		building,
@@ -28,7 +30,9 @@
 		onConfirm,
 	}: {
 		open?: boolean;
-		profile: CodexProfileListItem | null;
+		profile: SwitchProfileItem | null;
+		agent?: string;
+		mode?: "codex" | "antigravity";
 		currentProfile: string;
 		plan: SwitchPlan | null;
 		building: boolean;
@@ -39,14 +43,22 @@
 	} = $props();
 
 	let operations = $derived(plan?.operations ?? []);
+	let fileOperations = $derived(operations.filter((operation) => operation.backend_id === "file"));
+	// Unknown non-file backends stay on the safe summary-only path. Their public
+	// plans may intentionally omit locators, hashes, and previews.
+	let sensitiveOperations = $derived(operations.filter((operation) => operation.backend_id !== "file"));
 	let unsupportedCount = $derived(operations.filter((operation) => operation.action === "unsupported").length);
 	let loginChanges = $derived(!!plan?.bindings?.find((binding) => binding.target_id === "auth")?.changed);
 	let configChanges = $derived(!!plan?.bindings?.find((binding) => binding.target_id === "config")?.changed);
-	let changeSummary = $derived(
-		loginChanges && configChanges ? $_("useDialog.bothChange") : loginChanges ? $_("useDialog.loginOnly") : configChanges ? $_("useDialog.configOnly") : $_("useDialog.sameBindings"),
-	);
+	let changeSummary = $derived(mode === "antigravity"
+		? (sensitiveOperations.some((operation) => operation.action === "create" || operation.action === "update") ? $_("antigravity.use.loginChange") : $_("antigravity.use.loginSame"))
+		: (loginChanges && configChanges ? $_("useDialog.bothChange") : loginChanges ? $_("useDialog.loginOnly") : configChanges ? $_("useDialog.configOnly") : $_("useDialog.sameBindings")));
 
 	function handleOpenChange(value: boolean) {
+		if (!value && applying) {
+			open = true;
+			return;
+		}
 		open = value;
 		if (!value) onClose();
 	}
@@ -55,10 +67,19 @@
 		return [...new Set((operation.warnings ?? []).map(switchWarningMessage))];
 	}
 
-	function targetLabel(targetID: string): string {
-		if (targetID === "auth") return $_("useDialog.loginFile");
-		if (targetID === "config") return $_("useDialog.settingsFile");
+	function targetLabel(operation: PlanOperation): string {
+		if (mode === "antigravity" && operation.backend_id === "keyring") return $_("antigravity.use.targetLabel");
+		if (operation.target_id === "auth") return $_("useDialog.loginFile");
+		if (operation.target_id === "config") return $_("useDialog.settingsFile");
+		if (operation.target_label) return operation.target_label;
 		return $_("useDialog.codexFile");
+	}
+
+	function sensitiveStatus(operation: PlanOperation): string {
+		if (operation.action === "create") return $_("antigravity.use.create");
+		if (operation.action === "update") return $_("antigravity.use.update");
+		if (operation.action === "noop") return $_("antigravity.use.noop");
+		return mode === "antigravity" ? $_("antigravity.use.unsupported") : $_("useDialog.unsupported");
 	}
 
 	function preview(operation: PlanOperation, side: "before" | "after"): string {
@@ -82,9 +103,9 @@
 	<Dialog.Content class="max-h-[86vh] overflow-hidden sm:max-w-[760px]" showCloseButton={false}>
 		<Dialog.Header>
 			<Dialog.Title>
-				{$_("useDialog.title", { values: { profile: profile?.name ?? profile?.id ?? "—", agent: "Codex" } })}
+				{$_("useDialog.title", { values: { profile: profile?.name ?? profile?.id ?? "—", agent } })}
 			</Dialog.Title>
-			<Dialog.Description>{$_("useDialog.description", { values: { agent: "Codex" } })}</Dialog.Description>
+			<Dialog.Description>{mode === "antigravity" ? $_("antigravity.use.description") : $_("useDialog.description", { values: { agent } })}</Dialog.Description>
 		</Dialog.Header>
 
 		<div class="flex min-h-0 flex-col gap-4 overflow-auto pr-1">
@@ -97,7 +118,7 @@
 				<Alert.Root>
 					<ShieldCheckIcon data-icon="inline-start" />
 					<Alert.Title>{changeSummary}</Alert.Title>
-					<Alert.Description>{$_("useDialog.changeSummaryDescription")}</Alert.Description>
+					<Alert.Description>{mode === "antigravity" ? $_("antigravity.use.summaryDescription") : $_("useDialog.changeSummaryDescription")}</Alert.Description>
 				</Alert.Root>
 			{:else}
 				<Skeleton class="h-16 w-full" />
@@ -106,8 +127,8 @@
 			{#if plan?.state_captures?.length}
 			<Alert.Root>
 				<ShieldCheckIcon data-icon="inline-start" />
-				<Alert.Title>{$_("useDialog.captureTitle")}</Alert.Title>
-				<Alert.Description>{$_("useDialog.captureDescription", { values: { count: plan.state_captures.length } })}</Alert.Description>
+				<Alert.Title>{mode === "antigravity" ? $_("antigravity.use.captureTitle") : $_("useDialog.captureTitle")}</Alert.Title>
+				<Alert.Description>{mode === "antigravity" ? $_("antigravity.use.captureDescription") : $_("useDialog.captureDescription", { values: { count: plan.state_captures.length } })}</Alert.Description>
 			</Alert.Root>
 			{/if}
 
@@ -147,15 +168,28 @@
 					<Alert.Description>{$_("useDialog.noChanges")}</Alert.Description>
 				</Alert.Root>
 			{:else if plan}
+				{#each sensitiveOperations as operation (`${operation.backend_id}:${operation.target_id}:${operation.target_label}`)}
+					<Alert.Root>
+						<ShieldCheckIcon data-icon="inline-start" />
+						<Alert.Title>
+							<span class="flex items-center gap-2">
+								<Badge variant={operation.action === "unsupported" ? "destructive" : operation.action === "noop" ? "secondary" : "outline"}>{actionLabel(operation.action)}</Badge>
+								<span>{targetLabel(operation)}</span>
+							</span>
+						</Alert.Title>
+						<Alert.Description>{sensitiveStatus(operation)}</Alert.Description>
+					</Alert.Root>
+				{/each}
+				{#if fileOperations.length}
 				<Accordion.Root type="multiple">
-					{#each operations as operation (`${operation.target_id}:${operation.path}`)}
+					{#each fileOperations as operation (`${operation.target_id}:${operation.path}`)}
 						<Accordion.Item value={`${operation.target_id}:${operation.path}`}>
 							<Accordion.Trigger>
 								<div class="flex min-w-0 flex-1 items-center gap-2 pr-2">
 									<Badge variant={operation.action === "unsupported" ? "destructive" : operation.action === "noop" ? "secondary" : "outline"}>
 										{actionLabel(operation.action)}
 									</Badge>
-									<span class="shrink-0 font-medium">{targetLabel(operation.target_id)}</span>
+									<span class="shrink-0 font-medium">{targetLabel(operation)}</span>
 									<span class="truncate font-mono text-xs text-muted-foreground">{operation.path}</span>
 								</div>
 							</Accordion.Trigger>
@@ -181,11 +215,12 @@
 						</Accordion.Item>
 					{/each}
 				</Accordion.Root>
+				{/if}
 			{/if}
 		</div>
 
 		<Dialog.Footer>
-			<Button variant="outline" onclick={() => handleOpenChange(false)}>{$_("actions.cancel")}</Button>
+			<Button variant="outline" disabled={applying} onclick={() => handleOpenChange(false)}>{$_("actions.cancel")}</Button>
 			<Button disabled={building || !plan || unsupportedCount > 0 || applying} onclick={onConfirm}>
 				{#if applying}<Spinner data-icon="inline-start" />{/if}
 				{$_("actions.useProfile")}

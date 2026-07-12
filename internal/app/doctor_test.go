@@ -57,6 +57,27 @@ func TestDoctorHealthyDatabaseReportsOK(t *testing.T) {
 	}
 }
 
+func TestDoctorTreatsReleasedMaintenanceLockAsSafeResidue(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	if _, err := CreateProvider(ctx, CreateProviderRequest{
+		ConfigDir: configDir, ID: "provider-a", Name: "Provider A", AdapterID: "generic",
+	}); err != nil {
+		t.Fatalf("expected Provider create to succeed, got %v", err)
+	}
+
+	result, err := Doctor(ctx, DoctorRequest{ConfigDir: configDir})
+	if err != nil {
+		t.Fatalf("expected Doctor to succeed, got %v", err)
+	}
+	if result.OverallLevel != DoctorLevelOK || result.Lock.Reason != "maintenance_lock_residue" || !result.Lock.Repairable {
+		t.Fatalf("expected safe maintenance lock residue, got %#v", result.Lock)
+	}
+}
+
 func TestDoctorReportsCodexPresetAndBindingFailures(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
@@ -91,28 +112,14 @@ func TestDoctorReportsCodexPresetAndBindingFailures(t *testing.T) {
 	if _, err := db.UpdateProvider(ctx, store.UpdateProviderParams{ID: codexconfig.ProviderID, MetadataJSON: &metadataJSON}); err != nil {
 		t.Fatalf("expected provider metadata update, got %v", err)
 	}
-	targets, err := db.ListProfileTargets(ctx, "work", codexconfig.ProviderID, true)
-	if err != nil {
-		t.Fatalf("expected Codex targets, got %v", err)
+	if err := db.DeleteProfileCredentialBinding(ctx, "work", codexconfig.ProviderID, codexpreset.CredentialSlotAuth); err != nil {
+		t.Fatalf("expected login binding delete, got %v", err)
 	}
-	var configTarget store.ProfileTarget
-	for _, target := range targets {
-		if target.TargetID == codexconfig.TargetID {
-			configTarget = target
-		}
-		if err := db.DeleteProfileTarget(ctx, "work", codexconfig.ProviderID, target.TargetID); err != nil {
-			t.Fatalf("expected target delete, got %v", err)
-		}
+	if err := db.DeleteProfileConfigSetBinding(ctx, "work", codexconfig.ProviderID, codexpreset.ConfigSetSlotUserConfig); err != nil {
+		t.Fatalf("expected config binding delete, got %v", err)
 	}
 	if err := db.DeleteProviderConfigSet(ctx, created.Summary.ConfigSetID); err != nil {
-		t.Fatalf("expected config set delete, got %v", err)
-	}
-	if _, err := db.CreateProfileTarget(ctx, store.CreateProfileTargetParams{
-		ProfileID: "work", ProviderID: codexconfig.ProviderID, TargetID: configTarget.TargetID,
-		Path: configTarget.Path, PathKey: configTarget.PathKey, Format: configTarget.Format, Strategy: configTarget.Strategy,
-		ValueJSON: configTarget.ValueJSON, Enabled: true, MetadataJSON: configTarget.MetadataJSON,
-	}); err != nil {
-		t.Fatalf("expected missing-resource config binding setup, got %v", err)
+		t.Fatalf("expected unbound config set delete, got %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("expected store close, got %v", err)
@@ -122,10 +129,43 @@ func TestDoctorReportsCodexPresetAndBindingFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected doctor to succeed, got %v", err)
 	}
-	for _, findingID := range []string{"codex_preset_v2_invalid", "codex_login_binding_missing", "codex_config_set_invalid"} {
+	for _, findingID := range []string{"codex_preset_v2_invalid", "codex_login_binding_missing", "codex_config_binding_missing"} {
 		if !hasDoctorFinding(result.Findings, findingID) {
 			t.Fatalf("expected %s finding, got %#v", findingID, result.Findings)
 		}
+	}
+}
+
+func TestDoctorInspectsTypedCodexBindingsWhenProviderMetadataIsInvalid(t *testing.T) {
+	ctx, configDir, _ := setupCodexSwitchProfiles(t, true)
+	first, err := GetCodexProfile(ctx, GetCodexProfileRequest{ConfigDir: configDir, ProfileID: "first"})
+	if err != nil {
+		t.Fatalf("expected first profile, got %v", err)
+	}
+	db, err := openHealthyStore(ctx, configDir, false)
+	if err != nil {
+		t.Fatalf("expected writable store, got %v", err)
+	}
+	if _, err := db.UpsertProfileCredentialBinding(ctx, store.UpsertProfileCredentialBindingParams{
+		ProfileID: "first", ProviderID: codexconfig.ProviderID,
+		SlotID: "unsupported", CredentialID: first.Summary.CredentialID,
+	}); err != nil {
+		t.Fatalf("expected unsupported binding setup, got %v", err)
+	}
+	invalidMetadata := "{"
+	if _, err := db.UpdateProvider(ctx, store.UpdateProviderParams{ID: codexconfig.ProviderID, MetadataJSON: &invalidMetadata}); err != nil {
+		t.Fatalf("expected invalid metadata setup, got %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("expected store close, got %v", err)
+	}
+
+	result, err := Doctor(ctx, DoctorRequest{ConfigDir: configDir})
+	if err != nil {
+		t.Fatalf("expected Doctor to succeed, got %v", err)
+	}
+	if !hasDoctorFinding(result.Findings, "codex_preset_v2_invalid") || !hasDoctorFindingForProfile(result.Findings, "codex_login_binding_invalid", "first") {
+		t.Fatalf("expected invalid metadata and non-active binding findings, got %#v", result.Findings)
 	}
 }
 
@@ -777,6 +817,15 @@ func doctorTestOperationByID(t *testing.T, operations []DoctorOperation, id stri
 func hasDoctorFinding(findings []DoctorFinding, id string) bool {
 	for _, finding := range findings {
 		if finding.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDoctorFindingForProfile(findings []DoctorFinding, id, profileID string) bool {
+	for _, finding := range findings {
+		if finding.ID == id && finding.Details["profile_id"] == profileID {
 			return true
 		}
 	}

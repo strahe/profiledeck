@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
-	"github.com/strahe/profiledeck/internal/store"
 )
 
 func TestListCodexProfilesSummarizesBindingsAndActiveState(t *testing.T) {
@@ -109,12 +108,9 @@ func TestListCodexProfilesReportsMalformedBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected store open, got %v", err)
 	}
-	badMetadata := "{not-json"
-	if _, err := db.UpdateProfileTarget(ctx, store.UpdateProfileTargetParams{
-		ProfileID: "snapshot", ProviderID: codexconfig.ProviderID, TargetID: codexconfig.TargetID, MetadataJSON: &badMetadata,
-	}); err != nil {
+	if err := db.DeleteProfileConfigSetBinding(ctx, "snapshot", codexconfig.ProviderID, "user-config"); err != nil {
 		_ = db.Close()
-		t.Fatalf("expected target mutation setup, got %v", err)
+		t.Fatalf("expected binding removal setup, got %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("expected store close, got %v", err)
@@ -123,8 +119,8 @@ func TestListCodexProfilesReportsMalformedBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected tolerant list, got %v", err)
 	}
-	if len(result.Profiles) != 1 || !hasWarning(result.Profiles[0].Warnings, "Codex config set binding is invalid") {
-		t.Fatalf("expected malformed binding warning, got %#v", result.Profiles)
+	if len(result.Profiles) != 1 || !hasWarning(result.Profiles[0].Warnings, "Codex profile config binding is missing") {
+		t.Fatalf("expected missing binding warning, got %#v", result.Profiles)
 	}
 }
 

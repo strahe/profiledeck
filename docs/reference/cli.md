@@ -10,14 +10,15 @@ All commands accept the global option:
 
 | Command | Purpose |
 | --- | --- |
+| `antigravity` | Manage Antigravity agy v2 Profiles. |
 | `backup` | View ProfileDeck backups. |
 | `codex` | Manage Codex provider profiles. |
 | `doctor` | Check local data, file permissions, and interrupted changes. |
 | `init` | Create ProfileDeck's local data. |
-| `plan` | Preview a Profile switch without changing files. |
+| `plan` | Preview a Profile switch without changing external targets. |
 | `provider` | Manage AI tool providers. |
 | `profile` | Manage ProfileDeck profiles and targets. |
-| `recover` | Restore files from the backup saved before a failed switch. |
+| `recover` | Restore external targets from the backup saved before a failed switch. |
 | `rollback` | Undo an applied switch with its backup. |
 | `status` | Show ProfileDeck setup status. |
 | `switch` | Apply a profile switch. |
@@ -60,7 +61,20 @@ The first `profile create` saves the current Codex login and settings and create
 
 `profile export` creates a sensitive backup. With no Profile IDs it exports every Codex Profile and Config Set. With Profile IDs it exports only those Profiles and the logins and Config Sets they need. Run `save-current` first when the current Codex login or settings changed. `--output` is required so the backup can be kept outside a ProfileDeck data directory that will be deleted; `--force` is required to replace an existing file.
 
-The backup contains complete Codex sign-in data and settings. ProfileDeck writes it with `0600` permissions on POSIX systems and never prints the sensitive contents to stdout. `import inspect` checks the backup and reports `create`, `unchanged`, and `conflict` actions. `import apply` requires the reviewed fingerprint and makes no changes when an existing ID has different content. Import does not make a Profile current or write Codex files.
+The backup contains complete Codex sign-in data and settings. ProfileDeck writes it with `0600` permissions on POSIX systems and never prints the sensitive contents to stdout. `import inspect` checks the backup and reports `create`, `unchanged`, and `conflict` actions. `import apply` requires the reviewed fingerprint and makes no changes when existing Codex data conflicts. An existing global Profile without Codex bindings receives the imported bindings without changing its name or description. Import does not make a Profile current or write Codex files.
+
+## Antigravity agy v2
+
+```bash
+profiledeck antigravity detect [--json]
+profiledeck antigravity profile list [--json]
+profiledeck antigravity profile show <profile-id> [--json]
+profiledeck antigravity profile create <profile-id> [--name NAME] [--description TEXT] [--json]
+profiledeck antigravity profile update <profile-id> [--name NAME] [--description TEXT] [--json]
+profiledeck antigravity profile save-current [--json]
+```
+
+`agy` is an alias for `antigravity`. Create and save-current require a valid consumer OAuth login from Antigravity agy v2. Output contains metadata only and never prints login values.
 
 ## Switching
 
@@ -97,6 +111,8 @@ profiledeck profile update <id> [--name NAME] [--description TEXT] [--metadata-j
 profiledeck profile delete <id> --yes [--json]
 ```
 
+For the managed `codex` and `antigravity` Providers, generic Provider updates may change only the display name or enabled state. Their adapter and metadata are owned by the dedicated Profile workflows.
+
 Target commands:
 
 ```bash
@@ -107,7 +123,7 @@ profiledeck profile target update <profile-id> <provider-id> <target-id> [--path
 profiledeck profile target delete <profile-id> <provider-id> <target-id> --yes [--json]
 ```
 
-Generic target commands cannot create, update, or delete the files managed by Codex Profiles. Use the Codex commands above for saved logins and Config Sets.
+Generic target commands cannot create, update, or delete bindings managed by Codex or Antigravity Profiles. Use the Provider-specific commands above.
 
 ## Backup and recovery
 

@@ -513,6 +513,81 @@ func TestFailSwitchOperationPreservesOriginalErrorWhenFailureMarkFails(t *testin
 	}
 }
 
+func TestPublicStateCapturesRedactsSensitiveNonFileHashes(t *testing.T) {
+	private := []StateCapture{{
+		ResourceKind: "credential", ResourceID: "credential-a",
+		StoredSHA256: "stored-secret-hash", CurrentSHA256: "current-secret-hash",
+	}}
+	public := publicStateCaptures(private, []applyPlanOperation{{PlanOperation: PlanOperation{
+		BackendID: targetBackendKeyring,
+		sensitive: true,
+	}}})
+	if public[0].StoredSHA256 != "" || public[0].CurrentSHA256 != "" {
+		t.Fatalf("expected public secret-derived hashes to be redacted, got %#v", public[0])
+	}
+	if private[0].StoredSHA256 == "" || private[0].CurrentSHA256 == "" {
+		t.Fatalf("expected internal capture hashes to remain available, got %#v", private[0])
+	}
+}
+
+func TestInspectPreparedTargetsRejectsDuplicateTargetIDs(t *testing.T) {
+	_, err := inspectPreparedTargets(context.Background(), []preparedTarget{
+		{Spec: fileTargetSpec{ID: "duplicate", Path: filepath.Join(t.TempDir(), "first")}},
+		{Spec: fileTargetSpec{ID: "duplicate", Path: filepath.Join(t.TempDir(), "second")}},
+	})
+	assertAppErrorCode(t, err, ErrorPlanBuildFailed)
+	_, err = inspectPreparedTargets(context.Background(), []preparedTarget{{}})
+	assertAppErrorCode(t, err, ErrorPlanBuildFailed)
+}
+
+func TestInspectPreparedTargetsRejectsDuplicateLocators(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared.json")
+	_, err := inspectPreparedTargets(context.Background(), []preparedTarget{
+		{Spec: fileTargetSpec{ID: "first", Path: path, NeedsContent: true}},
+		{Spec: fileTargetSpec{ID: "second", Path: path, NeedsContent: true}},
+	})
+	assertAppErrorCode(t, err, ErrorPlanBuildFailed)
+	if err == nil || strings.Contains(err.Error(), sha256HexString(targetBackendFile+"\x00"+path)) {
+		t.Fatalf("expected duplicate locator error without locator fingerprint, got %v", err)
+	}
+}
+
+func TestValidateFinalizedPlanResultRejectsChangedTargetAndInvalidNoop(t *testing.T) {
+	input := planAdapterInput{Provider: store.Provider{ID: "provider"}, Profile: store.Profile{ID: "profile"}}
+	path := filepath.Join(t.TempDir(), "target.json")
+	preparedSpec := fileTargetSpec{ID: "target", Path: path, NeedsContent: true, Label: path}
+	snapshot := targetSnapshot{Exists: true, Fingerprint: sha256HexString("before"), Content: "before"}
+	prepared := planAdapterPrepared{Targets: []preparedTarget{{Spec: preparedSpec}}}
+	snapshots := map[string]targetSnapshot{"target": snapshot}
+	base := applyPlanOperation{
+		PlanOperation: PlanOperation{
+			ProviderID: "provider", ProfileID: "profile", TargetID: "target", BackendID: targetBackendFile,
+			TargetLabel: path, Action: planActionNoop, FileExists: true,
+			BeforeSHA256: snapshot.Fingerprint, DesiredSHA256: snapshot.Fingerprint,
+			locatorFingerprint: preparedSpec.LocatorFingerprint(),
+		},
+		DesiredContent: "before", Spec: preparedSpec, Snapshot: snapshot,
+	}
+
+	changedSpec := base
+	changedSpec.Spec = fileTargetSpec{ID: "target", Path: filepath.Join(t.TempDir(), "other.json"), NeedsContent: true, Label: path}
+	if err := validateFinalizedPlanResult(input, prepared, snapshots, planAdapterResult{Operations: []applyPlanOperation{changedSpec}}); err == nil || err.Code != ErrorPlanBuildFailed {
+		t.Fatalf("expected changed finalized target to fail, got %v", err)
+	}
+	changedPath := base
+	changedPath.Path = filepath.Join(t.TempDir(), "misleading.json")
+	if err := validateFinalizedPlanResult(input, prepared, snapshots, planAdapterResult{Operations: []applyPlanOperation{changedPath}}); err == nil || err.Code != ErrorPlanBuildFailed {
+		t.Fatalf("expected changed finalized file path to fail, got %v", err)
+	}
+
+	invalidNoop := base
+	invalidNoop.DesiredContent = "different"
+	invalidNoop.DesiredSHA256 = sha256HexString("different")
+	if err := validateFinalizedPlanResult(input, prepared, snapshots, planAdapterResult{Operations: []applyPlanOperation{invalidNoop}}); err == nil || err.Code != ErrorPlanBuildFailed {
+		t.Fatalf("expected invalid finalized no-op to fail, got %v", err)
+	}
+}
+
 func openAppTestStore(t *testing.T, ctx context.Context, databasePath string) *store.Store {
 	t.Helper()
 

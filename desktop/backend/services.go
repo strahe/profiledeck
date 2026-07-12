@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 )
@@ -25,6 +26,11 @@ type CodexService struct {
 	autoSync   *usageAutoSyncRuntime
 	quota      *codexQuotaRuntime
 	settingsMu sync.Mutex
+}
+
+type AntigravityService struct {
+	env     Environment
+	changes *ChangeNotifier
 }
 
 type ProfileService struct {
@@ -58,32 +64,34 @@ type SettingsService struct {
 }
 
 type Services struct {
-	App      *AppService
-	Codex    *CodexService
-	Profile  *ProfileService
-	Switch   *SwitchService
-	Doctor   *DoctorService
-	Backup   *BackupService
-	Usage    *UsageService
-	Settings *SettingsService
-	changes  *ChangeNotifier
-	autoSync *usageAutoSyncRuntime
-	quota    *codexQuotaRuntime
+	App         *AppService
+	Antigravity *AntigravityService
+	Codex       *CodexService
+	Profile     *ProfileService
+	Switch      *SwitchService
+	Doctor      *DoctorService
+	Backup      *BackupService
+	Usage       *UsageService
+	Settings    *SettingsService
+	changes     *ChangeNotifier
+	autoSync    *usageAutoSyncRuntime
+	quota       *codexQuotaRuntime
 }
 
 type DashboardResult struct {
-	Info            app.Info                      `json:"info"`
-	Environment     Environment                   `json:"environment"`
-	Status          app.StatusResult              `json:"status"`
-	Doctor          *app.DoctorResult             `json:"doctor,omitempty"`
-	Providers       []app.Provider                `json:"providers"`
-	Profiles        []app.Profile                 `json:"profiles"`
-	ActiveStates    []app.ActiveProviderState     `json:"active_states"`
-	CodexProfiles   *app.CodexProfileListResult   `json:"codex_profiles,omitempty"`
-	CodexConfigSets *app.CodexConfigSetListResult `json:"codex_config_sets,omitempty"`
-	Usage           *app.UsageSummaryResult       `json:"usage,omitempty"`
-	StartupError    *DesktopError                 `json:"startup_error,omitempty"`
-	GeneratedAt     int64                         `json:"generated_at_unix_ms"`
+	Info                app.Info                          `json:"info"`
+	Environment         Environment                       `json:"environment"`
+	Status              app.StatusResult                  `json:"status"`
+	Doctor              *app.DoctorResult                 `json:"doctor,omitempty"`
+	Providers           []app.Provider                    `json:"providers"`
+	Profiles            []app.Profile                     `json:"profiles"`
+	ActiveStates        []app.ActiveProviderState         `json:"active_states"`
+	CodexProfiles       *app.CodexProfileListResult       `json:"codex_profiles,omitempty"`
+	CodexConfigSets     *app.CodexConfigSetListResult     `json:"codex_config_sets,omitempty"`
+	AntigravityProfiles *app.AntigravityProfileListResult `json:"antigravity_profiles,omitempty"`
+	Usage               *app.UsageSummaryResult           `json:"usage,omitempty"`
+	StartupError        *DesktopError                     `json:"startup_error,omitempty"`
+	GeneratedAt         int64                             `json:"generated_at_unix_ms"`
 }
 
 type DesktopError struct {
@@ -150,6 +158,18 @@ type UpdateCodexProfileMetadataRequest struct {
 	Description *string `json:"description,omitempty"`
 }
 
+type CreateAntigravityProfileRequest struct {
+	ProfileID   string  `json:"profile_id"`
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+}
+
+type UpdateAntigravityProfileRequest struct {
+	ProfileID   string  `json:"profile_id"`
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+}
+
 type ExportCodexProfilesRequest struct {
 	ProfileIDs []string `json:"profile_ids,omitempty"`
 	OutputPath string   `json:"output_path"`
@@ -167,17 +187,18 @@ func NewServices(info app.Info, env Environment, startupErr error) Services {
 	autoSync := newUsageAutoSyncRuntime(env)
 	quota := newCodexQuotaRuntime(env)
 	return Services{
-		App:      &AppService{info: info, env: env, startupErr: startupErr, changes: changes},
-		Codex:    &CodexService{env: env, changes: changes, autoSync: autoSync, quota: quota},
-		Profile:  &ProfileService{env: env},
-		Switch:   &SwitchService{env: env, changes: changes, quota: quota},
-		Doctor:   &DoctorService{env: env, changes: changes},
-		Backup:   &BackupService{env: env, changes: changes, quota: quota},
-		Usage:    &UsageService{env: env, autoSync: autoSync},
-		Settings: &SettingsService{env: env},
-		changes:  changes,
-		autoSync: autoSync,
-		quota:    quota,
+		App:         &AppService{info: info, env: env, startupErr: startupErr, changes: changes},
+		Antigravity: &AntigravityService{env: env, changes: changes},
+		Codex:       &CodexService{env: env, changes: changes, autoSync: autoSync, quota: quota},
+		Profile:     &ProfileService{env: env},
+		Switch:      &SwitchService{env: env, changes: changes, quota: quota},
+		Doctor:      &DoctorService{env: env, changes: changes},
+		Backup:      &BackupService{env: env, changes: changes, quota: quota},
+		Usage:       &UsageService{env: env, autoSync: autoSync},
+		Settings:    &SettingsService{env: env},
+		changes:     changes,
+		autoSync:    autoSync,
+		quota:       quota,
 	}
 }
 
@@ -282,12 +303,57 @@ func (s *AppService) Dashboard(ctx context.Context) (DashboardResult, error) {
 	if codexConfigSets, err := app.ListCodexConfigSets(ctx, app.ListCodexConfigSetsRequest{ConfigDir: s.env.ConfigDir}); err == nil {
 		result.CodexConfigSets = &codexConfigSets
 	}
+	if antigravityProfiles, err := app.ListAntigravityProfiles(ctx, app.ListAntigravityProfilesRequest{ConfigDir: s.env.ConfigDir}); err == nil {
+		result.AntigravityProfiles = &antigravityProfiles
+	}
 
 	usage, err := app.UsageSummary(ctx, app.UsageSummaryRequest{ConfigDir: s.env.ConfigDir, ProviderID: codexconfig.ProviderID})
 	if err == nil {
 		result.Usage = &usage
 	}
 	return result, nil
+}
+
+func (s *AntigravityService) Detect(ctx context.Context) (app.AntigravityDetectResult, error) {
+	return app.AntigravityDetect(ctx, app.AntigravityDetectRequest{ConfigDir: s.env.ConfigDir})
+}
+
+func (s *AntigravityService) ListProfiles(ctx context.Context) (app.AntigravityProfileListResult, error) {
+	return app.ListAntigravityProfiles(ctx, app.ListAntigravityProfilesRequest{ConfigDir: s.env.ConfigDir})
+}
+
+func (s *AntigravityService) ShowProfile(ctx context.Context, profileID string) (app.AntigravityProfileDetail, error) {
+	return app.GetAntigravityProfile(ctx, app.GetAntigravityProfileRequest{ConfigDir: s.env.ConfigDir, ProfileID: profileID})
+}
+
+func (s *AntigravityService) CreateProfile(ctx context.Context, req CreateAntigravityProfileRequest) (app.AntigravityProfileSaveResult, error) {
+	result, err := app.CreateAntigravityProfile(ctx, app.CreateAntigravityProfileRequest{
+		ConfigDir: s.env.ConfigDir, ProfileID: req.ProfileID, Name: req.Name, Description: req.Description,
+	})
+	profileID := result.Summary.Profile.ID
+	if profileID == "" {
+		profileID = strings.TrimSpace(req.ProfileID)
+	}
+	s.notifyMutationResult(DesktopChangeAntigravityProfileChanged, "antigravity.createProfile", agyconfig.ProviderID, profileID, result.OperationID, err)
+	return result, err
+}
+
+func (s *AntigravityService) UpdateProfile(ctx context.Context, req UpdateAntigravityProfileRequest) (app.AntigravityProfileDetail, error) {
+	result, err := app.UpdateAntigravityProfile(ctx, app.UpdateAntigravityProfileRequest{
+		ConfigDir: s.env.ConfigDir, ProfileID: req.ProfileID, Name: req.Name, Description: req.Description,
+	})
+	profileID := result.Summary.Profile.ID
+	if profileID == "" {
+		profileID = strings.TrimSpace(req.ProfileID)
+	}
+	s.notifyMutationResult(DesktopChangeAntigravityProfileChanged, "antigravity.updateProfile", agyconfig.ProviderID, profileID, "", err)
+	return result, err
+}
+
+func (s *AntigravityService) SaveCurrent(ctx context.Context) (app.AntigravityProfileSaveResult, error) {
+	result, err := app.SaveActiveAntigravityProfile(ctx, app.SaveActiveAntigravityProfileRequest{ConfigDir: s.env.ConfigDir})
+	s.notifyMutationResult(DesktopChangeAntigravityProfileChanged, "antigravity.saveCurrent", agyconfig.ProviderID, result.Summary.Profile.ID, result.OperationID, err)
+	return result, err
 }
 
 func (s *CodexService) Detect(ctx context.Context) (app.CodexDetectResult, error) {
@@ -597,6 +663,10 @@ func (s *CodexService) notifyMutationResult(kind, source, providerID, profileID,
 	}
 }
 
+func (s *AntigravityService) notifyMutationResult(kind, source, providerID, profileID, operationID string, err error) {
+	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
+}
+
 func (s *SwitchService) notifyMutationResult(kind, source, providerID, profileID, operationID string, err error) {
 	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
 	if err == nil && providerID == codexconfig.ProviderID {
@@ -642,8 +712,11 @@ func notifyMutationResult(changes *ChangeNotifier, kind, source, providerID, pro
 		event.ActiveStateChanged = strings.Contains(source, "createProfile")
 	case DesktopChangeCodexConfigSetChanged:
 		event.ConfigSetsChanged = true
+	case DesktopChangeAntigravityProfileChanged:
+		event.ProfileChanged = true
+		event.ActiveStateChanged = strings.Contains(source, "createProfile")
 	case DesktopChangeSwitchApplied, DesktopChangeRollbackApplied, DesktopChangeSwitchRecovered:
-		event.ProfileChanged = providerID == codexconfig.ProviderID
+		event.ProfileChanged = providerID == codexconfig.ProviderID || providerID == agyconfig.ProviderID
 		event.ConfigSetsChanged = providerID == codexconfig.ProviderID
 		event.ActiveStateChanged = true
 	}

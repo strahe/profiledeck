@@ -96,7 +96,7 @@ func CreateCodexProfile(ctx context.Context, req CreateCodexProfileRequest) (Cod
 	if appErr != nil {
 		return CodexProfileSaveResult{}, appErr
 	}
-	fields, appErr := normalizeCodexProfileFields(profileID, req.Name, req.Description)
+	fields, appErr := normalizeManagedProfileFields(profileID, req.Name, req.Description)
 	if appErr != nil {
 		return CodexProfileSaveResult{}, appErr
 	}
@@ -123,10 +123,18 @@ func CreateCodexProfile(ctx context.Context, req CreateCodexProfileRequest) (Cod
 		if err != nil {
 			return err
 		}
-		if _, exists, err := codexPreflightProfile(ctx, txStore, profileID); err != nil {
+		_, hasProfile, err := codexPreflightProfile(ctx, txStore, profileID)
+		if err != nil {
 			return err
-		} else if exists {
-			return NewError(ErrorProfileAlreadyExists, "profile already exists").WithDetail("profile_id", profileID)
+		}
+		if hasProfile {
+			hasBindings, err := codexProfileHasBindings(ctx, txStore, profileID)
+			if err != nil {
+				return err
+			}
+			if hasBindings {
+				return NewError(ErrorProfileAlreadyExists, "Codex profile already exists").WithDetail("profile_id", profileID)
+			}
 		}
 		configSet, err = resolveCreatedProfileConfigSet(ctx, txStore, payload.ConfigContent, req)
 		if err != nil {
@@ -148,7 +156,7 @@ func CreateCodexProfile(ctx context.Context, req CreateCodexProfileRequest) (Cod
 			return err
 		}
 		_ = currentProvider
-		profile, err = upsertCodexProfile(ctx, txStore, profileID, fields, false)
+		profile, err = upsertCodexProfile(ctx, txStore, profileID, fields, hasProfile)
 		if err != nil {
 			return err
 		}
@@ -190,7 +198,7 @@ func ForkCodexProfile(ctx context.Context, req ForkCodexProfileRequest) (CodexPr
 	if credentialBinding == CodexForkBindingShareParent && configBinding == CodexForkBindingShareParent {
 		return CodexProfileSaveResult{}, NewError(ErrorCodexInvalid, "a Codex fork must copy at least one binding")
 	}
-	fields, appErr := normalizeCodexProfileFields(profileID, req.Name, req.Description)
+	fields, appErr := normalizeManagedProfileFields(profileID, req.Name, req.Description)
 	if appErr != nil {
 		return CodexProfileSaveResult{}, appErr
 	}
@@ -220,12 +228,20 @@ func ForkCodexProfile(ctx context.Context, req ForkCodexProfileRequest) (CodexPr
 		if _, err := txStore.GetProfile(ctx, sourceProfileID); err != nil {
 			return mapProfileStoreError(err)
 		}
-		if _, exists, err := codexPreflightProfile(ctx, txStore, profileID); err != nil {
+		_, hasProfile, err := codexPreflightProfile(ctx, txStore, profileID)
+		if err != nil {
 			return err
-		} else if exists {
-			return NewError(ErrorProfileAlreadyExists, "profile already exists").WithDetail("profile_id", profileID)
 		}
-		sourceTargets, err := txStore.ListProfileTargets(ctx, sourceProfileID, codexconfig.ProviderID, true)
+		if hasProfile {
+			hasBindings, err := codexProfileHasBindings(ctx, txStore, profileID)
+			if err != nil {
+				return err
+			}
+			if hasBindings {
+				return NewError(ErrorProfileAlreadyExists, "Codex profile already exists").WithDetail("profile_id", profileID)
+			}
+		}
+		sourceTargets, err := codexBindingTargets(ctx, txStore, sourceProfileID, home)
 		if err != nil {
 			return WrapError(ErrorStoreStatusFailed, "failed to read source Codex profile targets", err)
 		}
@@ -265,7 +281,7 @@ func ForkCodexProfile(ctx context.Context, req ForkCodexProfileRequest) (CodexPr
 				return err
 			}
 		}
-		profile, err = upsertCodexProfile(ctx, txStore, profileID, fields, false)
+		profile, err = upsertCodexProfile(ctx, txStore, profileID, fields, hasProfile)
 		if err != nil {
 			return err
 		}
@@ -313,7 +329,7 @@ func UpdateCodexProfileConfigSet(ctx context.Context, req UpdateCodexProfileConf
 		if _, err := requireCodexConfigSet(ctx, txStore, configSetID); err != nil {
 			return err
 		}
-		targets, err := txStore.ListProfileTargets(ctx, profileID, codexconfig.ProviderID, true)
+		targets, err := storedCodexBindingTargets(ctx, txStore, profileID)
 		if err != nil {
 			return WrapError(ErrorStoreStatusFailed, "failed to read Codex profile targets", err)
 		}
@@ -321,15 +337,13 @@ func UpdateCodexProfileConfigSet(ctx context.Context, req UpdateCodexProfileConf
 		if err != nil {
 			return err
 		}
-		valueJSON, err := codexpreset.ConfigSetBindingValueJSON(configSetID)
-		if err != nil {
-			return err
-		}
-		if _, err := txStore.UpdateProfileTarget(ctx, store.UpdateProfileTargetParams{
-			ProfileID: profileID, ProviderID: codexconfig.ProviderID, TargetID: configTarget.TargetID, ValueJSON: &valueJSON,
+		if _, err := txStore.UpsertProfileConfigSetBinding(ctx, store.UpsertProfileConfigSetBindingParams{
+			ProfileID: profileID, ProviderID: codexconfig.ProviderID,
+			SlotID: codexpreset.ConfigSetSlotUserConfig, ConfigSetID: configSetID,
 		}); err != nil {
-			return mapTargetStoreError(err)
+			return WrapError(ErrorStoreStatusFailed, "failed to update Codex config binding", err)
 		}
+		_ = configTarget
 		metadata, err := codexMaintenanceMetadata("profile-set-config", profileID, configSetID, "")
 		if err != nil {
 			return err
@@ -380,7 +394,7 @@ func SaveActiveCodexProfileState(ctx context.Context, req SaveActiveCodexProfile
 			return NewError(ErrorProfileNotFound, "no active Codex profile")
 		}
 		profileID = active.ProfileID
-		targets, err := txStore.ListProfileTargets(ctx, profileID, codexconfig.ProviderID, true)
+		targets, err := codexBindingTargets(ctx, txStore, profileID, home)
 		if err != nil {
 			return WrapError(ErrorStoreStatusFailed, "failed to read active Codex profile targets", err)
 		}
@@ -457,7 +471,7 @@ func resolveCreatedProfileConfigSet(ctx context.Context, db *store.Store, conten
 		return store.ProviderConfigSet{}, NewError(ErrorCodexInvalid, "the first Codex profile must create the shared config set")
 	}
 	if activeExists && newID == "" {
-		targets, err := db.ListProfileTargets(ctx, active.ProfileID, codexconfig.ProviderID, true)
+		targets, err := storedCodexBindingTargets(ctx, db, active.ProfileID)
 		if err != nil {
 			return store.ProviderConfigSet{}, WrapError(ErrorStoreStatusFailed, "failed to read active Codex profile targets", err)
 		}

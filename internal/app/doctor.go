@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	agyauth "github.com/strahe/profiledeck/internal/antigravity/auth"
+	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/runtime"
@@ -34,7 +36,10 @@ const (
 	doctorOSLockStateUnavailable = "unavailable"
 )
 
-var profileDeckOperationIDPrefixes = []string{"switch-", "rollback-", "codex-"}
+var (
+	profileDeckOperationIDPrefixes = []string{"switch-", "rollback-", "codex-", "antigravity-", "profile-target-", "provider-"}
+	maintenanceLockOwnerPrefixes   = []string{"codex-", "antigravity-", "profile-target-", "provider-"}
+)
 
 type DoctorRequest struct {
 	ConfigDir string
@@ -145,11 +150,101 @@ func Doctor(ctx context.Context, req DoctorRequest) (DoctorResult, error) {
 	}
 	result.Findings = append(result.Findings, inspectSensitivePathPermissions(ctx, paths, dbState)...)
 	result.Findings = append(result.Findings, inspectCodexDomainHealth(ctx, dbState)...)
+	result.Findings = append(result.Findings, inspectAntigravityDomainHealth(ctx, dbState)...)
 
 	result.Lock = inspectDoctorLock(ctx, paths.Lock, dbState)
 	result.Operations = doctorOperations(ctx, dbState, paths, operations, result.Lock)
 	result.OverallLevel = doctorOverallLevel(result)
 	return result, nil
+}
+
+func inspectAntigravityDomainHealth(ctx context.Context, dbState doctorDatabaseState) []DoctorFinding {
+	if !dbState.healthy || dbState.db == nil {
+		return nil
+	}
+	provider, err := dbState.db.GetProvider(ctx, agyconfig.ProviderID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return []DoctorFinding{{ID: "antigravity_provider_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect Antigravity provider"}}
+	}
+	findings := []DoctorFinding{}
+	if err := validateAntigravityProvider(provider); err != nil {
+		findings = append(findings, DoctorFinding{
+			ID: "antigravity_agy_v2_invalid", Level: DoctorLevelError,
+			Message: "Antigravity provider is not compatible with agy v2",
+		})
+	}
+	bindings, err := dbState.db.ListProfileCredentialBindingsByProvider(ctx, agyconfig.ProviderID)
+	if err != nil {
+		return append(findings, DoctorFinding{ID: "antigravity_binding_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect Antigravity profile bindings"})
+	}
+	grouped := map[string][]store.ProfileCredentialBinding{}
+	for _, binding := range bindings {
+		grouped[binding.ProfileID] = append(grouped[binding.ProfileID], binding)
+	}
+	configBindings, err := dbState.db.ListProfileConfigSetBindingsByProvider(ctx, agyconfig.ProviderID)
+	if err != nil {
+		return append(findings, DoctorFinding{ID: "antigravity_binding_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect Antigravity profile bindings"})
+	}
+	configBindingCounts := map[string]int{}
+	for _, binding := range configBindings {
+		configBindingCounts[binding.ProfileID]++
+		if _, ok := grouped[binding.ProfileID]; !ok {
+			grouped[binding.ProfileID] = nil
+		}
+	}
+	if active, activeErr := dbState.db.GetActiveState(ctx, store.ActiveStateScopeProvider, agyconfig.ProviderID); activeErr == nil {
+		if _, ok := grouped[active.ProfileID]; !ok {
+			grouped[active.ProfileID] = nil
+		}
+	} else if activeErr != nil && !errors.Is(activeErr, store.ErrNotFound) {
+		findings = append(findings, DoctorFinding{ID: "antigravity_active_state_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect active Antigravity Profile"})
+	}
+	for profileID, profileBindings := range grouped {
+		if _, err := dbState.db.GetProfile(ctx, profileID); err != nil {
+			findings = append(findings, DoctorFinding{
+				ID: "antigravity_profile_missing", Level: DoctorLevelError,
+				Message: "Antigravity binding references a missing Profile", Details: map[string]any{"profile_id": profileID},
+			})
+			continue
+		}
+		if len(profileBindings) != 1 || profileBindings[0].SlotID != agyconfig.CredentialSlot || configBindingCounts[profileID] != 0 {
+			findings = append(findings, DoctorFinding{
+				ID: "antigravity_login_binding_invalid", Level: DoctorLevelError,
+				Message: "Antigravity Profile bindings are missing or unsupported", Details: map[string]any{"profile_id": profileID},
+			})
+			continue
+		}
+		if _, err := requireAntigravityCredential(ctx, dbState.db, profileBindings[0].CredentialID); err != nil {
+			findings = append(findings, DoctorFinding{
+				ID: "antigravity_login_state_invalid", Level: DoctorLevelError,
+				Message: "Antigravity Profile references missing or invalid login state", Details: map[string]any{"profile_id": profileID},
+			})
+		}
+	}
+
+	snapshot, err := targetBackends[targetBackendKeyring].Inspect(ctx, antigravityTargetSpec())
+	if err != nil {
+		return append(findings, DoctorFinding{
+			ID: "antigravity_login_unavailable", Level: DoctorLevelWarning,
+			Message: "Antigravity login could not be read from the system credential store",
+		})
+	}
+	if !snapshot.Exists {
+		return append(findings, DoctorFinding{
+			ID: "antigravity_login_missing", Level: DoctorLevelWarning,
+			Message: "Antigravity is not signed in with agy v2",
+		})
+	}
+	if _, _, err := agyauth.Normalize([]byte(snapshot.Content)); err != nil {
+		findings = append(findings, DoctorFinding{
+			ID: "antigravity_login_invalid", Level: DoctorLevelError,
+			Message: "Antigravity login is not compatible with agy v2",
+		})
+	}
+	return findings
 }
 
 func inspectCodexDomainHealth(ctx context.Context, dbState doctorDatabaseState) []DoctorFinding {
@@ -165,59 +260,74 @@ func inspectCodexDomainHealth(ctx context.Context, dbState doctorDatabaseState) 
 	}
 	findings := []DoctorFinding{}
 	metadata, err := codexpreset.DecodeProviderMetadata(provider.MetadataJSON)
-	if err != nil || !metadata.Compatible() {
+	if provider.AdapterID != codexconfig.AdapterID || err != nil || !metadata.Compatible() {
 		findings = append(findings, DoctorFinding{
 			ID: "codex_preset_v2_invalid", Level: DoctorLevelError,
 			Message: "Codex provider is not compatible with preset v2",
 		})
 	}
-	targets, err := dbState.db.ListProfileTargetsByProvider(ctx, codexconfig.ProviderID)
+	credentialBindings, err := dbState.db.ListProfileCredentialBindingsByProvider(ctx, codexconfig.ProviderID)
 	if err != nil {
 		return append(findings, DoctorFinding{ID: "codex_binding_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect Codex profile bindings"})
 	}
-	grouped := map[string]map[string]store.ProfileTarget{}
-	for _, target := range targets {
-		if grouped[target.ProfileID] == nil {
-			grouped[target.ProfileID] = map[string]store.ProfileTarget{}
-		}
-		grouped[target.ProfileID][target.TargetID] = target
+	configBindings, err := dbState.db.ListProfileConfigSetBindingsByProvider(ctx, codexconfig.ProviderID)
+	if err != nil {
+		return append(findings, DoctorFinding{ID: "codex_binding_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect Codex profile bindings"})
 	}
-	if active, err := dbState.db.GetActiveState(ctx, store.ActiveStateScopeProvider, codexconfig.ProviderID); err == nil {
-		if grouped[active.ProfileID] == nil {
-			grouped[active.ProfileID] = map[string]store.ProfileTarget{}
-		}
+	credentialBindingsByProfile := map[string][]store.ProfileCredentialBinding{}
+	configBindingsByProfile := map[string][]store.ProfileConfigSetBinding{}
+	profileIDs := map[string]struct{}{}
+	for _, binding := range credentialBindings {
+		credentialBindingsByProfile[binding.ProfileID] = append(credentialBindingsByProfile[binding.ProfileID], binding)
+		profileIDs[binding.ProfileID] = struct{}{}
 	}
-	for profileID, profileTargets := range grouped {
-		configTarget, hasConfig := profileTargets[codexconfig.TargetID]
-		if !hasConfig {
+	for _, binding := range configBindings {
+		configBindingsByProfile[binding.ProfileID] = append(configBindingsByProfile[binding.ProfileID], binding)
+		profileIDs[binding.ProfileID] = struct{}{}
+	}
+	if active, activeErr := dbState.db.GetActiveState(ctx, store.ActiveStateScopeProvider, codexconfig.ProviderID); activeErr == nil {
+		profileIDs[active.ProfileID] = struct{}{}
+	} else if !errors.Is(activeErr, store.ErrNotFound) {
+		findings = append(findings, DoctorFinding{ID: "codex_active_state_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect active Codex Profile"})
+	}
+	for profileID := range profileIDs {
+		if _, err := dbState.db.GetProfile(ctx, profileID); err != nil {
+			findings = append(findings, DoctorFinding{
+				ID: "codex_profile_missing", Level: DoctorLevelError,
+				Message: "Codex binding references a missing Profile", Details: map[string]any{"profile_id": profileID},
+			})
+			continue
+		}
+		profileConfigBindings := configBindingsByProfile[profileID]
+		if len(profileConfigBindings) == 0 {
 			findings = append(findings, DoctorFinding{
 				ID: "codex_config_binding_missing", Level: DoctorLevelError,
 				Message: "Codex profile config binding is missing", Details: map[string]any{"profile_id": profileID},
 			})
-		} else if configSetID, err := codexConfigSetIDFromTarget(configTarget); err != nil {
+		} else if len(profileConfigBindings) != 1 || profileConfigBindings[0].SlotID != codexpreset.ConfigSetSlotUserConfig {
 			findings = append(findings, DoctorFinding{
 				ID: "codex_config_binding_invalid", Level: DoctorLevelError,
 				Message: "Codex profile config binding is invalid", Details: map[string]any{"profile_id": profileID},
 			})
-		} else if _, err := requireCodexConfigSet(ctx, dbState.db, configSetID); err != nil {
+		} else if _, err := requireCodexConfigSet(ctx, dbState.db, profileConfigBindings[0].ConfigSetID); err != nil {
 			findings = append(findings, DoctorFinding{
 				ID: "codex_config_set_invalid", Level: DoctorLevelError,
 				Message: "Codex profile references a missing or invalid config set",
-				Details: map[string]any{"profile_id": profileID, "config_set_id": configSetID},
+				Details: map[string]any{"profile_id": profileID, "config_set_id": profileConfigBindings[0].ConfigSetID},
 			})
 		}
-		authTarget, hasAuth := profileTargets[codexconfig.AuthTargetID]
-		if !hasAuth {
+		profileCredentialBindings := credentialBindingsByProfile[profileID]
+		if len(profileCredentialBindings) == 0 {
 			findings = append(findings, DoctorFinding{
 				ID: "codex_login_binding_missing", Level: DoctorLevelError,
 				Message: "Codex profile login binding is missing", Details: map[string]any{"profile_id": profileID},
 			})
-		} else if credentialID, err := codexCredentialIDFromTarget(authTarget); err != nil {
+		} else if len(profileCredentialBindings) != 1 || profileCredentialBindings[0].SlotID != codexpreset.CredentialSlotAuth {
 			findings = append(findings, DoctorFinding{
 				ID: "codex_login_binding_invalid", Level: DoctorLevelError,
 				Message: "Codex profile login binding is invalid", Details: map[string]any{"profile_id": profileID},
 			})
-		} else if _, err := requireCodexAuthCredential(ctx, dbState.db, credentialID); err != nil {
+		} else if _, err := requireCodexAuthCredential(ctx, dbState.db, profileCredentialBindings[0].CredentialID); err != nil {
 			findings = append(findings, DoctorFinding{
 				ID: "codex_login_state_invalid", Level: DoctorLevelError,
 				Message: "Codex profile references missing or invalid login state", Details: map[string]any{"profile_id": profileID},
@@ -341,7 +451,7 @@ func inspectSensitivePathPermissions(ctx context.Context, paths runtime.Paths, d
 	if !dbState.healthy || dbState.db == nil {
 		return findings
 	}
-	targets, err := dbState.db.ListProfileTargetsByProvider(ctx, codexconfig.ProviderID)
+	targets, err := allStoredCodexBindingTargets(ctx, dbState.db)
 	if err != nil {
 		findings = append(findings, DoctorFinding{
 			ID:      "codex_auth_target_permission_check_failed",
@@ -538,6 +648,14 @@ func classifyDoctorLock(lock *DoctorLock, parseErr, probeErr error, dbHealthy bo
 		lock.Reason = "owner_not_profiledeck_operation"
 		return
 	}
+	if lock.OperationStatus == "missing" && isMaintenanceLockOwner(lock.Owner) {
+		// Maintenance owners serialize database or tool-owned refresh work but do
+		// not need switch recovery once their OS lock is free.
+		lock.Level = DoctorLevelOK
+		lock.Reason = "maintenance_lock_residue"
+		lock.Repairable = true
+		return
+	}
 	switch lock.OperationStatus {
 	case store.OperationStatusFailed, "missing":
 		lock.Level = DoctorLevelError
@@ -666,6 +784,15 @@ func stringMapValue(value map[string]any, key string) string {
 
 func isProfileDeckOperationID(value string) bool {
 	for _, prefix := range profileDeckOperationIDPrefixes {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isMaintenanceLockOwner(value string) bool {
+	for _, prefix := range maintenanceLockOwnerPrefixes {
 		if strings.HasPrefix(value, prefix) {
 			return true
 		}

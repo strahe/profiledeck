@@ -2,7 +2,7 @@
 
 Safe profile switching for AI coding tools.
 
-ProfileDeck is a Go CLI and macOS desktop app with a Codex-first workflow. A Codex Profile saves one login and one reusable Config Set, so you can switch accounts and settings together, preserve valid changes made in Codex, and recover from interrupted switches. ProfileDeck also turns local Codex activity into usage reports and can check current ChatGPT Codex limits for individual Profiles.
+ProfileDeck is a Go CLI and macOS desktop app for switching local AI coding tool Profiles. Codex Profiles save one login and one reusable Config Set. Antigravity Profiles save the consumer OAuth login used by Antigravity agy v2 in the system credential store. Both use the same preview, backup, recovery, and active-state pipeline.
 
 ## Documentation
 
@@ -63,7 +63,7 @@ During desktop development, set `PROFILEDECK_CONFIG_DIR` to a temporary director
 PROFILEDECK_CONFIG_DIR=/tmp/profiledeck-dev PROFILEDECK_CODEX_DIR=/tmp/profiledeck-codex wails3 dev
 ```
 
-Global Desktop settings let you choose the language and appearance. Appearance defaults to System, and the Agent sidebar remembers whether it is expanded. The sidebar lists Codex and keeps global Settings and Diagnostics in its footer. Diagnostics shows only issues that need attention and offers recovery when it is safe.
+Global Desktop settings let you choose the language and appearance. Appearance defaults to System, and the Agent sidebar remembers whether it is expanded. The sidebar lists Codex and Antigravity and keeps global Settings and Diagnostics in its footer. Diagnostics shows only issues that need attention and offers recovery when it is safe.
 
 Codex settings let you choose how often Usage reports update and whether each Profile refreshes limits or renews its sign-in automatically. Per-Profile options also appear on the Profile detail page. Usage reports update while ProfileDeck is open or hidden in the tray; the available intervals are 5, 15, 30, and 60 seconds, with 15 seconds as the default. Automatic limit refresh and sign-in renewal are off by default.
 
@@ -85,7 +85,21 @@ profiledeck usage report --range 7d
 
 Codex profile switching requires file credentials. If `$CODEX_HOME/auth.json` is missing, set `cli_auth_credentials_store = "file"` in `$CODEX_HOME/config.toml` and run `codex login` again.
 
-Saved Codex logins and Config Sets are sensitive. ProfileDeck stores them locally in `profiledeck.db`; switch backups may contain previous `auth.json` and `config.toml` content.
+## Antigravity agy v2 Quick Start
+
+Sign in through Antigravity agy v2 first, then run:
+
+```bash
+profiledeck antigravity detect
+profiledeck antigravity profile create work
+profiledeck antigravity profile list
+profiledeck plan antigravity work
+profiledeck switch antigravity work --yes
+```
+
+Legacy Antigravity storage, OAuth login, quota reads, and Manager imports are not supported.
+
+Saved logins and Config Sets are sensitive. ProfileDeck stores them locally in `profiledeck.db`; switch backups may contain previous Codex files or Antigravity login payloads.
 
 Codex Profile exports are sensitive backups. They contain complete Codex sign-in data and settings in a JSON file with `0600` permissions on POSIX systems. Keep the file private and outside the ProfileDeck data directory before deleting a development database.
 

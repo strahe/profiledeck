@@ -10,14 +10,15 @@
 
 | 命令 | 用途 |
 | --- | --- |
+| `antigravity` | 管理 Antigravity agy v2 Profile。 |
 | `backup` | 查看 ProfileDeck 备份。 |
 | `codex` | 管理 Codex provider 的 profile。 |
 | `doctor` | 检查本地数据、文件权限和未完成的更改。 |
 | `init` | 创建 ProfileDeck 本地数据。 |
-| `plan` | 预览 Profile 切换，不修改文件。 |
+| `plan` | 预览 Profile 切换，不修改外部目标。 |
 | `provider` | 管理 AI 工具 provider。 |
 | `profile` | 管理 ProfileDeck profile 和 target。 |
-| `recover` | 使用失败切换前保存的备份恢复文件。 |
+| `recover` | 使用失败切换前保存的备份恢复外部目标。 |
 | `rollback` | 使用备份撤销已完成的切换。 |
 | `status` | 查看 ProfileDeck 初始化状态。 |
 | `switch` | 应用 profile 切换。 |
@@ -60,7 +61,20 @@ profiledeck codex config-set delete <config-set-id> --yes [--json]
 
 `profile export` 会创建敏感备份。不指定 Profile ID 时，它会导出全部 Codex Profiles 和 Config Sets。指定 Profile ID 时，只导出这些 Profiles 及其需要的登录和 Config Sets。当前 Codex 登录或设置有变化时，请先运行 `save-current`。`--output` 必填，便于把备份放到即将删除的 ProfileDeck 数据目录之外；覆盖已有文件必须传入 `--force`。
 
-备份包含完整的 Codex 登录数据和设置。ProfileDeck 会在 POSIX 系统上以 `0600` 权限写入文件；stdout 不会打印敏感内容。`import inspect` 会检查备份并报告 `create`、`unchanged` 和 `conflict`。`import apply` 必须提供审核过的 fingerprint；已有 ID 的内容不同时，不会写入任何更改。导入不会把 Profile 设为当前，也不会写入 Codex 文件。
+备份包含完整的 Codex 登录数据和设置。ProfileDeck 会在 POSIX 系统上以 `0600` 权限写入文件；stdout 不会打印敏感内容。`import inspect` 会检查备份并报告 `create`、`unchanged` 和 `conflict`。`import apply` 必须提供审核过的 fingerprint；已有 Codex 数据冲突时，不会写入任何更改。已有全局 Profile 尚无 Codex 绑定时，导入会附加绑定，但不会更改其名称或描述。导入不会把 Profile 设为当前，也不会写入 Codex 文件。
+
+## Antigravity agy v2
+
+```bash
+profiledeck antigravity detect [--json]
+profiledeck antigravity profile list [--json]
+profiledeck antigravity profile show <profile-id> [--json]
+profiledeck antigravity profile create <profile-id> [--name NAME] [--description TEXT] [--json]
+profiledeck antigravity profile update <profile-id> [--name NAME] [--description TEXT] [--json]
+profiledeck antigravity profile save-current [--json]
+```
+
+`agy` 是 `antigravity` 的别名。Create 和 save-current 要求 Antigravity agy v2 当前存在有效的 consumer OAuth 登录。输出只有元数据，不会打印登录内容。
 
 ## 切换
 
@@ -97,6 +111,8 @@ profiledeck profile update <id> [--name NAME] [--description TEXT] [--metadata-j
 profiledeck profile delete <id> --yes [--json]
 ```
 
+对于受管的 `codex` 和 `antigravity` Provider，通用 Provider 更新只能更改显示名称或启用状态；adapter 和 metadata 由各自的专用 Profile 流程管理。
+
 target 命令：
 
 ```bash
@@ -107,7 +123,7 @@ profiledeck profile target update <profile-id> <provider-id> <target-id> [--path
 profiledeck profile target delete <profile-id> <provider-id> <target-id> --yes [--json]
 ```
 
-Generic target 命令不能创建、修改或删除 Codex Profile 管理的文件。已保存登录和 Config Set 必须使用上面的 Codex 命令管理。
+Generic target 命令不能创建、修改或删除 Codex 或 Antigravity Profile 管理的绑定。请使用上面的 Provider 专用命令。
 
 ## 备份与恢复
 

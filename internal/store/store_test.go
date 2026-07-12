@@ -188,6 +188,12 @@ func TestProviderConfigSetCRUDAndReferences(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: "{}"}); err != nil {
+		t.Fatalf("expected provider create to succeed, got %v", err)
+	}
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{ID: "other", Name: "Other", AdapterID: "generic", Enabled: true, MetadataJSON: "{}"}); err != nil {
+		t.Fatalf("expected second provider create to succeed, got %v", err)
+	}
 
 	payload := "model = \"gpt-5\"\n"
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(payload)))
@@ -238,18 +244,10 @@ func TestProviderConfigSetCRUDAndReferences(t *testing.T) {
 	if _, err := db.CreateProfile(ctx, CreateProfileParams{ID: "profile-a", Name: "Profile A", MetadataJSON: "{}"}); err != nil {
 		t.Fatalf("expected profile create to succeed, got %v", err)
 	}
-	if _, err := db.CreateProfileTarget(ctx, CreateProfileTargetParams{
-		ProfileID:    "profile-a",
-		ProviderID:   "codex",
-		TargetID:     "config",
-		Path:         "/tmp/config.toml",
-		Format:       "toml",
-		Strategy:     "replace-file",
-		ValueJSON:    `{"config_set_id":"shared"}`,
-		Enabled:      true,
-		MetadataJSON: "{}",
+	if _, err := db.UpsertProfileConfigSetBinding(ctx, UpsertProfileConfigSetBindingParams{
+		ProfileID: "profile-a", ProviderID: "codex", SlotID: "user-config", ConfigSetID: created.ID,
 	}); err != nil {
-		t.Fatalf("expected profile target create to succeed, got %v", err)
+		t.Fatalf("expected profile Config Set binding to succeed, got %v", err)
 	}
 	references, err := db.CountProviderConfigSetReferences(ctx, created.ID)
 	if err != nil || references != 1 {
@@ -258,21 +256,13 @@ func TestProviderConfigSetCRUDAndReferences(t *testing.T) {
 	if err := db.DeleteProviderConfigSet(ctx, created.ID); !errors.Is(err, ErrInUse) {
 		t.Fatalf("expected referenced config set deletion to fail with ErrInUse, got %v", err)
 	}
-	if err := db.DeleteProfileTarget(ctx, "profile-a", "codex", "config"); err != nil {
-		t.Fatalf("expected profile target delete to succeed, got %v", err)
+	if err := db.DeleteProfileConfigSetBinding(ctx, "profile-a", "codex", "user-config"); err != nil {
+		t.Fatalf("expected profile Config Set binding delete to succeed, got %v", err)
 	}
-	if _, err := db.CreateProfileTarget(ctx, CreateProfileTargetParams{
-		ProfileID:    "profile-a",
-		ProviderID:   "generic",
-		TargetID:     "config",
-		Path:         "/tmp/generic-config.toml",
-		Format:       "toml",
-		Strategy:     "replace-file",
-		ValueJSON:    `{"config_set_id":"shared"}`,
-		Enabled:      true,
-		MetadataJSON: "{}",
-	}); err != nil {
-		t.Fatalf("expected unrelated provider target create to succeed, got %v", err)
+	if _, err := db.UpsertProfileConfigSetBinding(ctx, UpsertProfileConfigSetBindingParams{
+		ProfileID: "profile-a", ProviderID: "other", SlotID: "user-config", ConfigSetID: created.ID,
+	}); err == nil {
+		t.Fatalf("expected cross-provider Config Set binding to be rejected")
 	}
 	references, err = db.CountProviderConfigSetReferences(ctx, created.ID)
 	if err != nil || references != 0 {
@@ -332,8 +322,8 @@ func TestProviderCredentialCRUD(t *testing.T) {
 	createdHash := testPayloadSHA256(createdPayload)
 	created, err := db.UpsertProviderCredential(ctx, UpsertProviderCredentialParams{
 		ID:             " cred-work ",
-		ProviderID:     "codex",
-		CredentialKind: "codex-auth-json",
+		ProviderID:     " codex ",
+		CredentialKind: " codex-auth-json ",
 		PayloadJSON:    createdPayload,
 		PayloadSHA256:  createdHash,
 	})
@@ -397,6 +387,96 @@ func TestProviderCredentialCRUD(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected blank credential id to be rejected")
+	}
+}
+
+func TestTypedResourceBindingsEnforceProviderAndSharing(t *testing.T) {
+	ctx := context.Background()
+	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
+	defer closeTestStore(t, db)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+	var foreignKeysEnabled int
+	if err := db.executor().QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeysEnabled); err != nil || foreignKeysEnabled != 1 {
+		t.Fatalf("expected SQLite foreign key enforcement, got enabled=%d err=%v", foreignKeysEnabled, err)
+	}
+	for _, provider := range []CreateProviderParams{
+		{ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: "{}"},
+		{ID: "other", Name: "Other", AdapterID: "generic", Enabled: true, MetadataJSON: "{}"},
+	} {
+		if _, err := db.CreateProvider(ctx, provider); err != nil {
+			t.Fatalf("expected provider create to succeed, got %v", err)
+		}
+	}
+	for _, profileID := range []string{"work", "personal"} {
+		if _, err := db.CreateProfile(ctx, CreateProfileParams{ID: profileID, Name: profileID, MetadataJSON: "{}"}); err != nil {
+			t.Fatalf("expected Profile create to succeed, got %v", err)
+		}
+	}
+	for _, credential := range []UpsertProviderCredentialParams{
+		{ID: "shared-login", ProviderID: "codex", CredentialKind: "codex-auth-json", PayloadJSON: `{"token":"shared"}`, PayloadSHA256: testPayloadSHA256(`{"token":"shared"}`)},
+		{ID: "copied-login", ProviderID: "codex", CredentialKind: "codex-auth-json", PayloadJSON: `{"token":"copy"}`, PayloadSHA256: testPayloadSHA256(`{"token":"copy"}`)},
+		{ID: "other-login", ProviderID: "other", CredentialKind: "other-auth", PayloadJSON: `{"token":"other"}`, PayloadSHA256: testPayloadSHA256(`{"token":"other"}`)},
+	} {
+		if _, err := db.UpsertProviderCredential(ctx, credential); err != nil {
+			t.Fatalf("expected credential create to succeed, got %v", err)
+		}
+	}
+	for _, configSet := range []UpsertProviderConfigSetParams{
+		{ID: "shared-config", ProviderID: "codex", ConfigKind: "toml", Name: "Shared", PayloadText: "shared = true\n", PayloadSHA256: testPayloadSHA256("shared = true\n")},
+		{ID: "other-config", ProviderID: "other", ConfigKind: "text", Name: "Other", PayloadText: "other\n", PayloadSHA256: testPayloadSHA256("other\n")},
+	} {
+		if _, err := db.UpsertProviderConfigSet(ctx, configSet); err != nil {
+			t.Fatalf("expected Config Set create to succeed, got %v", err)
+		}
+	}
+	for _, profileID := range []string{"work", "personal"} {
+		if _, err := db.UpsertProfileCredentialBinding(ctx, UpsertProfileCredentialBindingParams{
+			ProfileID: profileID, ProviderID: "codex", SlotID: "auth", CredentialID: "shared-login",
+		}); err != nil {
+			t.Fatalf("expected shared credential binding to succeed, got %v", err)
+		}
+		if _, err := db.UpsertProfileConfigSetBinding(ctx, UpsertProfileConfigSetBindingParams{
+			ProfileID: profileID, ProviderID: "codex", SlotID: "user-config", ConfigSetID: "shared-config",
+		}); err != nil {
+			t.Fatalf("expected shared Config Set binding to succeed, got %v", err)
+		}
+	}
+	if references, err := db.CountProviderCredentialReferences(ctx, "shared-login"); err != nil || references != 2 {
+		t.Fatalf("expected shared credential to have two references, got count=%d err=%v", references, err)
+	}
+	if _, err := db.UpsertProfileCredentialBinding(ctx, UpsertProfileCredentialBindingParams{
+		ProfileID: "personal", ProviderID: "codex", SlotID: "auth", CredentialID: "copied-login",
+	}); err != nil {
+		t.Fatalf("expected copied credential rebind to succeed, got %v", err)
+	}
+	if references, err := db.CountProviderCredentialReferences(ctx, "shared-login"); err != nil || references != 1 {
+		t.Fatalf("expected shared credential reference count to decrease, got count=%d err=%v", references, err)
+	}
+	if references, err := db.CountProviderConfigSetReferences(ctx, "shared-config"); err != nil || references != 2 {
+		t.Fatalf("expected shared Config Set to have two references, got count=%d err=%v", references, err)
+	}
+	if _, err := db.UpsertProfileCredentialBinding(ctx, UpsertProfileCredentialBindingParams{
+		ProfileID: "work", ProviderID: "other", SlotID: "auth", CredentialID: "shared-login",
+	}); err == nil {
+		t.Fatalf("expected cross-provider credential binding to be rejected")
+	}
+	if _, err := db.UpsertProfileConfigSetBinding(ctx, UpsertProfileConfigSetBindingParams{
+		ProfileID: "work", ProviderID: "other", SlotID: "user-config", ConfigSetID: "shared-config",
+	}); err == nil {
+		t.Fatalf("expected cross-provider Config Set binding to be rejected")
+	}
+	if _, err := db.UpsertProfileCredentialBinding(ctx, UpsertProfileCredentialBindingParams{
+		ProfileID: "missing", ProviderID: "codex", SlotID: "auth", CredentialID: "shared-login",
+	}); err == nil {
+		t.Fatalf("expected binding for a missing Profile to be rejected")
+	}
+	if _, err := db.executor().ExecContext(ctx, "DELETE FROM provider_credentials WHERE id = ?", "shared-login"); err == nil {
+		t.Fatalf("expected referenced credential deletion to be rejected by the database")
+	}
+	if err := db.DeleteProvider(ctx, "other"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("expected Provider with an unbound resource to remain in use, got %v", err)
 	}
 }
 

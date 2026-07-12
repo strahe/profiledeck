@@ -87,7 +87,7 @@ func getCodexProfileFromStore(ctx context.Context, db *store.Store, profileID st
 	if err != nil {
 		return CodexProfileDetail{}, mapProfileStoreError(err)
 	}
-	targets, err := db.ListProfileTargets(ctx, profileID, codexconfig.ProviderID, true)
+	targets, err := storedCodexBindingTargets(ctx, db, profileID)
 	if err != nil {
 		return CodexProfileDetail{}, WrapError(ErrorStoreStatusFailed, "failed to list Codex profile targets", err)
 	}
@@ -106,7 +106,7 @@ func getCodexProfileFromStore(ctx context.Context, db *store.Store, profileID st
 }
 
 func listCodexProfileSummaries(ctx context.Context, db *store.Store) ([]CodexProfileSummary, error) {
-	targets, err := db.ListProfileTargetsByProvider(ctx, codexconfig.ProviderID)
+	targets, err := allStoredCodexBindingTargets(ctx, db)
 	if err != nil {
 		return nil, WrapError(ErrorStoreStatusFailed, "failed to list Codex profile targets", err)
 	}

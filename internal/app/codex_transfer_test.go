@@ -213,6 +213,61 @@ func TestCodexProfileImportRejectsConflictsWithoutPartialWrites(t *testing.T) {
 	}
 }
 
+func TestCodexProfileImportAttachesToExistingGlobalProfile(t *testing.T) {
+	ctx := context.Background()
+	sourceConfigDir := t.TempDir()
+	codexDir := t.TempDir()
+	writeCodexTransferFixture(t, codexDir, "model = \"source\"\n", `{"tokens":{"account_id":"source-account"}}`)
+	if _, err := Init(ctx, InitRequest{ConfigDir: sourceConfigDir}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{ConfigDir: sourceConfigDir, CodexDir: codexDir, ProfileID: "shared"}); err != nil {
+		t.Fatal(err)
+	}
+	bundlePath := filepath.Join(t.TempDir(), "profiles.json")
+	if _, err := ExportCodexProfiles(ctx, ExportCodexProfilesRequest{
+		ConfigDir: sourceConfigDir, ProfileIDs: []string{"shared"}, OutputPath: bundlePath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	targetConfigDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: targetConfigDir}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateProfile(ctx, CreateProfileRequest{
+		ConfigDir: targetConfigDir, ID: "shared", Name: "Existing global name", Description: "Keep this metadata",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := InspectCodexProfileImport(ctx, InspectCodexProfileImportRequest{
+		ConfigDir: targetConfigDir, CodexDir: codexDir, InputPath: bundlePath,
+	})
+	if err != nil || !plan.CanApply || plan.Counts.Conflict != 0 {
+		t.Fatalf("expected attachable import plan, got %#v err=%v", plan, err)
+	}
+	result, err := ImportCodexProfiles(ctx, ImportCodexProfilesRequest{
+		ConfigDir: targetConfigDir, CodexDir: codexDir, InputPath: bundlePath,
+		ExpectedPlanFingerprint: plan.PlanFingerprint, Confirm: true,
+	})
+	if err != nil || !result.Changed {
+		t.Fatalf("expected import attach to succeed, got %#v err=%v", result, err)
+	}
+	detail, err := GetCodexProfile(ctx, GetCodexProfileRequest{ConfigDir: targetConfigDir, ProfileID: "shared"})
+	if err != nil {
+		t.Fatalf("expected attached Codex Profile, got %v", err)
+	}
+	if detail.Summary.Profile.Name != "Existing global name" || detail.Summary.Profile.Description != "Keep this metadata" {
+		t.Fatalf("expected global Profile metadata to be preserved, got %#v", detail.Summary.Profile)
+	}
+	repeat, err := InspectCodexProfileImport(ctx, InspectCodexProfileImportRequest{
+		ConfigDir: targetConfigDir, CodexDir: codexDir, InputPath: bundlePath,
+	})
+	if err != nil || !repeat.NoChanges || repeat.Counts.Conflict != 0 {
+		t.Fatalf("expected preserved global metadata not to create a repeat conflict, got %#v err=%v", repeat, err)
+	}
+}
+
 func TestCodexProfileImportRejectsChangedPlan(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()

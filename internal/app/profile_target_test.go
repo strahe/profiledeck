@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -327,6 +328,56 @@ func TestProfileTargetPathOwnershipAllowsSharedLogicalTarget(t *testing.T) {
 		Path:       &sharedPath,
 	})
 	assertAppErrorCode(t, err, ErrorTargetAlreadyExists)
+}
+
+func TestGenericTargetsCannotClaimManagedCodexPaths(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("after Codex Profile creation", func(t *testing.T) {
+		configDir := t.TempDir()
+		codexDir := t.TempDir()
+		if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+			t.Fatalf("expected init to succeed, got %v", err)
+		}
+		writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"tokens":{"account_id":"display","access_token":"token"}}`)
+		if _, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
+			ConfigDir: configDir, CodexDir: codexDir, ProfileID: "codex-profile",
+		}); err != nil {
+			t.Fatalf("expected Codex Profile create, got %v", err)
+		}
+		createGenericProviderAndProfile(t, ctx, configDir, true)
+		for targetID, path := range map[string]string{
+			"codex-auth-conflict":   filepath.Join(codexDir, codexconfig.AuthFileName),
+			"codex-config-conflict": filepath.Join(codexDir, codexconfig.ConfigFileName),
+		} {
+			_, err := CreateProfileTarget(ctx, CreateProfileTargetRequest{
+				ConfigDir: configDir, ProfileID: "profile-a", ProviderID: "provider-a", TargetID: targetID,
+				Path: path, Format: "text", Strategy: "replace-file", ValueJSON: `{"content":"conflict"}`,
+			})
+			assertAppErrorCode(t, err, ErrorTargetAlreadyExists)
+		}
+	})
+
+	t.Run("before Codex Profile creation", func(t *testing.T) {
+		configDir := t.TempDir()
+		codexDir := t.TempDir()
+		if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+			t.Fatalf("expected init to succeed, got %v", err)
+		}
+		createGenericProviderAndProfile(t, ctx, configDir, true)
+		if _, err := CreateProfileTarget(ctx, CreateProfileTargetRequest{
+			ConfigDir: configDir, ProfileID: "profile-a", ProviderID: "provider-a", TargetID: "auth-owner",
+			Path: filepath.Join(codexDir, codexconfig.AuthFileName), Format: "text", Strategy: "replace-file",
+			ValueJSON: `{"content":"owned"}`,
+		}); err != nil {
+			t.Fatalf("expected generic target fixture, got %v", err)
+		}
+		writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"tokens":{"account_id":"display","access_token":"token"}}`)
+		_, err := CreateCodexProfile(ctx, CreateCodexProfileRequest{
+			ConfigDir: configDir, CodexDir: codexDir, ProfileID: "codex-profile",
+		})
+		assertAppErrorCode(t, err, ErrorTargetAlreadyExists)
+	})
 }
 
 func TestProfileTargetPathNormalizationPreventsOwnershipBypass(t *testing.T) {

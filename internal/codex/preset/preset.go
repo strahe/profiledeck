@@ -13,6 +13,8 @@ const (
 	ProviderName            = "Codex"
 	CredentialKindAuthJSON  = "codex-auth-json"
 	ConfigSetKindTOML       = "codex-config-toml"
+	CredentialSlotAuth      = "auth"
+	ConfigSetSlotUserConfig = "user-config"
 	TargetModeConfigSet     = "config-set-binding"
 	TargetModeCredential    = "credential-binding"
 	AuthPreviewContent      = "[REDACTED_Codex_AUTH]"

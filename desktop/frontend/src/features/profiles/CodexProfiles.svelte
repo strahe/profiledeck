@@ -5,6 +5,15 @@
 	import { _, locale } from "svelte-i18n";
 	import { toast } from "svelte-sonner";
 	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
+	import DownloadIcon from "@lucide/svelte/icons/download";
+	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
+	import PlusIcon from "@lucide/svelte/icons/plus";
+	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
+	import UploadIcon from "@lucide/svelte/icons/upload";
+
+	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
+	import PageHeader from "$lib/components/app/PageHeader.svelte";
+	import * as Tooltip from "$lib/components/ui/tooltip";
 
 	import { CodexService, SwitchService } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type {
@@ -31,6 +40,7 @@
 	import * as Alert from "$lib/components/ui/alert";
 	import * as AlertDialog from "$lib/components/ui/alert-dialog";
 	import * as Dialog from "$lib/components/ui/dialog";
+	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import * as Field from "$lib/components/ui/field";
 	import * as Select from "$lib/components/ui/select";
 	import { Button } from "$lib/components/ui/button";
@@ -472,7 +482,7 @@
 	}
 
 	async function confirmUse() {
-		if (!useProfile || !usePlan?.plan_fingerprint) return;
+		if (useApplying || !useProfile || !usePlan?.plan_fingerprint) return;
 		const sequence = useSequence;
 		useApplying = true;
 		try {
@@ -485,7 +495,14 @@
 			if (sequence !== useSequence || isCancelError(error)) return;
 			if (isDesktopErrorCode(error, "TARGET_CHANGED")) {
 				useInlineError = translate("errors.targetChanged");
-				usePlan = await track("use-build", SwitchService.BuildPlan(codexProviderID, useProfile.id));
+				usePlan = null;
+				try {
+					usePlan = await track("use-build", SwitchService.BuildPlan(codexProviderID, useProfile.id));
+				} catch (rebuildError) {
+					if (sequence !== useSequence || isCancelError(rebuildError)) return;
+					useInlineError = formatError(rebuildError);
+					showError(rebuildError);
+				}
 			} else {
 				useInlineError = formatError(error);
 				showError(error);
@@ -577,28 +594,83 @@
 </script>
 
 {#if route.kind === "list"}
-	<div class="mx-auto w-full max-w-5xl">
+	<ContentContainer>
+		<PageHeader title={$_("profilePages.list.title")} description={$_("profilePages.list.description")}>
+			{#snippet actions()}
+				<div class="flex items-center gap-2">
+					<DropdownMenu.Root>
+						<DropdownMenu.Trigger>
+							{#snippet child({ props })}
+								<Button {...props} size="icon-sm" variant="outline" aria-label={$_("actions.more")}>
+									<MoreHorizontalIcon />
+								</Button>
+							{/snippet}
+						</DropdownMenu.Trigger>
+						<DropdownMenu.Content align="end">
+							<DropdownMenu.Group>
+								<DropdownMenu.Item onSelect={() => push("/codex/config-sets")}><SlidersHorizontalIcon />{$_("actions.configSets")}</DropdownMenu.Item>
+								<DropdownMenu.Item onSelect={() => exportProfiles()}><DownloadIcon />{$_("actions.exportAllProfiles")}</DropdownMenu.Item>
+								<DropdownMenu.Item onSelect={chooseProfileImport}><UploadIcon />{$_("actions.importProfiles")}</DropdownMenu.Item>
+							</DropdownMenu.Group>
+						</DropdownMenu.Content>
+					</DropdownMenu.Root>
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							{#snippet child({ props })}
+								<Button
+									{...props}
+									size="sm"
+									aria-disabled={!!busyAction || useBuilding || useApplying || !sourceReady}
+									class="aria-disabled:opacity-50"
+									onclick={(event) => {
+										if (!!busyAction || useBuilding || useApplying || !sourceReady) {
+											event.preventDefault();
+											return;
+										}
+										push("/codex/profiles/new");
+									}}
+									aria-label={$_("actions.saveAsNewProfile")}
+								>
+									<PlusIcon data-icon="inline-start" />
+									{$_("actions.saveCurrentShort")}
+								</Button>
+							{/snippet}
+						</Tooltip.Trigger>
+						<Tooltip.Content>{$_("actions.saveAsNewProfile")}</Tooltip.Content>
+					</Tooltip.Root>
+				</div>
+			{/snippet}
+		</PageHeader>
+
+		{#if (detectResult !== null || !!detectError) && !sourceReady}
+			<Alert.Root variant="destructive">
+				<AlertTriangleIcon data-icon="inline-start" />
+				<Alert.Title>{$_("profilePages.source.notReadyTitle")}</Alert.Title>
+				<Alert.Description>{sourceStatusDescription()}</Alert.Description>
+				<Alert.Action>
+					<div class="flex gap-2">
+						<Button size="xs" variant="outline" onclick={() => { void Promise.all([refreshDetect(), refreshProfiles()]); }}>{$_("actions.retry")}</Button>
+						<Button size="xs" variant="outline" onclick={() => push("/diagnostics")}>{$_("nav.diagnostics")}</Button>
+					</div>
+				</Alert.Action>
+			</Alert.Root>
+		{/if}
+
 		<ProfileList
 			profiles={listItems}
 			loading={loadingProfiles}
 			error={profileError}
 			busy={!!busyAction || useBuilding || useApplying}
 			canCreate={sourceReady}
-			sourceChecked={detectResult !== null || !!detectError}
-			sourceDescription={sourceStatusDescription()}
 			onNew={() => push("/codex/profiles/new")}
-			onConfigSets={() => push("/codex/config-sets")}
-			onExportAll={() => exportProfiles()}
-			onImport={chooseProfileImport}
 			onExport={(profile) => exportProfiles([profile.id])}
 			onRefreshQuota={(profile) => runtime.readQuota(profile.id)}
 			onUse={openUse}
 			onDetails={(profile) => push(`/codex/profiles/${encodeURIComponent(profile.id)}`)}
 			onFork={(profile) => push(`/codex/profiles/${encodeURIComponent(profile.id)}/fork`)}
 			onRetrySource={() => { void Promise.all([refreshDetect(), refreshProfiles()]); }}
-			onDiagnostics={() => { void push("/diagnostics"); }}
 		/>
-	</div>
+	</ContentContainer>
 {:else if route.kind === "config-sets"}
 	<ConfigSetPage {configSets} loading={configSetsLoading} error={configSetsError} busy={!!busyAction} formatUpdated={formatRelativeTime} onBack={() => push("/codex/profiles")} onCreate={() => openConfigDialog("create")} onCopy={(value) => openConfigDialog("copy", value)} onEdit={(value) => openConfigDialog("edit", value)} onDelete={deleteConfigSet} />
 {:else if route.kind === "new"}
@@ -653,12 +725,27 @@
 
 <AlertDialog.Root bind:open={saveCurrentOpen}>
 	<AlertDialog.Content>
-		<AlertDialog.Header><AlertDialog.Title>{$_("profilePages.saveCurrent.title")}</AlertDialog.Title><AlertDialog.Description>{$_("profilePages.saveCurrent.description", { values: { credential: detail?.login?.reference_count ?? 0, config: detail?.config_set?.reference_count ?? 0 } })}</AlertDialog.Description></AlertDialog.Header>
+		<AlertDialog.Header><AlertDialog.Title>{$_("profilePages.saveCurrent.title")}</AlertDialog.Title><AlertDialog.Description>{$_("profilePages.saveCurrent.description")}</AlertDialog.Description></AlertDialog.Header>
 		{#if saveCurrentSourceError}
 			<Alert.Root variant="destructive">
 				<AlertTriangleIcon data-icon="inline-start" />
 				<Alert.Title>{$_("profilePages.source.notReadyTitle")}</Alert.Title>
 				<Alert.Description>{saveCurrentSourceError}</Alert.Description>
+			</Alert.Root>
+		{/if}
+		{#if (detail?.login?.reference_count ?? 0) > 1 || (detail?.config_set?.reference_count ?? 0) > 1}
+			<Alert.Root>
+				<AlertTriangleIcon data-icon="inline-start" />
+				<Alert.Title>{$_("profilePages.saveCurrent.sharedTitle")}</Alert.Title>
+				<Alert.Description>
+					{#if (detail?.login?.reference_count ?? 0) > 1 && (detail?.config_set?.reference_count ?? 0) > 1}
+						{$_("profilePages.saveCurrent.sharedBothDescription", { values: { loginCount: detail?.login?.reference_count ?? 0, configCount: detail?.config_set?.reference_count ?? 0 } })}
+					{:else if (detail?.login?.reference_count ?? 0) > 1}
+						{$_("profilePages.saveCurrent.sharedLoginDescription", { values: { count: detail?.login?.reference_count ?? 0 } })}
+					{:else}
+						{$_("profilePages.saveCurrent.sharedConfigDescription", { values: { count: detail?.config_set?.reference_count ?? 0 } })}
+					{/if}
+				</Alert.Description>
 			</Alert.Root>
 		{/if}
 		<AlertDialog.Footer><AlertDialog.Cancel>{$_("actions.cancel")}</AlertDialog.Cancel><AlertDialog.Action onclick={saveCurrent}>{$_("actions.updateFromCurrent")}</AlertDialog.Action></AlertDialog.Footer>

@@ -34,17 +34,38 @@ func TestCreateCodexProfileCreatesSharedConfigSetAndActivates(t *testing.T) {
 		t.Fatalf("expected store open to succeed, got %v", err)
 	}
 	defer db.Close()
-	configTarget, err := db.GetProfileTarget(ctx, "work", codexconfig.ProviderID, codexconfig.TargetID)
+	configBinding, err := db.GetProfileConfigSetBinding(ctx, "work", codexconfig.ProviderID, codexpreset.ConfigSetSlotUserConfig)
 	if err != nil {
-		t.Fatalf("expected config target, got %v", err)
+		t.Fatalf("expected config binding, got %v", err)
 	}
-	configSetID, err := codexpreset.ParseConfigSetBindingValueJSON(configTarget.ValueJSON)
-	if err != nil || configSetID != codexSharedConfigSetID {
-		t.Fatalf("unexpected config binding: id=%q err=%v", configSetID, err)
+	if configBinding.ConfigSetID != codexSharedConfigSetID {
+		t.Fatalf("unexpected config binding: %#v", configBinding)
 	}
-	if configTarget.ValueJSON == "model = \"gpt-5\"\n" {
-		t.Fatalf("expected target to contain only a config set binding")
+	if targetCount, err := db.CountProfileTargetReferences(ctx, "work"); err != nil || targetCount != 0 {
+		t.Fatalf("expected Codex resource IDs not to be stored in generic targets, count=%d err=%v", targetCount, err)
 	}
+	publicTargets, err := ListProfileTargets(ctx, ListProfileTargetsRequest{
+		ConfigDir: configDir, ProfileID: "work", ProviderID: codexconfig.ProviderID, IncludeDisabled: true,
+	})
+	if err != nil || len(publicTargets) != 2 {
+		t.Fatalf("expected two synthesized Codex file targets, got %#v err=%v", publicTargets, err)
+	}
+	authTarget, err := GetProfileTarget(ctx, GetProfileTargetRequest{
+		ConfigDir: configDir, ProfileID: "work", ProviderID: codexconfig.ProviderID, TargetID: codexconfig.AuthTargetID,
+	})
+	if err != nil || authTarget.Path != result.AuthPath || authTarget.ValuePreview.Content != codexpreset.AuthPreviewContent {
+		t.Fatalf("unexpected synthesized Codex auth target: %#v err=%v", authTarget, err)
+	}
+	metadataJSON := `{}`
+	_, err = UpdateProvider(ctx, UpdateProviderRequest{
+		ConfigDir: configDir, ID: codexconfig.ProviderID, MetadataJSON: &metadataJSON,
+	})
+	assertAppErrorCode(t, err, ErrorProviderInvalid)
+	adapterID := "generic"
+	_, err = UpdateProvider(ctx, UpdateProviderRequest{
+		ConfigDir: configDir, ID: codexconfig.ProviderID, AdapterID: &adapterID,
+	})
+	assertAppErrorCode(t, err, ErrorProviderInvalid)
 }
 
 func TestCreateFirstCodexProfileRejectsCustomConfigSet(t *testing.T) {
@@ -80,12 +101,9 @@ func TestListCodexConfigSetsSurvivesInvalidActiveBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected store open to succeed, got %v", err)
 	}
-	invalidBinding := `{`
-	if _, err := db.UpdateProfileTarget(ctx, store.UpdateProfileTargetParams{
-		ProfileID: "work", ProviderID: codexconfig.ProviderID, TargetID: codexconfig.TargetID, ValueJSON: &invalidBinding,
-	}); err != nil {
+	if err := db.DeleteProfileConfigSetBinding(ctx, "work", codexconfig.ProviderID, codexpreset.ConfigSetSlotUserConfig); err != nil {
 		_ = db.Close()
-		t.Fatalf("expected active binding corruption setup to succeed, got %v", err)
+		t.Fatalf("expected active binding removal setup to succeed, got %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("expected store close to succeed, got %v", err)
@@ -166,6 +184,11 @@ func TestForkCodexProfileRequiresAtLeastOneCopiedBinding(t *testing.T) {
 		CredentialBinding: CodexForkBindingShareParent, ConfigBinding: CodexForkBindingShareParent,
 	})
 	assertAppErrorCode(t, err, ErrorCodexInvalid)
+	if _, err := CreateProfile(ctx, CreateProfileRequest{
+		ConfigDir: configDir, ID: "child", Name: "Existing Child", Description: "Shared globally",
+	}); err != nil {
+		t.Fatalf("expected global child Profile, got %v", err)
+	}
 
 	child, err := ForkCodexProfile(ctx, ForkCodexProfileRequest{
 		ConfigDir: configDir, CodexDir: codexDir, SourceProfileID: "parent", ProfileID: "child",
@@ -177,6 +200,9 @@ func TestForkCodexProfileRequiresAtLeastOneCopiedBinding(t *testing.T) {
 	}
 	if child.Summary.CredentialID == "" || child.ConfigSet.ID != "child-config" {
 		t.Fatalf("unexpected fork result: %#v", child)
+	}
+	if child.Profile.Name != "Existing Child" || child.Profile.Description != "Shared globally" {
+		t.Fatalf("expected fork to preserve existing global Profile metadata, got %#v", child.Profile)
 	}
 	parent, err := GetCodexProfile(ctx, GetCodexProfileRequest{ConfigDir: configDir, ProfileID: "parent"})
 	if err != nil {
@@ -240,6 +266,18 @@ func TestSaveActiveCodexProfileStateUpdatesSharedResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected create to succeed, got %v", err)
 	}
+	if _, err := ForkCodexProfile(ctx, ForkCodexProfileRequest{
+		ConfigDir: configDir, CodexDir: codexDir, SourceProfileID: "work", ProfileID: "shared-login",
+		CredentialBinding: CodexForkBindingShareParent, ConfigBinding: CodexForkBindingCopyNew, NewConfigSetID: "shared-login-config",
+	}); err != nil {
+		t.Fatalf("expected shared-login fork to succeed, got %v", err)
+	}
+	if _, err := ForkCodexProfile(ctx, ForkCodexProfileRequest{
+		ConfigDir: configDir, CodexDir: codexDir, SourceProfileID: "work", ProfileID: "shared-config",
+		CredentialBinding: CodexForkBindingCopyNew, ConfigBinding: CodexForkBindingShareParent,
+	}); err != nil {
+		t.Fatalf("expected shared-config fork to succeed, got %v", err)
+	}
 	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5-mini\"\n", `{"tokens":{"account_id":"work","access_token":"token-2"}}`)
 	result, err := SaveActiveCodexProfileState(ctx, SaveActiveCodexProfileStateRequest{ConfigDir: configDir, CodexDir: codexDir})
 	if err != nil {
@@ -247,6 +285,10 @@ func TestSaveActiveCodexProfileStateUpdatesSharedResources(t *testing.T) {
 	}
 	if result.ProfileID != "work" || result.ConfigSet.Model != "gpt-5-mini" || result.CredentialID != created.Summary.CredentialID {
 		t.Fatalf("unexpected save result: %#v", result)
+	}
+	if result.CredentialReferenceCount != 2 || result.ConfigSet.ReferenceCount != 2 ||
+		!hasWarning(result.Warnings, "shared Codex login") || !hasWarning(result.Warnings, "shared Codex config") {
+		t.Fatalf("expected shared resource warnings, got %#v", result)
 	}
 
 	db, err := openHealthyStore(ctx, configDir, true)

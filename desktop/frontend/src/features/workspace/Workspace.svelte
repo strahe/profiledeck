@@ -7,6 +7,7 @@
 	import { toast } from "svelte-sonner";
 	import BotIcon from "@lucide/svelte/icons/bot";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
+	import OrbitIcon from "@lucide/svelte/icons/orbit";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import SettingsIcon from "@lucide/svelte/icons/settings";
 	import StethoscopeIcon from "@lucide/svelte/icons/stethoscope";
@@ -14,6 +15,7 @@
 
 	import {
 		AppService,
+		AntigravityService,
 		BackupService,
 		CodexService,
 		DoctorService,
@@ -21,6 +23,8 @@
 	} from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type { DashboardResult, DesktopError } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type {
+		AntigravityDetectResult,
+		AntigravityProfileSummary,
 		CodexConfigSet,
 		CodexDetectResult,
 		CodexProfileSummary,
@@ -43,16 +47,17 @@
 		translate,
 		type DesktopLanguage,
 	} from "$lib/i18n";
+	import AntigravityProfiles from "../profiles/AntigravityProfiles.svelte";
 	import CodexProfiles from "../profiles/CodexProfiles.svelte";
-	import type { CodexProfileRoute, ProfileUseRequest } from "../profiles/types";
+	import type { AntigravityProfileRoute, CodexProfileRoute, ProfileUseRequest } from "../profiles/types";
 	import CodexSettings from "../settings/CodexSettings.svelte";
 	import { provideCodexRuntime } from "../settings/codex-runtime.svelte.js";
 	import UsagePage from "../usage/UsagePage.svelte";
 	import DiagnosticsPage from "./DiagnosticsPage.svelte";
 	import GlobalSettings from "./GlobalSettings.svelte";
 
-	type WorkspaceView = "profiles" | "usage" | "codex-settings" | "settings" | "diagnostics";
-	type AgentID = "codex";
+	type WorkspaceView = "profiles" | "antigravity-profiles" | "usage" | "codex-settings" | "settings" | "diagnostics";
+	type AgentID = "codex" | "antigravity";
 	type Appearance = "system" | "light" | "dark";
 	type Platform = "macos" | "windows" | "linux";
 
@@ -63,6 +68,7 @@
 		profile_changed?: boolean;
 		config_sets_changed?: boolean;
 		active_state_changed?: boolean;
+		provider_id?: string;
 	};
 
 	type DashboardUpdatePayload = {
@@ -73,19 +79,23 @@
 
 	type WorkspaceRoute = {
 		view: WorkspaceView;
-		profile: CodexProfileRoute;
+		codexProfile: CodexProfileRoute;
+		antigravityProfile: AntigravityProfileRoute;
 		valid: boolean;
 	};
 
 	const codexProviderID = "codex";
+	const antigravityProviderID = "antigravity";
 	const agents: Array<{ id: AgentID; name: string; icon: typeof BotIcon }> = [
 		{ id: "codex", name: "Codex", icon: BotIcon },
+		{ id: "antigravity", name: "Antigravity", icon: OrbitIcon },
 	];
 	const inFlight = new Map<string, CancellablePromise<unknown>>();
 
 	let platform = $state<Platform>(detectPlatform());
 	let loading = $state(false);
 	let loadingProfiles = $state(true);
+	let loadingAntigravityProfiles = $state(true);
 	let actionBusy = $state("");
 	let languageBusy = $state(false);
 	let appearanceBusy = $state(false);
@@ -102,25 +112,35 @@
 
 	let dashboard = $state<DashboardResult | null>(null);
 	let detectResult = $state<CodexDetectResult | null>(null);
+	let antigravityDetectResult = $state<AntigravityDetectResult | null>(null);
 	let doctorResult = $state<DoctorResult | null>(null);
 	let codexProfileSummaries = $state<CodexProfileSummary[]>([]);
+	let antigravityProfileSummaries = $state<AntigravityProfileSummary[]>([]);
 	let codexConfigSets = $state<CodexConfigSet[]>([]);
 	let dashboardError = $state("");
 	let detectError = $state("");
+	let antigravityDetectError = $state("");
 	let doctorError = $state("");
 	let profileError = $state("");
+	let antigravityProfileError = $state("");
 	let useRequest = $state<ProfileUseRequest | null>(null);
+	let antigravityUseRequest = $state<ProfileUseRequest | null>(null);
 	let useRequestSequence = 0;
 	let startupQuotaReadStarted = false;
 
 	const codexRuntime = provideCodexRuntime({ showError, showNotice });
 	let workspaceRoute = $derived(parseWorkspaceRoute(currentPath));
 	let agentWorkspace = $derived(isAgentWorkspace(workspaceRoute.view));
-	let activeAgentTab = $derived(workspaceRoute.view === "codex-settings" ? "settings" : workspaceRoute.view);
-	let activeProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === codexProviderID)?.profile_id ?? "");
+	let selectedAgent = $derived<AgentID | null>(workspaceRoute.view === "antigravity-profiles" ? "antigravity" : agentWorkspace ? "codex" : null);
+	let activeAgentTab = $derived(workspaceRoute.view === "codex-settings" ? "settings" : workspaceRoute.view === "antigravity-profiles" ? "profiles" : workspaceRoute.view);
+	let codexActiveProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === codexProviderID)?.profile_id ?? "");
+	let antigravityActiveProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === antigravityProviderID)?.profile_id ?? "");
+	let activeProfileID = $derived(selectedAgent === "antigravity" ? antigravityActiveProfileID : codexActiveProfileID);
 	let currentProfileName = $derived.by(() => {
 		void $locale;
-		const active = codexProfileSummaries.find((summary) => summary.profile.id === activeProfileID);
+		const active = selectedAgent === "antigravity"
+			? antigravityProfileSummaries.find((summary) => summary.profile.id === activeProfileID)
+			: codexProfileSummaries.find((summary) => summary.profile.id === activeProfileID);
 		if (active?.profile.name) return active.profile.name;
 		const id = active?.profile.id || activeProfileID;
 		return id ? `${translate("profile.unnamed")} · ${shortID(id)}` : "";
@@ -130,7 +150,7 @@
 		switch (workspaceRoute.view) {
 			case "settings": return translate("settings.title");
 			case "diagnostics": return translate("diagnosticsPage.title");
-			default: return "Codex";
+			default: return selectedAgent === "antigravity" ? "Antigravity" : "Codex";
 		}
 	});
 	let titlebarOffset = $derived(sidebarOpen ? "10rem" : platform === "macos" ? "5rem" : "3rem");
@@ -141,7 +161,7 @@
 	});
 
 	$effect(() => {
-		const profileID = activeProfileID;
+		const profileID = codexActiveProfileID;
 		if (!profileID || startupQuotaReadStarted) return;
 		startupQuotaReadStarted = true;
 		untrack(() => { void codexRuntime.readQuota(profileID); });
@@ -157,7 +177,7 @@
 			invalidRoute = "";
 		} else if (invalidRoute !== path) {
 			invalidRoute = path;
-			void replace("/codex/profiles");
+			void replace(path.startsWith("/antigravity/") ? "/antigravity/profiles" : "/codex/profiles");
 		}
 	});
 
@@ -173,9 +193,14 @@
 		const off = [
 			Events.On("profiledeck:open-switch", (event) => {
 				const payload = event.data ?? {};
-				if (payload.provider_id !== codexProviderID || !payload.profile_id) return;
-				useRequest = { profileID: payload.profile_id, sequence: ++useRequestSequence };
-				void push("/codex/profiles");
+				if (!payload.profile_id) return;
+				if (payload.provider_id === codexProviderID) {
+					useRequest = { profileID: payload.profile_id, sequence: ++useRequestSequence };
+					void push("/codex/profiles");
+				} else if (payload.provider_id === antigravityProviderID) {
+					antigravityUseRequest = { profileID: payload.profile_id, sequence: ++useRequestSequence };
+					void push("/antigravity/profiles");
+				}
 			}),
 			Events.On("profiledeck:open-doctor", () => {
 				void push("/diagnostics");
@@ -198,9 +223,10 @@
 	async function refreshAll(reloadRuntime = true) {
 		loading = true;
 		try {
+			const detectCurrentAgent = selectedAgent === "antigravity" ? refreshAntigravityDetect() : refreshDetect();
 			const [dashboardResult] = await Promise.all([
 				track("dashboard", AppService.Dashboard()),
-				refreshDetect(),
+				detectCurrentAgent,
 			]);
 			applyDashboardResult(dashboardResult);
 			dashboardError = "";
@@ -211,6 +237,7 @@
 				showError(error);
 			}
 			loadingProfiles = false;
+			loadingAntigravityProfiles = false;
 		} finally {
 			loading = false;
 		}
@@ -319,6 +346,34 @@
 		}
 	}
 
+	async function refreshAntigravityDetect() {
+		try {
+			const result = await track("antigravity-detect", AntigravityService.Detect());
+			antigravityDetectResult = result;
+			antigravityDetectError = "";
+			return result;
+		} catch (error) {
+			if (!isCancelError(error)) {
+				antigravityDetectResult = null;
+				antigravityDetectError = formatError(error);
+			}
+			return null;
+		}
+	}
+
+	async function refreshAntigravityProfiles() {
+		loadingAntigravityProfiles = true;
+		try {
+			const result = await track("antigravity-profiles", AntigravityService.ListProfiles());
+			antigravityProfileSummaries = result.profiles ?? [];
+			antigravityProfileError = "";
+		} catch (error) {
+			if (!isCancelError(error)) antigravityProfileError = formatError(error);
+		} finally {
+			loadingAntigravityProfiles = false;
+		}
+	}
+
 	async function runDoctor() {
 		await runAction("doctor", async () => {
 			try {
@@ -362,7 +417,10 @@
 		if (payload.dashboard) applyDashboardResult(payload.dashboard);
 		if (payload.error && !isCancelError(payload.error)) showError(payload.error);
 		if (payload.event?.error && !isCancelError(payload.event.error)) showError(payload.event.error);
-		if (payload.event?.profile_changed || payload.event?.active_state_changed) void refreshDetect();
+		if (payload.event?.profile_changed || payload.event?.active_state_changed) {
+			if (payload.event.provider_id === antigravityProviderID) void refreshAntigravityDetect();
+			else void refreshDetect();
+		}
 	}
 
 	function applyDashboardResult(next: DashboardResult) {
@@ -372,29 +430,41 @@
 		codexProfileSummaries = next.codex_profiles?.profiles ?? [];
 		loadingProfiles = false;
 		codexConfigSets = next.codex_config_sets?.config_sets ?? [];
+		antigravityProfileSummaries = next.antigravity_profiles?.profiles ?? [];
+		loadingAntigravityProfiles = false;
 		if (next.startup_error) dashboardError = desktopErrorMessage(next.startup_error, translate("errors.desktopUnavailable"));
 		else dashboardError = "";
 	}
 
 	function parseWorkspaceRoute(path: string): WorkspaceRoute {
-		const list = (): WorkspaceRoute => ({ view: "profiles", profile: { kind: "list", profileID: "" }, valid: true });
+		const codexList: CodexProfileRoute = { kind: "list", profileID: "" };
+		const antigravityList: AntigravityProfileRoute = { kind: "list", profileID: "" };
+		const build = (view: WorkspaceView, codexProfile: CodexProfileRoute = codexList, antigravityProfile: AntigravityProfileRoute = antigravityList): WorkspaceRoute => ({ view, codexProfile, antigravityProfile, valid: true });
+		const list = (): WorkspaceRoute => build("profiles");
 		if (path === "/" || path === "/codex/profiles") return list();
-		if (path === "/codex/config-sets") return { view: "profiles", profile: { kind: "config-sets", profileID: "" }, valid: true };
-		if (path === "/codex/profiles/new") return { view: "profiles", profile: { kind: "new", profileID: "" }, valid: true };
+		if (path === "/codex/config-sets") return build("profiles", { kind: "config-sets", profileID: "" });
+		if (path === "/codex/profiles/new") return build("profiles", { kind: "new", profileID: "" });
 		const fork = path.match(/^\/codex\/profiles\/([^/]+)\/fork$/);
 		if (fork) {
 			const profileID = decodeRouteID(fork[1]);
-			return profileID ? { view: "profiles", profile: { kind: "fork", profileID }, valid: true } : { ...list(), valid: false };
+			return profileID ? build("profiles", { kind: "fork", profileID }) : { ...list(), valid: false };
 		}
 		const detail = path.match(/^\/codex\/profiles\/([^/]+)$/);
 		if (detail) {
 			const profileID = decodeRouteID(detail[1]);
-			return profileID ? { view: "profiles", profile: { kind: "detail", profileID }, valid: true } : { ...list(), valid: false };
+			return profileID ? build("profiles", { kind: "detail", profileID }) : { ...list(), valid: false };
 		}
-		if (path === "/codex/usage") return { view: "usage", profile: { kind: "list", profileID: "" }, valid: true };
-		if (path === "/codex/settings") return { view: "codex-settings", profile: { kind: "list", profileID: "" }, valid: true };
-		if (path === "/settings") return { view: "settings", profile: { kind: "list", profileID: "" }, valid: true };
-		if (path === "/diagnostics" || path === "/codex/health") return { view: "diagnostics", profile: { kind: "list", profileID: "" }, valid: true };
+		if (path === "/antigravity/profiles") return build("antigravity-profiles");
+		if (path === "/antigravity/profiles/new") return build("antigravity-profiles", codexList, { kind: "new", profileID: "" });
+		const antigravityDetail = path.match(/^\/antigravity\/profiles\/([^/]+)$/);
+		if (antigravityDetail) {
+			const profileID = decodeRouteID(antigravityDetail[1]);
+			return profileID ? build("antigravity-profiles", codexList, { kind: "detail", profileID }) : { ...build("antigravity-profiles"), valid: false };
+		}
+		if (path === "/codex/usage") return build("usage");
+		if (path === "/codex/settings") return build("codex-settings");
+		if (path === "/settings") return build("settings");
+		if (path === "/diagnostics" || path === "/codex/health") return build("diagnostics");
 		return { ...list(), valid: false };
 	}
 
@@ -412,14 +482,19 @@
 	}
 
 	function isAgentWorkspace(view: WorkspaceView): boolean {
-		return view === "profiles" || view === "usage" || view === "codex-settings";
+		return view === "profiles" || view === "antigravity-profiles" || view === "usage" || view === "codex-settings";
 	}
 
 	function selectAgent(agentID: AgentID) {
 		if (agentID === "codex") void push("/codex/profiles");
+		else void push("/antigravity/profiles");
 	}
 
 	function selectAgentTab(value: string) {
+		if (selectedAgent === "antigravity") {
+			void push("/antigravity/profiles");
+			return;
+		}
 		switch (value) {
 			case "profiles":
 				void push("/codex/profiles");
@@ -573,7 +648,7 @@
 								<Sidebar.MenuItem>
 									<Sidebar.MenuButton
 										class="[&_svg]:size-5!"
-										isActive={agent.id === "codex" && agentWorkspace}
+										isActive={agent.id === selectedAgent}
 										tooltipContent={agent.name}
 										onclick={() => selectAgent(agent.id)}
 									>
@@ -619,8 +694,10 @@
 					<Tabs.Root value={activeAgentTab} onValueChange={selectAgentTab}>
 						<Tabs.List variant="line" class="h-auto bg-transparent p-0">
 							<Tabs.Trigger value="profiles">{$_("tabs.profiles")}</Tabs.Trigger>
-							<Tabs.Trigger value="usage">{$_("tabs.usage")}</Tabs.Trigger>
-							<Tabs.Trigger value="settings">{$_("tabs.settings")}</Tabs.Trigger>
+							{#if selectedAgent === "codex"}
+								<Tabs.Trigger value="usage">{$_("tabs.usage")}</Tabs.Trigger>
+								<Tabs.Trigger value="settings">{$_("tabs.settings")}</Tabs.Trigger>
+							{/if}
 						</Tabs.List>
 					</Tabs.Root>
 				</div>
@@ -645,12 +722,12 @@
 			<div class="min-h-0 flex-1 overflow-auto p-4">
 				{#if workspaceRoute.view === "profiles"}
 					<CodexProfiles
-						route={workspaceRoute.profile}
+						route={workspaceRoute.codexProfile}
 						profiles={codexProfileSummaries}
 						dashboardConfigSets={codexConfigSets}
 						{detectResult}
 						{detectError}
-						{activeProfileID}
+						activeProfileID={codexActiveProfileID}
 						{loadingProfiles}
 						{profileError}
 						{useRequest}
@@ -658,6 +735,22 @@
 						refreshProfiles={refreshCodexProfiles}
 						{cancelDetect}
 						onUseRequestHandled={(sequence) => { if (useRequest?.sequence === sequence) useRequest = null; }}
+						{showError}
+						{showNotice}
+					/>
+				{:else if workspaceRoute.view === "antigravity-profiles"}
+					<AntigravityProfiles
+						route={workspaceRoute.antigravityProfile}
+						profiles={antigravityProfileSummaries}
+						detectResult={antigravityDetectResult}
+						detectError={antigravityDetectError}
+						activeProfileID={antigravityActiveProfileID}
+						loadingProfiles={loadingAntigravityProfiles}
+						profileError={antigravityProfileError}
+						useRequest={antigravityUseRequest}
+						refreshDetect={refreshAntigravityDetect}
+						refreshProfiles={refreshAntigravityProfiles}
+						onUseRequestHandled={(sequence) => { if (antigravityUseRequest?.sequence === sequence) antigravityUseRequest = null; }}
 						{showError}
 						{showNotice}
 					/>

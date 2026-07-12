@@ -42,4 +42,4 @@ profiledeck backup show <backup-id>
 profiledeck rollback <backup-id> --yes
 ```
 
-回滚会从备份中还原文件和所选 Profile。恢复旧状态前，ProfileDeck 也会先备份当前文件。
+回滚会从备份中还原外部目标和所选 Profile。恢复旧状态前，ProfileDeck 也会先备份当前目标状态。该流程同时适用于 Codex 文件和 Antigravity 系统凭据。

@@ -137,4 +137,4 @@ profiledeck codex profile import apply ./profiledeck-codex-profiles.json \
   --yes
 ```
 
-导入会添加缺失内容、跳过相同内容；已有 ID 的内容不同时，不会写入任何更改。导入不会把 Profile 设为当前、恢复自动更新设置，也不会写入 `auth.json` 或 `config.toml`。准备使用导入的 Profile 时，再审核并应用正常切换。
+导入会添加缺失内容、跳过相同内容；已有 Codex 数据冲突时，不会写入任何更改。如果同 ID 的全局 Profile 尚无 Codex 绑定，导入会附加这些绑定，并保留该 Profile 现有的名称和描述。导入不会把 Profile 设为当前、恢复自动更新设置，也不会写入 `auth.json` 或 `config.toml`。准备使用导入的 Profile 时，再审核并应用正常切换。

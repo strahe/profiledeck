@@ -63,22 +63,9 @@ func codexConfigSetIDFromTarget(target store.ProfileTarget) (string, error) {
 }
 
 func codexCredentialBindingCount(ctx context.Context, db *store.Store, credentialID string) (int, error) {
-	targets, err := db.ListProfileTargetsByProvider(ctx, codexconfig.ProviderID)
+	count, err := db.CountProviderCredentialReferences(ctx, credentialID)
 	if err != nil {
-		return 0, WrapError(ErrorStoreStatusFailed, "failed to list Codex auth targets", err)
-	}
-	count := 0
-	for _, target := range targets {
-		if target.TargetID != codexconfig.AuthTargetID || !target.Enabled {
-			continue
-		}
-		current, err := codexpreset.ParseCredentialBindingValueJSON(target.ValueJSON)
-		if err != nil {
-			continue
-		}
-		if current == credentialID {
-			count++
-		}
+		return 0, WrapError(ErrorStoreStatusFailed, "failed to count Codex login bindings", err)
 	}
 	return count, nil
 }
@@ -205,7 +192,7 @@ func upsertCodexProvider(ctx context.Context, db *store.Store, metadataJSON stri
 	return provider, nil
 }
 
-func upsertCodexProfile(ctx context.Context, db *store.Store, profileID string, fields codexProfileFields, hasProfile bool) (store.Profile, error) {
+func upsertCodexProfile(ctx context.Context, db *store.Store, profileID string, fields managedProfileFields, hasProfile bool) (store.Profile, error) {
 	if !hasProfile {
 		profile, err := db.CreateProfile(ctx, store.CreateProfileParams{
 			ID:           profileID,
@@ -236,88 +223,164 @@ func upsertCodexProfile(ctx context.Context, db *store.Store, profileID string, 
 	return profile, nil
 }
 
-func upsertCodexConfigTarget(ctx context.Context, db *store.Store, profileID string, home codexconfig.Home, valueJSON, metadataJSON string, hasTarget bool) (store.ProfileTarget, error) {
-	enabled := true
-	if !hasTarget {
-		target, err := db.CreateProfileTarget(ctx, store.CreateProfileTargetParams{
-			ProfileID:    profileID,
-			ProviderID:   codexconfig.ProviderID,
-			TargetID:     codexconfig.TargetID,
-			Path:         home.ConfigPath,
-			PathKey:      targetPathOwnershipKey(home.ConfigPath),
-			Format:       targetFormatTOML,
-			Strategy:     targetStrategyReplaceFile,
-			ValueJSON:    valueJSON,
-			Enabled:      true,
-			MetadataJSON: metadataJSON,
-		})
-		if err != nil {
-			return store.ProfileTarget{}, mapTargetStoreError(err)
-		}
-		return target, nil
+func upsertCodexConfigTarget(ctx context.Context, db *store.Store, profileID string, home codexconfig.Home, valueJSON, metadataJSON string, _ bool) (store.ProfileTarget, error) {
+	configSetID, err := codexpreset.ParseConfigSetBindingValueJSON(valueJSON)
+	if err != nil {
+		return store.ProfileTarget{}, WrapError(ErrorCodexInvalid, "Codex config binding is invalid", err)
 	}
-	path := home.ConfigPath
-	pathKey := targetPathOwnershipKey(home.ConfigPath)
-	format := targetFormatTOML
-	strategy := targetStrategyReplaceFile
-	target, err := db.UpdateProfileTarget(ctx, store.UpdateProfileTargetParams{
-		ProfileID:    profileID,
-		ProviderID:   codexconfig.ProviderID,
-		TargetID:     codexconfig.TargetID,
-		Path:         &path,
-		PathKey:      &pathKey,
-		Format:       &format,
-		Strategy:     &strategy,
-		ValueJSON:    &valueJSON,
-		Enabled:      &enabled,
-		MetadataJSON: &metadataJSON,
+	binding, err := db.UpsertProfileConfigSetBinding(ctx, store.UpsertProfileConfigSetBindingParams{
+		ProfileID: profileID, ProviderID: codexconfig.ProviderID,
+		SlotID: codexpreset.ConfigSetSlotUserConfig, ConfigSetID: configSetID,
 	})
 	if err != nil {
-		return store.ProfileTarget{}, mapTargetStoreError(err)
+		return store.ProfileTarget{}, WrapError(ErrorStoreStatusFailed, "failed to store Codex config binding", err)
 	}
-	return target, nil
+	return codexConfigTargetFromBinding(home, binding, valueJSON, metadataJSON), nil
 }
 
-func upsertCodexAuthTarget(ctx context.Context, db *store.Store, profileID string, home codexconfig.Home, valueJSON, metadataJSON string, hasTarget bool) (store.ProfileTarget, error) {
-	enabled := true
-	if !hasTarget {
-		target, err := db.CreateProfileTarget(ctx, store.CreateProfileTargetParams{
-			ProfileID:    profileID,
-			ProviderID:   codexconfig.ProviderID,
-			TargetID:     codexconfig.AuthTargetID,
-			Path:         home.AuthPath,
-			PathKey:      targetPathOwnershipKey(home.AuthPath),
-			Format:       targetFormatJSON,
-			Strategy:     targetStrategyReplaceFile,
-			ValueJSON:    valueJSON,
-			Enabled:      true,
-			MetadataJSON: metadataJSON,
-		})
-		if err != nil {
-			return store.ProfileTarget{}, mapTargetStoreError(err)
-		}
-		return target, nil
+func upsertCodexAuthTarget(ctx context.Context, db *store.Store, profileID string, home codexconfig.Home, valueJSON, metadataJSON string, _ bool) (store.ProfileTarget, error) {
+	credentialID, err := codexpreset.ParseCredentialBindingValueJSON(valueJSON)
+	if err != nil {
+		return store.ProfileTarget{}, WrapError(ErrorCodexInvalid, "Codex login binding is invalid", err)
 	}
-	path := home.AuthPath
-	pathKey := targetPathOwnershipKey(home.AuthPath)
-	format := targetFormatJSON
-	strategy := targetStrategyReplaceFile
-	target, err := db.UpdateProfileTarget(ctx, store.UpdateProfileTargetParams{
-		ProfileID:    profileID,
-		ProviderID:   codexconfig.ProviderID,
-		TargetID:     codexconfig.AuthTargetID,
-		Path:         &path,
-		PathKey:      &pathKey,
-		Format:       &format,
-		Strategy:     &strategy,
-		ValueJSON:    &valueJSON,
-		Enabled:      &enabled,
-		MetadataJSON: &metadataJSON,
+	binding, err := db.UpsertProfileCredentialBinding(ctx, store.UpsertProfileCredentialBindingParams{
+		ProfileID: profileID, ProviderID: codexconfig.ProviderID,
+		SlotID: codexpreset.CredentialSlotAuth, CredentialID: credentialID,
 	})
 	if err != nil {
-		return store.ProfileTarget{}, mapTargetStoreError(err)
+		return store.ProfileTarget{}, WrapError(ErrorStoreStatusFailed, "failed to store Codex login binding", err)
 	}
-	return target, nil
+	return codexAuthTargetFromBinding(home, binding, valueJSON, metadataJSON), nil
+}
+
+func codexConfigTargetFromBinding(home codexconfig.Home, binding store.ProfileConfigSetBinding, valueJSON, metadataJSON string) store.ProfileTarget {
+	return store.ProfileTarget{
+		ProfileID: binding.ProfileID, ProviderID: binding.ProviderID, TargetID: codexconfig.TargetID,
+		Path: home.ConfigPath, PathKey: targetPathOwnershipKey(home.ConfigPath), Format: targetFormatTOML,
+		Strategy: targetStrategyReplaceFile, ValueJSON: valueJSON, Enabled: true, MetadataJSON: metadataJSON,
+		CreatedAtUnixMS: binding.CreatedAtUnixMS, UpdatedAtUnixMS: binding.UpdatedAtUnixMS,
+	}
+}
+
+func codexAuthTargetFromBinding(home codexconfig.Home, binding store.ProfileCredentialBinding, valueJSON, metadataJSON string) store.ProfileTarget {
+	return store.ProfileTarget{
+		ProfileID: binding.ProfileID, ProviderID: binding.ProviderID, TargetID: codexconfig.AuthTargetID,
+		Path: home.AuthPath, PathKey: targetPathOwnershipKey(home.AuthPath), Format: targetFormatJSON,
+		Strategy: targetStrategyReplaceFile, ValueJSON: valueJSON, Enabled: true, MetadataJSON: metadataJSON,
+		CreatedAtUnixMS: binding.CreatedAtUnixMS, UpdatedAtUnixMS: binding.UpdatedAtUnixMS,
+	}
+}
+
+func codexBindingTargets(ctx context.Context, db *store.Store, profileID string, home codexconfig.Home) ([]store.ProfileTarget, error) {
+	credentialBindings, err := db.ListProfileCredentialBindings(ctx, profileID, codexconfig.ProviderID)
+	if err != nil {
+		return nil, WrapError(ErrorStoreStatusFailed, "failed to list Codex login bindings", err)
+	}
+	configBindings, err := db.ListProfileConfigSetBindings(ctx, profileID, codexconfig.ProviderID)
+	if err != nil {
+		return nil, WrapError(ErrorStoreStatusFailed, "failed to list Codex config bindings", err)
+	}
+	targets := make([]store.ProfileTarget, 0, len(credentialBindings)+len(configBindings))
+	for _, binding := range configBindings {
+		if binding.SlotID != codexpreset.ConfigSetSlotUserConfig {
+			return nil, NewError(ErrorCodexInvalid, "Codex profile contains an unsupported config binding").
+				WithDetail("profile_id", binding.ProfileID).WithDetail("slot_id", binding.SlotID)
+		}
+		valueJSON, err := codexpreset.ConfigSetBindingValueJSON(binding.ConfigSetID)
+		if err != nil {
+			return nil, err
+		}
+		metadataJSON, err := codexpreset.TargetMetadataJSON(codexconfig.TargetID, codexpreset.TargetModeConfigSet)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, codexConfigTargetFromBinding(home, binding, valueJSON, metadataJSON))
+	}
+	for _, binding := range credentialBindings {
+		if binding.SlotID != codexpreset.CredentialSlotAuth {
+			return nil, NewError(ErrorCodexInvalid, "Codex profile contains an unsupported login binding").
+				WithDetail("profile_id", binding.ProfileID).WithDetail("slot_id", binding.SlotID)
+		}
+		valueJSON, err := codexpreset.CredentialBindingValueJSON(binding.CredentialID)
+		if err != nil {
+			return nil, err
+		}
+		metadataJSON, err := codexpreset.TargetMetadataJSON(codexconfig.AuthTargetID, codexpreset.TargetModeCredential)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, codexAuthTargetFromBinding(home, binding, valueJSON, metadataJSON))
+	}
+	return targets, nil
+}
+
+func codexStoredHome(ctx context.Context, db *store.Store) (codexconfig.Home, error) {
+	provider, err := db.GetProvider(ctx, codexconfig.ProviderID)
+	if err != nil {
+		return codexconfig.Home{}, mapProviderStoreError(err)
+	}
+	if provider.AdapterID != codexconfig.AdapterID {
+		return codexconfig.Home{}, NewError(ErrorCodexInvalid, "stored Codex provider adapter is invalid")
+	}
+	metadata, err := codexpreset.DecodeProviderMetadata(provider.MetadataJSON)
+	if err != nil || !metadata.Compatible() {
+		return codexconfig.Home{}, NewError(ErrorCodexInvalid, "stored Codex provider metadata is invalid")
+	}
+	return codexconfig.Home{Dir: metadata.CodexDir, ConfigPath: metadata.ConfigPath, AuthPath: metadata.AuthPath}, nil
+}
+
+func storedCodexBindingTargets(ctx context.Context, db *store.Store, profileID string) ([]store.ProfileTarget, error) {
+	home, err := codexStoredHome(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	return codexBindingTargets(ctx, db, profileID, home)
+}
+
+func allStoredCodexBindingTargets(ctx context.Context, db *store.Store) ([]store.ProfileTarget, error) {
+	provider, err := db.GetProvider(ctx, codexconfig.ProviderID)
+	if errors.Is(err, store.ErrNotFound) {
+		return []store.ProfileTarget{}, nil
+	}
+	if err != nil {
+		return nil, mapProviderStoreError(err)
+	}
+	metadata, err := codexpreset.DecodeProviderMetadata(provider.MetadataJSON)
+	if provider.AdapterID != codexconfig.AdapterID || err != nil || !metadata.Compatible() {
+		// Detection and doctor still need to inspect typed binding presence when
+		// provider metadata is damaged; callers that materialize files use the
+		// strict single-profile helper above.
+		return []store.ProfileTarget{}, nil
+	}
+	home := codexconfig.Home{Dir: metadata.CodexDir, ConfigPath: metadata.ConfigPath, AuthPath: metadata.AuthPath}
+	credentialBindings, err := db.ListProfileCredentialBindingsByProvider(ctx, codexconfig.ProviderID)
+	if err != nil {
+		return nil, err
+	}
+	configBindings, err := db.ListProfileConfigSetBindingsByProvider(ctx, codexconfig.ProviderID)
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]store.ProfileTarget, 0, len(credentialBindings)+len(configBindings))
+	for _, binding := range configBindings {
+		if binding.SlotID != codexpreset.ConfigSetSlotUserConfig {
+			return nil, NewError(ErrorCodexInvalid, "Codex profile contains an unsupported config binding").
+				WithDetail("profile_id", binding.ProfileID).WithDetail("slot_id", binding.SlotID)
+		}
+		valueJSON, _ := codexpreset.ConfigSetBindingValueJSON(binding.ConfigSetID)
+		metadataJSON, _ := codexpreset.TargetMetadataJSON(codexconfig.TargetID, codexpreset.TargetModeConfigSet)
+		targets = append(targets, codexConfigTargetFromBinding(home, binding, valueJSON, metadataJSON))
+	}
+	for _, binding := range credentialBindings {
+		if binding.SlotID != codexpreset.CredentialSlotAuth {
+			return nil, NewError(ErrorCodexInvalid, "Codex profile contains an unsupported login binding").
+				WithDetail("profile_id", binding.ProfileID).WithDetail("slot_id", binding.SlotID)
+		}
+		valueJSON, _ := codexpreset.CredentialBindingValueJSON(binding.CredentialID)
+		metadataJSON, _ := codexpreset.TargetMetadataJSON(codexconfig.AuthTargetID, codexpreset.TargetModeCredential)
+		targets = append(targets, codexAuthTargetFromBinding(home, binding, valueJSON, metadataJSON))
+	}
+	return targets, nil
 }
 
 func mapCodexCredentialStoreError(err error) error {
@@ -346,6 +409,10 @@ func requireCodexAuthCredential(ctx context.Context, db *store.Store, credential
 		return store.ProviderCredential{}, NewError(ErrorCodexInvalid, "Codex auth credential has unsupported kind").
 			WithDetail("credential_id", credentialID).
 			WithDetail("credential_kind", credential.CredentialKind)
+	}
+	if sha256HexString(credential.PayloadJSON) != credential.PayloadSHA256 {
+		return store.ProviderCredential{}, NewError(ErrorCodexInvalid, "Codex auth credential payload hash is invalid").
+			WithDetail("credential_id", credentialID)
 	}
 	if _, err := codexauth.NormalizePayload([]byte(credential.PayloadJSON)); err != nil {
 		return store.ProviderCredential{}, codexAuthPayloadAppError(err).WithDetail("credential_id", credentialID)

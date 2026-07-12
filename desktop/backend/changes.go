@@ -3,13 +3,14 @@ package backend
 import "sync"
 
 const (
-	DesktopChangeInitialized           = "initialized"
-	DesktopChangeCodexProfileChanged   = "codex-profile-changed"
-	DesktopChangeCodexConfigSetChanged = "codex-config-set-changed"
-	DesktopChangeSwitchApplied         = "switch-applied"
-	DesktopChangeLockRepaired          = "lock-repaired"
-	DesktopChangeRollbackApplied       = "rollback-applied"
-	DesktopChangeSwitchRecovered       = "switch-recovered"
+	DesktopChangeInitialized               = "initialized"
+	DesktopChangeCodexProfileChanged       = "codex-profile-changed"
+	DesktopChangeCodexConfigSetChanged     = "codex-config-set-changed"
+	DesktopChangeAntigravityProfileChanged = "antigravity-profile-changed"
+	DesktopChangeSwitchApplied             = "switch-applied"
+	DesktopChangeLockRepaired              = "lock-repaired"
+	DesktopChangeRollbackApplied           = "rollback-applied"
+	DesktopChangeSwitchRecovered           = "switch-recovered"
 
 	DesktopChangeStatusSuccess  = "success"
 	DesktopChangeStatusFailure  = "failure"

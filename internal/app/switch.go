@@ -19,6 +19,10 @@ import (
 
 const switchOperationRandomBytes = 6
 
+var completeSwitchOperation = func(ctx context.Context, db *store.Store, params store.CompleteSwitchOperationParams) error {
+	return db.CompleteSwitchOperation(ctx, params)
+}
+
 type ApplySwitchRequest struct {
 	ConfigDir               string
 	ProviderID              string
@@ -60,6 +64,8 @@ type switchBackupManifest struct {
 
 type switchBackupEntry struct {
 	TargetID      string `json:"target_id"`
+	BackendID     string `json:"backend_id"`
+	TargetLabel   string `json:"target_label"`
 	Path          string `json:"path"`
 	Action        string `json:"action"`
 	Existed       bool   `json:"existed"`
@@ -91,6 +97,8 @@ type switchPreviousActiveState struct {
 
 type switchOperationTargetMetadata struct {
 	TargetID      string   `json:"target_id"`
+	BackendID     string   `json:"backend_id"`
+	TargetLabel   string   `json:"target_label"`
 	Path          string   `json:"path"`
 	Format        string   `json:"format"`
 	Strategy      string   `json:"strategy"`
@@ -211,7 +219,7 @@ func ApplySwitch(ctx context.Context, req ApplySwitchRequest) (ApplySwitchResult
 	if err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, backupMetadata, WrapError(ErrorOperationUpdateFailed, "failed to encode switch operation metadata", err))
 	}
-	if err := db.CompleteSwitchOperation(ctx, store.CompleteSwitchOperationParams{
+	if err := completeSwitchOperation(ctx, db, store.CompleteSwitchOperationParams{
 		ID:                operationID,
 		ProfileID:         profileID,
 		ProviderID:        providerID,
@@ -292,26 +300,29 @@ func verifySingleSwitchPlanHash(ctx context.Context, op applyPlanOperation) erro
 	if op.Action == planActionUnsupported {
 		return nil
 	}
-	err := targetfs.VerifyExpected(ctx, targetfs.ExpectedTarget{
-		TargetID: op.TargetID,
-		Path:     op.Path,
-		Exists:   op.FileExists,
-		SHA256:   op.BeforeSHA256,
-	})
-	if err != nil {
-		return mapTargetFSError(err)
+	if op.Spec == nil {
+		return NewError(ErrorSwitchPlanUnsupported, "switch target spec is missing").WithDetail("target_id", op.TargetID)
 	}
-	return nil
+	backend, ok := targetBackends[op.Spec.BackendID()]
+	if !ok {
+		return NewError(ErrorSwitchPlanUnsupported, "switch target backend is unavailable").WithDetail("backend_id", op.Spec.BackendID())
+	}
+	return backend.Verify(ctx, op.Spec, op.Snapshot)
 }
 
 func createSwitchBackup(ctx context.Context, paths runtime.Paths, operationID string, plan applyPlan) (switchBackup, error) {
 	backupPath := filepath.Join(paths.Backups, operationID)
 	filesPath := filepath.Join(backupPath, "files")
+	secretsPath := filepath.Join(backupPath, "secrets")
 	if err := os.MkdirAll(filesPath, 0o700); err != nil {
 		return switchBackup{}, WrapError(ErrorBackupFailed, "failed to create backup directory", err).WithDetail("path", backupPath)
 	}
 	chmodBestEffort(backupPath, 0o700)
 	chmodBestEffort(filesPath, 0o700)
+	if err := os.MkdirAll(secretsPath, 0o700); err != nil {
+		return switchBackup{}, WrapError(ErrorBackupFailed, "failed to create credential backup directory", err)
+	}
+	chmodBestEffort(secretsPath, 0o700)
 
 	backup := switchBackup{Path: backupPath, Entries: []switchBackupEntry{}}
 	for _, op := range plan.Operations {
@@ -320,22 +331,32 @@ func createSwitchBackup(ctx context.Context, paths runtime.Paths, operationID st
 		}
 		entry := switchBackupEntry{
 			TargetID:     op.TargetID,
+			BackendID:    op.BackendID,
+			TargetLabel:  op.TargetLabel,
 			Path:         op.Path,
 			Action:       op.Action,
 			Existed:      op.FileExists,
-			BeforeSHA256: op.BeforeSHA256,
+			BeforeSHA256: op.Snapshot.Fingerprint,
 			Mode:         fileModeString(op.BeforeMode),
 		}
 		if op.FileExists {
-			relPath := filepath.Join("files", op.TargetID+".bak")
-			copiedSHA, err := copyBackupFile(ctx, op.Path, filepath.Join(backupPath, relPath))
+			directory := "files"
+			if op.Spec.Sensitive() && op.Spec.BackendID() != targetBackendFile {
+				directory = "secrets"
+			}
+			relPath := filepath.Join(directory, op.TargetID+".bak")
+			backend, ok := targetBackends[op.Spec.BackendID()]
+			if !ok {
+				return switchBackup{}, NewError(ErrorBackupFailed, "target backend is unavailable").WithDetail("backend_id", op.Spec.BackendID())
+			}
+			copiedSHA, err := backend.Backup(ctx, op.Spec, op.Snapshot, filepath.Join(backupPath, relPath))
 			if err != nil {
 				return switchBackup{}, err
 			}
-			if copiedSHA != op.BeforeSHA256 {
+			if copiedSHA != op.Snapshot.Fingerprint {
 				return switchBackup{}, NewError(ErrorBackupFailed, "backup hash does not match planned target hash").
 					WithDetail("target_id", op.TargetID).
-					WithDetail("path", op.Path)
+					WithDetail("backend_id", op.BackendID)
 			}
 			entry.BackupRelPath = filepath.ToSlash(relPath)
 		}
@@ -361,30 +382,15 @@ func createSwitchBackup(ctx context.Context, paths runtime.Paths, operationID st
 	return backup, nil
 }
 
-func copyBackupFile(ctx context.Context, source, destination string) (string, error) {
-	hash, err := targetfs.CopyBackupFile(ctx, source, destination)
-	if err != nil {
-		return "", mapTargetFSError(err)
-	}
-	return hash, nil
-}
-
 func writeTargetAtomic(ctx context.Context, op applyPlanOperation) error {
-	err := targetfs.AtomicWriteContent(ctx, targetfs.AtomicWriteContentRequest{
-		Expected: targetfs.ExpectedTarget{
-			TargetID: op.TargetID,
-			Path:     op.Path,
-			Exists:   op.FileExists,
-			SHA256:   op.BeforeSHA256,
-		},
-		Content: op.DesiredContent,
-		Mode:    op.DesiredMode,
-		UseMode: op.UseDesiredMode,
-	})
-	if err != nil {
-		return mapTargetFSError(err)
+	if op.Spec == nil {
+		return NewError(ErrorSwitchPlanUnsupported, "switch target spec is missing").WithDetail("target_id", op.TargetID)
 	}
-	return nil
+	backend, ok := targetBackends[op.Spec.BackendID()]
+	if !ok {
+		return NewError(ErrorSwitchPlanUnsupported, "switch target backend is unavailable").WithDetail("backend_id", op.Spec.BackendID())
+	}
+	return backend.Apply(ctx, op.Spec, op.Snapshot, op.DesiredContent, op.DesiredMode, op.UseDesiredMode)
 }
 
 func failSwitchOperation(ctx context.Context, db *store.Store, operationID, metadataJSON string, operationErr error) error {
@@ -486,14 +492,16 @@ func marshalSwitchOperationMetadata(checkpoint, providerID, profileID string, pl
 	for _, op := range plan.Operations {
 		targets = append(targets, switchOperationTargetMetadata{
 			TargetID:      op.TargetID,
+			BackendID:     op.BackendID,
+			TargetLabel:   op.TargetLabel,
 			Path:          op.Path,
 			Format:        op.Format,
 			Strategy:      op.Strategy,
 			Action:        op.Action,
 			StatusReason:  op.StatusReason,
 			FileExists:    op.FileExists,
-			BeforeSHA256:  op.BeforeSHA256,
-			DesiredSHA256: op.DesiredSHA256,
+			BeforeSHA256:  firstNonEmpty(op.privateBeforeFingerprint, op.BeforeSHA256),
+			DesiredSHA256: firstNonEmpty(op.privateDesiredFingerprint, op.DesiredSHA256),
 			Warnings:      op.Warnings,
 		})
 	}

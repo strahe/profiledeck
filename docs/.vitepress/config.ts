@@ -19,6 +19,10 @@ const enCodex = [
   { text: 'Usage and Cost', link: '/codex/usage-cost' }
 ]
 
+const enAntigravity = [
+  { text: 'Profiles', link: '/antigravity/profiles' }
+]
+
 const enOperations = [
   { text: 'Switching', link: '/operations/switching' },
   { text: 'Recovery', link: '/operations/recovery' }
@@ -38,6 +42,10 @@ const zhGuide = [
 const zhCodex = [
   { text: 'Profile', link: '/zh/codex/profiles' },
   { text: '用量与成本', link: '/zh/codex/usage-cost' }
+]
+
+const zhAntigravity = [
+  { text: 'Profile', link: '/zh/antigravity/profiles' }
 ]
 
 const zhOperations = [
@@ -84,12 +92,14 @@ export default defineConfig({
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Codex', link: '/codex/profiles' },
+      { text: 'Antigravity', link: '/antigravity/profiles' },
       { text: 'Operations', link: '/operations/switching' },
       { text: 'Reference', link: '/reference/cli' }
     ],
     sidebar: [
       { text: 'Guide', items: enGuide },
       { text: 'Codex', items: enCodex },
+      { text: 'Antigravity', items: enAntigravity },
       { text: 'Operations', items: enOperations },
       { text: 'Reference', items: enReference }
     ],
@@ -111,12 +121,14 @@ export default defineConfig({
         nav: [
           { text: '指南', link: '/zh/guide/getting-started' },
           { text: 'Codex', link: '/zh/codex/profiles' },
+          { text: 'Antigravity', link: '/zh/antigravity/profiles' },
           { text: '操作', link: '/zh/operations/switching' },
           { text: '参考', link: '/zh/reference/cli' }
         ],
         sidebar: [
           { text: '指南', items: zhGuide },
           { text: 'Codex', items: zhCodex },
+          { text: 'Antigravity', items: zhAntigravity },
           { text: '操作', items: zhOperations },
           { text: '参考', items: zhReference }
         ],

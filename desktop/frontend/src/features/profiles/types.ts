@@ -23,6 +23,16 @@ export type ProfileUseRequest = {
 	sequence: number;
 };
 
+export type AntigravityProfileRoute =
+	| { kind: "list"; profileID: "" }
+	| { kind: "new"; profileID: "" }
+	| { kind: "detail"; profileID: string };
+
+export type SwitchProfileItem = {
+	id: string;
+	name: string;
+};
+
 export type CodexForkBinding = "share-parent" | "copy-new";
 export type ConfigSetDialogMode = "create" | "copy" | "edit";
 export type ConfigSetDialogState = {

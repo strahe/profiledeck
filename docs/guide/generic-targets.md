@@ -1,6 +1,8 @@
 # Generic Targets
 
-Generic targets let advanced users switch local configuration files for tools that do not have a dedicated ProfileDeck workflow. Most Codex users should start with `profiledeck codex profile create`.
+Generic targets let advanced users switch local configuration files for tools that do not have a dedicated ProfileDeck workflow. Codex and Antigravity users should use their dedicated Profile commands; generic target CRUD cannot change those managed bindings.
+
+The dedicated workflows also own the `codex` and `antigravity` Provider adapter and metadata. Generic Provider updates can change only their display name or enabled state.
 
 ## Create provider and profile
 

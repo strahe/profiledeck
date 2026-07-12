@@ -8,6 +8,8 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/strahe/profiledeck/desktop/backend"
+	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
+	"github.com/strahe/profiledeck/internal/app"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 )
 
@@ -124,10 +126,10 @@ func (c *trayController) runDoctor() {
 	c.ui.Emit("profiledeck:open-doctor")
 }
 
-func (c *trayController) openSwitch(profileID string) {
+func (c *trayController) openSwitch(providerID, profileID string) {
 	c.ui.ShowMainWindow()
 	c.ui.Emit("profiledeck:open-switch", map[string]string{
-		"provider_id": codexconfig.ProviderID,
+		"provider_id": providerID,
 		"profile_id":  profileID,
 	})
 }
@@ -141,7 +143,7 @@ type trayMenuActions struct {
 	openMainWindow func()
 	runDoctor      func()
 	refresh        func()
-	openSwitch     func(profileID string)
+	openSwitch     func(providerID, profileID string)
 	quit           func()
 }
 
@@ -152,8 +154,9 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 		menu.Add(trayErrorLabel(dashboardErr, trayDashboardUnavailableLabel)).SetEnabled(false)
 	} else {
 		menu.Add(currentProfileLabel(dashboard)).SetEnabled(false)
-		if missingID := missingActiveCodexProfileID(dashboard); missingID != "" {
-			menu.Add("Missing active profile: " + missingID).SetEnabled(false)
+		menu.Add(providerCurrentProfileLabel(dashboard, agyconfig.ProviderID, "Antigravity")).SetEnabled(false)
+		for _, missing := range missingActiveProfileLabels(dashboard) {
+			menu.Add(missing).SetEnabled(false)
 		}
 	}
 	menu.AddSeparator()
@@ -163,31 +166,21 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 	menu.Add("Run Doctor").OnClick(func(*application.Context) {
 		runTrayAction(actions.runDoctor)
 	})
-	profilesMenu := menu.AddSubmenu("Codex Profiles")
-	if dashboard.CodexProfiles == nil {
-		profilesMenu.Add(trayCodexProfilesUnavailableLabel).SetEnabled(false)
-	} else if len(dashboard.CodexProfiles.Profiles) == 0 {
-		profilesMenu.Add("No Codex profiles").SetEnabled(false)
-	} else {
+	var codexProfiles []trayProfile
+	if dashboard.CodexProfiles != nil {
 		for _, profile := range dashboard.CodexProfiles.Profiles {
-			profile := profile
-			label := profile.Profile.Name
-			if label == "" {
-				label = profile.Profile.ID
-			}
-			item := profilesMenu.Add(label)
-			if profile.Active {
-				item.SetChecked(true)
-			}
-			item.OnClick(func(*application.Context) {
-				if actions.openSwitch != nil {
-					runTrayAction(func() {
-						actions.openSwitch(profile.Profile.ID)
-					})
-				}
-			})
+			codexProfiles = append(codexProfiles, trayProfile{Profile: profile.Profile, Active: profile.Active})
 		}
 	}
+	addTrayProfilesMenu(menu, "Codex Profiles", codexconfig.ProviderID, codexProfiles, dashboard.CodexProfiles != nil, "No Codex profiles", trayCodexProfilesUnavailableLabel, actions)
+
+	var antigravityProfiles []trayProfile
+	if dashboard.AntigravityProfiles != nil {
+		for _, profile := range dashboard.AntigravityProfiles.Profiles {
+			antigravityProfiles = append(antigravityProfiles, trayProfile{Profile: profile.Profile, Active: profile.Active})
+		}
+	}
+	addTrayProfilesMenu(menu, "Antigravity Profiles", agyconfig.ProviderID, antigravityProfiles, dashboard.AntigravityProfiles != nil, "No Antigravity profiles", trayAntigravityProfilesUnavailableLabel, actions)
 
 	menu.AddSeparator()
 	menu.Add("Refresh Menu").OnClick(func(*application.Context) {
@@ -197,6 +190,41 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 		runTrayAction(actions.quit)
 	})
 	return menu
+}
+
+type trayProfile struct {
+	Profile app.Profile
+	Active  bool
+}
+
+func addTrayProfilesMenu(menu *application.Menu, title, providerID string, profiles []trayProfile, loaded bool, emptyLabel, unavailableLabel string, actions trayMenuActions) {
+	profilesMenu := menu.AddSubmenu(title)
+	if !loaded {
+		profilesMenu.Add(unavailableLabel).SetEnabled(false)
+		return
+	}
+	if len(profiles) == 0 {
+		profilesMenu.Add(emptyLabel).SetEnabled(false)
+		return
+	}
+	for _, profile := range profiles {
+		profile := profile
+		label := profile.Profile.Name
+		if label == "" {
+			label = profile.Profile.ID
+		}
+		item := profilesMenu.Add(label)
+		if profile.Active {
+			item.SetChecked(true)
+		}
+		item.OnClick(func(*application.Context) {
+			if actions.openSwitch != nil {
+				runTrayAction(func() {
+					actions.openSwitch(providerID, profile.Profile.ID)
+				})
+			}
+		})
+	}
 }
 
 func runTrayAction(action func()) {
@@ -247,13 +275,42 @@ func currentProfileLabel(dashboard backend.DashboardResult) string {
 	return "Current: Codex not active"
 }
 
-func missingActiveCodexProfileID(dashboard backend.DashboardResult) string {
+func providerCurrentProfileLabel(dashboard backend.DashboardResult, providerID, providerName string) string {
 	for _, state := range dashboard.ActiveStates {
-		if state.ProviderID == codexconfig.ProviderID && state.ProfileID != "" && !state.ProfileAvailable {
-			return state.ProfileID
+		if state.ProviderID != providerID {
+			continue
 		}
+		name := state.ProfileName
+		if name == "" {
+			name = state.ProfileID
+		}
+		if name == "" {
+			return providerName + ": not active"
+		}
+		if !state.ProfileAvailable {
+			return providerName + ": missing profile " + name
+		}
+		return providerName + ": " + name
 	}
-	return ""
+	return providerName + ": not active"
+}
+
+func missingActiveProfileLabels(dashboard backend.DashboardResult) []string {
+	labels := []string{}
+	for _, state := range dashboard.ActiveStates {
+		if state.ProfileID == "" || state.ProfileAvailable {
+			continue
+		}
+		providerName := state.ProviderID
+		switch state.ProviderID {
+		case codexconfig.ProviderID:
+			providerName = "Codex"
+		case agyconfig.ProviderID:
+			providerName = "Antigravity"
+		}
+		labels = append(labels, "Missing "+providerName+" profile: "+state.ProfileID)
+	}
+	return labels
 }
 
 func showMainWindow(window application.Window) {

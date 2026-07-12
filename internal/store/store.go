@@ -195,6 +195,24 @@ type ProviderConfigSet struct {
 	UpdatedAtUnixMS int64
 }
 
+type ProfileCredentialBinding struct {
+	ProfileID       string
+	ProviderID      string
+	SlotID          string
+	CredentialID    string
+	CreatedAtUnixMS int64
+	UpdatedAtUnixMS int64
+}
+
+type ProfileConfigSetBinding struct {
+	ProfileID       string
+	ProviderID      string
+	SlotID          string
+	ConfigSetID     string
+	CreatedAtUnixMS int64
+	UpdatedAtUnixMS int64
+}
+
 type Setting struct {
 	Key             string
 	ValueJSON       string
@@ -375,6 +393,20 @@ type UpsertProviderConfigSetParams struct {
 	PayloadText   string
 	PayloadSHA256 string
 	MetadataJSON  string
+}
+
+type UpsertProfileCredentialBindingParams struct {
+	ProfileID    string
+	ProviderID   string
+	SlotID       string
+	CredentialID string
+}
+
+type UpsertProfileConfigSetBindingParams struct {
+	ProfileID   string
+	ProviderID  string
+	SlotID      string
+	ConfigSetID string
 }
 
 type UpdateProviderConfigSetParams struct {
@@ -687,6 +719,38 @@ var initialTableSpecs = []tableSpec{
 			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
 		},
 	},
+	{
+		name: "profile_credential_bindings",
+		columns: []columnSpec{
+			{name: "profile_id", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "provider_id", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "slot_id", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "credential_id", columnType: "TEXT", notNull: true},
+			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
+			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
+		},
+		checks: []string{
+			"FOREIGN KEY (profile_id) REFERENCES profiles(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+			"FOREIGN KEY (provider_id) REFERENCES providers(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+			"FOREIGN KEY (provider_id, credential_id) REFERENCES provider_credentials(provider_id, id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+		},
+	},
+	{
+		name: "profile_config_set_bindings",
+		columns: []columnSpec{
+			{name: "profile_id", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "provider_id", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "slot_id", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "config_set_id", columnType: "TEXT", notNull: true},
+			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
+			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
+		},
+		checks: []string{
+			"FOREIGN KEY (profile_id) REFERENCES profiles(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+			"FOREIGN KEY (provider_id) REFERENCES providers(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+			"FOREIGN KEY (provider_id, config_set_id) REFERENCES provider_config_sets(provider_id, id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+		},
+	},
 }
 
 var initialIndexSpecs = []indexSpec{
@@ -709,8 +773,14 @@ var initialIndexSpecs = []indexSpec{
 	{name: "idx_usage_import_cursors_source", table: "usage_import_cursors", columns: []string{"source"}},
 	{name: "idx_provider_credentials_provider_id", table: "provider_credentials", columns: []string{"provider_id"}},
 	{name: "idx_provider_credentials_kind", table: "provider_credentials", columns: []string{"credential_kind"}},
+	{name: "idx_provider_credentials_provider_id_id", table: "provider_credentials", columns: []string{"provider_id", "id"}, unique: true},
 	{name: "idx_provider_config_sets_provider_id", table: "provider_config_sets", columns: []string{"provider_id"}},
 	{name: "idx_provider_config_sets_kind", table: "provider_config_sets", columns: []string{"config_kind"}},
+	{name: "idx_provider_config_sets_provider_id_id", table: "provider_config_sets", columns: []string{"provider_id", "id"}, unique: true},
+	{name: "idx_profile_credential_bindings_provider_id", table: "profile_credential_bindings", columns: []string{"provider_id"}},
+	{name: "idx_profile_credential_bindings_credential_id", table: "profile_credential_bindings", columns: []string{"credential_id"}},
+	{name: "idx_profile_config_set_bindings_provider_id", table: "profile_config_set_bindings", columns: []string{"provider_id"}},
+	{name: "idx_profile_config_set_bindings_config_set_id", table: "profile_config_set_bindings", columns: []string{"config_set_id"}},
 }
 
 var initialTriggerSpecs = []triggerSpec{
@@ -983,9 +1053,13 @@ func (s *Store) DeleteProvider(ctx context.Context, id string) error {
 		DELETE FROM providers
 		WHERE id = ?
 			AND NOT EXISTS (SELECT 1 FROM profile_targets WHERE provider_id = ?)
+			AND NOT EXISTS (SELECT 1 FROM provider_credentials WHERE provider_id = ?)
+			AND NOT EXISTS (SELECT 1 FROM provider_config_sets WHERE provider_id = ?)
+			AND NOT EXISTS (SELECT 1 FROM profile_credential_bindings WHERE provider_id = ?)
+			AND NOT EXISTS (SELECT 1 FROM profile_config_set_bindings WHERE provider_id = ?)
 			AND NOT EXISTS (SELECT 1 FROM provider_profile_settings WHERE provider_id = ?)
 			AND NOT EXISTS (SELECT 1 FROM active_states WHERE scope_type = ? AND scope_id = ?)
-	`, id, id, id, ActiveStateScopeProvider, id)
+	`, id, id, id, id, id, id, id, ActiveStateScopeProvider, id)
 	if err != nil {
 		return err
 	}
@@ -1123,7 +1197,9 @@ func (s *Store) DeleteProfile(ctx context.Context, id string) error {
 			AND NOT EXISTS (SELECT 1 FROM active_states WHERE profile_id = ?)
 			AND NOT EXISTS (SELECT 1 FROM operations WHERE profile_id = ?)
 			AND NOT EXISTS (SELECT 1 FROM profile_targets WHERE profile_id = ?)
-	`, id, id, id, id)
+			AND NOT EXISTS (SELECT 1 FROM profile_credential_bindings WHERE profile_id = ?)
+			AND NOT EXISTS (SELECT 1 FROM profile_config_set_bindings WHERE profile_id = ?)
+	`, id, id, id, id, id, id)
 	if err != nil {
 		return err
 	}
@@ -1519,6 +1595,8 @@ func (s *Store) UpsertProviderCredential(ctx context.Context, params UpsertProvi
 		return ProviderCredential{}, err
 	}
 	id := strings.TrimSpace(params.ID)
+	providerID := strings.TrimSpace(params.ProviderID)
+	credentialKind := strings.TrimSpace(params.CredentialKind)
 	now := time.Now().UnixMilli()
 	metadataJSON := params.MetadataJSON
 	if metadataJSON == "" {
@@ -1530,15 +1608,15 @@ func (s *Store) UpsertProviderCredential(ctx context.Context, params UpsertProvi
 			(id, provider_id, credential_kind, payload_json, payload_sha256, metadata_json, created_at_unix_ms, updated_at_unix_ms)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
-			provider_id = excluded.provider_id,
-			credential_kind = excluded.credential_kind,
 			payload_json = excluded.payload_json,
 			payload_sha256 = excluded.payload_sha256,
 			metadata_json = excluded.metadata_json,
-			updated_at_unix_ms = excluded.updated_at_unix_ms`,
+			updated_at_unix_ms = excluded.updated_at_unix_ms
+		WHERE provider_credentials.provider_id = excluded.provider_id
+			AND provider_credentials.credential_kind = excluded.credential_kind`,
 		id,
-		params.ProviderID,
-		params.CredentialKind,
+		providerID,
+		credentialKind,
 		params.PayloadJSON,
 		strings.ToLower(params.PayloadSHA256),
 		metadataJSON,
@@ -1548,7 +1626,16 @@ func (s *Store) UpsertProviderCredential(ctx context.Context, params UpsertProvi
 	if err != nil {
 		return ProviderCredential{}, err
 	}
-	return s.GetProviderCredential(ctx, id)
+	credential, err := s.GetProviderCredential(ctx, id)
+	if err != nil {
+		return ProviderCredential{}, err
+	}
+	// Credential IDs have one provider/kind identity for their full lifetime;
+	// external account metadata must never retarget an existing credential.
+	if credential.ProviderID != providerID || credential.CredentialKind != credentialKind {
+		return ProviderCredential{}, fmt.Errorf("provider credential identity does not match existing record")
+	}
+	return credential, nil
 }
 
 func (s *Store) CompareAndSwapProviderCredential(ctx context.Context, expectedPayloadSHA256 string, params UpsertProviderCredentialParams) (ProviderCredential, bool, error) {
@@ -1568,7 +1655,7 @@ func (s *Store) CompareAndSwapProviderCredential(ctx context.Context, expectedPa
 		UPDATE provider_credentials SET
 			payload_json = ?, payload_sha256 = ?, metadata_json = ?, updated_at_unix_ms = ?
 		WHERE id = ? AND provider_id = ? AND credential_kind = ? AND payload_sha256 = ?
-	`, params.PayloadJSON, strings.ToLower(params.PayloadSHA256), metadataJSON, now, strings.TrimSpace(params.ID), params.ProviderID, params.CredentialKind, expected)
+	`, params.PayloadJSON, strings.ToLower(params.PayloadSHA256), metadataJSON, now, strings.TrimSpace(params.ID), strings.TrimSpace(params.ProviderID), strings.TrimSpace(params.CredentialKind), expected)
 	if err != nil {
 		return ProviderCredential{}, false, err
 	}
@@ -1797,6 +1884,208 @@ func (s *Store) ListProviderConfigSets(ctx context.Context, providerID, configKi
 	return configSets, nil
 }
 
+func (s *Store) UpsertProfileCredentialBinding(ctx context.Context, params UpsertProfileCredentialBindingParams) (ProfileCredentialBinding, error) {
+	profileID := strings.TrimSpace(params.ProfileID)
+	providerID := strings.TrimSpace(params.ProviderID)
+	slotID := strings.TrimSpace(params.SlotID)
+	credentialID := strings.TrimSpace(params.CredentialID)
+	if profileID == "" || providerID == "" || slotID == "" || credentialID == "" {
+		return ProfileCredentialBinding{}, errors.New("profile credential binding fields are required")
+	}
+	now := time.Now().UnixMilli()
+	_, err := s.executor().ExecContext(ctx, `
+		INSERT INTO profile_credential_bindings
+			(profile_id, provider_id, slot_id, credential_id, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(profile_id, provider_id, slot_id) DO UPDATE SET
+			credential_id = excluded.credential_id,
+			updated_at_unix_ms = excluded.updated_at_unix_ms
+	`, profileID, providerID, slotID, credentialID, now, now)
+	if err != nil {
+		return ProfileCredentialBinding{}, err
+	}
+	return s.GetProfileCredentialBinding(ctx, profileID, providerID, slotID)
+}
+
+func (s *Store) GetProfileCredentialBinding(ctx context.Context, profileID, providerID, slotID string) (ProfileCredentialBinding, error) {
+	row := s.executor().QueryRowContext(ctx, `
+		SELECT profile_id, provider_id, slot_id, credential_id, created_at_unix_ms, updated_at_unix_ms
+		FROM profile_credential_bindings
+		WHERE profile_id = ? AND provider_id = ? AND slot_id = ?
+	`, profileID, providerID, slotID)
+	var binding ProfileCredentialBinding
+	err := row.Scan(&binding.ProfileID, &binding.ProviderID, &binding.SlotID, &binding.CredentialID, &binding.CreatedAtUnixMS, &binding.UpdatedAtUnixMS)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ProfileCredentialBinding{}, ErrNotFound
+	}
+	return binding, err
+}
+
+func (s *Store) ListProfileCredentialBindings(ctx context.Context, profileID, providerID string) ([]ProfileCredentialBinding, error) {
+	query := `SELECT profile_id, provider_id, slot_id, credential_id, created_at_unix_ms, updated_at_unix_ms
+		FROM profile_credential_bindings WHERE profile_id = ?`
+	args := []any{profileID}
+	if providerID != "" {
+		query += " AND provider_id = ?"
+		args = append(args, providerID)
+	}
+	query += " ORDER BY provider_id ASC, slot_id ASC"
+	rows, err := s.executor().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	bindings := []ProfileCredentialBinding{}
+	for rows.Next() {
+		var binding ProfileCredentialBinding
+		if err := rows.Scan(&binding.ProfileID, &binding.ProviderID, &binding.SlotID, &binding.CredentialID, &binding.CreatedAtUnixMS, &binding.UpdatedAtUnixMS); err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, binding)
+	}
+	return bindings, rows.Err()
+}
+
+func (s *Store) ListProfileCredentialBindingsByProvider(ctx context.Context, providerID string) ([]ProfileCredentialBinding, error) {
+	rows, err := s.executor().QueryContext(ctx, `
+		SELECT profile_id, provider_id, slot_id, credential_id, created_at_unix_ms, updated_at_unix_ms
+		FROM profile_credential_bindings WHERE provider_id = ?
+		ORDER BY profile_id ASC, slot_id ASC
+	`, providerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	bindings := []ProfileCredentialBinding{}
+	for rows.Next() {
+		var binding ProfileCredentialBinding
+		if err := rows.Scan(&binding.ProfileID, &binding.ProviderID, &binding.SlotID, &binding.CredentialID, &binding.CreatedAtUnixMS, &binding.UpdatedAtUnixMS); err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, binding)
+	}
+	return bindings, rows.Err()
+}
+
+func (s *Store) DeleteProfileCredentialBinding(ctx context.Context, profileID, providerID, slotID string) error {
+	result, err := s.executor().ExecContext(ctx, `DELETE FROM profile_credential_bindings WHERE profile_id = ? AND provider_id = ? AND slot_id = ?`, profileID, providerID, slotID)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) CountProviderCredentialReferences(ctx context.Context, credentialID string) (int, error) {
+	var count int
+	err := s.executor().QueryRowContext(ctx, `SELECT COUNT(1) FROM profile_credential_bindings WHERE credential_id = ?`, strings.TrimSpace(credentialID)).Scan(&count)
+	return count, err
+}
+
+func (s *Store) UpsertProfileConfigSetBinding(ctx context.Context, params UpsertProfileConfigSetBindingParams) (ProfileConfigSetBinding, error) {
+	profileID := strings.TrimSpace(params.ProfileID)
+	providerID := strings.TrimSpace(params.ProviderID)
+	slotID := strings.TrimSpace(params.SlotID)
+	configSetID := strings.TrimSpace(params.ConfigSetID)
+	if profileID == "" || providerID == "" || slotID == "" || configSetID == "" {
+		return ProfileConfigSetBinding{}, errors.New("profile Config Set binding fields are required")
+	}
+	now := time.Now().UnixMilli()
+	_, err := s.executor().ExecContext(ctx, `
+		INSERT INTO profile_config_set_bindings
+			(profile_id, provider_id, slot_id, config_set_id, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(profile_id, provider_id, slot_id) DO UPDATE SET
+			config_set_id = excluded.config_set_id,
+			updated_at_unix_ms = excluded.updated_at_unix_ms
+	`, profileID, providerID, slotID, configSetID, now, now)
+	if err != nil {
+		return ProfileConfigSetBinding{}, err
+	}
+	return s.GetProfileConfigSetBinding(ctx, profileID, providerID, slotID)
+}
+
+func (s *Store) GetProfileConfigSetBinding(ctx context.Context, profileID, providerID, slotID string) (ProfileConfigSetBinding, error) {
+	row := s.executor().QueryRowContext(ctx, `
+		SELECT profile_id, provider_id, slot_id, config_set_id, created_at_unix_ms, updated_at_unix_ms
+		FROM profile_config_set_bindings
+		WHERE profile_id = ? AND provider_id = ? AND slot_id = ?
+	`, profileID, providerID, slotID)
+	var binding ProfileConfigSetBinding
+	err := row.Scan(&binding.ProfileID, &binding.ProviderID, &binding.SlotID, &binding.ConfigSetID, &binding.CreatedAtUnixMS, &binding.UpdatedAtUnixMS)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ProfileConfigSetBinding{}, ErrNotFound
+	}
+	return binding, err
+}
+
+func (s *Store) ListProfileConfigSetBindings(ctx context.Context, profileID, providerID string) ([]ProfileConfigSetBinding, error) {
+	query := `SELECT profile_id, provider_id, slot_id, config_set_id, created_at_unix_ms, updated_at_unix_ms
+		FROM profile_config_set_bindings WHERE profile_id = ?`
+	args := []any{profileID}
+	if providerID != "" {
+		query += " AND provider_id = ?"
+		args = append(args, providerID)
+	}
+	query += " ORDER BY provider_id ASC, slot_id ASC"
+	rows, err := s.executor().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	bindings := []ProfileConfigSetBinding{}
+	for rows.Next() {
+		var binding ProfileConfigSetBinding
+		if err := rows.Scan(&binding.ProfileID, &binding.ProviderID, &binding.SlotID, &binding.ConfigSetID, &binding.CreatedAtUnixMS, &binding.UpdatedAtUnixMS); err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, binding)
+	}
+	return bindings, rows.Err()
+}
+
+func (s *Store) ListProfileConfigSetBindingsByProvider(ctx context.Context, providerID string) ([]ProfileConfigSetBinding, error) {
+	rows, err := s.executor().QueryContext(ctx, `
+		SELECT profile_id, provider_id, slot_id, config_set_id, created_at_unix_ms, updated_at_unix_ms
+		FROM profile_config_set_bindings WHERE provider_id = ?
+		ORDER BY profile_id ASC, slot_id ASC
+	`, providerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	bindings := []ProfileConfigSetBinding{}
+	for rows.Next() {
+		var binding ProfileConfigSetBinding
+		if err := rows.Scan(&binding.ProfileID, &binding.ProviderID, &binding.SlotID, &binding.ConfigSetID, &binding.CreatedAtUnixMS, &binding.UpdatedAtUnixMS); err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, binding)
+	}
+	return bindings, rows.Err()
+}
+
+func (s *Store) DeleteProfileConfigSetBinding(ctx context.Context, profileID, providerID, slotID string) error {
+	result, err := s.executor().ExecContext(ctx, `DELETE FROM profile_config_set_bindings WHERE profile_id = ? AND provider_id = ? AND slot_id = ?`, profileID, providerID, slotID)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) UpdateProviderConfigSet(ctx context.Context, params UpdateProviderConfigSetParams) (ProviderConfigSet, error) {
 	assignments := []string{}
 	args := []any{}
@@ -1844,16 +2133,9 @@ func (s *Store) UpdateProviderConfigSet(ctx context.Context, params UpdateProvid
 
 func (s *Store) CountProviderConfigSetReferences(ctx context.Context, id string) (int, error) {
 	var count int
-	err := s.executor().QueryRowContext(
-		ctx,
-		`SELECT COUNT(1)
-		FROM profile_targets AS target
-		JOIN provider_config_sets AS config_set ON config_set.id = ?
-		WHERE target.provider_id = config_set.provider_id
-			AND json_valid(target.value_json) = 1
-			AND json_extract(target.value_json, '$.config_set_id') = config_set.id`,
-		strings.TrimSpace(id),
-	).Scan(&count)
+	err := s.executor().QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM profile_config_set_bindings WHERE config_set_id = ?
+	`, strings.TrimSpace(id)).Scan(&count)
 	return count, err
 }
 
@@ -1864,10 +2146,9 @@ func (s *Store) DeleteProviderConfigSet(ctx context.Context, id string) error {
 		`DELETE FROM provider_config_sets
 		WHERE id = ?
 			AND NOT EXISTS (
-				SELECT 1 FROM profile_targets AS target
-				WHERE target.provider_id = provider_config_sets.provider_id
-					AND json_valid(target.value_json) = 1
-					AND json_extract(target.value_json, '$.config_set_id') = provider_config_sets.id
+				SELECT 1 FROM profile_config_set_bindings AS binding
+				WHERE binding.provider_id = provider_config_sets.provider_id
+					AND binding.config_set_id = provider_config_sets.id
 			)`,
 		id,
 	)
@@ -3252,7 +3533,16 @@ func (s *Store) profileReferenceCount(ctx context.Context, profileID string) (in
 		return 0, err
 	}
 
-	return activeStateCount + operationCount + targetCount, nil
+	var credentialBindingCount int
+	if err := s.executor().QueryRowContext(ctx, "SELECT COUNT(1) FROM profile_credential_bindings WHERE profile_id = ?", profileID).Scan(&credentialBindingCount); err != nil {
+		return 0, err
+	}
+	var configSetBindingCount int
+	if err := s.executor().QueryRowContext(ctx, "SELECT COUNT(1) FROM profile_config_set_bindings WHERE profile_id = ?", profileID).Scan(&configSetBindingCount); err != nil {
+		return 0, err
+	}
+
+	return activeStateCount + operationCount + targetCount + credentialBindingCount + configSetBindingCount, nil
 }
 
 func (s *Store) providerReferenceCount(ctx context.Context, providerID string) (int, error) {
@@ -3281,7 +3571,24 @@ func (s *Store) providerReferenceCount(ctx context.Context, providerID string) (
 		return 0, err
 	}
 
-	return targetCount + activeStateCount + operationCount + settingCount, nil
+	var credentialBindingCount int
+	if err := s.executor().QueryRowContext(ctx, "SELECT COUNT(1) FROM profile_credential_bindings WHERE provider_id = ?", providerID).Scan(&credentialBindingCount); err != nil {
+		return 0, err
+	}
+	var configSetBindingCount int
+	if err := s.executor().QueryRowContext(ctx, "SELECT COUNT(1) FROM profile_config_set_bindings WHERE provider_id = ?", providerID).Scan(&configSetBindingCount); err != nil {
+		return 0, err
+	}
+	var credentialCount int
+	if err := s.executor().QueryRowContext(ctx, "SELECT COUNT(1) FROM provider_credentials WHERE provider_id = ?", providerID).Scan(&credentialCount); err != nil {
+		return 0, err
+	}
+	var configSetCount int
+	if err := s.executor().QueryRowContext(ctx, "SELECT COUNT(1) FROM provider_config_sets WHERE provider_id = ?", providerID).Scan(&configSetCount); err != nil {
+		return 0, err
+	}
+
+	return targetCount + activeStateCount + operationCount + settingCount + credentialCount + configSetCount + credentialBindingCount + configSetBindingCount, nil
 }
 
 func (s *Store) providerOperationReferenceCount(ctx context.Context, providerID string) (int, error) {
@@ -3514,6 +3821,7 @@ func sqliteDSN(databasePath string, readOnly bool) string {
 	q := u.Query()
 	q.Set("mode", mode)
 	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", sqliteBusyTimeout.Milliseconds()))
+	q.Add("_pragma", "foreign_keys(1)")
 	u.RawQuery = q.Encode()
 
 	return u.String()

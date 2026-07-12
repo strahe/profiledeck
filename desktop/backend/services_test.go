@@ -10,6 +10,9 @@ import (
 	"sync"
 	"testing"
 
+	keyring "github.com/zalando/go-keyring"
+
+	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 )
@@ -78,6 +81,49 @@ func TestSwitchApplyRequiresExpectedPlanFingerprint(t *testing.T) {
 	var appErr *app.AppError
 	if !errors.As(err, &appErr) || appErr.Code != app.ErrorConfirmationRequired {
 		t.Fatalf("expected missing fingerprint to fail with confirmation error, got %v", err)
+	}
+}
+
+func TestAntigravityServiceCreatesSafeDashboardProfile(t *testing.T) {
+	keyring.MockInit()
+	t.Cleanup(keyring.MockInit)
+	ctx := context.Background()
+	configDir := t.TempDir()
+	payload := `{"token":{"access_token":"desktop-access-secret","token_type":"Bearer","refresh_token":"desktop-refresh-secret","expiry":"2026-07-12T04:00:00Z"},"auth_method":"consumer"}`
+	if err := keyring.Set(agyconfig.KeyringService, agyconfig.KeyringAccount, payload); err != nil {
+		t.Fatalf("expected mock keyring setup to succeed, got %v", err)
+	}
+	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir}, nil)
+	if _, err := services.App.Initialize(ctx); err != nil {
+		t.Fatalf("expected initialize to succeed, got %v", err)
+	}
+	events := []DesktopChangeEvent{}
+	services.SubscribeChanges(func(event DesktopChangeEvent) { events = append(events, event) })
+	created, err := services.Antigravity.CreateProfile(ctx, CreateAntigravityProfileRequest{ProfileID: "work"})
+	if err != nil {
+		t.Fatalf("expected Antigravity create to succeed, got %v", err)
+	}
+	if !created.Summary.Active || created.Summary.Profile.ID != "work" {
+		t.Fatalf("unexpected Antigravity create result: %#v", created)
+	}
+	if len(events) != 1 || events[0].Kind != DesktopChangeAntigravityProfileChanged || !events[0].ProfileChanged || !events[0].ActiveStateChanged {
+		t.Fatalf("expected Antigravity desktop change event, got %#v", events)
+	}
+	dashboard, err := services.App.Dashboard(ctx)
+	if err != nil {
+		t.Fatalf("expected dashboard to succeed, got %v", err)
+	}
+	if dashboard.AntigravityProfiles == nil || len(dashboard.AntigravityProfiles.Profiles) != 1 {
+		t.Fatalf("expected Antigravity dashboard Profile, got %#v", dashboard.AntigravityProfiles)
+	}
+	raw, err := json.Marshal(dashboard.AntigravityProfiles)
+	if err != nil {
+		t.Fatalf("expected dashboard JSON, got %v", err)
+	}
+	for _, secret := range []string{"desktop-access-secret", "desktop-refresh-secret", "access_token", "refresh_token"} {
+		if strings.Contains(string(raw), secret) {
+			t.Fatalf("expected Antigravity dashboard to hide %q, got %s", secret, raw)
+		}
 	}
 }
 

@@ -27,7 +27,7 @@ export function switchWarningMessage(message: string): string {
 
 export function profileChangeWarningMessage(message: string): string {
 	const normalized = message.toLowerCase();
-	if (normalized.includes("shared codex login")) return translate("warnings.change.sharedLogin");
+	if (normalized.includes("shared") && normalized.includes("login")) return translate("warnings.change.sharedLogin");
 	if (normalized.includes("shared codex config")) return translate("warnings.change.sharedSettings");
 	return profileWarningMessage(message);
 }

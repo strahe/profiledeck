@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	keyring "github.com/zalando/go-keyring"
+
+	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/strahe/profiledeck/internal/store"
@@ -34,6 +37,9 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	}
 	if cmd.Command("codex") == nil {
 		t.Fatalf("expected codex subcommand")
+	}
+	if antigravity := cmd.Command("antigravity"); antigravity == nil || antigravity.Command("detect") == nil || antigravity.Command("profile") == nil {
+		t.Fatalf("expected Antigravity commands")
 	}
 	if codex := cmd.Command("codex"); codex == nil || codex.Command("profile") == nil ||
 		codex.Command("profile").Command("list") == nil ||
@@ -79,6 +85,73 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	}
 	if cmd.Command("rollback") == nil {
 		t.Fatalf("expected rollback subcommand")
+	}
+}
+
+func TestWritePlanUsesSafeTargetLabelWithoutPath(t *testing.T) {
+	var output bytes.Buffer
+	err := writePlan(&output, app.SwitchPlan{
+		Provider: app.PlanProvider{ID: agyconfig.ProviderID, Name: "Antigravity"},
+		Profile:  app.PlanProfile{ID: "work", Name: "Work"},
+		Operations: []app.PlanOperation{{
+			TargetID: "auth", BackendID: "keyring", TargetLabel: "Antigravity login",
+			Action: "update", StatusReason: "target_different_content",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("expected plan output to succeed, got %v", err)
+	}
+	if !strings.Contains(output.String(), "Antigravity login") {
+		t.Fatalf("expected safe target label in plan output, got %q", output.String())
+	}
+}
+
+func TestWriteBackupDetailUsesSafeTargetLabelWithoutPath(t *testing.T) {
+	var output bytes.Buffer
+	err := writeBackupDetail(&output, app.BackupDetail{
+		BackupSummary: app.BackupSummary{BackupID: "switch-test", ProviderID: agyconfig.ProviderID},
+		Entries: []app.BackupEntrySummary{{
+			TargetID: "auth", BackendID: "keyring", TargetLabel: "Antigravity login", Action: "update", Existed: true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("expected backup output to succeed, got %v", err)
+	}
+	if !strings.Contains(output.String(), "Antigravity login") {
+		t.Fatalf("expected safe target label in backup output, got %q", output.String())
+	}
+}
+
+func TestAntigravityProfileCLIUsesAgyV2KeyringState(t *testing.T) {
+	keyring.MockInit()
+	t.Cleanup(keyring.MockInit)
+	configDir := t.TempDir()
+	payload := `{"token":{"access_token":"cli-access-secret","token_type":"Bearer","refresh_token":"cli-refresh-secret","expiry":"2026-07-12T04:00:00Z"},"auth_method":"consumer"}`
+	if err := keyring.Set(agyconfig.KeyringService, agyconfig.KeyringAccount, payload); err != nil {
+		t.Fatalf("expected mock keyring setup to succeed, got %v", err)
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	createdRaw, err := runCLI(t, "--config-dir", configDir, "agy", "profile", "create", "work", "--name", "Work", "--json")
+	if err != nil {
+		t.Fatalf("expected Antigravity profile create to succeed, got %v", err)
+	}
+	var created app.AntigravityProfileSaveResult
+	if err := json.Unmarshal([]byte(createdRaw), &created); err != nil {
+		t.Fatalf("expected Antigravity create JSON, got %q: %v", createdRaw, err)
+	}
+	if created.Summary.Profile.ID != "work" || !created.Summary.Active {
+		t.Fatalf("unexpected Antigravity create result: %#v", created)
+	}
+	listed, err := runCLI(t, "--config-dir", configDir, "antigravity", "profile", "list", "--json")
+	if err != nil {
+		t.Fatalf("expected Antigravity list to succeed, got %v", err)
+	}
+	for _, secret := range []string{"cli-access-secret", "cli-refresh-secret", "access_token", "refresh_token"} {
+		if strings.Contains(createdRaw, secret) || strings.Contains(listed, secret) {
+			t.Fatalf("expected Antigravity CLI output to hide %q", secret)
+		}
 	}
 }
 

@@ -45,7 +45,7 @@ type codexExistingTargets struct {
 	HasAuth   bool
 }
 
-type codexProfileFields struct {
+type managedProfileFields struct {
 	CreateName        string
 	CreateDescription string
 	UpdateName        *string
@@ -202,14 +202,14 @@ func codexPreflightProvider(ctx context.Context, db *store.Store, home codexconf
 	return provider, true, nil
 }
 
-func normalizeCodexProfileFields(profileID string, name, description *string) (codexProfileFields, *AppError) {
-	fields := codexProfileFields{
+func normalizeManagedProfileFields(profileID string, name, description *string) (managedProfileFields, *AppError) {
+	fields := managedProfileFields{
 		CreateName: profileID,
 	}
 	if name != nil {
 		normalized, appErr := validateName(*name, ErrorProfileInvalid)
 		if appErr != nil {
-			return codexProfileFields{}, appErr
+			return managedProfileFields{}, appErr
 		}
 		fields.CreateName = normalized
 		fields.UpdateName = &normalized
@@ -217,7 +217,7 @@ func normalizeCodexProfileFields(profileID string, name, description *string) (c
 	if description != nil {
 		normalized, appErr := validateDescription(*description, ErrorProfileInvalid)
 		if appErr != nil {
-			return codexProfileFields{}, appErr
+			return managedProfileFields{}, appErr
 		}
 		fields.CreateDescription = normalized
 		fields.UpdateDescription = &normalized
@@ -236,10 +236,22 @@ func codexPreflightProfile(ctx context.Context, db *store.Store, profileID strin
 	return profile, true, nil
 }
 
-func codexPreflightTargets(ctx context.Context, db *store.Store, home codexconfig.Home, profileID string) (codexExistingTargets, error) {
-	targets, err := db.ListProfileTargetsByProvider(ctx, codexconfig.ProviderID)
+func codexProfileHasBindings(ctx context.Context, db *store.Store, profileID string) (bool, error) {
+	credentialBindings, err := db.ListProfileCredentialBindings(ctx, profileID, codexconfig.ProviderID)
 	if err != nil {
-		return codexExistingTargets{}, WrapError(ErrorStoreStatusFailed, "failed to inspect Codex profile targets", err)
+		return false, WrapError(ErrorStoreStatusFailed, "failed to inspect Codex login bindings", err)
+	}
+	configBindings, err := db.ListProfileConfigSetBindings(ctx, profileID, codexconfig.ProviderID)
+	if err != nil {
+		return false, WrapError(ErrorStoreStatusFailed, "failed to inspect Codex config bindings", err)
+	}
+	return len(credentialBindings) != 0 || len(configBindings) != 0, nil
+}
+
+func codexPreflightTargets(ctx context.Context, db *store.Store, home codexconfig.Home, profileID string) (codexExistingTargets, error) {
+	targets, err := codexBindingTargets(ctx, db, profileID, home)
+	if err != nil {
+		return codexExistingTargets{}, err
 	}
 
 	current := codexExistingTargets{}
@@ -247,15 +259,13 @@ func codexPreflightTargets(ctx context.Context, db *store.Store, home codexconfi
 		if appErr := requireCodexTargetForHome(target, home); appErr != nil {
 			return codexExistingTargets{}, appErr
 		}
-		if target.ProfileID == profileID {
-			switch target.TargetID {
-			case codexconfig.TargetID:
-				current.Config = target
-				current.HasConfig = true
-			case codexconfig.AuthTargetID:
-				current.Auth = target
-				current.HasAuth = true
-			}
+		switch target.TargetID {
+		case codexconfig.TargetID:
+			current.Config = target
+			current.HasConfig = true
+		case codexconfig.AuthTargetID:
+			current.Auth = target
+			current.HasAuth = true
 		}
 	}
 
@@ -365,9 +375,9 @@ func codexDetectCompatibilityWarnings(ctx context.Context, db *store.Store, prov
 		}
 	}
 
-	targets, err := db.ListProfileTargetsByProvider(ctx, codexconfig.ProviderID)
+	targets, err := allStoredCodexBindingTargets(ctx, db)
 	if err != nil {
-		return nil, WrapError(ErrorStoreStatusFailed, "failed to inspect Codex profile targets", err)
+		return nil, err
 	}
 	for _, target := range targets {
 		warnings = append(warnings, codexDetectTargetWarnings(target, home)...)

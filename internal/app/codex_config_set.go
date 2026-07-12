@@ -305,7 +305,7 @@ func activeCodexConfigSetID(ctx context.Context, db *store.Store) (string, error
 	if err != nil || !exists {
 		return "", err
 	}
-	targets, err := db.ListProfileTargets(ctx, active.ProfileID, codexconfig.ProviderID, true)
+	targets, err := storedCodexBindingTargets(ctx, db, active.ProfileID)
 	if err != nil {
 		return "", WrapError(ErrorStoreStatusFailed, "failed to read active Codex profile targets", err)
 	}

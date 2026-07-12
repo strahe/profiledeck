@@ -1,12 +1,13 @@
 # ProfileDeck
 
-ProfileDeck safely switches local AI coding tool Profiles. The current implementation is Codex-first: each Profile saves a Codex login and a reusable Config Set, so accounts and settings can be switched together.
+ProfileDeck safely switches local AI coding tool Profiles. Codex Profiles save a login and reusable Config Set. Antigravity Profiles save the consumer OAuth login used by Antigravity agy v2.
 
 ## Current capabilities
 
 - Create a Codex Profile from `$CODEX_HOME/config.toml` and `$CODEX_HOME/auth.json`.
+- Save and switch Antigravity agy v2 logins through the system credential store.
 - Share saved logins and Config Sets independently across Profiles.
-- Preview every switch, preserve valid changes made in Codex, create a backup first, and stop if the reviewed files changed.
+- Preview every switch, preserve valid changes made in Codex, create a backup first, and stop if a reviewed external target changed.
 - Import active and archived Codex session JSONL, then analyze local-time trends, models, sessions, cache usage, and API-equivalent estimated cost.
 - Inspect backups, find problems that block switching, recover failed switches, and undo an applied switch.
 - Manage generic providers, profiles, and target files for advanced local workflows.
@@ -29,6 +30,7 @@ Codex must use file credentials for profile switching. If `$CODEX_HOME/auth.json
 
 - [Getting Started](/guide/getting-started) covers local build, initial setup, and command shortcuts.
 - [Codex Profiles](/codex/profiles) covers saved logins, Config Sets, switching, limits, and backups.
+- [Antigravity Profiles](/antigravity/profiles) covers agy v2 login capture, switching, and limitations.
 - [Codex Usage and Cost](/codex/usage-cost) covers offline imports, reports, and estimation limits.
 - [Switching](/operations/switching) explains plan, apply, backups, and safety checks.
 - [Data and Security](/reference/data-security) describes stored secrets, backups, and redaction boundaries.

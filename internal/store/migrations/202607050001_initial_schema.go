@@ -79,6 +79,7 @@ func upInitialSchema(ctx context.Context, db *bun.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_credentials_provider_id ON provider_credentials(provider_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_credentials_kind ON provider_credentials(credential_kind)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_credentials_provider_id_id ON provider_credentials(provider_id, id)`,
 		`CREATE TABLE IF NOT EXISTS provider_config_sets (
 			id TEXT PRIMARY KEY,
 			provider_id TEXT NOT NULL,
@@ -93,14 +94,51 @@ func upInitialSchema(ctx context.Context, db *bun.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_config_sets_provider_id ON provider_config_sets(provider_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_provider_config_sets_kind ON provider_config_sets(config_kind)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_config_sets_provider_id_id ON provider_config_sets(provider_id, id)`,
+		`CREATE TABLE IF NOT EXISTS profile_credential_bindings (
+			profile_id TEXT NOT NULL,
+			provider_id TEXT NOT NULL,
+			slot_id TEXT NOT NULL,
+			credential_id TEXT NOT NULL,
+			created_at_unix_ms INTEGER NOT NULL,
+			updated_at_unix_ms INTEGER NOT NULL,
+			PRIMARY KEY (profile_id, provider_id, slot_id),
+			FOREIGN KEY (profile_id) REFERENCES profiles(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+			FOREIGN KEY (provider_id) REFERENCES providers(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+			FOREIGN KEY (provider_id, credential_id) REFERENCES provider_credentials(provider_id, id) ON UPDATE RESTRICT ON DELETE RESTRICT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_profile_credential_bindings_provider_id ON profile_credential_bindings(provider_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_profile_credential_bindings_credential_id ON profile_credential_bindings(credential_id)`,
+		`CREATE TABLE IF NOT EXISTS profile_config_set_bindings (
+			profile_id TEXT NOT NULL,
+			provider_id TEXT NOT NULL,
+			slot_id TEXT NOT NULL,
+			config_set_id TEXT NOT NULL,
+			created_at_unix_ms INTEGER NOT NULL,
+			updated_at_unix_ms INTEGER NOT NULL,
+			PRIMARY KEY (profile_id, provider_id, slot_id),
+			FOREIGN KEY (profile_id) REFERENCES profiles(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+			FOREIGN KEY (provider_id) REFERENCES providers(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+			FOREIGN KEY (provider_id, config_set_id) REFERENCES provider_config_sets(provider_id, id) ON UPDATE RESTRICT ON DELETE RESTRICT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_profile_config_set_bindings_provider_id ON profile_config_set_bindings(provider_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_profile_config_set_bindings_config_set_id ON profile_config_set_bindings(config_set_id)`,
 	})
 }
 
 func downInitialSchema(ctx context.Context, db *bun.DB) error {
 	return execStatements(ctx, db, []string{
+		`DROP INDEX IF EXISTS idx_profile_config_set_bindings_config_set_id`,
+		`DROP INDEX IF EXISTS idx_profile_config_set_bindings_provider_id`,
+		`DROP TABLE IF EXISTS profile_config_set_bindings`,
+		`DROP INDEX IF EXISTS idx_profile_credential_bindings_credential_id`,
+		`DROP INDEX IF EXISTS idx_profile_credential_bindings_provider_id`,
+		`DROP TABLE IF EXISTS profile_credential_bindings`,
+		`DROP INDEX IF EXISTS idx_provider_config_sets_provider_id_id`,
 		`DROP INDEX IF EXISTS idx_provider_config_sets_kind`,
 		`DROP INDEX IF EXISTS idx_provider_config_sets_provider_id`,
 		`DROP TABLE IF EXISTS provider_config_sets`,
+		`DROP INDEX IF EXISTS idx_provider_credentials_provider_id_id`,
 		`DROP INDEX IF EXISTS idx_provider_credentials_kind`,
 		`DROP INDEX IF EXISTS idx_provider_credentials_provider_id`,
 		`DROP TABLE IF EXISTS provider_credentials`,

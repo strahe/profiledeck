@@ -137,4 +137,4 @@ profiledeck codex profile import apply ./profiledeck-codex-profiles.json \
   --yes
 ```
 
-Import adds missing data, skips identical data, and makes no changes if an existing ID has different content. It does not make a Profile current, restore automatic-update settings, or write `auth.json` or `config.toml`. Review and apply a normal switch when you are ready to use an imported Profile.
+Import adds missing data, skips identical data, and makes no changes when existing Codex data conflicts. If a global Profile with the same ID has no Codex bindings yet, import attaches them and keeps that Profile's existing name and description. It does not make a Profile current, restore automatic-update settings, or write `auth.json` or `config.toml`. Review and apply a normal switch when you are ready to use an imported Profile.

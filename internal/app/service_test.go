@@ -390,6 +390,44 @@ func TestProviderProfileAppCRUD(t *testing.T) {
 	}
 }
 
+func TestProviderMutationsSerializeWithSwitchLock(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	if _, err := Init(ctx, InitRequest{ConfigDir: configDir}); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	_, paths, err := resolveRuntime(configDir)
+	if err != nil {
+		t.Fatalf("expected runtime resolve to succeed, got %v", err)
+	}
+
+	lock, err := acquireSwitchLock(paths.Lock, "switch-provider-create-test")
+	if err != nil {
+		t.Fatalf("expected test lock acquire to succeed, got %v", err)
+	}
+	_, err = CreateProvider(ctx, CreateProviderRequest{
+		ConfigDir: configDir, ID: "provider-lock", Name: "Provider Lock", AdapterID: "generic",
+	})
+	assertAppErrorCode(t, err, ErrorLockAcquireFailed)
+	lock.Release()
+
+	if _, err := CreateProvider(ctx, CreateProviderRequest{
+		ConfigDir: configDir, ID: "provider-lock", Name: "Provider Lock", AdapterID: "generic",
+	}); err != nil {
+		t.Fatalf("expected provider create to succeed, got %v", err)
+	}
+	lock, err = acquireSwitchLock(paths.Lock, "switch-provider-change-test")
+	if err != nil {
+		t.Fatalf("expected second test lock acquire to succeed, got %v", err)
+	}
+	enabled := false
+	_, err = UpdateProvider(ctx, UpdateProviderRequest{ConfigDir: configDir, ID: "provider-lock", Enabled: &enabled})
+	assertAppErrorCode(t, err, ErrorLockAcquireFailed)
+	_, err = DeleteProvider(ctx, DeleteProviderRequest{ConfigDir: configDir, ID: "provider-lock", Confirm: true})
+	assertAppErrorCode(t, err, ErrorLockAcquireFailed)
+	lock.Release()
+}
+
 func TestProfileDeleteConfirmationAndInUseProtection(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()

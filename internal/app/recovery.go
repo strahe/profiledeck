@@ -194,10 +194,10 @@ func loadFailedSwitchRecoverySource(ctx context.Context, db *store.Store, paths 
 		}
 		return rollbackSource{}, WrapError(ErrorStoreStatusFailed, "failed to read failed switch operation", err)
 	}
-	return loadFailedSwitchRecoverySourceFromOperation(ctx, paths, operation)
+	return loadFailedSwitchRecoverySourceFromOperation(ctx, db, paths, operation)
 }
 
-func loadFailedSwitchRecoverySourceFromOperation(ctx context.Context, paths runtime.Paths, operation store.Operation) (rollbackSource, error) {
+func loadFailedSwitchRecoverySourceFromOperation(ctx context.Context, db *store.Store, paths runtime.Paths, operation store.Operation) (rollbackSource, error) {
 	if _, appErr := validateBackupID(operation.ID); appErr != nil {
 		return rollbackSource{}, appErr
 	}
@@ -233,7 +233,11 @@ func loadFailedSwitchRecoverySourceFromOperation(ctx context.Context, paths runt
 	if err := validateRollbackManifest(manifest, metadata, operation.ID, operation.ID, backupPath); err != nil {
 		return rollbackSource{}, err
 	}
-	targets, err := rollbackTargetsFromMetadata(metadata, manifest, backupPath)
+	adapter, err := rollbackAdapter(ctx, db, metadata)
+	if err != nil {
+		return rollbackSource{}, err
+	}
+	targets, err := rollbackTargetsFromMetadataWithAdapter(metadata, manifest, backupPath, adapter)
 	if err != nil {
 		return rollbackSource{}, err
 	}
@@ -296,7 +300,7 @@ func recoveryRollbackMetadata(source rollbackSource) rollbackOperationMetadata {
 func inspectFailedSwitchRecovery(ctx context.Context, db *store.Store, paths runtime.Paths, operation store.Operation) failedSwitchRecoveryInspection {
 	// Doctor must stay read-only, so it reuses recovery validation and maps
 	// failures to diagnostic statuses instead of creating recovery records.
-	source, err := loadFailedSwitchRecoverySourceFromOperation(ctx, paths, operation)
+	source, err := loadFailedSwitchRecoverySourceFromOperation(ctx, db, paths, operation)
 	if err != nil {
 		return failedSwitchRecoveryInspectionFromError(err)
 	}
@@ -320,7 +324,7 @@ func failedSwitchRecoveryInspectionFromError(err error) failedSwitchRecoveryInsp
 	var appErr *AppError
 	if errors.As(err, &appErr) {
 		switch appErr.Code {
-		case ErrorRecoveryUnsupported:
+		case ErrorRecoveryUnsupported, ErrorRollbackUnsupported:
 			return failedSwitchRecoveryInspection{Status: RecoveryStatusUnrecoverable, Reason: "recovery_unsupported"}
 		case ErrorBackupInvalid, ErrorBackupNotFound:
 			return failedSwitchRecoveryInspection{Status: RecoveryStatusUnrecoverable, Reason: "backup_invalid"}
