@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
+	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/store"
@@ -312,7 +313,7 @@ func DeleteProfileTarget(ctx context.Context, req DeleteProfileTargetRequest) (D
 }
 
 func managedProviderUsesTypedBindings(providerID string) bool {
-	return providerID == codexconfig.ProviderID || providerID == agyconfig.ProviderID
+	return providerID == codexconfig.ProviderID || providerID == agyconfig.ProviderID || providerID == claudecodeconfig.ProviderID
 }
 
 func managedProviderTargetMutationError(providerID, targetID string) *AppError {

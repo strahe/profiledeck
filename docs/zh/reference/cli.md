@@ -12,6 +12,7 @@
 | --- | --- |
 | `antigravity` | 管理 Antigravity agy v2 Profile。 |
 | `backup` | 查看 ProfileDeck 备份。 |
+| `claude-code` | 管理 Claude Code 官方订阅 Profile。 |
 | `codex` | 管理 Codex provider 的 profile。 |
 | `doctor` | 检查本地数据、文件权限和未完成的更改。 |
 | `init` | 创建 ProfileDeck 本地数据。 |
@@ -63,6 +64,21 @@ profiledeck codex config-set delete <config-set-id> --yes [--json]
 
 备份包含完整的 Codex 登录数据和设置。ProfileDeck 会在 POSIX 系统上以 `0600` 权限写入文件；stdout 不会打印敏感内容。`import inspect` 会检查备份并报告 `create`、`unchanged` 和 `conflict`。`import apply` 必须提供审核过的 fingerprint；已有 Codex 数据冲突时，不会写入任何更改。已有全局 Profile 尚无 Codex 绑定时，导入会附加绑定，但不会更改其名称或描述。导入不会把 Profile 设为当前，也不会写入 Codex 文件。
 
+## Claude Code
+
+```bash
+profiledeck claude-code detect [--json]
+profiledeck claude-code profile create <profile-id> [--name NAME] [--description TEXT] [--json]
+profiledeck claude-code profile list [--json]
+profiledeck claude-code profile show <profile-id> [--json]
+profiledeck claude-code profile update <profile-id> [--name NAME] [--description TEXT] [--json]
+profiledeck claude-code profile save-current [--yes] [--json]
+```
+
+Create 保存当前 Claude Code 官方订阅登录，并把新 Profile 设为当前。`save-current` 更新 active Profile 绑定的登录；隐藏登录被多个 Profile 共用时，命令会报告受影响 Profile 数量，并要求传入 `--yes`。
+
+Claude Code 不提供更短的 `claude` alias。请使用 `profiledeck plan claude-code <profile-id>` 和 `profiledeck switch claude-code <profile-id> --yes` 切换。命令只显示登录状态和元数据，不显示 Token 值。
+
 ## Antigravity agy v2
 
 ```bash
@@ -111,7 +127,7 @@ profiledeck profile update <id> [--name NAME] [--description TEXT] [--metadata-j
 profiledeck profile delete <id> --yes [--json]
 ```
 
-对于受管的 `codex` 和 `antigravity` Provider，通用 Provider 更新只能更改显示名称或启用状态；adapter 和 metadata 由各自的专用 Profile 流程管理。
+对于受管的 `codex`、`claude-code` 和 `antigravity` Provider，通用 Provider 更新只能更改显示名称或启用状态；adapter 和 metadata 由各自的专用 Profile 流程管理。
 
 target 命令：
 
@@ -123,7 +139,7 @@ profiledeck profile target update <profile-id> <provider-id> <target-id> [--path
 profiledeck profile target delete <profile-id> <provider-id> <target-id> --yes [--json]
 ```
 
-Generic target 命令不能创建、修改或删除 Codex 或 Antigravity Profile 管理的绑定。请使用上面的 Provider 专用命令。
+Generic target 命令不能创建、修改或删除 Codex、Claude Code 或 Antigravity Profile 管理的绑定。请使用上面的 Provider 专用命令。
 
 ## 备份与恢复
 

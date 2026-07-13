@@ -17,6 +17,7 @@
 		AppService,
 		AntigravityService,
 		BackupService,
+		ClaudeCodeService,
 		CodexService,
 		DoctorService,
 		SettingsService,
@@ -28,6 +29,8 @@
 		CodexConfigSet,
 		CodexDetectResult,
 		CodexProfileSummary,
+		ClaudeCodeDetectResult,
+		ClaudeCodeProfileSummary,
 		DoctorResult,
 	} from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
 	import StatusBadge from "$lib/components/app/StatusBadge.svelte";
@@ -49,15 +52,16 @@
 	} from "$lib/i18n";
 	import AntigravityProfiles from "../profiles/AntigravityProfiles.svelte";
 	import CodexProfiles from "../profiles/CodexProfiles.svelte";
-	import type { AntigravityProfileRoute, CodexProfileRoute, ProfileUseRequest } from "../profiles/types";
+	import ClaudeCodeProfiles from "../profiles/ClaudeCodeProfiles.svelte";
+	import type { AntigravityProfileRoute, ClaudeCodeProfileRoute, CodexProfileRoute, ProfileUseRequest } from "../profiles/types";
 	import CodexSettings from "../settings/CodexSettings.svelte";
 	import { provideCodexRuntime } from "../settings/codex-runtime.svelte.js";
 	import UsagePage from "../usage/UsagePage.svelte";
 	import DiagnosticsPage from "./DiagnosticsPage.svelte";
 	import GlobalSettings from "./GlobalSettings.svelte";
 
-	type WorkspaceView = "profiles" | "antigravity-profiles" | "usage" | "codex-settings" | "settings" | "diagnostics";
-	type AgentID = "codex" | "antigravity";
+	type WorkspaceView = "profiles" | "antigravity-profiles" | "claude-code-profiles" | "usage" | "codex-settings" | "settings" | "diagnostics";
+	type AgentID = "codex" | "antigravity" | "claude-code";
 	type Appearance = "system" | "light" | "dark";
 	type Platform = "macos" | "windows" | "linux";
 
@@ -81,14 +85,17 @@
 		view: WorkspaceView;
 		codexProfile: CodexProfileRoute;
 		antigravityProfile: AntigravityProfileRoute;
+		claudeCodeProfile: ClaudeCodeProfileRoute;
 		valid: boolean;
 	};
 
 	const codexProviderID = "codex";
 	const antigravityProviderID = "antigravity";
+	const claudeCodeProviderID = "claude-code";
 	const agents: Array<{ id: AgentID; name: string; icon: typeof BotIcon }> = [
 		{ id: "codex", name: "Codex", icon: BotIcon },
 		{ id: "antigravity", name: "Antigravity", icon: OrbitIcon },
+		{ id: "claude-code", name: "Claude Code", icon: BotIcon },
 	];
 	const inFlight = new Map<string, CancellablePromise<unknown>>();
 
@@ -96,6 +103,7 @@
 	let loading = $state(false);
 	let loadingProfiles = $state(true);
 	let loadingAntigravityProfiles = $state(true);
+	let loadingClaudeCodeProfiles = $state(true);
 	let actionBusy = $state("");
 	let languageBusy = $state(false);
 	let appearanceBusy = $state(false);
@@ -113,34 +121,42 @@
 	let dashboard = $state<DashboardResult | null>(null);
 	let detectResult = $state<CodexDetectResult | null>(null);
 	let antigravityDetectResult = $state<AntigravityDetectResult | null>(null);
+	let claudeCodeDetectResult = $state<ClaudeCodeDetectResult | null>(null);
 	let doctorResult = $state<DoctorResult | null>(null);
 	let codexProfileSummaries = $state<CodexProfileSummary[]>([]);
 	let antigravityProfileSummaries = $state<AntigravityProfileSummary[]>([]);
+	let claudeCodeProfileSummaries = $state<ClaudeCodeProfileSummary[]>([]);
 	let codexConfigSets = $state<CodexConfigSet[]>([]);
 	let dashboardError = $state("");
 	let detectError = $state("");
 	let antigravityDetectError = $state("");
+	let claudeCodeDetectError = $state("");
 	let doctorError = $state("");
 	let profileError = $state("");
 	let antigravityProfileError = $state("");
+	let claudeCodeProfileError = $state("");
 	let useRequest = $state<ProfileUseRequest | null>(null);
 	let antigravityUseRequest = $state<ProfileUseRequest | null>(null);
+	let claudeCodeUseRequest = $state<ProfileUseRequest | null>(null);
 	let useRequestSequence = 0;
 	let startupQuotaReadStarted = false;
 
 	const codexRuntime = provideCodexRuntime({ showError, showNotice });
 	let workspaceRoute = $derived(parseWorkspaceRoute(currentPath));
 	let agentWorkspace = $derived(isAgentWorkspace(workspaceRoute.view));
-	let selectedAgent = $derived<AgentID | null>(workspaceRoute.view === "antigravity-profiles" ? "antigravity" : agentWorkspace ? "codex" : null);
-	let activeAgentTab = $derived(workspaceRoute.view === "codex-settings" ? "settings" : workspaceRoute.view === "antigravity-profiles" ? "profiles" : workspaceRoute.view);
+	let selectedAgent = $derived<AgentID | null>(workspaceRoute.view === "antigravity-profiles" ? "antigravity" : workspaceRoute.view === "claude-code-profiles" ? "claude-code" : agentWorkspace ? "codex" : null);
+	let activeAgentTab = $derived(workspaceRoute.view === "codex-settings" ? "settings" : workspaceRoute.view === "antigravity-profiles" || workspaceRoute.view === "claude-code-profiles" ? "profiles" : workspaceRoute.view);
 	let codexActiveProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === codexProviderID)?.profile_id ?? "");
 	let antigravityActiveProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === antigravityProviderID)?.profile_id ?? "");
-	let activeProfileID = $derived(selectedAgent === "antigravity" ? antigravityActiveProfileID : codexActiveProfileID);
+	let claudeCodeActiveProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === claudeCodeProviderID)?.profile_id ?? "");
+	let activeProfileID = $derived(selectedAgent === "antigravity" ? antigravityActiveProfileID : selectedAgent === "claude-code" ? claudeCodeActiveProfileID : codexActiveProfileID);
 	let currentProfileName = $derived.by(() => {
 		void $locale;
 		const active = selectedAgent === "antigravity"
 			? antigravityProfileSummaries.find((summary) => summary.profile.id === activeProfileID)
-			: codexProfileSummaries.find((summary) => summary.profile.id === activeProfileID);
+			: selectedAgent === "claude-code"
+				? claudeCodeProfileSummaries.find((summary) => summary.profile.id === activeProfileID)
+				: codexProfileSummaries.find((summary) => summary.profile.id === activeProfileID);
 		if (active?.profile.name) return active.profile.name;
 		const id = active?.profile.id || activeProfileID;
 		return id ? `${translate("profile.unnamed")} · ${shortID(id)}` : "";
@@ -150,7 +166,7 @@
 		switch (workspaceRoute.view) {
 			case "settings": return translate("settings.title");
 			case "diagnostics": return translate("diagnosticsPage.title");
-			default: return selectedAgent === "antigravity" ? "Antigravity" : "Codex";
+			default: return selectedAgent === "antigravity" ? "Antigravity" : selectedAgent === "claude-code" ? "Claude Code" : "Codex";
 		}
 	});
 	let titlebarOffset = $derived(sidebarOpen ? "10rem" : platform === "macos" ? "5rem" : "3rem");
@@ -177,7 +193,7 @@
 			invalidRoute = "";
 		} else if (invalidRoute !== path) {
 			invalidRoute = path;
-			void replace(path.startsWith("/antigravity/") ? "/antigravity/profiles" : "/codex/profiles");
+			void replace(path.startsWith("/antigravity/") ? "/antigravity/profiles" : path.startsWith("/claude-code/") ? "/claude-code/profiles" : "/codex/profiles");
 		}
 	});
 
@@ -200,6 +216,9 @@
 				} else if (payload.provider_id === antigravityProviderID) {
 					antigravityUseRequest = { profileID: payload.profile_id, sequence: ++useRequestSequence };
 					void push("/antigravity/profiles");
+				} else if (payload.provider_id === claudeCodeProviderID) {
+					claudeCodeUseRequest = { profileID: payload.profile_id, sequence: ++useRequestSequence };
+					void push("/claude-code/profiles");
 				}
 			}),
 			Events.On("profiledeck:open-doctor", () => {
@@ -223,7 +242,7 @@
 	async function refreshAll(reloadRuntime = true) {
 		loading = true;
 		try {
-			const detectCurrentAgent = selectedAgent === "antigravity" ? refreshAntigravityDetect() : refreshDetect();
+			const detectCurrentAgent = selectedAgent === "antigravity" ? refreshAntigravityDetect() : selectedAgent === "claude-code" ? refreshClaudeCodeDetect() : refreshDetect();
 			const [dashboardResult] = await Promise.all([
 				track("dashboard", AppService.Dashboard()),
 				detectCurrentAgent,
@@ -238,6 +257,7 @@
 			}
 			loadingProfiles = false;
 			loadingAntigravityProfiles = false;
+			loadingClaudeCodeProfiles = false;
 		} finally {
 			loading = false;
 		}
@@ -374,6 +394,49 @@
 		}
 	}
 
+	async function refreshClaudeCodeDetect() {
+		try {
+			const result = await track("claude-code-detect", ClaudeCodeService.Detect());
+			claudeCodeDetectResult = result;
+			claudeCodeDetectError = "";
+			return result;
+		} catch (error) {
+			if (!isCancelError(error)) {
+				claudeCodeDetectResult = null;
+				claudeCodeDetectError = formatError(error);
+			}
+			return null;
+		}
+	}
+
+	async function authorizeClaudeCodeKeychain() {
+		try {
+			const result = await track("claude-code-detect", ClaudeCodeService.AuthorizeKeychain());
+			claudeCodeDetectResult = result;
+			claudeCodeDetectError = "";
+			return result;
+		} catch (error) {
+			if (!isCancelError(error)) {
+				claudeCodeDetectResult = null;
+				claudeCodeDetectError = formatError(error);
+			}
+			return null;
+		}
+	}
+
+	async function refreshClaudeCodeProfiles() {
+		loadingClaudeCodeProfiles = true;
+		try {
+			const result = await track("claude-code-profiles", ClaudeCodeService.ListProfiles());
+			claudeCodeProfileSummaries = result.profiles ?? [];
+			claudeCodeProfileError = "";
+		} catch (error) {
+			if (!isCancelError(error)) claudeCodeProfileError = formatError(error);
+		} finally {
+			loadingClaudeCodeProfiles = false;
+		}
+	}
+
 	async function runDoctor() {
 		await runAction("doctor", async () => {
 			try {
@@ -419,6 +482,7 @@
 		if (payload.event?.error && !isCancelError(payload.event.error)) showError(payload.event.error);
 		if (payload.event?.profile_changed || payload.event?.active_state_changed) {
 			if (payload.event.provider_id === antigravityProviderID) void refreshAntigravityDetect();
+			else if (payload.event.provider_id === claudeCodeProviderID) void refreshClaudeCodeDetect();
 			else void refreshDetect();
 		}
 	}
@@ -432,6 +496,8 @@
 		codexConfigSets = next.codex_config_sets?.config_sets ?? [];
 		antigravityProfileSummaries = next.antigravity_profiles?.profiles ?? [];
 		loadingAntigravityProfiles = false;
+		claudeCodeProfileSummaries = next.claude_code_profiles?.profiles ?? [];
+		loadingClaudeCodeProfiles = false;
 		if (next.startup_error) dashboardError = desktopErrorMessage(next.startup_error, translate("errors.desktopUnavailable"));
 		else dashboardError = "";
 	}
@@ -439,7 +505,8 @@
 	function parseWorkspaceRoute(path: string): WorkspaceRoute {
 		const codexList: CodexProfileRoute = { kind: "list", profileID: "" };
 		const antigravityList: AntigravityProfileRoute = { kind: "list", profileID: "" };
-		const build = (view: WorkspaceView, codexProfile: CodexProfileRoute = codexList, antigravityProfile: AntigravityProfileRoute = antigravityList): WorkspaceRoute => ({ view, codexProfile, antigravityProfile, valid: true });
+		const claudeCodeList: ClaudeCodeProfileRoute = { kind: "list", profileID: "" };
+		const build = (view: WorkspaceView, codexProfile: CodexProfileRoute = codexList, antigravityProfile: AntigravityProfileRoute = antigravityList, claudeCodeProfile: ClaudeCodeProfileRoute = claudeCodeList): WorkspaceRoute => ({ view, codexProfile, antigravityProfile, claudeCodeProfile, valid: true });
 		const list = (): WorkspaceRoute => build("profiles");
 		if (path === "/" || path === "/codex/profiles") return list();
 		if (path === "/codex/config-sets") return build("profiles", { kind: "config-sets", profileID: "" });
@@ -460,6 +527,13 @@
 		if (antigravityDetail) {
 			const profileID = decodeRouteID(antigravityDetail[1]);
 			return profileID ? build("antigravity-profiles", codexList, { kind: "detail", profileID }) : { ...build("antigravity-profiles"), valid: false };
+		}
+		if (path === "/claude-code/profiles") return build("claude-code-profiles");
+		if (path === "/claude-code/profiles/new") return build("claude-code-profiles", codexList, antigravityList, { kind: "new", profileID: "" });
+		const claudeCodeDetail = path.match(/^\/claude-code\/profiles\/([^/]+)$/);
+		if (claudeCodeDetail) {
+			const profileID = decodeRouteID(claudeCodeDetail[1]);
+			return profileID ? build("claude-code-profiles", codexList, antigravityList, { kind: "detail", profileID }) : { ...build("claude-code-profiles"), valid: false };
 		}
 		if (path === "/codex/usage") return build("usage");
 		if (path === "/codex/settings") return build("codex-settings");
@@ -482,17 +556,18 @@
 	}
 
 	function isAgentWorkspace(view: WorkspaceView): boolean {
-		return view === "profiles" || view === "antigravity-profiles" || view === "usage" || view === "codex-settings";
+		return view === "profiles" || view === "antigravity-profiles" || view === "claude-code-profiles" || view === "usage" || view === "codex-settings";
 	}
 
 	function selectAgent(agentID: AgentID) {
 		if (agentID === "codex") void push("/codex/profiles");
-		else void push("/antigravity/profiles");
+		else if (agentID === "antigravity") void push("/antigravity/profiles");
+		else void push("/claude-code/profiles");
 	}
 
 	function selectAgentTab(value: string) {
-		if (selectedAgent === "antigravity") {
-			void push("/antigravity/profiles");
+		if (selectedAgent !== "codex") {
+			void push(selectedAgent === "claude-code" ? "/claude-code/profiles" : "/antigravity/profiles");
 			return;
 		}
 		switch (value) {
@@ -751,6 +826,23 @@
 						refreshDetect={refreshAntigravityDetect}
 						refreshProfiles={refreshAntigravityProfiles}
 						onUseRequestHandled={(sequence) => { if (antigravityUseRequest?.sequence === sequence) antigravityUseRequest = null; }}
+						{showError}
+						{showNotice}
+					/>
+				{:else if workspaceRoute.view === "claude-code-profiles"}
+					<ClaudeCodeProfiles
+						route={workspaceRoute.claudeCodeProfile}
+						profiles={claudeCodeProfileSummaries}
+						detectResult={claudeCodeDetectResult}
+						detectError={claudeCodeDetectError}
+						activeProfileID={claudeCodeActiveProfileID}
+						loadingProfiles={loadingClaudeCodeProfiles}
+						profileError={claudeCodeProfileError}
+						useRequest={claudeCodeUseRequest}
+						refreshDetect={refreshClaudeCodeDetect}
+						authorizeKeychain={authorizeClaudeCodeKeychain}
+						refreshProfiles={refreshClaudeCodeProfiles}
+						onUseRequestHandled={(sequence) => { if (claudeCodeUseRequest?.sequence === sequence) claudeCodeUseRequest = null; }}
 						{showError}
 						{showNotice}
 					/>

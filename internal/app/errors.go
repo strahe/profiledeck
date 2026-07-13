@@ -46,6 +46,7 @@ const (
 	ErrorUsageImportFailed     ErrorCode = "USAGE_IMPORT_FAILED"
 	ErrorCodexInvalid          ErrorCode = "CODEX_INVALID"
 	ErrorAntigravityInvalid    ErrorCode = "ANTIGRAVITY_INVALID"
+	ErrorClaudeCodeInvalid     ErrorCode = "CLAUDE_CODE_INVALID"
 	ErrorSettingInvalid        ErrorCode = "SETTING_INVALID"
 	ErrorExportFailed          ErrorCode = "EXPORT_FAILED"
 	ErrorImportInvalid         ErrorCode = "IMPORT_INVALID"

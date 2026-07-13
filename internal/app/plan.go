@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
+	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/targetfs"
@@ -27,6 +28,7 @@ const (
 	planReasonTargetMissing          = "target_missing"
 	planReasonTargetSameContent      = "target_same_content"
 	planReasonTargetDifferentContent = "target_different_content"
+	planReasonTargetModeDifferent    = "target_mode_different"
 	planReasonTargetIsSymlink        = "target_is_symlink"
 
 	maxTargetContentBytes = targetfs.MaxFileBytes
@@ -100,6 +102,8 @@ type PlanOperation struct {
 	locatorFingerprint        string
 	privateBeforeFingerprint  string
 	privateDesiredFingerprint string
+	privateRecoveryLocator    string
+	privateObjectFingerprint  string
 	sensitive                 bool
 }
 
@@ -156,9 +160,10 @@ type planAdapterInput struct {
 }
 
 var planAdapters = map[string]planAdapter{
-	"generic":             genericPlanAdapter{},
-	codexconfig.AdapterID: codexPlanAdapter{},
-	agyconfig.AdapterID:   antigravityPlanAdapter{},
+	"generic":                  genericPlanAdapter{},
+	codexconfig.AdapterID:      codexPlanAdapter{},
+	agyconfig.AdapterID:        antigravityPlanAdapter{},
+	claudecodeconfig.AdapterID: claudeCodePlanAdapter{},
 }
 
 func BuildPlan(ctx context.Context, req BuildPlanRequest) (SwitchPlan, error) {
@@ -321,6 +326,20 @@ func validateFinalizedPlanResult(input planAdapterInput, prepared planAdapterPre
 		} else if operation.Path != "" || operation.Format != "" || operation.Strategy != "" {
 			return NewError(ErrorPlanBuildFailed, "finalized non-file target contains file details").WithDetail("target_id", targetID)
 		}
+		if keychainSpec, ok := preparedSpec.(claudeCodeKeychainTargetSpec); ok {
+			if operation.privateRecoveryLocator != keychainSpec.Account {
+				return NewError(ErrorPlanBuildFailed, "finalized Claude Code recovery locator is invalid").WithDetail("target_id", targetID)
+			}
+			expectedObjectFingerprint := ""
+			if operation.Snapshot.privateLocator != "" {
+				expectedObjectFingerprint = sha256HexString(operation.Snapshot.privateLocator)
+			}
+			if operation.privateObjectFingerprint != expectedObjectFingerprint {
+				return NewError(ErrorPlanBuildFailed, "finalized Claude Code Keychain object identity is invalid").WithDetail("target_id", targetID)
+			}
+		} else if operation.privateRecoveryLocator != "" || operation.privateObjectFingerprint != "" {
+			return NewError(ErrorPlanBuildFailed, "finalized switch recovery locator is unexpected").WithDetail("target_id", targetID)
+		}
 		expectedSnapshot, ok := snapshots[targetID]
 		if !ok || operation.Snapshot != expectedSnapshot || operation.FileExists != expectedSnapshot.Exists || operation.IsSymlink != expectedSnapshot.IsSymlink {
 			return NewError(ErrorPlanBuildFailed, "finalized switch snapshot does not match inspected target").WithDetail("target_id", targetID)
@@ -376,6 +395,10 @@ func validateManagedProviderAdapter(provider store.Provider) *AppError {
 	case agyconfig.ProviderID:
 		if provider.AdapterID != agyconfig.AdapterID {
 			return NewError(ErrorAntigravityInvalid, "Antigravity provider uses an incompatible adapter")
+		}
+	case claudecodeconfig.ProviderID:
+		if provider.AdapterID != claudecodeconfig.AdapterID {
+			return NewError(ErrorClaudeCodeInvalid, "Claude Code provider uses an incompatible adapter")
 		}
 	}
 	return nil
@@ -636,6 +659,7 @@ func fingerprintSwitchPlan(plan SwitchPlan) string {
 		IsSymlink     bool     `json:"is_symlink"`
 		BeforeSHA256  string   `json:"before_sha256"`
 		DesiredSHA256 string   `json:"desired_sha256"`
+		ObjectSHA256  string   `json:"object_sha256,omitempty"`
 		Warnings      []string `json:"warnings"`
 	}
 	type fingerprintPayload struct {
@@ -665,6 +689,7 @@ func fingerprintSwitchPlan(plan SwitchPlan) string {
 			IsSymlink:     op.IsSymlink,
 			BeforeSHA256:  firstNonEmpty(op.privateBeforeFingerprint, op.BeforeSHA256),
 			DesiredSHA256: firstNonEmpty(op.privateDesiredFingerprint, op.DesiredSHA256),
+			ObjectSHA256:  op.privateObjectFingerprint,
 			Warnings:      op.Warnings,
 		})
 	}

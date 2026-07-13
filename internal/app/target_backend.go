@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	targetBackendFile    = "file"
-	targetBackendKeyring = "keyring"
+	targetBackendFile               = "file"
+	targetBackendKeyring            = "keyring"
+	targetBackendClaudeCodeKeychain = "claude-code-keychain"
 )
 
 type targetSpec interface {
@@ -69,6 +70,9 @@ type targetSnapshot struct {
 	Mode        os.FileMode
 	Preview     TextPreview
 	Content     string
+	// privateLocator is backend-owned recovery state. It may be persisted only
+	// in private backup data and must never cross a public output boundary.
+	privateLocator string
 }
 
 type targetBackend interface {
@@ -332,8 +336,9 @@ func resolveFileTargetSpec(targetID, backendID, path, label string) (targetSpec,
 }
 
 var targetBackends = map[string]targetBackend{
-	targetBackendFile:    fileTargetBackend{},
-	targetBackendKeyring: keyringTargetBackend{client: systemKeyringClient{}},
+	targetBackendFile:               fileTargetBackend{},
+	targetBackendKeyring:            keyringTargetBackend{client: systemKeyringClient{}},
+	targetBackendClaudeCodeKeychain: claudeCodeKeychainTargetBackend{driver: newClaudeCodeKeychainDriver()},
 }
 
 func inspectPreparedTargets(ctx context.Context, targets []preparedTarget) (map[string]targetSnapshot, error) {

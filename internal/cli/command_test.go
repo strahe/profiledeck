@@ -3,9 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +18,7 @@ import (
 
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
+	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/strahe/profiledeck/internal/store"
 )
@@ -40,6 +43,15 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	}
 	if antigravity := cmd.Command("antigravity"); antigravity == nil || antigravity.Command("detect") == nil || antigravity.Command("profile") == nil {
 		t.Fatalf("expected Antigravity commands")
+	}
+	if claudeCode := cmd.Command("claude-code"); claudeCode == nil || claudeCode.Command("detect") == nil || claudeCode.Command("profile") == nil ||
+		claudeCode.Command("profile").Command("create") == nil || claudeCode.Command("profile").Command("list") == nil ||
+		claudeCode.Command("profile").Command("show") == nil || claudeCode.Command("profile").Command("update") == nil ||
+		claudeCode.Command("profile").Command("save-current") == nil {
+		t.Fatalf("expected Claude Code commands")
+	}
+	if cmd.Command("claude") != nil {
+		t.Fatalf("Claude Code must not register a generic claude alias")
 	}
 	if codex := cmd.Command("codex"); codex == nil || codex.Command("profile") == nil ||
 		codex.Command("profile").Command("list") == nil ||
@@ -151,6 +163,53 @@ func TestAntigravityProfileCLIUsesAgyV2KeyringState(t *testing.T) {
 	for _, secret := range []string{"cli-access-secret", "cli-refresh-secret", "access_token", "refresh_token"} {
 		if strings.Contains(createdRaw, secret) || strings.Contains(listed, secret) {
 			t.Fatalf("expected Antigravity CLI output to hide %q", secret)
+		}
+	}
+}
+
+func TestClaudeCodeProfileCLIUsesOfficialLoginWithoutExposingTokens(t *testing.T) {
+	configDir := t.TempDir()
+	credentialPath := filepath.Join(t.TempDir(), claudecodeconfig.CredentialsFile)
+	payload := `{"claudeAiOauth":{"accessToken":"cli-claude-access-secret","refreshToken":"cli-claude-refresh-secret","subscriptionType":"max","expiresAt":4102444800000}}`
+	if err := os.WriteFile(credentialPath, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	fingerprint := sha256.Sum256([]byte(claudecodeconfig.StorageFile + "\x00" + credentialPath + "\x00\x00"))
+	metadata, err := json.Marshal(map[string]any{
+		"preset": claudecodeconfig.PresetName, "preset_version": claudecodeconfig.PresetVersion,
+		"storage": claudecodeconfig.StorageFile, "path": credentialPath,
+		"locator_fingerprint": fmt.Sprintf("%x", fingerprint),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadataJSON := string(metadata)
+	if _, err := app.CreateProvider(context.Background(), app.CreateProviderRequest{
+		ConfigDir: configDir, ID: claudecodeconfig.ProviderID, Name: claudecodeconfig.ProviderName,
+		AdapterID: claudecodeconfig.AdapterID, MetadataJSON: &metadataJSON,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	created, err := runCLI(t, "--config-dir", configDir, "claude-code", "profile", "create", "work", "--json")
+	if err != nil {
+		t.Fatalf("expected Claude Code Profile create to succeed, got %v", err)
+	}
+	listed, err := runCLI(t, "--config-dir", configDir, "claude-code", "profile", "list", "--json")
+	if err != nil {
+		t.Fatalf("expected Claude Code Profile list to succeed, got %v", err)
+	}
+	planned, err := runCLI(t, "--config-dir", configDir, "plan", claudecodeconfig.ProviderID, "work", "--json")
+	if err != nil {
+		t.Fatalf("expected Claude Code plan to succeed, got %v", err)
+	}
+	for boundary, output := range map[string]string{"create": created, "list": listed, "plan": planned} {
+		for _, secret := range []string{"cli-claude-access-secret", "cli-claude-refresh-secret", "accessToken", "refreshToken"} {
+			if strings.Contains(output, secret) {
+				t.Fatalf("Claude Code CLI %s output exposed %q: %s", boundary, secret, output)
+			}
 		}
 	}
 }

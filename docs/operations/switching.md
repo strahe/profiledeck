@@ -21,7 +21,7 @@ The preview is read-only. File targets show:
 
 Codex sign-in contents are always hidden. Complete saved login and Config Set data never appears in the preview.
 
-Sensitive targets such as the Antigravity system credential show only a safe label, `create`, `update`, or `noop`, and the reason for that action. The credential-store location, payload, previews, and content hashes remain hidden.
+Sensitive targets such as the Antigravity and macOS Claude Code system credentials show only a safe label, `create`, `update`, or `noop`, and the reason for that action. The credential-store location, payload, previews, and content hashes remain hidden.
 
 The fingerprint represents the reviewed Profile and current target state. If a relevant target or saved Profile changes after preview, ProfileDeck rejects that fingerprint before writing anything.
 
@@ -29,6 +29,7 @@ The fingerprint represents the reviewed Profile and current target state. If a r
 
 ```bash
 profiledeck switch codex work --yes
+profiledeck switch claude-code personal --yes
 profiledeck switch antigravity work --yes
 ```
 
@@ -46,7 +47,7 @@ Before changing external targets, ProfileDeck:
 
 1. checks that no other ProfileDeck change is still running;
 2. rechecks the current external targets and the reviewed switch;
-3. preserves valid changes made to the current Codex login and settings;
+3. preserves valid changes made to the current Codex login and settings, or to the active Claude Code login;
 4. creates a backup;
 5. changes only the targets that need updating;
 6. records the selected Profile as current only after the external updates succeed.
@@ -62,5 +63,7 @@ Every successful switch saves a backup under the ProfileDeck data directory. Fil
 Codex backups may contain previous `auth.json` and `config.toml` contents. Treat the backup directory as sensitive.
 
 Antigravity backups may contain the previous login in a private payload file, written with `0600` permissions on POSIX systems. Public backup summaries omit its location and hashes.
+
+Claude Code backups may contain the previous subscription login. On macOS, recovery also keeps the private reference to the exact Keychain item used by the original operation. Public plans, operation results, backup summaries, logs, and errors omit that reference and all login hashes.
 
 Rollback and recovery restore external targets and the previously selected Profile. Changes already saved to a Profile login or Config Set remain saved.

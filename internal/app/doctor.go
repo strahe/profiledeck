@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	goruntime "runtime"
 	"strconv"
 	"strings"
 
 	agyauth "github.com/strahe/profiledeck/internal/antigravity/auth"
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
+	claudecodeauth "github.com/strahe/profiledeck/internal/claudecode/auth"
+	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/runtime"
@@ -37,8 +40,8 @@ const (
 )
 
 var (
-	profileDeckOperationIDPrefixes = []string{"switch-", "rollback-", "codex-", "antigravity-", "profile-target-", "provider-"}
-	maintenanceLockOwnerPrefixes   = []string{"codex-", "antigravity-", "profile-target-", "provider-"}
+	profileDeckOperationIDPrefixes = []string{"switch-", "rollback-", "codex-", "antigravity-", "claude-code-", "profile-target-", "provider-"}
+	maintenanceLockOwnerPrefixes   = []string{"codex-", "antigravity-", "claude-code-", "profile-target-", "provider-"}
 )
 
 type DoctorRequest struct {
@@ -151,11 +154,177 @@ func Doctor(ctx context.Context, req DoctorRequest) (DoctorResult, error) {
 	result.Findings = append(result.Findings, inspectSensitivePathPermissions(ctx, paths, dbState)...)
 	result.Findings = append(result.Findings, inspectCodexDomainHealth(ctx, dbState)...)
 	result.Findings = append(result.Findings, inspectAntigravityDomainHealth(ctx, dbState)...)
+	result.Findings = append(result.Findings, inspectClaudeCodeDomainHealth(ctx, dbState)...)
 
 	result.Lock = inspectDoctorLock(ctx, paths.Lock, dbState)
 	result.Operations = doctorOperations(ctx, dbState, paths, operations, result.Lock)
 	result.OverallLevel = doctorOverallLevel(result)
 	return result, nil
+}
+
+func inspectClaudeCodeDomainHealth(ctx context.Context, dbState doctorDatabaseState) []DoctorFinding {
+	if !dbState.healthy || dbState.db == nil {
+		return nil
+	}
+	provider, err := dbState.db.GetProvider(ctx, claudecodeconfig.ProviderID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return []DoctorFinding{{ID: "claude_code_provider_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect Claude Code provider"}}
+	}
+	metadata, err := validateClaudeCodeProvider(provider)
+	if err != nil {
+		return []DoctorFinding{{ID: "claude_code_preset_invalid", Level: DoctorLevelError, Message: "Claude Code provider or credential locator is incompatible"}}
+	}
+	findings := []DoctorFinding{}
+	credentials, err := dbState.db.ListProviderCredentials(ctx, claudecodeconfig.ProviderID)
+	if err != nil {
+		findings = append(findings, DoctorFinding{ID: "claude_code_login_state_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect saved Claude Code login state"})
+	} else {
+		for _, credential := range credentials {
+			if _, credentialErr := requireClaudeCodeCredential(ctx, dbState.db, credential.ID); credentialErr != nil {
+				findings = append(findings, DoctorFinding{
+					ID: "claude_code_login_state_invalid", Level: DoctorLevelError,
+					Message: "saved Claude Code login state has an invalid kind, payload hash, or schema",
+					Details: map[string]any{"credential_id": credential.ID},
+				})
+			}
+		}
+	}
+	credentialBindings, err := dbState.db.ListProfileCredentialBindingsByProvider(ctx, claudecodeconfig.ProviderID)
+	if err != nil {
+		return append(findings, DoctorFinding{ID: "claude_code_binding_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect Claude Code Profile bindings"})
+	}
+	configBindings, err := dbState.db.ListProfileConfigSetBindingsByProvider(ctx, claudecodeconfig.ProviderID)
+	if err != nil {
+		return append(findings, DoctorFinding{ID: "claude_code_binding_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect Claude Code Profile bindings"})
+	}
+	genericTargets, err := dbState.db.ListProfileTargetsByProvider(ctx, claudecodeconfig.ProviderID)
+	if err != nil {
+		return append(findings, DoctorFinding{ID: "claude_code_binding_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect Claude Code Profile bindings"})
+	}
+	grouped := map[string][]store.ProfileCredentialBinding{}
+	for _, binding := range credentialBindings {
+		grouped[binding.ProfileID] = append(grouped[binding.ProfileID], binding)
+	}
+	configCounts := map[string]int{}
+	for _, binding := range configBindings {
+		configCounts[binding.ProfileID]++
+		if _, ok := grouped[binding.ProfileID]; !ok {
+			grouped[binding.ProfileID] = nil
+		}
+	}
+	targetCounts := map[string]int{}
+	for _, target := range genericTargets {
+		targetCounts[target.ProfileID]++
+		if _, ok := grouped[target.ProfileID]; !ok {
+			grouped[target.ProfileID] = nil
+		}
+	}
+	activeProfileID := ""
+	if active, activeErr := dbState.db.GetActiveState(ctx, store.ActiveStateScopeProvider, claudecodeconfig.ProviderID); activeErr == nil {
+		activeProfileID = active.ProfileID
+		if _, ok := grouped[active.ProfileID]; !ok {
+			grouped[active.ProfileID] = nil
+		}
+	} else if activeErr != nil && !errors.Is(activeErr, store.ErrNotFound) {
+		findings = append(findings, DoctorFinding{ID: "claude_code_active_state_check_failed", Level: DoctorLevelWarning, Message: "failed to inspect active Claude Code Profile"})
+	}
+	var activeCredential *store.ProviderCredential
+	for profileID, bindings := range grouped {
+		if _, err := dbState.db.GetProfile(ctx, profileID); err != nil {
+			findings = append(findings, DoctorFinding{ID: "claude_code_profile_missing", Level: DoctorLevelError, Message: "Claude Code binding references a missing Profile", Details: map[string]any{"profile_id": profileID}})
+			continue
+		}
+		if len(bindings) != 1 || bindings[0].SlotID != claudecodeconfig.CredentialSlot || configCounts[profileID] != 0 || targetCounts[profileID] != 0 {
+			findings = append(findings, DoctorFinding{ID: "claude_code_login_binding_invalid", Level: DoctorLevelError, Message: "Claude Code Profile bindings are missing or unsupported", Details: map[string]any{"profile_id": profileID}})
+			continue
+		}
+		credential, err := requireClaudeCodeCredential(ctx, dbState.db, bindings[0].CredentialID)
+		if err != nil {
+			findings = append(findings, DoctorFinding{ID: "claude_code_login_state_invalid", Level: DoctorLevelError, Message: "Claude Code Profile references missing or invalid login state", Details: map[string]any{"profile_id": profileID}})
+			continue
+		}
+		if profileID == activeProfileID {
+			credentialCopy := credential
+			activeCredential = &credentialCopy
+		}
+	}
+	spec := claudeCodeTargetSpec(metadata)
+	snapshot, err := inspectClaudeCodeTarget(ctx, spec, false)
+	if err != nil {
+		if metadata.Storage == claudecodeconfig.StorageFile {
+			if info, statErr := os.Lstat(metadata.Path); statErr == nil && info.Mode()&os.ModeSymlink == 0 && (info.IsDir() || !info.Mode().IsRegular()) {
+				return append(findings, DoctorFinding{ID: "claude_code_login_file_type", Level: DoctorLevelError, Message: "Claude Code credential target is not a regular file"})
+			}
+		}
+		var appErr *AppError
+		if metadata.Storage == claudecodeconfig.StorageKeychain && isClaudeCodeKeychainAuthorizationRequired(err) {
+			return append(findings, DoctorFinding{ID: "claude_code_keychain_authorization_required", Level: DoctorLevelWarning, Message: "Claude Code Keychain login needs explicit authorization before it can be inspected"})
+		}
+		if metadata.Storage == claudecodeconfig.StorageKeychain && errors.As(err, &appErr) && (appErr.Code == ErrorClaudeCodeInvalid || appErr.Code == ErrorTargetChanged) {
+			return append(findings, DoctorFinding{ID: "claude_code_keychain_reference_invalid", Level: DoctorLevelError, Message: "Claude Code Keychain item could not be resolved uniquely"})
+		}
+		return append(findings, DoctorFinding{ID: "claude_code_login_unavailable", Level: DoctorLevelWarning, Message: "Claude Code login working copy could not be read"})
+	}
+	if !snapshot.Exists {
+		findings = append(findings, DoctorFinding{ID: "claude_code_login_missing", Level: DoctorLevelWarning, Message: "Claude Code login working copy is missing"})
+		if metadata.Storage == claudecodeconfig.StorageFile && goruntime.GOOS == "windows" && !claudeCodeFileReplacementAvailable(metadata.Path) {
+			findings = append(findings, DoctorFinding{ID: "claude_code_credentials_replace_unavailable", Level: DoctorLevelWarning, Message: "Claude Code credential file directory is not writable for atomic replacement"})
+		}
+		return findings
+	}
+	if snapshot.IsSymlink {
+		return append(findings, DoctorFinding{ID: "claude_code_login_symlink", Level: DoctorLevelError, Message: "Claude Code credential file is a symlink"})
+	}
+	normalized, info, authErr := claudecodeauth.Normalize([]byte(snapshot.Content))
+	if authErr != nil {
+		level, id, message := DoctorLevelError, "claude_code_login_invalid", "Claude Code login working copy is invalid"
+		if claudecodeauth.IsKind(authErr, claudecodeauth.ErrorUnsupportedAccountType) {
+			id, message = "claude_code_login_unsupported", "Claude Code login working copy does not report an active Pro, Max, Team, or Enterprise subscription"
+		}
+		findings = append(findings, DoctorFinding{ID: id, Level: level, Message: message})
+	} else {
+		if info.ExpiryUnknown {
+			findings = append(findings, DoctorFinding{ID: "claude_code_expiry_unknown", Level: DoctorLevelWarning, Message: "Claude Code login expiry could not be determined"})
+		}
+		if activeCredential != nil && normalized != activeCredential.PayloadJSON {
+			findings = append(findings, DoctorFinding{ID: "claude_code_working_copy_changed", Level: DoctorLevelWarning, Message: "Claude Code login working copy differs from the active saved login"})
+		}
+	}
+	if metadata.Storage == claudecodeconfig.StorageFile {
+		if goruntime.GOOS == "linux" && snapshot.Mode.Perm() != 0o600 {
+			findings = append(findings, DoctorFinding{ID: "claude_code_credentials_permissions", Level: DoctorLevelError, Message: "Claude Code credential file permissions must be 0600"})
+		}
+		if goruntime.GOOS == "windows" && !claudeCodeFileReplacementAvailable(metadata.Path) {
+			findings = append(findings, DoctorFinding{ID: "claude_code_credentials_replace_unavailable", Level: DoctorLevelWarning, Message: "Claude Code credential file directory is not writable for atomic replacement"})
+		}
+	}
+	return findings
+}
+
+func claudeCodeFileReplacementAvailable(path string) bool {
+	directory := filepath.Dir(path)
+	source, err := os.CreateTemp(directory, ".profiledeck-doctor-source-*")
+	if err != nil {
+		return false
+	}
+	sourceName := source.Name()
+	defer func() { _ = os.Remove(sourceName) }()
+	if err := source.Close(); err != nil {
+		return false
+	}
+	destination, err := os.CreateTemp(directory, ".profiledeck-doctor-destination-*")
+	if err != nil {
+		return false
+	}
+	destinationName := destination.Name()
+	defer func() { _ = os.Remove(destinationName) }()
+	if err := destination.Close(); err != nil {
+		return false
+	}
+	return os.Rename(sourceName, destinationName) == nil
 }
 
 func inspectAntigravityDomainHealth(ctx context.Context, dbState doctorDatabaseState) []DoctorFinding {

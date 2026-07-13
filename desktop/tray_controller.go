@@ -10,6 +10,7 @@ import (
 	"github.com/strahe/profiledeck/desktop/backend"
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
+	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 )
 
@@ -155,6 +156,7 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 	} else {
 		menu.Add(currentProfileLabel(dashboard)).SetEnabled(false)
 		menu.Add(providerCurrentProfileLabel(dashboard, agyconfig.ProviderID, "Antigravity")).SetEnabled(false)
+		menu.Add(providerCurrentProfileLabel(dashboard, claudecodeconfig.ProviderID, "Claude Code")).SetEnabled(false)
 		for _, missing := range missingActiveProfileLabels(dashboard) {
 			menu.Add(missing).SetEnabled(false)
 		}
@@ -181,6 +183,14 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 		}
 	}
 	addTrayProfilesMenu(menu, "Antigravity Profiles", agyconfig.ProviderID, antigravityProfiles, dashboard.AntigravityProfiles != nil, "No Antigravity profiles", trayAntigravityProfilesUnavailableLabel, actions)
+
+	var claudeCodeProfiles []trayProfile
+	if dashboard.ClaudeCodeProfiles != nil {
+		for _, profile := range dashboard.ClaudeCodeProfiles.Profiles {
+			claudeCodeProfiles = append(claudeCodeProfiles, trayProfile{Profile: profile.Profile, Active: profile.Active})
+		}
+	}
+	addTrayProfilesMenu(menu, "Claude Code Profiles", claudecodeconfig.ProviderID, claudeCodeProfiles, dashboard.ClaudeCodeProfiles != nil, "No Claude Code profiles", trayClaudeCodeProfilesUnavailableLabel, actions)
 
 	menu.AddSeparator()
 	menu.Add("Refresh Menu").OnClick(func(*application.Context) {
@@ -307,6 +317,8 @@ func missingActiveProfileLabels(dashboard backend.DashboardResult) []string {
 			providerName = "Codex"
 		case agyconfig.ProviderID:
 			providerName = "Antigravity"
+		case claudecodeconfig.ProviderID:
+			providerName = "Claude Code"
 		}
 		labels = append(labels, "Missing "+providerName+" profile: "+state.ProfileID)
 	}

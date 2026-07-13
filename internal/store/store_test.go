@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -691,8 +692,15 @@ func TestSQLiteDSNNormalizesWindowsPathAndSetsBusyTimeout(t *testing.T) {
 	if strings.Contains(dsn, `\`) || strings.Contains(dsn, "%5C") {
 		t.Fatalf("expected Windows path separators to be normalized, got %q", dsn)
 	}
-	if !strings.Contains(dsn, "C:/Users/profiledeck/profiledeck.db") {
-		t.Fatalf("expected normalized Windows path in DSN, got %q", dsn)
+	if !strings.HasPrefix(dsn, "file:///C:/Users/profiledeck/profiledeck.db?") {
+		t.Fatalf("expected drive-letter path to remain a URI path, got %q", dsn)
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("expected valid SQLite URI, got %q: %v", dsn, err)
+	}
+	if parsed.Host != "" || parsed.Path != "/C:/Users/profiledeck/profiledeck.db" {
+		t.Fatalf("expected empty URI authority and normalized path, got %#v", parsed)
 	}
 	if !strings.Contains(dsn, "mode=rwc") {
 		t.Fatalf("expected read-write-create mode in DSN, got %q", dsn)

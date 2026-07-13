@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -98,13 +99,19 @@ func TestNativeQuotaUsesPrivateTemporaryHomeAndCASForInactiveCredential(t *testi
 			t.Fatal("expected inactive credential not to use real CODEX_HOME")
 		}
 		dirInfo, err := os.Stat(home)
-		if err != nil || dirInfo.Mode().Perm() != 0o700 {
-			t.Fatalf("expected 0700 temporary home, info=%v err=%v", dirInfo, err)
+		if err != nil {
+			t.Fatalf("expected temporary home, info=%v err=%v", dirInfo, err)
+		}
+		if runtime.GOOS != "windows" && dirInfo.Mode().Perm() != 0o700 {
+			t.Fatalf("expected 0700 temporary home, info=%v", dirInfo)
 		}
 		authPath := filepath.Join(home, "auth.json")
 		authInfo, err := os.Stat(authPath)
-		if err != nil || authInfo.Mode().Perm() != 0o600 {
-			t.Fatalf("expected 0600 temporary auth, info=%v err=%v", authInfo, err)
+		if err != nil {
+			t.Fatalf("expected temporary auth, info=%v err=%v", authInfo, err)
+		}
+		if runtime.GOOS != "windows" && authInfo.Mode().Perm() != 0o600 {
+			t.Fatalf("expected 0600 temporary auth, info=%v", authInfo)
 		}
 		if err := os.WriteFile(authPath, []byte(rotated), 0o600); err != nil {
 			t.Fatalf("expected rotated inactive auth write, got %v", err)

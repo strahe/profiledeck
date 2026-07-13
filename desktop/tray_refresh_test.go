@@ -13,6 +13,7 @@ import (
 	"github.com/strahe/profiledeck/desktop/backend"
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
+	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 )
 
@@ -126,6 +127,30 @@ func TestBuildTrayMenuUsesDashboardAntigravityProfiles(t *testing.T) {
 		}
 		if got := submenu.ItemAt(1).Label(); got != "personal" {
 			t.Fatalf("expected Antigravity Profile id fallback, got %q", got)
+		}
+	})
+}
+
+func TestBuildTrayMenuUsesDashboardClaudeCodeProfiles(t *testing.T) {
+	t.Run("unavailable", func(t *testing.T) {
+		menu := buildTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{})
+		submenu := requireMenuSubmenu(t, menu, "Claude Code Profiles")
+		if got := submenu.ItemAt(0).Label(); got != trayClaudeCodeProfilesUnavailableLabel {
+			t.Fatalf("expected unavailable Claude Code label, got %q", got)
+		}
+	})
+
+	t.Run("profiles", func(t *testing.T) {
+		menu := buildTrayMenu(dashboardWithClaudeCodeProfiles(
+			claudeCodeProfileSummary("work", "Work", true),
+			claudeCodeProfileSummary("personal", "", false),
+		), nil, trayMenuActions{})
+		submenu := requireMenuSubmenu(t, menu, "Claude Code Profiles")
+		if got := submenu.ItemAt(0).Label(); got != "Work" || !submenu.ItemAt(0).Checked() {
+			t.Fatalf("expected active Claude Code Profile, got label=%q checked=%t", got, submenu.ItemAt(0).Checked())
+		}
+		if got := submenu.ItemAt(1).Label(); got != "personal" {
+			t.Fatalf("expected Claude Code Profile id fallback, got %q", got)
 		}
 	})
 }
@@ -285,6 +310,7 @@ func TestTrayErrorLabelDoesNotExposeRawError(t *testing.T) {
 	for _, label := range []string{
 		trayErrorLabel(err, trayDashboardUnavailableLabel),
 		trayErrorLabel(err, trayCodexProfilesUnavailableLabel),
+		trayErrorLabel(err, trayClaudeCodeProfilesUnavailableLabel),
 	} {
 		if strings.Contains(label, rawPath) || strings.Contains(label, "permission denied") {
 			t.Fatalf("expected tray label to omit raw error details, got %q", label)
@@ -386,6 +412,10 @@ func dashboardWithAntigravityProfiles(profiles ...app.AntigravityProfileSummary)
 	return backend.DashboardResult{AntigravityProfiles: &app.AntigravityProfileListResult{Profiles: profiles}}
 }
 
+func dashboardWithClaudeCodeProfiles(profiles ...app.ClaudeCodeProfileSummary) backend.DashboardResult {
+	return backend.DashboardResult{ClaudeCodeProfiles: &app.ClaudeCodeProfileListResult{Profiles: profiles}}
+}
+
 func codexProfileSummary(profileID, name string, active bool) app.CodexProfileSummary {
 	return app.CodexProfileSummary{
 		Profile: app.Profile{
@@ -400,5 +430,11 @@ func codexProfileSummary(profileID, name string, active bool) app.CodexProfileSu
 func antigravityProfileSummary(profileID, name string, active bool) app.AntigravityProfileSummary {
 	return app.AntigravityProfileSummary{
 		Profile: app.Profile{ID: profileID, Name: name}, ProviderID: agyconfig.ProviderID, Active: active,
+	}
+}
+
+func claudeCodeProfileSummary(profileID, name string, active bool) app.ClaudeCodeProfileSummary {
+	return app.ClaudeCodeProfileSummary{
+		Profile: app.Profile{ID: profileID, Name: name}, ProviderID: claudecodeconfig.ProviderID, Active: active,
 	}
 }

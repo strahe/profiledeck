@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
 	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/targetfs"
@@ -127,18 +129,19 @@ type rollbackSource struct {
 }
 
 type rollbackTarget struct {
-	TargetID      string
-	BackendID     string
-	TargetLabel   string
-	Path          string
-	Action        string
-	FileExists    bool
-	BeforeSHA256  string
-	DesiredSHA256 string
-	BackupRelPath string
-	Mode          os.FileMode
-	HasMode       bool
-	Spec          targetSpec
+	TargetID       string
+	BackendID      string
+	TargetLabel    string
+	Path           string
+	Action         string
+	FileExists     bool
+	BeforeSHA256   string
+	DesiredSHA256  string
+	BackupRelPath  string
+	Mode           os.FileMode
+	HasMode        bool
+	Spec           targetSpec
+	PrivateLocator string
 }
 
 func ApplyRollback(ctx context.Context, req ApplyRollbackRequest) (ApplyRollbackResult, error) {
@@ -238,6 +241,12 @@ func ApplyRollback(ctx context.Context, req ApplyRollbackRequest) (ApplyRollback
 	counts, processed, err := applyRollbackTargets(ctx, db, operationID, backedUpMetadata, metadataBase, source)
 	if err != nil {
 		return ApplyRollbackResult{}, err
+	}
+	// Re-read the restored targets before committing active state. External
+	// writers can still race after this check, but an already diverged restore
+	// must leave the rollback visible as failed.
+	if err := verifyRestoredRollbackTargets(ctx, source.Targets); err != nil {
+		return ApplyRollbackResult{}, failRollbackWithProcessed(ctx, db, operationID, backedUpMetadata, metadataBase, counts, processed, err)
 	}
 	metadataBase.Counts = counts
 	metadataBase.ProcessedTargets = processed
@@ -341,7 +350,7 @@ func ShowBackup(ctx context.Context, req ShowBackupRequest) (BackupDetail, error
 	if summary.Valid {
 		manifest, err := loadBackupManifest(filepath.Join(paths.Backups, backupID))
 		if err == nil {
-			detail.Entries = backupEntrySummaries(manifest.Entries)
+			detail.Entries = backupEntrySummaries(manifest.ProviderID, manifest.Entries)
 		}
 	}
 	return detail, nil
@@ -545,15 +554,16 @@ func rollbackTargetsFromMetadataWithAdapter(metadata switchOperationMetadata, ma
 		}
 		seenLocators[locatorKey] = target.TargetID
 		rollbackTarget := rollbackTarget{
-			TargetID:      target.TargetID,
-			BackendID:     backendID,
-			TargetLabel:   target.TargetLabel,
-			Path:          target.Path,
-			Action:        target.Action,
-			FileExists:    target.FileExists,
-			BeforeSHA256:  target.BeforeSHA256,
-			DesiredSHA256: target.DesiredSHA256,
-			Spec:          spec,
+			TargetID:       target.TargetID,
+			BackendID:      backendID,
+			TargetLabel:    target.TargetLabel,
+			Path:           target.Path,
+			Action:         target.Action,
+			FileExists:     target.FileExists,
+			BeforeSHA256:   target.BeforeSHA256,
+			DesiredSHA256:  target.DesiredSHA256,
+			Spec:           spec,
+			PrivateLocator: entryPrivateLocator(entries, target.TargetID),
 		}
 		switch target.Action {
 		case planActionCreate, planActionUpdate:
@@ -580,7 +590,23 @@ func rollbackTargetsFromMetadataWithAdapter(metadata switchOperationMetadata, ma
 				rollbackTarget.Mode = mode
 				rollbackTarget.HasMode = true
 			}
+			if goruntime.GOOS == "linux" && metadata.ProviderID == claudecodeconfig.ProviderID && backendID == targetBackendFile {
+				// Claude Code credential writes never restore an insecure historical
+				// mode; rollback and failed-switch recovery keep the file at 0600.
+				rollbackTarget.Mode = 0o600
+				rollbackTarget.HasMode = true
+			}
 		case planActionNoop:
+			if backendID == targetBackendClaudeCodeKeychain {
+				entry, ok := entries[target.TargetID]
+				if !ok {
+					return nil, NewError(ErrorBackupInvalid, "Claude Code Keychain backup is missing its item reference").WithDetail("target_id", target.TargetID)
+				}
+				if err := validateRollbackEntry(target, entry); err != nil {
+					return nil, err
+				}
+				delete(entries, target.TargetID)
+			}
 		default:
 			return nil, NewError(ErrorRollbackUnsupported, "source switch target action is unsupported").WithDetail("target_id", target.TargetID)
 		}
@@ -654,6 +680,9 @@ func validateRollbackEntry(target switchOperationTargetMetadata, entry switchBac
 	if entryBackend != targetBackend || entry.Path != target.Path || entry.Action != target.Action || entry.BeforeSHA256 != target.BeforeSHA256 {
 		return NewError(ErrorBackupInvalid, "backup manifest entry does not match source target").WithDetail("target_id", target.TargetID)
 	}
+	if targetBackend != targetBackendClaudeCodeKeychain && entry.PrivateLocator != "" {
+		return NewError(ErrorBackupInvalid, "backup manifest contains unexpected private recovery state").WithDetail("target_id", target.TargetID)
+	}
 	switch target.Action {
 	case planActionCreate:
 		if entry.Existed || entry.BackupRelPath != "" {
@@ -662,6 +691,13 @@ func validateRollbackEntry(target switchOperationTargetMetadata, entry switchBac
 	case planActionUpdate:
 		if !entry.Existed || entry.BackupRelPath == "" {
 			return NewError(ErrorBackupInvalid, "update backup entry must contain previous file content").WithDetail("target_id", target.TargetID)
+		}
+		if targetBackend == targetBackendClaudeCodeKeychain && entry.PrivateLocator == "" {
+			return NewError(ErrorBackupInvalid, "Claude Code Keychain backup is missing its item reference").WithDetail("target_id", target.TargetID)
+		}
+	case planActionNoop:
+		if targetBackend != targetBackendClaudeCodeKeychain || !entry.Existed || entry.BackupRelPath != "" || entry.PrivateLocator == "" {
+			return NewError(ErrorBackupInvalid, "no-op backup entry contains unsupported recovery state").WithDetail("target_id", target.TargetID)
 		}
 	default:
 		return NewError(ErrorRollbackUnsupported, "backup entry action is unsupported").WithDetail("target_id", target.TargetID)
@@ -723,7 +759,7 @@ func verifyRollbackTarget(ctx context.Context, target rollbackTarget) error {
 		_, err := rollbackUpdateAlreadyRestored(ctx, target)
 		return err
 	}
-	return backend.Verify(ctx, target.Spec, targetSnapshot{Exists: target.FileExists, Fingerprint: target.DesiredSHA256})
+	return backend.Verify(ctx, target.Spec, targetSnapshot{Exists: target.FileExists, Fingerprint: target.DesiredSHA256, privateLocator: target.PrivateLocator})
 }
 
 func rollbackUpdateAlreadyRestored(ctx context.Context, target rollbackTarget) (bool, error) {
@@ -738,6 +774,9 @@ func rollbackUpdateAlreadyRestored(ctx context.Context, target rollbackTarget) (
 	if !state.Exists {
 		return false, NewError(ErrorTargetChanged, "target disappeared").WithDetail("target_id", target.TargetID)
 	}
+	if target.PrivateLocator != "" && state.privateLocator != target.PrivateLocator {
+		return false, NewError(ErrorTargetChanged, "credential store item was replaced").WithDetail("target_id", target.TargetID)
+	}
 	if state.IsSymlink {
 		return false, NewError(ErrorTargetChanged, "target is not writable").WithDetail("target_id", target.TargetID)
 	}
@@ -745,7 +784,9 @@ func rollbackUpdateAlreadyRestored(ctx context.Context, target rollbackTarget) (
 		return false, nil
 	}
 	if target.BeforeSHA256 != "" && state.Fingerprint == target.BeforeSHA256 {
-		return true, nil
+		if !target.HasMode || target.BackendID != targetBackendFile || state.Mode.Perm() == target.Mode.Perm() {
+			return true, nil
+		}
 	}
 	return false, NewError(ErrorTargetChanged, "target content changed").WithDetail("target_id", target.TargetID)
 }
@@ -780,6 +821,7 @@ func createRollbackCurrentBackup(ctx context.Context, paths runtime.Paths, opera
 		entry := switchBackupEntry{
 			TargetID: target.TargetID, BackendID: target.BackendID, TargetLabel: target.TargetLabel,
 			Path: target.Path, Action: target.Action, Existed: state.Exists,
+			PrivateLocator: state.privateLocator,
 		}
 		if state.Exists {
 			if state.IsSymlink {
@@ -840,7 +882,7 @@ func applyRollbackTargets(ctx context.Context, db *store.Store, operationID, las
 				break
 			}
 			backupFile := filepath.Join(source.BackupPath, target.BackupRelPath)
-			err = backend.Restore(ctx, target.Spec, targetSnapshot{Exists: true, Fingerprint: target.DesiredSHA256},
+			err = backend.Restore(ctx, target.Spec, targetSnapshot{Exists: true, Fingerprint: target.DesiredSHA256, privateLocator: target.PrivateLocator},
 				backupFile, target.BeforeSHA256, target.Mode, target.HasMode)
 			if err != nil {
 				return counts, processed, failRollbackWithProcessed(ctx, db, operationID, lastMetadata, metadataBase, counts, processed, err)
@@ -859,6 +901,11 @@ func applyRollbackTargets(ctx context.Context, db *store.Store, operationID, las
 			}
 			processed = append(processed, target.TargetID)
 		case planActionNoop:
+			if err := backend.Verify(ctx, target.Spec, targetSnapshot{
+				Exists: target.FileExists, Fingerprint: target.DesiredSHA256, privateLocator: target.PrivateLocator,
+			}); err != nil {
+				return counts, processed, failRollbackWithProcessed(ctx, db, operationID, lastMetadata, metadataBase, counts, processed, err)
+			}
 			counts.Noop++
 			processed = append(processed, target.TargetID)
 		}
@@ -874,6 +921,48 @@ func applyRollbackTargets(ctx context.Context, db *store.Store, operationID, las
 		lastMetadata = metadataJSON
 	}
 	return counts, processed, nil
+}
+
+func verifyRestoredRollbackTargets(ctx context.Context, targets []rollbackTarget) error {
+	for _, target := range targets {
+		backend, ok := targetBackends[target.BackendID]
+		if !ok {
+			return NewError(ErrorRollbackUnsupported, "target backend is unavailable").WithDetail("backend_id", target.BackendID)
+		}
+		expected := targetSnapshot{privateLocator: target.PrivateLocator}
+		switch target.Action {
+		case planActionUpdate:
+			expected.Exists = true
+			expected.Fingerprint = target.BeforeSHA256
+		case planActionCreate:
+			expected.Exists = false
+		case planActionNoop:
+			expected.Exists = target.FileExists
+			expected.Fingerprint = target.DesiredSHA256
+		default:
+			return NewError(ErrorRollbackUnsupported, "rollback target action is unsupported").WithDetail("target_id", target.TargetID)
+		}
+		if err := backend.Verify(ctx, target.Spec, expected); err != nil {
+			return err
+		}
+		if target.HasMode && target.BackendID == targetBackendFile && expected.Exists {
+			state, err := backend.Inspect(ctx, target.Spec)
+			if err != nil {
+				return err
+			}
+			if !state.Exists || state.IsSymlink || state.Fingerprint != expected.Fingerprint || state.Mode.Perm() != target.Mode.Perm() {
+				return NewError(ErrorTargetChanged, "restored target permissions or content changed during post-verify").WithDetail("target_id", target.TargetID)
+			}
+		}
+	}
+	return nil
+}
+
+func entryPrivateLocator(entries map[string]switchBackupEntry, targetID string) string {
+	if entry, ok := entries[targetID]; ok {
+		return entry.PrivateLocator
+	}
+	return ""
 }
 
 func failRollbackWithProcessed(ctx context.Context, db *store.Store, operationID, lastMetadata string, metadataBase rollbackOperationMetadata, counts RollbackCounts, processed []string, operationErr error) error {
@@ -952,9 +1041,28 @@ func writeBackupManifest(backupPath string, manifest switchBackupManifest) error
 		return WrapError(ErrorBackupFailed, "failed to encode backup manifest", err)
 	}
 	raw = append(raw, '\n')
-	if err := os.WriteFile(filepath.Join(backupPath, "manifest.json"), raw, 0o600); err != nil {
+	manifestPath := filepath.Join(backupPath, "manifest.json")
+	file, err := os.OpenFile(manifestPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
 		return WrapError(ErrorBackupFailed, "failed to write backup manifest", err).WithDetail("path", backupPath)
 	}
+	remove := true
+	defer func() {
+		_ = file.Close()
+		if remove {
+			_ = os.Remove(manifestPath)
+		}
+	}()
+	if _, err := file.Write(raw); err != nil {
+		return WrapError(ErrorBackupFailed, "failed to write backup manifest", err).WithDetail("path", backupPath)
+	}
+	if err := file.Sync(); err != nil {
+		return WrapError(ErrorBackupFailed, "failed to sync backup manifest", err).WithDetail("path", backupPath)
+	}
+	if err := file.Close(); err != nil {
+		return WrapError(ErrorBackupFailed, "failed to close backup manifest", err).WithDetail("path", backupPath)
+	}
+	remove = false
 	return nil
 }
 
@@ -1010,7 +1118,7 @@ func rollbackUnsupportedReason(ctx context.Context, db *store.Store, paths runti
 	return err.Error()
 }
 
-func backupEntrySummaries(entries []switchBackupEntry) []BackupEntrySummary {
+func backupEntrySummaries(providerID string, entries []switchBackupEntry) []BackupEntrySummary {
 	result := make([]BackupEntrySummary, 0, len(entries))
 	for _, entry := range entries {
 		summary := BackupEntrySummary{
@@ -1027,6 +1135,10 @@ func backupEntrySummaries(entries []switchBackupEntry) []BackupEntrySummary {
 			summary.Path = ""
 			summary.BeforeSHA256 = ""
 			summary.Mode = ""
+		} else if providerID == claudecodeconfig.ProviderID {
+			// Claude Code credential files are secret working copies even though
+			// they use the shared file backend. Keep payload-derived hashes private.
+			summary.BeforeSHA256 = ""
 		}
 		result = append(result, summary)
 	}

@@ -116,6 +116,47 @@ export interface BackupSummary {
     "unsupported_reason"?: string;
 }
 
+export interface ClaudeCodeDetectResult {
+    "provider_id": string;
+    "adapter_id": string;
+    "credential_status": string;
+    "expires_at_unix_ms"?: number;
+    "profiledeck_initialized": boolean;
+    "provider_exists": boolean;
+    "provider_enabled": boolean;
+    "provider_compatible": boolean;
+    "keychain_authorization_required": boolean;
+    "observed_auth_override_hints": string[] | null;
+    "warnings": string[] | null;
+}
+
+export interface ClaudeCodeProfileDetail {
+    "summary": ClaudeCodeProfileSummary;
+}
+
+export interface ClaudeCodeProfileListResult {
+    "profiles": ClaudeCodeProfileSummary[] | null;
+}
+
+export interface ClaudeCodeProfileSaveResult {
+    "operation_id": string;
+    "summary": ClaudeCodeProfileSummary;
+    "warnings": string[] | null;
+}
+
+export interface ClaudeCodeProfileSummary {
+    "profile": Profile;
+    "provider_id": string;
+    "credential_id": string;
+    "credential_status": string;
+    "credential_reference_count": number;
+    "expires_at_unix_ms"?: number;
+    "active": boolean;
+    "active_operation_id"?: string;
+    "updated_at_unix_ms": number;
+    "warnings"?: string[] | null;
+}
+
 export interface CodexConfigSet {
     "id": string;
     "name": string;

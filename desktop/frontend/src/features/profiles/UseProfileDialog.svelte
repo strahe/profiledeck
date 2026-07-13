@@ -32,7 +32,7 @@
 		open?: boolean;
 		profile: SwitchProfileItem | null;
 		agent?: string;
-		mode?: "codex" | "antigravity";
+		mode?: "codex" | "antigravity" | "claude-code";
 		currentProfile: string;
 		plan: SwitchPlan | null;
 		building: boolean;
@@ -43,15 +43,17 @@
 	} = $props();
 
 	let operations = $derived(plan?.operations ?? []);
-	let fileOperations = $derived(operations.filter((operation) => operation.backend_id === "file"));
+	let fileOperations = $derived(operations.filter((operation) => operation.backend_id === "file" && mode !== "claude-code"));
 	// Unknown non-file backends stay on the safe summary-only path. Their public
-	// plans may intentionally omit locators, hashes, and previews.
-	let sensitiveOperations = $derived(operations.filter((operation) => operation.backend_id !== "file"));
+	// plans may intentionally omit locators, hashes, and previews. Claude Code
+	// file credentials use the same summary-only treatment as Keychain items.
+	let sensitiveOperations = $derived(operations.filter((operation) => operation.backend_id !== "file" || mode === "claude-code"));
 	let unsupportedCount = $derived(operations.filter((operation) => operation.action === "unsupported").length);
 	let loginChanges = $derived(!!plan?.bindings?.find((binding) => binding.target_id === "auth")?.changed);
 	let configChanges = $derived(!!plan?.bindings?.find((binding) => binding.target_id === "config")?.changed);
-	let changeSummary = $derived(mode === "antigravity"
-		? (sensitiveOperations.some((operation) => operation.action === "create" || operation.action === "update") ? $_("antigravity.use.loginChange") : $_("antigravity.use.loginSame"))
+	let managedLoginPrefix = $derived(mode === "claude-code" ? "claudeCode" : "antigravity");
+	let changeSummary = $derived(mode !== "codex"
+		? (operations.some((operation) => operation.action === "create" || operation.action === "update") ? $_(`${managedLoginPrefix}.use.loginChange`) : $_(`${managedLoginPrefix}.use.loginSame`))
 		: (loginChanges && configChanges ? $_("useDialog.bothChange") : loginChanges ? $_("useDialog.loginOnly") : configChanges ? $_("useDialog.configOnly") : $_("useDialog.sameBindings")));
 
 	function handleOpenChange(value: boolean) {
@@ -69,6 +71,7 @@
 
 	function targetLabel(operation: PlanOperation): string {
 		if (mode === "antigravity" && operation.backend_id === "keyring") return $_("antigravity.use.targetLabel");
+		if (mode === "claude-code") return $_("claudeCode.use.targetLabel");
 		if (operation.target_id === "auth") return $_("useDialog.loginFile");
 		if (operation.target_id === "config") return $_("useDialog.settingsFile");
 		if (operation.target_label) return operation.target_label;
@@ -76,10 +79,11 @@
 	}
 
 	function sensitiveStatus(operation: PlanOperation): string {
-		if (operation.action === "create") return $_("antigravity.use.create");
-		if (operation.action === "update") return $_("antigravity.use.update");
-		if (operation.action === "noop") return $_("antigravity.use.noop");
-		return mode === "antigravity" ? $_("antigravity.use.unsupported") : $_("useDialog.unsupported");
+		if (mode === "codex") return $_("useDialog.unsupported");
+		if (operation.action === "create") return $_(`${managedLoginPrefix}.use.create`);
+		if (operation.action === "update") return $_(`${managedLoginPrefix}.use.update`);
+		if (operation.action === "noop") return $_(`${managedLoginPrefix}.use.noop`);
+		return $_(`${managedLoginPrefix}.use.unsupported`);
 	}
 
 	function preview(operation: PlanOperation, side: "before" | "after"): string {
@@ -105,7 +109,7 @@
 			<Dialog.Title>
 				{$_("useDialog.title", { values: { profile: profile?.name ?? profile?.id ?? "—", agent } })}
 			</Dialog.Title>
-			<Dialog.Description>{mode === "antigravity" ? $_("antigravity.use.description") : $_("useDialog.description", { values: { agent } })}</Dialog.Description>
+			<Dialog.Description>{mode !== "codex" ? $_(`${managedLoginPrefix}.use.description`) : $_("useDialog.description", { values: { agent } })}</Dialog.Description>
 		</Dialog.Header>
 
 		<div class="flex min-h-0 flex-col gap-4 overflow-auto pr-1">
@@ -118,7 +122,7 @@
 				<Alert.Root>
 					<ShieldCheckIcon data-icon="inline-start" />
 					<Alert.Title>{changeSummary}</Alert.Title>
-					<Alert.Description>{mode === "antigravity" ? $_("antigravity.use.summaryDescription") : $_("useDialog.changeSummaryDescription")}</Alert.Description>
+					<Alert.Description>{mode !== "codex" ? $_(`${managedLoginPrefix}.use.summaryDescription`) : $_("useDialog.changeSummaryDescription")}</Alert.Description>
 				</Alert.Root>
 			{:else}
 				<Skeleton class="h-16 w-full" />
@@ -127,8 +131,8 @@
 			{#if plan?.state_captures?.length}
 			<Alert.Root>
 				<ShieldCheckIcon data-icon="inline-start" />
-				<Alert.Title>{mode === "antigravity" ? $_("antigravity.use.captureTitle") : $_("useDialog.captureTitle")}</Alert.Title>
-				<Alert.Description>{mode === "antigravity" ? $_("antigravity.use.captureDescription") : $_("useDialog.captureDescription", { values: { count: plan.state_captures.length } })}</Alert.Description>
+				<Alert.Title>{mode !== "codex" ? $_(`${managedLoginPrefix}.use.captureTitle`) : $_("useDialog.captureTitle")}</Alert.Title>
+				<Alert.Description>{mode !== "codex" ? $_(`${managedLoginPrefix}.use.captureDescription`) : $_("useDialog.captureDescription", { values: { count: plan.state_captures.length } })}</Alert.Description>
 			</Alert.Root>
 			{/if}
 
@@ -177,7 +181,10 @@
 								<span>{targetLabel(operation)}</span>
 							</span>
 						</Alert.Title>
-						<Alert.Description>{sensitiveStatus(operation)}</Alert.Description>
+						<Alert.Description>
+							<div>{sensitiveStatus(operation)}</div>
+							{#if operationWarnings(operation).length}<div class="mt-1">{operationWarnings(operation).join(" ")}</div>{/if}
+						</Alert.Description>
 					</Alert.Root>
 				{/each}
 				{#if fileOperations.length}

@@ -42,6 +42,12 @@ export interface CreateAntigravityProfileRequest {
     "description"?: string | null;
 }
 
+export interface CreateClaudeCodeProfileRequest {
+    "profile_id": string;
+    "name"?: string | null;
+    "description"?: string | null;
+}
+
 export interface CreateCodexConfigSetRequest {
     "config_set_id": string;
     "name": string;
@@ -68,6 +74,7 @@ export interface DashboardResult {
     "codex_profiles"?: app$0.CodexProfileListResult | null;
     "codex_config_sets"?: app$0.CodexConfigSetListResult | null;
     "antigravity_profiles"?: app$0.AntigravityProfileListResult | null;
+    "claude_code_profiles"?: app$0.ClaudeCodeProfileListResult | null;
     "usage"?: app$0.UsageSummaryResult | null;
     "startup_error"?: DesktopError | null;
     "generated_at_unix_ms": number;
@@ -110,6 +117,12 @@ export interface SwitchApplyRequest {
 }
 
 export interface UpdateAntigravityProfileRequest {
+    "profile_id": string;
+    "name"?: string | null;
+    "description"?: string | null;
+}
+
+export interface UpdateClaudeCodeProfileRequest {
     "profile_id": string;
     "name"?: string | null;
     "description"?: string | null;

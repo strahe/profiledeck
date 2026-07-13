@@ -16,6 +16,7 @@ func TestResolveHomeOrder(t *testing.T) {
 
 	t.Setenv("CODEX_HOME", envHome)
 	t.Setenv("HOME", userHome)
+	t.Setenv("USERPROFILE", userHome)
 
 	got, err := ResolveHome(explicit)
 	if err != nil {

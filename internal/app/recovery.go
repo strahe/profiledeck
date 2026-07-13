@@ -150,6 +150,9 @@ func RecoverFailedSwitch(ctx context.Context, req RecoverFailedSwitchParams) (Re
 	if err != nil {
 		return RecoverFailedSwitchResult{}, err
 	}
+	if err := verifyRestoredRollbackTargets(ctx, source.Targets); err != nil {
+		return RecoverFailedSwitchResult{}, failRollbackWithProcessed(ctx, db, recoveryOperationID, backedUpMetadata, metadataBase, counts, processed, err)
+	}
 	metadataBase.Counts = counts
 	metadataBase.ProcessedTargets = processed
 	appliedMetadata, err := marshalRollbackOperationMetadata("applied", metadataBase)

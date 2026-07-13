@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"time"
 
+	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
 	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/targetfs"
@@ -72,6 +74,9 @@ type switchBackupEntry struct {
 	BeforeSHA256  string `json:"before_sha256"`
 	Mode          string `json:"mode"`
 	BackupRelPath string `json:"backup_rel_path"`
+	// PrivateLocator is backend-owned recovery state. Backup summaries and all
+	// other public DTOs intentionally omit it.
+	PrivateLocator string `json:"private_locator,omitempty"`
 }
 
 type switchOperationMetadata struct {
@@ -140,6 +145,9 @@ func ApplySwitch(ctx context.Context, req ApplySwitchRequest) (ApplySwitchResult
 	operationID, err := newSwitchOperationID(time.Now())
 	if err != nil {
 		return ApplySwitchResult{}, WrapError(ErrorOperationCreateFailed, "failed to create switch operation id", err)
+	}
+	if providerID == claudecodeconfig.ProviderID {
+		operationID = strings.Replace(operationID, "switch-", "claude-code-switch-", 1)
 	}
 	initialMetadata, err := marshalSwitchOperationMetadata("created", providerID, profileID, applyPlan{}, switchBackup{}, SwitchCounts{}, nil)
 	if err != nil {
@@ -213,6 +221,13 @@ func ApplySwitch(ctx context.Context, req ApplySwitchRequest) (ApplySwitchResult
 		if err := writeTargetAtomic(ctx, op); err != nil {
 			return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, backupMetadata, err)
 		}
+	}
+	// External writes and active-state commit are not one storage transaction.
+	// Re-read every target after all writes so an already failed or replaced
+	// working copy does not advance active state; external writers can still race
+	// after this final read.
+	if err := verifyAppliedSwitchTargets(ctx, plan.Operations); err != nil {
+		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, backupMetadata, err)
 	}
 
 	appliedMetadata, err := marshalSwitchOperationMetadata("applied", providerID, profileID, plan, backup, counts, previousActive)
@@ -296,6 +311,40 @@ func verifySwitchPlanHashes(ctx context.Context, operations []applyPlanOperation
 	return nil
 }
 
+func verifyAppliedSwitchTargets(ctx context.Context, operations []applyPlanOperation) error {
+	for _, op := range operations {
+		if op.Action == planActionUnsupported {
+			continue
+		}
+		backend, ok := targetBackends[op.Spec.BackendID()]
+		if !ok {
+			return NewError(ErrorSwitchPlanUnsupported, "switch target backend is unavailable").WithDetail("backend_id", op.Spec.BackendID())
+		}
+		expected := op.Snapshot
+		if op.Action == planActionCreate || op.Action == planActionUpdate {
+			expected.Exists = true
+			expected.IsSymlink = false
+			expected.Fingerprint = sha256HexString(op.DesiredContent)
+		}
+		if err := backend.Verify(ctx, op.Spec, expected); err != nil {
+			return err
+		}
+		if goruntime.GOOS == "linux" && op.ProviderID == claudecodeconfig.ProviderID && op.Spec.BackendID() == targetBackendFile {
+			state, err := backend.Inspect(ctx, op.Spec)
+			if err != nil {
+				return err
+			}
+			if !state.Exists || state.IsSymlink || state.Fingerprint != expected.Fingerprint {
+				return NewError(ErrorTargetChanged, "Claude Code credential file changed during post-verify").WithDetail("target_id", op.TargetID)
+			}
+			if state.Mode.Perm() != 0o600 {
+				return NewError(ErrorTargetWriteFailed, "Claude Code credential file permissions could not be verified").WithDetail("target_id", op.TargetID)
+			}
+		}
+	}
+	return nil
+}
+
 func verifySingleSwitchPlanHash(ctx context.Context, op applyPlanOperation) error {
 	if op.Action == planActionUnsupported {
 		return nil
@@ -326,20 +375,22 @@ func createSwitchBackup(ctx context.Context, paths runtime.Paths, operationID st
 
 	backup := switchBackup{Path: backupPath, Entries: []switchBackupEntry{}}
 	for _, op := range plan.Operations {
-		if op.Action != planActionCreate && op.Action != planActionUpdate {
+		keepsPrivateLocator := op.Action == planActionNoop && op.Snapshot.privateLocator != ""
+		if op.Action != planActionCreate && op.Action != planActionUpdate && !keepsPrivateLocator {
 			continue
 		}
 		entry := switchBackupEntry{
-			TargetID:     op.TargetID,
-			BackendID:    op.BackendID,
-			TargetLabel:  op.TargetLabel,
-			Path:         op.Path,
-			Action:       op.Action,
-			Existed:      op.FileExists,
-			BeforeSHA256: op.Snapshot.Fingerprint,
-			Mode:         fileModeString(op.BeforeMode),
+			TargetID:       op.TargetID,
+			BackendID:      op.BackendID,
+			TargetLabel:    op.TargetLabel,
+			Path:           firstNonEmpty(op.Path, op.privateRecoveryLocator),
+			Action:         op.Action,
+			Existed:        op.FileExists,
+			BeforeSHA256:   op.Snapshot.Fingerprint,
+			Mode:           fileModeString(op.BeforeMode),
+			PrivateLocator: op.Snapshot.privateLocator,
 		}
-		if op.FileExists {
+		if op.FileExists && op.Action != planActionNoop {
 			directory := "files"
 			if op.Spec.Sensitive() && op.Spec.BackendID() != targetBackendFile {
 				directory = "secrets"
@@ -371,13 +422,8 @@ func createSwitchBackup(ctx context.Context, paths runtime.Paths, operationID st
 		CreatedAtUnixMS: time.Now().UnixMilli(),
 		Entries:         backup.Entries,
 	}
-	raw, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return switchBackup{}, WrapError(ErrorBackupFailed, "failed to encode backup manifest", err)
-	}
-	raw = append(raw, '\n')
-	if err := os.WriteFile(filepath.Join(backupPath, "manifest.json"), raw, 0o600); err != nil {
-		return switchBackup{}, WrapError(ErrorBackupFailed, "failed to write backup manifest", err).WithDetail("path", backupPath)
+	if err := writeBackupManifest(backupPath, manifest); err != nil {
+		return switchBackup{}, err
 	}
 	return backup, nil
 }
@@ -494,7 +540,7 @@ func marshalSwitchOperationMetadata(checkpoint, providerID, profileID string, pl
 			TargetID:      op.TargetID,
 			BackendID:     op.BackendID,
 			TargetLabel:   op.TargetLabel,
-			Path:          op.Path,
+			Path:          firstNonEmpty(op.Path, op.privateRecoveryLocator),
 			Format:        op.Format,
 			Strategy:      op.Strategy,
 			Action:        op.Action,

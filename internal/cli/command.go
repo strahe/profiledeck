@@ -35,6 +35,7 @@ func NewCommand(info app.Info) *urfavecli.Command {
 		Commands: []*urfavecli.Command{
 			newAntigravityCommand(),
 			newBackupCommand(),
+			newClaudeCodeCommand(),
 			newCodexCommand(),
 			newDoctorCommand(),
 			newInitCommand(),

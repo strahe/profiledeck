@@ -3814,9 +3814,15 @@ func sqliteDSN(databasePath string, readOnly bool) string {
 		mode = "ro"
 	}
 
+	normalizedPath := strings.ReplaceAll(databasePath, `\`, `/`)
+	// A drive-letter path must remain a URI path. Without the leading slash,
+	// net/url serializes the drive as an authority and SQLite rejects it.
+	if len(normalizedPath) >= 2 && normalizedPath[1] == ':' {
+		normalizedPath = "/" + normalizedPath
+	}
 	u := url.URL{
 		Scheme: "file",
-		Path:   strings.ReplaceAll(databasePath, `\`, `/`),
+		Path:   normalizedPath,
 	}
 	q := u.Query()
 	q.Set("mode", mode)

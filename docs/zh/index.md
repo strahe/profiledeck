@@ -1,13 +1,14 @@
 # ProfileDeck
 
-ProfileDeck 用于安全切换本地 AI 编程工具的 Profile。Codex Profile 保存登录和可复用的 Config Set；Antigravity Profile 保存 Antigravity agy v2 使用的 consumer OAuth 登录。
+ProfileDeck 用于安全切换本地 AI 编程工具的 Profile。Codex Profile 保存登录和可复用的 Config Set；Claude Code Profile 保存官方订阅登录；Antigravity Profile 保存 Antigravity agy v2 使用的 consumer OAuth 登录。
 
 ## 当前能力
 
 - 从 `$CODEX_HOME/config.toml` 和 `$CODEX_HOME/auth.json` 创建 Codex Profile。
+- 保存和切换多个 Claude Code 官方订阅登录，不修改 Claude Code settings。
 - 通过系统凭据存储保存和切换 Antigravity agy v2 登录。
 - 在 Profile 之间独立共享已保存登录和 Config Set。
-- 切换前审核全部变更、保留 Codex 中的有效修改并创建备份；审核后外部目标发生变化时会停止切换。
+- 切换前审核全部变更、保留当前工具状态中受支持的有效修改并创建备份；审核后外部目标发生变化时会停止切换。
 - 导入当前和归档 Codex session JSONL，并分析本地时间趋势、模型、会话、缓存用量和 API 等价估算成本。
 - 查看备份、找出阻止切换的问题、恢复失败切换，并撤销已完成的切换。
 - 管理通用 provider、profile 和 target file，用于高级本地流程。
@@ -30,6 +31,7 @@ Codex profile 切换要求 Codex 使用文件凭据。如果 `$CODEX_HOME/auth.j
 
 - [快速开始](/zh/guide/getting-started) 说明本地构建、首次设置和常用命令。
 - [Codex Profile](/zh/codex/profiles) 说明已保存登录、Config Set、切换、限额和备份。
+- [Claude Code Profile](/zh/claude-code/profiles) 说明官方订阅登录的捕获、切换和各平台凭据位置。
 - [Antigravity Profile](/zh/antigravity/profiles) 说明 agy v2 登录保存、切换和支持范围。
 - [Codex 用量与成本](/zh/codex/usage-cost) 说明离线导入、分析报告和估算限制。
 - [切换流程](/zh/operations/switching) 说明 plan、apply、备份和安全检查。

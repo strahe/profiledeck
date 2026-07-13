@@ -33,6 +33,22 @@ jobs:
       - name: Check core
         run: make ci-core-check
 
+  core-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test core on Windows
+        run: go test ./cmd/... ./internal/...
+
   desktop:
     runs-on: macos-26
 
@@ -53,5 +69,50 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/frontend/package-lock.json
 
+      - name: Test macOS core with cgo
+        run: go test ./cmd/... ./internal/...
+
       - name: Check desktop
         run: make ci-desktop-check
+
+  desktop-native-build:
+    name: Desktop build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+
+      - name: Install Linux Wails dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
+
+      - name: Install frontend dependencies
+        run: npm --prefix desktop/frontend ci
+
+      - name: Build frontend
+        run: npm --prefix desktop/frontend run build
+
+      - name: Build Wails desktop
+        run: go build -tags production -o profiledeck-desktop${{ runner.os == 'Windows' && '.exe' || '' }} ./desktop

@@ -12,12 +12,16 @@ import (
 )
 
 const (
-	lockRangeLow  = ^uint32(0)
-	lockRangeHigh = ^uint32(0)
+	lockOffsetLow  = uint32(0)
+	lockOffsetHigh = uint32(1)
+	lockRangeLow   = uint32(1)
+	lockRangeHigh  = uint32(0)
 )
 
 func tryLockFile(file *os.File) error {
-	var overlapped windows.Overlapped
+	// Lock one byte beyond the diagnostic payload so readers can inspect the
+	// owner while every ProfileDeck process still contends on the same range.
+	overlapped := windows.Overlapped{Offset: lockOffsetLow, OffsetHigh: lockOffsetHigh}
 	err := windows.LockFileEx(
 		windows.Handle(file.Fd()),
 		windows.LOCKFILE_FAIL_IMMEDIATELY|windows.LOCKFILE_EXCLUSIVE_LOCK,
@@ -36,7 +40,7 @@ func tryLockFile(file *os.File) error {
 }
 
 func unlockFileHandle(file *os.File) error {
-	var overlapped windows.Overlapped
+	overlapped := windows.Overlapped{Offset: lockOffsetLow, OffsetHigh: lockOffsetHigh}
 	return windows.UnlockFileEx(
 		windows.Handle(file.Fd()),
 		0,

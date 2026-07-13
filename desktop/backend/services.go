@@ -9,6 +9,7 @@ import (
 
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
+	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 )
 
@@ -29,6 +30,11 @@ type CodexService struct {
 }
 
 type AntigravityService struct {
+	env     Environment
+	changes *ChangeNotifier
+}
+
+type ClaudeCodeService struct {
 	env     Environment
 	changes *ChangeNotifier
 }
@@ -66,6 +72,7 @@ type SettingsService struct {
 type Services struct {
 	App         *AppService
 	Antigravity *AntigravityService
+	ClaudeCode  *ClaudeCodeService
 	Codex       *CodexService
 	Profile     *ProfileService
 	Switch      *SwitchService
@@ -89,6 +96,7 @@ type DashboardResult struct {
 	CodexProfiles       *app.CodexProfileListResult       `json:"codex_profiles,omitempty"`
 	CodexConfigSets     *app.CodexConfigSetListResult     `json:"codex_config_sets,omitempty"`
 	AntigravityProfiles *app.AntigravityProfileListResult `json:"antigravity_profiles,omitempty"`
+	ClaudeCodeProfiles  *app.ClaudeCodeProfileListResult  `json:"claude_code_profiles,omitempty"`
 	Usage               *app.UsageSummaryResult           `json:"usage,omitempty"`
 	StartupError        *DesktopError                     `json:"startup_error,omitempty"`
 	GeneratedAt         int64                             `json:"generated_at_unix_ms"`
@@ -170,6 +178,18 @@ type UpdateAntigravityProfileRequest struct {
 	Description *string `json:"description,omitempty"`
 }
 
+type CreateClaudeCodeProfileRequest struct {
+	ProfileID   string  `json:"profile_id"`
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+}
+
+type UpdateClaudeCodeProfileRequest struct {
+	ProfileID   string  `json:"profile_id"`
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+}
+
 type ExportCodexProfilesRequest struct {
 	ProfileIDs []string `json:"profile_ids,omitempty"`
 	OutputPath string   `json:"output_path"`
@@ -189,6 +209,7 @@ func NewServices(info app.Info, env Environment, startupErr error) Services {
 	return Services{
 		App:         &AppService{info: info, env: env, startupErr: startupErr, changes: changes},
 		Antigravity: &AntigravityService{env: env, changes: changes},
+		ClaudeCode:  &ClaudeCodeService{env: env, changes: changes},
 		Codex:       &CodexService{env: env, changes: changes, autoSync: autoSync, quota: quota},
 		Profile:     &ProfileService{env: env},
 		Switch:      &SwitchService{env: env, changes: changes, quota: quota},
@@ -306,6 +327,9 @@ func (s *AppService) Dashboard(ctx context.Context) (DashboardResult, error) {
 	if antigravityProfiles, err := app.ListAntigravityProfiles(ctx, app.ListAntigravityProfilesRequest{ConfigDir: s.env.ConfigDir}); err == nil {
 		result.AntigravityProfiles = &antigravityProfiles
 	}
+	if claudeCodeProfiles, err := app.ListClaudeCodeProfiles(ctx, app.ListClaudeCodeProfilesRequest{ConfigDir: s.env.ConfigDir}); err == nil {
+		result.ClaudeCodeProfiles = &claudeCodeProfiles
+	}
 
 	usage, err := app.UsageSummary(ctx, app.UsageSummaryRequest{ConfigDir: s.env.ConfigDir, ProviderID: codexconfig.ProviderID})
 	if err == nil {
@@ -353,6 +377,52 @@ func (s *AntigravityService) UpdateProfile(ctx context.Context, req UpdateAntigr
 func (s *AntigravityService) SaveCurrent(ctx context.Context) (app.AntigravityProfileSaveResult, error) {
 	result, err := app.SaveActiveAntigravityProfile(ctx, app.SaveActiveAntigravityProfileRequest{ConfigDir: s.env.ConfigDir})
 	s.notifyMutationResult(DesktopChangeAntigravityProfileChanged, "antigravity.saveCurrent", agyconfig.ProviderID, result.Summary.Profile.ID, result.OperationID, err)
+	return result, err
+}
+
+func (s *ClaudeCodeService) Detect(ctx context.Context) (app.ClaudeCodeDetectResult, error) {
+	return app.ClaudeCodeDetect(ctx, app.ClaudeCodeDetectRequest{ConfigDir: s.env.ConfigDir})
+}
+
+func (s *ClaudeCodeService) AuthorizeKeychain(ctx context.Context) (app.ClaudeCodeDetectResult, error) {
+	return app.ClaudeCodeDetect(ctx, app.ClaudeCodeDetectRequest{ConfigDir: s.env.ConfigDir, AllowKeychainInteraction: true})
+}
+
+func (s *ClaudeCodeService) ListProfiles(ctx context.Context) (app.ClaudeCodeProfileListResult, error) {
+	return app.ListClaudeCodeProfiles(ctx, app.ListClaudeCodeProfilesRequest{ConfigDir: s.env.ConfigDir})
+}
+
+func (s *ClaudeCodeService) ShowProfile(ctx context.Context, profileID string) (app.ClaudeCodeProfileDetail, error) {
+	return app.GetClaudeCodeProfile(ctx, app.GetClaudeCodeProfileRequest{ConfigDir: s.env.ConfigDir, ProfileID: profileID})
+}
+
+func (s *ClaudeCodeService) CreateProfile(ctx context.Context, req CreateClaudeCodeProfileRequest) (app.ClaudeCodeProfileSaveResult, error) {
+	result, err := app.CreateClaudeCodeProfile(ctx, app.CreateClaudeCodeProfileRequest{
+		ConfigDir: s.env.ConfigDir, ProfileID: req.ProfileID, Name: req.Name, Description: req.Description,
+	})
+	profileID := result.Summary.Profile.ID
+	if profileID == "" {
+		profileID = strings.TrimSpace(req.ProfileID)
+	}
+	s.notifyMutationResult(DesktopChangeClaudeCodeProfileChanged, "claude-code.createProfile", claudecodeconfig.ProviderID, profileID, result.OperationID, err)
+	return result, err
+}
+
+func (s *ClaudeCodeService) UpdateProfile(ctx context.Context, req UpdateClaudeCodeProfileRequest) (app.ClaudeCodeProfileDetail, error) {
+	result, err := app.UpdateClaudeCodeProfile(ctx, app.UpdateClaudeCodeProfileRequest{
+		ConfigDir: s.env.ConfigDir, ProfileID: req.ProfileID, Name: req.Name, Description: req.Description,
+	})
+	profileID := result.Summary.Profile.ID
+	if profileID == "" {
+		profileID = strings.TrimSpace(req.ProfileID)
+	}
+	s.notifyMutationResult(DesktopChangeClaudeCodeProfileChanged, "claude-code.updateProfile", claudecodeconfig.ProviderID, profileID, "", err)
+	return result, err
+}
+
+func (s *ClaudeCodeService) SaveCurrent(ctx context.Context, confirmShared bool) (app.ClaudeCodeProfileSaveResult, error) {
+	result, err := app.SaveActiveClaudeCodeProfile(ctx, app.SaveActiveClaudeCodeProfileRequest{ConfigDir: s.env.ConfigDir, ConfirmShared: confirmShared})
+	s.notifyMutationResult(DesktopChangeClaudeCodeProfileChanged, "claude-code.saveCurrent", claudecodeconfig.ProviderID, result.Summary.Profile.ID, result.OperationID, err)
 	return result, err
 }
 
@@ -664,6 +734,10 @@ func (s *CodexService) notifyMutationResult(kind, source, providerID, profileID,
 }
 
 func (s *AntigravityService) notifyMutationResult(kind, source, providerID, profileID, operationID string, err error) {
+	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
+}
+
+func (s *ClaudeCodeService) notifyMutationResult(kind, source, providerID, profileID, operationID string, err error) {
 	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
 }
 

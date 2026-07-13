@@ -12,6 +12,7 @@ All commands accept the global option:
 | --- | --- |
 | `antigravity` | Manage Antigravity agy v2 Profiles. |
 | `backup` | View ProfileDeck backups. |
+| `claude-code` | Manage official Claude Code subscription Profiles. |
 | `codex` | Manage Codex provider profiles. |
 | `doctor` | Check local data, file permissions, and interrupted changes. |
 | `init` | Create ProfileDeck's local data. |
@@ -63,6 +64,21 @@ The first `profile create` saves the current Codex login and settings and create
 
 The backup contains complete Codex sign-in data and settings. ProfileDeck writes it with `0600` permissions on POSIX systems and never prints the sensitive contents to stdout. `import inspect` checks the backup and reports `create`, `unchanged`, and `conflict` actions. `import apply` requires the reviewed fingerprint and makes no changes when existing Codex data conflicts. An existing global Profile without Codex bindings receives the imported bindings without changing its name or description. Import does not make a Profile current or write Codex files.
 
+## Claude Code
+
+```bash
+profiledeck claude-code detect [--json]
+profiledeck claude-code profile create <profile-id> [--name NAME] [--description TEXT] [--json]
+profiledeck claude-code profile list [--json]
+profiledeck claude-code profile show <profile-id> [--json]
+profiledeck claude-code profile update <profile-id> [--name NAME] [--description TEXT] [--json]
+profiledeck claude-code profile save-current [--yes] [--json]
+```
+
+Create saves the current official Claude Code subscription login and makes the new Profile current. `save-current` updates the login bound to the active Profile. When that hidden login is shared, the command reports the affected Profile count and requires `--yes`.
+
+Claude Code has no shorter `claude` alias. Switch it with `profiledeck plan claude-code <profile-id>` and `profiledeck switch claude-code <profile-id> --yes`. Commands expose login status and metadata only, never token values.
+
 ## Antigravity agy v2
 
 ```bash
@@ -111,7 +127,7 @@ profiledeck profile update <id> [--name NAME] [--description TEXT] [--metadata-j
 profiledeck profile delete <id> --yes [--json]
 ```
 
-For the managed `codex` and `antigravity` Providers, generic Provider updates may change only the display name or enabled state. Their adapter and metadata are owned by the dedicated Profile workflows.
+For the managed `codex`, `claude-code`, and `antigravity` Providers, generic Provider updates may change only the display name or enabled state. Their adapter and metadata are owned by the dedicated Profile workflows.
 
 Target commands:
 
@@ -123,7 +139,7 @@ profiledeck profile target update <profile-id> <provider-id> <target-id> [--path
 profiledeck profile target delete <profile-id> <provider-id> <target-id> --yes [--json]
 ```
 
-Generic target commands cannot create, update, or delete bindings managed by Codex or Antigravity Profiles. Use the Provider-specific commands above.
+Generic target commands cannot create, update, or delete bindings managed by Codex, Claude Code, or Antigravity Profiles. Use the Provider-specific commands above.
 
 ## Backup and recovery
 

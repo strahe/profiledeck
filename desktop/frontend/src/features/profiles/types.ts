@@ -28,6 +28,11 @@ export type AntigravityProfileRoute =
 	| { kind: "new"; profileID: "" }
 	| { kind: "detail"; profileID: string };
 
+export type ClaudeCodeProfileRoute =
+	| { kind: "list"; profileID: "" }
+	| { kind: "new"; profileID: "" }
+	| { kind: "detail"; profileID: string };
+
 export type SwitchProfileItem = {
 	id: string;
 	name: string;

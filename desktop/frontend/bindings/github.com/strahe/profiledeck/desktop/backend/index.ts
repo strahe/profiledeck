@@ -4,6 +4,7 @@
 import * as AntigravityService from "./antigravityservice.js";
 import * as AppService from "./appservice.js";
 import * as BackupService from "./backupservice.js";
+import * as ClaudeCodeService from "./claudecodeservice.js";
 import * as CodexService from "./codexservice.js";
 import * as DoctorService from "./doctorservice.js";
 import * as ProfileService from "./profileservice.js";
@@ -14,6 +15,7 @@ export {
     AntigravityService,
     AppService,
     BackupService,
+    ClaudeCodeService,
     CodexService,
     DoctorService,
     ProfileService,
@@ -28,6 +30,7 @@ export type {
     CodexQuotaRuntimeStatus,
     CopyCodexConfigSetRequest,
     CreateAntigravityProfileRequest,
+    CreateClaudeCodeProfileRequest,
     CreateCodexConfigSetRequest,
     CreateCodexProfileRequest,
     DashboardResult,
@@ -37,6 +40,7 @@ export type {
     ForkCodexProfileRequest,
     SwitchApplyRequest,
     UpdateAntigravityProfileRequest,
+    UpdateClaudeCodeProfileRequest,
     UpdateCodexConfigSetRequest,
     UpdateCodexProfileConfigSetRequest,
     UpdateCodexProfileMetadataRequest,

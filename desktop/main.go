@@ -28,6 +28,7 @@ const (
 	trayDashboardUnavailableLabel           = "Dashboard unavailable. Open ProfileDeck for details."
 	trayCodexProfilesUnavailableLabel       = "Unable to load Codex profiles. Open ProfileDeck for details."
 	trayAntigravityProfilesUnavailableLabel = "Unable to load Antigravity profiles. Open ProfileDeck for details."
+	trayClaudeCodeProfilesUnavailableLabel  = "Unable to load Claude Code profiles. Open ProfileDeck for details."
 )
 
 //go:embed all:frontend/dist
@@ -48,6 +49,7 @@ func main() {
 		Services: []application.Service{
 			application.NewService(services.App),
 			application.NewService(services.Antigravity),
+			application.NewService(services.ClaudeCode),
 			application.NewService(services.Codex),
 			application.NewService(services.Profile),
 			application.NewService(services.Switch),
