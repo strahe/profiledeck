@@ -6,8 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	sqlite "modernc.org/sqlite"
+)
+
+const (
+	snapshotStepPages = 128
+	snapshotStepDelay = 25 * time.Millisecond
 )
 
 type onlineBackuper interface {
@@ -77,7 +83,9 @@ func (factory Factory) CreateSnapshot(ctx context.Context, destination string) e
 		return fmt.Errorf("create online database snapshot: %w", err)
 	}
 
-	file, err := os.OpenFile(tempPath, os.O_RDONLY, 0)
+	// Windows requires a writable handle for Sync because it calls
+	// FlushFileBuffers, even though the completed snapshot is not modified.
+	file, err := os.OpenFile(tempPath, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("open completed snapshot: %w", err)
 	}
@@ -105,12 +113,21 @@ func stepBackup(ctx context.Context, backup *sqlite.Backup) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		more, err := backup.Step(128)
-		if err != nil {
+		more, err := backup.Step(snapshotStepPages)
+		if err != nil && !isSQLiteBusyError(err) {
 			return err
 		}
-		if !more {
+		if err == nil && !more {
 			return nil
+		}
+		// Online backups may be retried after SQLITE_BUSY or SQLITE_LOCKED.
+		// Yield between chunks too, so concurrent writers can release their locks.
+		timer := time.NewTimer(snapshotStepDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
 		}
 	}
 }

@@ -34,6 +34,7 @@ jobs:
         run: make ci-core-check
 
   core-windows:
+    if: ${{ vars.DISABLE_WINDOWS_CI != 'true' }}
     runs-on: windows-latest
 
     steps:
@@ -81,9 +82,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
+        os: ${{ fromJSON(vars.DISABLE_WINDOWS_CI == 'true' && '["ubuntu-latest"]' || '["ubuntu-latest","windows-latest"]') }}
 
     steps:
       - name: Checkout
