@@ -9,7 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/codex"
 	codexappserver "github.com/strahe/profiledeck/internal/codex/appserver"
 )
 
@@ -32,16 +33,16 @@ type CodexQuotaRuntimeStatus struct {
 }
 
 type CodexProfileQuotaRuntimeStatus struct {
-	ProfileID             string                      `json:"profile_id"`
-	Running               bool                        `json:"running"`
-	LastTask              string                      `json:"last_task,omitempty"`
-	LastStartedAtUnixMS   int64                       `json:"last_started_at_unix_ms"`
-	LastCompletedAtUnixMS int64                       `json:"last_completed_at_unix_ms"`
-	LastSuccessAtUnixMS   int64                       `json:"last_success_at_unix_ms"`
-	NextRunAtUnixMS       int64                       `json:"next_run_at_unix_ms"`
-	Status                app.CodexProfileQuotaStatus `json:"status"`
-	Snapshot              *app.CodexQuotaSnapshot     `json:"snapshot,omitempty"`
-	ErrorCode             string                      `json:"error_code,omitempty"`
+	ProfileID             string                        `json:"profile_id"`
+	Running               bool                          `json:"running"`
+	LastTask              string                        `json:"last_task,omitempty"`
+	LastStartedAtUnixMS   int64                         `json:"last_started_at_unix_ms"`
+	LastCompletedAtUnixMS int64                         `json:"last_completed_at_unix_ms"`
+	LastSuccessAtUnixMS   int64                         `json:"last_success_at_unix_ms"`
+	NextRunAtUnixMS       int64                         `json:"next_run_at_unix_ms"`
+	Status                codex.CodexProfileQuotaStatus `json:"status"`
+	Snapshot              *codex.CodexQuotaSnapshot     `json:"snapshot,omitempty"`
+	ErrorCode             string                        `json:"error_code,omitempty"`
 }
 
 type codexCredentialSchedule struct {
@@ -53,7 +54,7 @@ type codexCredentialSchedule struct {
 	keepalive        bool
 	keepaliveDueAt   time.Time
 	nextRunAt        time.Time
-	nextKind         app.CodexCredentialJobKind
+	nextKind         codex.CodexCredentialJobKind
 	retryIndex       int
 	pausedHash       string
 	quotaSupported   bool
@@ -66,7 +67,7 @@ type codexQuotaWaiter struct {
 }
 
 type codexQuotaManualResult struct {
-	quota app.CodexProfileQuota
+	quota codex.CodexProfileQuota
 	err   error
 }
 
@@ -78,15 +79,13 @@ type codexQuotaManualGroup struct {
 type codexQuotaRuntimeJob struct {
 	key       string
 	profileID string
-	kind      app.CodexCredentialJobKind
+	kind      codex.CodexCredentialJobKind
 	manual    bool
 	waiters   []codexQuotaWaiter
 	startedAt time.Time
 }
 
 type codexQuotaRuntime struct {
-	env Environment
-
 	mu                sync.RWMutex
 	status            CodexQuotaRuntimeStatus
 	emitter           func(CodexQuotaRuntimeStatus)
@@ -103,23 +102,26 @@ type codexQuotaRuntime struct {
 	reloadMu    sync.Mutex
 	started     bool
 	cancel      context.CancelFunc
+	pause       chan struct{}
 	wg          sync.WaitGroup
 
 	wake        chan struct{}
 	now         func() time.Time
 	random      *rand.Rand
 	timeout     time.Duration
-	loadTargets func(context.Context) ([]app.CodexAutomationTarget, error)
-	runJob      func(context.Context, app.RunCodexCredentialJobRequest) (app.CodexCredentialJobResult, error)
+	loadTargets func(context.Context) ([]codex.CodexAutomationTarget, error)
+	runJob      func(context.Context, codex.RunCodexCredentialJobRequest) (codex.CodexCredentialJobResult, error)
 }
 
-func newCodexQuotaRuntime(env Environment) *codexQuotaRuntime {
+func newCodexQuotaRuntime(
+	loadTargets func(context.Context) ([]codex.CodexAutomationTarget, error),
+	runJob func(context.Context, codex.RunCodexCredentialJobRequest) (codex.CodexCredentialJobResult, error),
+) *codexQuotaRuntime {
 	appServerState := CodexAppServerUnknown
 	if !codexappserver.NewRunner().Available() {
 		appServerState = CodexAppServerUnavailable
 	}
 	runtime := &codexQuotaRuntime{
-		env:           env,
 		status:        CodexQuotaRuntimeStatus{AppServerStatus: appServerState, Profiles: []CodexProfileQuotaRuntimeStatus{}},
 		schedules:     map[string]*codexCredentialSchedule{},
 		profileToKey:  map[string]string{},
@@ -129,12 +131,8 @@ func newCodexQuotaRuntime(env Environment) *codexQuotaRuntime {
 		now:           time.Now,
 		random:        rand.New(rand.NewSource(time.Now().UnixNano())),
 		timeout:       codexQuotaJobTimeout,
-	}
-	runtime.loadTargets = func(ctx context.Context) ([]app.CodexAutomationTarget, error) {
-		return app.ListCodexAutomationTargets(ctx, app.CodexSettingsRequest{ConfigDir: env.ConfigDir})
-	}
-	runtime.runJob = func(ctx context.Context, req app.RunCodexCredentialJobRequest) (app.CodexCredentialJobResult, error) {
-		return app.RunCodexCredentialJob(ctx, req)
+		loadTargets:   loadTargets,
+		runJob:        runJob,
 	}
 	return runtime
 }
@@ -149,6 +147,7 @@ func (r *codexQuotaRuntime) Start(ctx context.Context, emitter func(CodexQuotaRu
 		return
 	}
 	runCtx, cancel := context.WithCancel(ctx)
+	pause := make(chan struct{})
 	r.mu.Lock()
 	r.emitter = emitter
 	r.mu.Unlock()
@@ -158,11 +157,36 @@ func (r *codexQuotaRuntime) Start(ctx context.Context, emitter func(CodexQuotaRu
 	r.wg.Add(1)
 	r.started = true
 	r.cancel = cancel
-	go r.run(runCtx)
+	r.pause = pause
+	go r.run(runCtx, pause)
 	r.lifecycleMu.Unlock()
 }
 
+func (r *codexQuotaRuntime) SetEmitter(emitter func(CodexQuotaRuntimeStatus)) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.emitter = emitter
+	r.mu.Unlock()
+}
+
+func (r *codexQuotaRuntime) startAgentRuntime(ctx context.Context) {
+	r.mu.RLock()
+	emitter := r.emitter
+	r.mu.RUnlock()
+	r.Start(ctx, emitter)
+}
+
 func (r *codexQuotaRuntime) Stop() {
+	r.stop(false)
+}
+
+func (r *codexQuotaRuntime) stopAgentRuntime() {
+	r.stop(true)
+}
+
+func (r *codexQuotaRuntime) stop(graceful bool) {
 	if r == nil {
 		return
 	}
@@ -171,9 +195,16 @@ func (r *codexQuotaRuntime) Stop() {
 		r.lifecycleMu.Unlock()
 		return
 	}
-	r.cancel()
+	if graceful {
+		close(r.pause)
+	} else {
+		r.cancel()
+	}
 	r.signalWake()
 	r.wg.Wait()
+	if graceful {
+		r.cancel()
+	}
 	r.mu.Lock()
 	for _, group := range r.manualByKey {
 		for _, waiter := range group.waiters {
@@ -190,6 +221,7 @@ func (r *codexQuotaRuntime) Stop() {
 	r.inflight = nil
 	r.started = false
 	r.cancel = nil
+	r.pause = nil
 	r.mu.Unlock()
 	r.lifecycleMu.Unlock()
 }
@@ -219,25 +251,25 @@ func (r *codexQuotaRuntime) Reload(ctx context.Context) error {
 	return nil
 }
 
-func (r *codexQuotaRuntime) ReadProfileQuota(ctx context.Context, profileID string) (app.CodexProfileQuota, error) {
+func (r *codexQuotaRuntime) ReadProfileQuota(ctx context.Context, profileID string) (codex.CodexProfileQuota, error) {
 	if r == nil {
-		return app.CodexProfileQuota{}, errors.New("Codex quota runtime is unavailable")
+		return codex.CodexProfileQuota{}, errors.New("Codex quota runtime is unavailable")
 	}
 	profileID = strings.TrimSpace(profileID)
 	if profileID == "" {
-		return app.CodexProfileQuota{}, app.NewError(app.ErrorProfileInvalid, "Codex profile id is required")
+		return codex.CodexProfileQuota{}, apperror.New(apperror.ProfileInvalid, "Codex profile id is required")
 	}
 	if err := r.Reload(ctx); err != nil {
-		return app.CodexProfileQuota{}, err
+		return codex.CodexProfileQuota{}, err
 	}
 	waiter := codexQuotaWaiter{profileID: profileID, result: make(chan codexQuotaManualResult, 1)}
 	r.mu.Lock()
 	key, ok := r.profileToKey[profileID]
 	if !ok {
 		r.mu.Unlock()
-		return app.CodexProfileQuota{}, app.NewError(app.ErrorProfileNotFound, "Codex profile not found").WithDetail("profile_id", profileID)
+		return codex.CodexProfileQuota{}, apperror.New(apperror.ProfileNotFound, "Codex profile not found").WithDetail("profile_id", profileID)
 	}
-	if r.inflight != nil && r.inflight.key == key && r.inflight.kind == app.CodexCredentialJobQuota {
+	if r.inflight != nil && r.inflight.key == key && r.inflight.kind == codex.CodexCredentialJobQuota {
 		r.inflight.waiters = append(r.inflight.waiters, waiter)
 	} else if group, exists := r.manualByKey[key]; exists {
 		group.waiters = append(group.waiters, waiter)
@@ -249,13 +281,13 @@ func (r *codexQuotaRuntime) ReadProfileQuota(ctx context.Context, profileID stri
 	r.signalWake()
 	select {
 	case <-ctx.Done():
-		return app.CodexProfileQuota{}, ctx.Err()
+		return codex.CodexProfileQuota{}, ctx.Err()
 	case result := <-waiter.result:
 		return result.quota, result.err
 	}
 }
 
-func (r *codexQuotaRuntime) applyTargets(targets []app.CodexAutomationTarget) {
+func (r *codexQuotaRuntime) applyTargets(targets []codex.CodexAutomationTarget) {
 	now := r.now()
 	grouped := map[string]*codexCredentialSchedule{}
 	profileToKey := make(map[string]string, len(targets))
@@ -339,14 +371,14 @@ func (r *codexQuotaRuntime) applyTargets(targets []app.CodexAutomationTarget) {
 
 func (r *codexQuotaRuntime) ensureScheduleLocked(schedule, old *codexCredentialSchedule, now time.Time) {
 	if schedule.interval > 0 && schedule.quotaSupported {
-		schedule.nextKind = app.CodexCredentialJobQuota
-		if schedule.nextRunAt.IsZero() || old == nil || old.interval != schedule.interval || old.nextKind != app.CodexCredentialJobQuota {
+		schedule.nextKind = codex.CodexCredentialJobQuota
+		if schedule.nextRunAt.IsZero() || old == nil || old.interval != schedule.interval || old.nextKind != codex.CodexCredentialJobQuota {
 			schedule.nextRunAt = now.Add(r.randomInitialDelayLocked(schedule.interval))
 		}
 		return
 	}
 	if schedule.keepalive && schedule.keepaliveSupport {
-		schedule.nextKind = app.CodexCredentialJobKeepalive
+		schedule.nextKind = codex.CodexCredentialJobKeepalive
 		if schedule.keepaliveDueAt.IsZero() || schedule.keepaliveDueAt.Before(now) {
 			schedule.nextRunAt = now
 		} else {
@@ -358,14 +390,18 @@ func (r *codexQuotaRuntime) ensureScheduleLocked(schedule, old *codexCredentialS
 	schedule.nextRunAt = time.Time{}
 }
 
-func (r *codexQuotaRuntime) run(ctx context.Context) {
+func (r *codexQuotaRuntime) run(ctx context.Context, pause <-chan struct{}) {
 	defer r.wg.Done()
 	for {
 		// A canceled automatic job can still have an overdue nextRunAt. Check
 		// lifecycle cancellation before selecting work so shutdown cannot spin by
 		// repeatedly starting that same job with an already-canceled context.
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			return
+		case <-pause:
+			return
+		default:
 		}
 		job, wait := r.nextJob()
 		if job != nil {
@@ -376,6 +412,8 @@ func (r *codexQuotaRuntime) run(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
+			case <-pause:
+				return
 			case <-r.wake:
 			}
 			continue
@@ -383,6 +421,11 @@ func (r *codexQuotaRuntime) run(ctx context.Context) {
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		case <-pause:
 			if !timer.Stop() {
 				<-timer.C
 			}
@@ -414,7 +457,7 @@ func (r *codexQuotaRuntime) nextJob() (*codexQuotaRuntimeJob, time.Duration) {
 		schedule := r.schedules[key]
 		if group == nil || schedule == nil || len(schedule.profileIDs) == 0 {
 			if group != nil {
-				err := app.NewError(app.ErrorCodexInvalid, "Codex profile changed while quota refresh was queued")
+				err := apperror.New(apperror.CodexInvalid, "Codex profile changed while quota refresh was queued")
 				for _, waiter := range group.waiters {
 					nonBlockingQuotaResult(waiter.result, codexQuotaManualResult{err: err})
 				}
@@ -422,7 +465,7 @@ func (r *codexQuotaRuntime) nextJob() (*codexQuotaRuntimeJob, time.Duration) {
 			return nil, 0
 		}
 		job := &codexQuotaRuntimeJob{
-			key: key, profileID: group.waiters[0].profileID, kind: app.CodexCredentialJobQuota,
+			key: key, profileID: group.waiters[0].profileID, kind: codex.CodexCredentialJobQuota,
 			manual: true, waiters: group.waiters, startedAt: now,
 		}
 		r.startJobLocked(job, schedule)
@@ -478,18 +521,18 @@ func (r *codexQuotaRuntime) startJobLocked(job *codexQuotaRuntimeJob, schedule *
 
 func (r *codexQuotaRuntime) executeJob(parent context.Context, job *codexQuotaRuntimeJob) {
 	ctx, cancel := context.WithTimeout(parent, r.timeout)
-	result, err := r.runJob(ctx, app.RunCodexCredentialJobRequest{
-		ConfigDir: r.env.ConfigDir, ProfileID: job.profileID,
-		Kind: job.kind, AllowDirectFallback: job.manual,
+	result, err := r.runJob(ctx, codex.RunCodexCredentialJobRequest{
+		ProfileID: job.profileID,
+		Kind:      job.kind, AllowDirectFallback: job.manual,
 	})
 	cancel()
 	if err == nil && result.CredentialConflict {
 		// The native response belongs to the stale temporary credential copy.
 		// The concurrent database value wins, so its quota must be re-read rather
 		// than projected onto Profiles bound to the replacement credential.
-		result.Quota.Status = app.CodexProfileQuotaUnavailable
+		result.Quota.Status = codex.CodexProfileQuotaUnavailable
 		result.Quota.Snapshot = nil
-		err = app.NewError(app.ErrorCodexInvalid, "Codex credential changed during quota refresh")
+		err = apperror.New(apperror.CodexInvalid, "Codex credential changed during quota refresh")
 	}
 	completedAt := r.now()
 	credentialUpdated := result.CredentialUpdated || result.CredentialConflict
@@ -499,7 +542,7 @@ func (r *codexQuotaRuntime) executeJob(parent context.Context, job *codexQuotaRu
 	}
 }
 
-func (r *codexQuotaRuntime) completeJob(job *codexQuotaRuntimeJob, result app.CodexCredentialJobResult, jobErr error, completedAt time.Time) {
+func (r *codexQuotaRuntime) completeJob(job *codexQuotaRuntimeJob, result codex.CodexCredentialJobResult, jobErr error, completedAt time.Time) {
 	r.mu.Lock()
 	schedule := r.schedules[job.key]
 	scheduleExists := schedule != nil
@@ -542,13 +585,13 @@ func (r *codexQuotaRuntime) completeJob(job *codexQuotaRuntimeJob, result app.Co
 		schedule.nextRunAt = time.Time{}
 	}
 	if jobErr == nil && result.NativeErrorKind != codexappserver.ErrorAuthPermanent {
-		if result.Quota.Status == app.CodexProfileQuotaAvailable {
+		if result.Quota.Status == codex.CodexProfileQuotaAvailable {
 			schedule.retryIndex = 0
 			r.scheduleNextSuccessLocked(schedule, job.kind, completedAt)
-		} else if !job.manual && (result.Quota.Status == app.CodexProfileQuotaUnavailable || result.Quota.Status == app.CodexProfileQuotaAuthRequired) {
+		} else if !job.manual && (result.Quota.Status == codex.CodexProfileQuotaUnavailable || result.Quota.Status == codex.CodexProfileQuotaAuthRequired) {
 			r.scheduleRetryLocked(schedule, completedAt)
 		} else if job.manual && schedule.interval > 0 {
-			schedule.nextKind = app.CodexCredentialJobQuota
+			schedule.nextKind = codex.CodexCredentialJobQuota
 			schedule.nextRunAt = completedAt.Add(r.randomJitterLocked(schedule.interval))
 		}
 	} else if jobErr != nil && !job.manual && !errors.Is(jobErr, context.Canceled) {
@@ -565,14 +608,14 @@ func (r *codexQuotaRuntime) completeJob(job *codexQuotaRuntimeJob, result app.Co
 			status.ErrorCode = statusCode
 			if jobErr == nil {
 				status.Status = result.Quota.Status
-				if job.kind == app.CodexCredentialJobQuota && result.Quota.Snapshot != nil {
+				if job.kind == codex.CodexCredentialJobQuota && result.Quota.Snapshot != nil {
 					status.Snapshot = cloneCodexQuotaSnapshot(result.Quota.Snapshot)
 				}
-				if result.Quota.Status == app.CodexProfileQuotaAvailable {
+				if result.Quota.Status == codex.CodexProfileQuotaAvailable {
 					status.LastSuccessAtUnixMS = completedAt.UnixMilli()
 				}
 			} else {
-				status.Status = app.CodexProfileQuotaUnavailable
+				status.Status = codex.CodexProfileQuotaUnavailable
 			}
 			r.profileStatus[profileID] = status
 		}
@@ -594,15 +637,15 @@ func (r *codexQuotaRuntime) completeJob(job *codexQuotaRuntimeJob, result app.Co
 	r.signalWake()
 }
 
-func (r *codexQuotaRuntime) scheduleNextSuccessLocked(schedule *codexCredentialSchedule, kind app.CodexCredentialJobKind, now time.Time) {
+func (r *codexQuotaRuntime) scheduleNextSuccessLocked(schedule *codexCredentialSchedule, kind codex.CodexCredentialJobKind, now time.Time) {
 	if schedule.interval > 0 && schedule.quotaSupported {
-		schedule.nextKind = app.CodexCredentialJobQuota
+		schedule.nextKind = codex.CodexCredentialJobQuota
 		schedule.nextRunAt = now.Add(r.randomJitterLocked(schedule.interval))
 		return
 	}
 	if schedule.keepalive && schedule.keepaliveSupport {
-		schedule.nextKind = app.CodexCredentialJobKeepalive
-		if kind == app.CodexCredentialJobKeepalive {
+		schedule.nextKind = codex.CodexCredentialJobKeepalive
+		if kind == codex.CodexCredentialJobKeepalive {
 			schedule.nextRunAt = now.Add(8 * 24 * time.Hour)
 		} else if schedule.keepaliveDueAt.After(now) {
 			schedule.nextRunAt = schedule.keepaliveDueAt
@@ -625,7 +668,7 @@ func (r *codexQuotaRuntime) scheduleRetryLocked(schedule *codexCredentialSchedul
 		schedule.retryIndex++
 	}
 	if schedule.nextKind == "" {
-		schedule.nextKind = app.CodexCredentialJobQuota
+		schedule.nextKind = codex.CodexCredentialJobQuota
 	}
 }
 
@@ -700,12 +743,12 @@ func cloneCodexQuotaRuntimeStatus(status CodexQuotaRuntimeStatus) CodexQuotaRunt
 	return status
 }
 
-func cloneCodexQuotaSnapshot(snapshot *app.CodexQuotaSnapshot) *app.CodexQuotaSnapshot {
+func cloneCodexQuotaSnapshot(snapshot *codex.CodexQuotaSnapshot) *codex.CodexQuotaSnapshot {
 	if snapshot == nil {
 		return nil
 	}
 	cloned := *snapshot
-	cloned.AdditionalRateLimits = append([]app.CodexQuotaRateLimit(nil), snapshot.AdditionalRateLimits...)
+	cloned.AdditionalRateLimits = append([]codex.CodexQuotaRateLimit(nil), snapshot.AdditionalRateLimits...)
 	return &cloned
 }
 

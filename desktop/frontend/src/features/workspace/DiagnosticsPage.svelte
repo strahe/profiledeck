@@ -3,7 +3,7 @@
 	import CheckCircleIcon from "@lucide/svelte/icons/circle-check";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 
-	import type { DoctorFinding, DoctorResult } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { Finding as DoctorFinding, DoctorResult } from "../../../bindings/github.com/strahe/profiledeck/internal/doctor/models";
 	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
 	import OperationTable from "$lib/components/app/OperationTable.svelte";
 	import SectionCard from "$lib/components/app/SectionCard.svelte";

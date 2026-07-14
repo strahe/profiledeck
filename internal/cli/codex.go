@@ -8,7 +8,8 @@ import (
 
 	urfavecli "github.com/urfave/cli/v3"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/codex"
 )
 
 const (
@@ -31,7 +32,11 @@ func newCodexDetectCommand() *urfavecli.Command {
 		Name: "detect", Usage: "Detect local Codex config state",
 		Flags: []urfavecli.Flag{stringFlag(codexDirFlagName, "Codex config directory"), boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.CodexDetect(ctx, app.CodexDetectRequest{ConfigDir: configDirValue(cmd), CodexDir: cmd.String(codexDirFlagName)})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().Detect(ctx)
 			if err != nil {
 				return err
 			}
@@ -58,7 +63,11 @@ func newCodexProfileListCommand() *urfavecli.Command {
 	return &urfavecli.Command{
 		Name: "list", Usage: "List stored Codex profiles", Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.ListCodexProfiles(ctx, app.ListCodexProfilesRequest{ConfigDir: configDirValue(cmd)})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().ListProfiles(ctx)
 			if err != nil {
 				return err
 			}
@@ -75,11 +84,15 @@ func newCodexProfileShowCommand() *urfavecli.Command {
 		Name: "show", Usage: "Show a stored Codex profile", ArgsUsage: "<profile-id>",
 		Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			profileID, err := singleIDArg(cmd, app.ErrorProfileInvalid)
+			profileID, err := singleIDArg(cmd, apperror.ProfileInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.GetCodexProfile(ctx, app.GetCodexProfileRequest{ConfigDir: configDirValue(cmd), ProfileID: profileID})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().GetProfile(ctx, profileID)
 			if err != nil {
 				return err
 			}
@@ -101,13 +114,17 @@ func newCodexProfileCreateCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			profileID, err := singleIDArg(cmd, app.ErrorProfileInvalid)
+			profileID, err := singleIDArg(cmd, apperror.ProfileInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.CreateCodexProfile(ctx, app.CreateCodexProfileRequest{
-				ConfigDir: configDirValue(cmd), CodexDir: cmd.String(codexDirFlagName), ProfileID: profileID,
-				Name: stringFlagPtr(cmd, nameFlagName), Description: stringFlagPtr(cmd, descriptionFlagName),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().CreateProfile(ctx, codex.CreateCodexProfileRequest{
+				ProfileID: profileID,
+				Name:      stringFlagPtr(cmd, nameFlagName), Description: stringFlagPtr(cmd, descriptionFlagName),
 				NewConfigSetID: cmd.String(newConfigSetFlagName), NewConfigSetName: stringFlagPtr(cmd, configSetNameFlagName),
 				NewConfigSetDescription: stringFlagPtr(cmd, configSetDescriptionFlagName),
 			})
@@ -135,18 +152,22 @@ func newCodexProfileForkCommand() *urfavecli.Command {
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
 			if cmd.Args().Len() != 2 {
-				return app.NewError(app.ErrorProfileInvalid, "expected source profile id and new profile id")
+				return apperror.New(apperror.ProfileInvalid, "expected source profile id and new profile id")
 			}
-			sourceID, appErr := appValidateCLIID(cmd.Args().Get(0), app.ErrorProfileInvalid)
+			sourceID, appErr := appValidateCLIID(cmd.Args().Get(0), apperror.ProfileInvalid)
 			if appErr != nil {
 				return appErr
 			}
-			profileID, appErr := appValidateCLIID(cmd.Args().Get(1), app.ErrorProfileInvalid)
+			profileID, appErr := appValidateCLIID(cmd.Args().Get(1), apperror.ProfileInvalid)
 			if appErr != nil {
 				return appErr
 			}
-			result, err := app.ForkCodexProfile(ctx, app.ForkCodexProfileRequest{
-				ConfigDir: configDirValue(cmd), CodexDir: cmd.String(codexDirFlagName), SourceProfileID: sourceID, ProfileID: profileID,
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().ForkProfile(ctx, codex.ForkCodexProfileRequest{
+				SourceProfileID: sourceID, ProfileID: profileID,
 				CredentialBinding: cmd.String(credentialBindingFlagName), ConfigBinding: cmd.String(configBindingFlagName),
 				NewConfigSetID: cmd.String(newConfigSetFlagName), NewConfigSetName: stringFlagPtr(cmd, configSetNameFlagName),
 				NewConfigSetDescription: stringFlagPtr(cmd, configSetDescriptionFlagName),
@@ -168,7 +189,11 @@ func newCodexProfileSaveCurrentCommand() *urfavecli.Command {
 		Name: "save-current", Usage: "Save current Codex auth and config into the active profile",
 		Flags: []urfavecli.Flag{stringFlag(codexDirFlagName, "Codex config directory"), boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.SaveActiveCodexProfileState(ctx, app.SaveActiveCodexProfileStateRequest{ConfigDir: configDirValue(cmd), CodexDir: cmd.String(codexDirFlagName)})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().SaveActiveProfileState(ctx)
 			if err != nil {
 				return err
 			}
@@ -190,10 +215,14 @@ func newCodexProfileSetConfigCommand() *urfavecli.Command {
 		Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
 			if cmd.Args().Len() != 2 {
-				return app.NewError(app.ErrorProfileInvalid, "expected profile id and config set id")
+				return apperror.New(apperror.ProfileInvalid, "expected profile id and config set id")
 			}
-			result, err := app.UpdateCodexProfileConfigSet(ctx, app.UpdateCodexProfileConfigSetRequest{
-				ConfigDir: configDirValue(cmd), ProfileID: cmd.Args().Get(0), ConfigSetID: cmd.Args().Get(1),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().UpdateProfileConfigSet(ctx, codex.UpdateCodexProfileConfigSetRequest{
+				ProfileID: cmd.Args().Get(0), ConfigSetID: cmd.Args().Get(1),
 			})
 			if err != nil {
 				return err
@@ -220,7 +249,11 @@ func newCodexConfigSetListCommand() *urfavecli.Command {
 	return &urfavecli.Command{
 		Name: "list", Usage: "List Codex Config Sets", Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.ListCodexConfigSets(ctx, app.ListCodexConfigSetsRequest{ConfigDir: configDirValue(cmd)})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().ListConfigSets(ctx)
 			if err != nil {
 				return err
 			}
@@ -237,11 +270,15 @@ func newCodexConfigSetShowCommand() *urfavecli.Command {
 		Name: "show", Usage: "Show a Codex Config Set summary", ArgsUsage: "<config-set-id>",
 		Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			id, err := singleIDArg(cmd, app.ErrorCodexInvalid)
+			id, err := singleIDArg(cmd, apperror.CodexInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.GetCodexConfigSet(ctx, app.GetCodexConfigSetRequest{ConfigDir: configDirValue(cmd), ConfigSetID: id})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().GetConfigSet(ctx, id)
 			if err != nil {
 				return err
 			}
@@ -258,7 +295,7 @@ func newCodexConfigSetCreateCommand() *urfavecli.Command {
 		Name: "create", Usage: "Create a Config Set from the current config.toml", ArgsUsage: "<config-set-id>",
 		Flags: []urfavecli.Flag{stringFlag(codexDirFlagName, "Codex config directory"), stringFlag(nameFlagName, "Config Set name"), stringFlag(descriptionFlagName, "Config Set description"), boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			id, err := singleIDArg(cmd, app.ErrorCodexInvalid)
+			id, err := singleIDArg(cmd, apperror.CodexInvalid)
 			if err != nil {
 				return err
 			}
@@ -266,7 +303,11 @@ func newCodexConfigSetCreateCommand() *urfavecli.Command {
 			if name == "" {
 				name = id
 			}
-			result, err := app.CreateCodexConfigSet(ctx, app.CreateCodexConfigSetRequest{ConfigDir: configDirValue(cmd), CodexDir: cmd.String(codexDirFlagName), ConfigSetID: id, Name: name, Description: cmd.String(descriptionFlagName)})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().CreateConfigSet(ctx, codex.CreateCodexConfigSetRequest{ConfigSetID: id, Name: name, Description: cmd.String(descriptionFlagName)})
 			if err != nil {
 				return err
 			}
@@ -281,13 +322,17 @@ func newCodexConfigSetCopyCommand() *urfavecli.Command {
 		Flags: []urfavecli.Flag{stringFlag(nameFlagName, "Config Set name"), stringFlag(descriptionFlagName, "Config Set description"), boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
 			if cmd.Args().Len() != 2 {
-				return app.NewError(app.ErrorCodexInvalid, "expected source and destination config set ids")
+				return apperror.New(apperror.CodexInvalid, "expected source and destination config set ids")
 			}
 			name := cmd.String(nameFlagName)
 			if name == "" {
 				name = cmd.Args().Get(1)
 			}
-			result, err := app.CopyCodexConfigSet(ctx, app.CopyCodexConfigSetRequest{ConfigDir: configDirValue(cmd), SourceConfigSetID: cmd.Args().Get(0), ConfigSetID: cmd.Args().Get(1), Name: name, Description: cmd.String(descriptionFlagName)})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().CopyConfigSet(ctx, codex.CopyCodexConfigSetRequest{SourceConfigSetID: cmd.Args().Get(0), ConfigSetID: cmd.Args().Get(1), Name: name, Description: cmd.String(descriptionFlagName)})
 			if err != nil {
 				return err
 			}
@@ -301,11 +346,15 @@ func newCodexConfigSetUpdateCommand() *urfavecli.Command {
 		Name: "update", Usage: "Rename or describe a Codex Config Set", ArgsUsage: "<config-set-id>",
 		Flags: []urfavecli.Flag{stringFlag(nameFlagName, "Config Set name"), stringFlag(descriptionFlagName, "Config Set description"), boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			id, err := singleIDArg(cmd, app.ErrorCodexInvalid)
+			id, err := singleIDArg(cmd, apperror.CodexInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.UpdateCodexConfigSet(ctx, app.UpdateCodexConfigSetRequest{ConfigDir: configDirValue(cmd), ConfigSetID: id, Name: stringFlagPtr(cmd, nameFlagName), Description: stringFlagPtr(cmd, descriptionFlagName)})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().UpdateConfigSet(ctx, codex.UpdateCodexConfigSetRequest{ConfigSetID: id, Name: stringFlagPtr(cmd, nameFlagName), Description: stringFlagPtr(cmd, descriptionFlagName)})
 			if err != nil {
 				return err
 			}
@@ -319,14 +368,18 @@ func newCodexConfigSetDeleteCommand() *urfavecli.Command {
 		Name: "delete", Usage: "Delete an unreferenced Codex Config Set", ArgsUsage: "<config-set-id>",
 		Flags: []urfavecli.Flag{boolFlag(yesFlagName, "Confirm deletion"), boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			id, err := singleIDArg(cmd, app.ErrorCodexInvalid)
+			id, err := singleIDArg(cmd, apperror.CodexInvalid)
 			if err != nil {
 				return err
 			}
 			if !cmd.Bool(yesFlagName) {
-				return app.NewError(app.ErrorConfirmationRequired, "Config Set deletion requires --yes")
+				return apperror.New(apperror.ConfirmationRequired, "Config Set deletion requires --yes")
 			}
-			if err := app.DeleteCodexConfigSet(ctx, app.DeleteCodexConfigSetRequest{ConfigDir: configDirValue(cmd), ConfigSetID: id}); err != nil {
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			if err := application.Codex().DeleteConfigSet(ctx, id); err != nil {
 				return err
 			}
 			result := map[string]any{"deleted": true, "config_set_id": id}
@@ -339,21 +392,21 @@ func newCodexConfigSetDeleteCommand() *urfavecli.Command {
 	}
 }
 
-func writeCodexConfigSetCommandResult(cmd *urfavecli.Command, result app.CodexConfigSet) error {
+func writeCodexConfigSetCommandResult(cmd *urfavecli.Command, result codex.CodexConfigSet) error {
 	if cmd.Bool(jsonFlagName) {
 		return writeJSON(outputWriter(cmd), result)
 	}
 	return writeCodexConfigSet(outputWriter(cmd), result)
 }
 
-func appValidateCLIID(value string, code app.ErrorCode) (string, *app.AppError) {
+func appValidateCLIID(value string, code apperror.Code) (string, *apperror.Error) {
 	if strings.TrimSpace(value) == "" {
-		return "", app.NewError(code, "id is required")
+		return "", apperror.New(code, "id is required")
 	}
 	return strings.TrimSpace(value), nil
 }
 
-func writeCodexDetect(w io.Writer, result app.CodexDetectResult) error {
+func writeCodexDetect(w io.Writer, result codex.CodexDetectResult) error {
 	if _, err := fmt.Fprintf(w, "Codex detect\nprovider: %s\nadapter: %s\ncodex dir: %s\nconfig: %s\nauth: %s\ncodex dir exists: %t\nconfig status: %s\nauth status: %s\nProfileDeck initialized: %t\nprovider exists: %t\nprovider adapter: %s\nprovider compatible: %t\n",
 		result.ProviderID, result.AdapterID, result.CodexDir, result.ConfigPath, result.AuthPath, result.CodexDirExists,
 		result.ConfigStatus, result.AuthStatus, result.ProfileDeckInitialized, result.ProviderExists, result.ProviderAdapterID, result.ProviderCompatible); err != nil {
@@ -362,7 +415,7 @@ func writeCodexDetect(w io.Writer, result app.CodexDetectResult) error {
 	return writeWarnings(w, result.Warnings)
 }
 
-func writeCodexProfileList(w io.Writer, result app.CodexProfileListResult) error {
+func writeCodexProfileList(w io.Writer, result codex.CodexProfileListResult) error {
 	if len(result.Profiles) == 0 {
 		_, err := fmt.Fprintln(w, "No Codex profiles")
 		return err
@@ -386,7 +439,7 @@ func writeCodexProfileList(w io.Writer, result app.CodexProfileListResult) error
 	return nil
 }
 
-func writeCodexProfileDetail(w io.Writer, detail app.CodexProfileDetail) error {
+func writeCodexProfileDetail(w io.Writer, detail codex.CodexProfileDetail) error {
 	summary := detail.Summary
 	if _, err := fmt.Fprintf(w, "Codex profile\nprofile: %s\nname: %s\nactive: %t\naccount: %s\nconfig set: %s (%s)\nmodel: %s\nprovider: %s\nupdated: %d\n",
 		summary.Profile.ID, summary.Profile.Name, summary.Active, summary.CodexAccountID, summary.ConfigSetName, summary.ConfigSetID,
@@ -396,7 +449,7 @@ func writeCodexProfileDetail(w io.Writer, detail app.CodexProfileDetail) error {
 	return writeWarnings(w, summary.Warnings)
 }
 
-func writeCodexProfileSave(w io.Writer, title string, result app.CodexProfileSaveResult) error {
+func writeCodexProfileSave(w io.Writer, title string, result codex.CodexProfileSaveResult) error {
 	if _, err := fmt.Fprintf(w, "%s\noperation: %s\nprovider: %s\nprofile: %s\nconfig set: %s\ncodex dir: %s\nconfig: %s\nauth: %s\n",
 		title, result.OperationID, result.Provider.ID, result.Profile.ID, result.ConfigSet.ID, result.CodexDir, result.ConfigPath, result.AuthPath); err != nil {
 		return err
@@ -404,7 +457,7 @@ func writeCodexProfileSave(w io.Writer, title string, result app.CodexProfileSav
 	return writeWarnings(w, result.Warnings)
 }
 
-func writeCodexConfigSetList(w io.Writer, result app.CodexConfigSetListResult) error {
+func writeCodexConfigSetList(w io.Writer, result codex.CodexConfigSetListResult) error {
 	if len(result.ConfigSets) == 0 {
 		_, err := fmt.Fprintln(w, "No Codex Config Sets")
 		return err
@@ -417,7 +470,7 @@ func writeCodexConfigSetList(w io.Writer, result app.CodexConfigSetListResult) e
 	return nil
 }
 
-func writeCodexConfigSet(w io.Writer, result app.CodexConfigSet) error {
+func writeCodexConfigSet(w io.Writer, result codex.CodexConfigSet) error {
 	_, err := fmt.Fprintf(w, "Codex Config Set\nid: %s\nname: %s\nactive: %t\nreferences: %d\nmodel: %s\nprovider: %s\nupdated: %d\n",
 		result.ID, result.Name, result.Active, result.ReferenceCount, result.Model, result.ModelProvider, result.UpdatedAtUnixMS)
 	return err

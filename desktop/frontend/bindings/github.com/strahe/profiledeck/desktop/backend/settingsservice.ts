@@ -7,12 +7,12 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as app$0 from "../../internal/app/models.js";
+import * as settings$0 from "../../internal/settings/models.js";
 
-export function Get(): $CancellablePromise<app$0.DesktopSettings> {
+export function Get(): $CancellablePromise<settings$0.Desktop> {
     return $Call.ByID(1068180696);
 }
 
-export function Update(req: app$0.UpdateDesktopSettingsRequest): $CancellablePromise<app$0.DesktopSettings> {
+export function Update(req: settings$0.UpdateRequest): $CancellablePromise<settings$0.Desktop> {
     return $Call.ByID(340284781, req);
 }

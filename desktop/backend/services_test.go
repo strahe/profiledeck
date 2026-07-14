@@ -12,16 +12,40 @@ import (
 
 	keyring "github.com/zalando/go-keyring"
 
+	"github.com/strahe/profiledeck/internal/agent"
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/codex"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	"github.com/strahe/profiledeck/internal/settings"
+	"github.com/strahe/profiledeck/internal/usage"
 )
+
+func newBackendTestApplication(t *testing.T, env Environment) *app.Application {
+	t.Helper()
+	if env.ConfigDir == "" {
+		env.ConfigDir = t.TempDir()
+	}
+	application, err := app.New(app.Config{
+		ConfigDir: env.ConfigDir, CodexDir: env.CodexDir, AgentAccess: agent.AccessDesktopPreferences,
+	})
+	if err != nil {
+		t.Fatalf("create test Application: %v", err)
+	}
+	return application
+}
+
+func newTestServices(t *testing.T, info app.Info, env Environment, startupErr error) Services {
+	t.Helper()
+	return NewServices(newBackendTestApplication(t, env), info, env, startupErr)
+}
 
 func TestBootstrapInitializesOnlyProfileDeckRuntime(t *testing.T) {
 	configDir := t.TempDir()
 	codexDir := filepath.Join(t.TempDir(), ".codex")
 
-	err := Bootstrap(context.Background(), Environment{ConfigDir: configDir, CodexDir: codexDir})
+	err := Bootstrap(context.Background(), newBackendTestApplication(t, Environment{ConfigDir: configDir, CodexDir: codexDir}))
 	if err != nil {
 		t.Fatalf("expected bootstrap to succeed, got %v", err)
 	}
@@ -35,20 +59,20 @@ func TestBootstrapInitializesOnlyProfileDeckRuntime(t *testing.T) {
 }
 
 func TestDashboardReportsStartupError(t *testing.T) {
-	service := NewServices(app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, app.NewError(app.ErrorRuntimeInitFailed, "startup failed")).App
+	service := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, apperror.New(apperror.RuntimeInitFailed, "startup failed")).App
 
 	result, err := service.Dashboard(context.Background())
 	if err != nil {
 		t.Fatalf("expected dashboard to tolerate startup error, got %v", err)
 	}
-	if result.StartupError == nil || result.StartupError.Code != string(app.ErrorRuntimeInitFailed) {
+	if result.StartupError == nil || result.StartupError.Code != string(apperror.RuntimeInitFailed) {
 		t.Fatalf("expected structured startup error, got %#v", result.StartupError)
 	}
 }
 
 func TestInitializeClearsStartupError(t *testing.T) {
 	ctx := context.Background()
-	service := NewServices(app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, app.NewError(app.ErrorRuntimeInitFailed, "startup failed")).App
+	service := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, apperror.New(apperror.RuntimeInitFailed, "startup failed")).App
 
 	before, err := service.Dashboard(ctx)
 	if err != nil {
@@ -70,17 +94,107 @@ func TestInitializeClearsStartupError(t *testing.T) {
 	}
 }
 
+func TestDisabledAgentsRejectStaticServiceCallsButKeepSafetyServices(t *testing.T) {
+	ctx := context.Background()
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil)
+	if _, err := services.App.Initialize(ctx); err != nil {
+		t.Fatalf("expected initialize to succeed, got %v", err)
+	}
+	state, err := services.Agent.SetEnabled(ctx, string(agent.Codex), false)
+	if err != nil || state.Enabled {
+		t.Fatalf("expected Codex Agent disable, state=%#v err=%v", state, err)
+	}
+
+	assertDesktopServiceErrorCode(t, func() error {
+		_, err := services.Codex.Detect(ctx)
+		return err
+	}(), apperror.AgentDisabled)
+	assertDesktopServiceErrorCode(t, func() error {
+		_, err := services.Codex.QuotaRuntimeStatus(ctx)
+		return err
+	}(), apperror.AgentDisabled)
+	assertDesktopServiceErrorCode(t, func() error {
+		_, err := services.Usage.Summary(ctx, codexconfig.ProviderID)
+		return err
+	}(), apperror.AgentDisabled)
+	assertDesktopServiceErrorCode(t, func() error {
+		_, err := services.Usage.AutoSyncStatus(ctx)
+		return err
+	}(), apperror.AgentDisabled)
+	assertDesktopServiceErrorCode(t, func() error {
+		_, err := services.Switch.BuildPlan(ctx, codexconfig.ProviderID, "work")
+		return err
+	}(), apperror.AgentDisabled)
+	assertDesktopServiceErrorCode(t, func() error {
+		_, err := services.Switch.Apply(ctx, SwitchApplyRequest{
+			ProviderID:              codexconfig.ProviderID,
+			ProfileID:               "work",
+			ExpectedPlanFingerprint: "fingerprint",
+			Confirm:                 true,
+		})
+		return err
+	}(), apperror.AgentDisabled)
+
+	dashboard, err := services.App.Dashboard(ctx)
+	if err != nil {
+		t.Fatalf("expected Dashboard to remain available, got %v", err)
+	}
+	if dashboard.CodexProfiles != nil || dashboard.CodexConfigSets != nil || dashboard.Usage != nil {
+		t.Fatalf("disabled Codex data remained in Dashboard: %#v", dashboard)
+	}
+	if len(dashboard.Agents) != 3 || agentEnabled(dashboard.Agents, agent.Codex) {
+		t.Fatalf("Dashboard did not expose resolved disabled state: %#v", dashboard.Agents)
+	}
+	for _, id := range []agent.ID{agent.Antigravity, agent.ClaudeCode} {
+		if _, err := services.Agent.SetEnabled(ctx, string(id), false); err != nil {
+			t.Fatalf("disable %s Agent: %v", id, err)
+		}
+	}
+	dashboard, err = services.App.Dashboard(ctx)
+	if err != nil {
+		t.Fatalf("expected all-disabled Dashboard to remain available, got %v", err)
+	}
+	for _, state := range dashboard.Agents {
+		if state.Enabled {
+			t.Fatalf("Dashboard retained enabled Agent after all were disabled: %#v", dashboard.Agents)
+		}
+	}
+	if len(dashboard.Providers) != 0 || len(dashboard.ActiveStates) != 0 ||
+		dashboard.CodexProfiles != nil || dashboard.AntigravityProfiles != nil || dashboard.ClaudeCodeProfiles != nil {
+		t.Fatalf("all-disabled Dashboard exposed managed Agent data: %#v", dashboard)
+	}
+	if _, err := services.Backup.ListBackups(ctx); err != nil {
+		t.Fatalf("Agent gate blocked backup inspection: %v", err)
+	}
+	if _, err := services.Doctor.Run(ctx); err != nil {
+		t.Fatalf("Agent gate blocked Doctor: %v", err)
+	}
+	_, recoveryErr := services.Backup.RecoverFailedSwitch(ctx, "missing-operation", true)
+	var recoveryAppErr *apperror.Error
+	if !errors.As(recoveryErr, &recoveryAppErr) || recoveryAppErr.Code == apperror.AgentDisabled {
+		t.Fatalf("recovery was blocked by Agent gate: %v", recoveryErr)
+	}
+}
+
 func TestSwitchApplyRequiresExpectedPlanFingerprint(t *testing.T) {
-	service := NewServices(app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil).Switch
+	service := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil).Switch
 
 	_, err := service.Apply(context.Background(), SwitchApplyRequest{
 		ProviderID: codexconfig.ProviderID,
 		ProfileID:  "work",
 		Confirm:    true,
 	})
-	var appErr *app.AppError
-	if !errors.As(err, &appErr) || appErr.Code != app.ErrorConfirmationRequired {
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.Code != apperror.ConfirmationRequired {
 		t.Fatalf("expected missing fingerprint to fail with confirmation error, got %v", err)
+	}
+}
+
+func assertDesktopServiceErrorCode(t *testing.T, err error, code apperror.Code) {
+	t.Helper()
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.Code != code {
+		t.Fatalf("error = %v, want code %q", err, code)
 	}
 }
 
@@ -93,7 +207,7 @@ func TestAntigravityServiceCreatesSafeDashboardProfile(t *testing.T) {
 	if err := keyring.Set(agyconfig.KeyringService, agyconfig.KeyringAccount, payload); err != nil {
 		t.Fatalf("expected mock keyring setup to succeed, got %v", err)
 	}
-	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir}, nil)
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir}, nil)
 	if _, err := services.App.Initialize(ctx); err != nil {
 		t.Fatalf("expected initialize to succeed, got %v", err)
 	}
@@ -129,7 +243,7 @@ func TestAntigravityServiceCreatesSafeDashboardProfile(t *testing.T) {
 
 func TestSettingsServicePersistsDesktopPreferences(t *testing.T) {
 	ctx := context.Background()
-	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil)
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil)
 	if _, err := services.App.Initialize(ctx); err != nil {
 		t.Fatalf("expected initialize to succeed, got %v", err)
 	}
@@ -138,14 +252,14 @@ func TestSettingsServicePersistsDesktopPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected settings get to succeed, got %v", err)
 	}
-	if initial.Language != app.DesktopLanguageAuto || initial.Appearance != app.DesktopAppearanceSystem || initial.SidebarCollapsed {
+	if initial.Language != settings.DesktopLanguageAuto || initial.Appearance != settings.DesktopAppearanceSystem || initial.SidebarCollapsed {
 		t.Fatalf("unexpected default settings: %#v", initial)
 	}
 
-	language := app.DesktopLanguageEnUS
-	appearance := app.DesktopAppearanceDark
+	language := settings.DesktopLanguageEnUS
+	appearance := settings.DesktopAppearanceDark
 	collapsed := true
-	updated, err := services.Settings.Update(ctx, app.UpdateDesktopSettingsRequest{
+	updated, err := services.Settings.Update(ctx, settings.UpdateRequest{
 		Language:         &language,
 		Appearance:       &appearance,
 		SidebarCollapsed: &collapsed,
@@ -153,14 +267,14 @@ func TestSettingsServicePersistsDesktopPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected settings update to succeed, got %v", err)
 	}
-	if updated.Language != app.DesktopLanguageEnUS || updated.Appearance != app.DesktopAppearanceDark || !updated.SidebarCollapsed {
+	if updated.Language != settings.DesktopLanguageEnUS || updated.Appearance != settings.DesktopAppearanceDark || !updated.SidebarCollapsed {
 		t.Fatalf("unexpected language update: %#v", updated)
 	}
 }
 
 func TestCodexSettingsServiceKeepsConcurrentUsageIntervalUpdatesConsistent(t *testing.T) {
 	ctx := context.Background()
-	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil)
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil)
 	if _, err := services.App.Initialize(ctx); err != nil {
 		t.Fatalf("expected initialize to succeed, got %v", err)
 	}
@@ -174,7 +288,7 @@ func TestCodexSettingsServiceKeepsConcurrentUsageIntervalUpdatesConsistent(t *te
 		go func() {
 			defer wg.Done()
 			<-start
-			_, err := services.Codex.UpdateSettings(ctx, app.UpdateCodexSettingsRequest{UsageSyncIntervalSeconds: &interval})
+			_, err := services.Codex.UpdateSettings(ctx, codex.UpdateCodexSettingsRequest{UsageSyncIntervalSeconds: &interval})
 			errorsByUpdate <- err
 		}()
 	}
@@ -191,7 +305,11 @@ func TestCodexSettingsServiceKeepsConcurrentUsageIntervalUpdatesConsistent(t *te
 	if err != nil {
 		t.Fatalf("expected settings reload to succeed, got %v", err)
 	}
-	if runtime := services.Usage.AutoSyncStatus(ctx); runtime.IntervalSeconds != persisted.UsageSyncIntervalSeconds {
+	runtime, err := services.Usage.AutoSyncStatus(ctx)
+	if err != nil {
+		t.Fatalf("expected runtime status to succeed, got %v", err)
+	}
+	if runtime.IntervalSeconds != persisted.UsageSyncIntervalSeconds {
 		t.Fatalf("expected persisted and runtime intervals to match, persisted=%#v runtime=%#v", persisted, runtime)
 	}
 }
@@ -199,7 +317,7 @@ func TestCodexSettingsServiceKeepsConcurrentUsageIntervalUpdatesConsistent(t *te
 func TestServicesNotifyDesktopChanges(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir}, nil)
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir}, nil)
 	events := []DesktopChangeEvent{}
 	cancel := services.SubscribeChanges(func(event DesktopChangeEvent) {
 		events = append(events, event)
@@ -225,7 +343,7 @@ func TestServicesNotifyDesktopChanges(t *testing.T) {
 }
 
 func TestSwitchApplyMissingFingerprintDoesNotNotify(t *testing.T) {
-	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil)
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil)
 	events := []DesktopChangeEvent{}
 	services.SubscribeChanges(func(event DesktopChangeEvent) {
 		events = append(events, event)
@@ -268,10 +386,10 @@ func TestNotifyMutationResultMarksCanceled(t *testing.T) {
 func TestSwitchApplyStateFailureNotifies(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	if err := Bootstrap(ctx, Environment{ConfigDir: configDir}); err != nil {
+	if err := Bootstrap(ctx, newBackendTestApplication(t, Environment{ConfigDir: configDir})); err != nil {
 		t.Fatalf("expected bootstrap to succeed, got %v", err)
 	}
-	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir}, nil)
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir}, nil)
 	events := []DesktopChangeEvent{}
 	services.SubscribeChanges(func(event DesktopChangeEvent) {
 		events = append(events, event)
@@ -303,23 +421,23 @@ func TestSwitchApplyStateFailureNotifies(t *testing.T) {
 func TestDashboardHonorsCanceledContext(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	if err := Bootstrap(ctx, Environment{ConfigDir: configDir}); err != nil {
+	if err := Bootstrap(ctx, newBackendTestApplication(t, Environment{ConfigDir: configDir})); err != nil {
 		t.Fatalf("expected bootstrap to succeed, got %v", err)
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
 
-	_, err := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir}, nil).App.Dashboard(canceled)
+	_, err := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir}, nil).App.Dashboard(canceled)
 	if err == nil {
 		t.Fatalf("expected dashboard to return a cancellation error")
 	}
 }
 
 func TestFormatDesktopError(t *testing.T) {
-	err := app.NewError(app.ErrorRuntimeInitFailed, "runtime failed").WithDetail("path", "/tmp/profiledeck")
+	err := apperror.New(apperror.RuntimeInitFailed, "runtime failed").WithDetail("path", "/tmp/profiledeck")
 
 	result := FormatDesktopError(err)
-	if result.Code != string(app.ErrorRuntimeInitFailed) || result.Message != "runtime failed" || result.Details["path"] != "/tmp/profiledeck" {
+	if result.Code != string(apperror.RuntimeInitFailed) || result.Message != "runtime failed" || result.Details["path"] != "/tmp/profiledeck" {
 		t.Fatalf("unexpected app error format: %#v", result)
 	}
 }
@@ -348,7 +466,7 @@ func TestDashboardDoesNotExposeRawCodexCredential(t *testing.T) {
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
 	ctx := context.Background()
-	if err := Bootstrap(ctx, Environment{ConfigDir: configDir, CodexDir: codexDir}); err != nil {
+	if err := Bootstrap(ctx, newBackendTestApplication(t, Environment{ConfigDir: configDir, CodexDir: codexDir})); err != nil {
 		t.Fatalf("expected bootstrap to succeed, got %v", err)
 	}
 
@@ -359,7 +477,7 @@ func TestDashboardDoesNotExposeRawCodexCredential(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.AuthFileName), []byte(`{"tokens":{"account_id":"work","access_token":"`+rawSecret+`"}}`), 0o600); err != nil {
 		t.Fatalf("expected auth fixture to write, got %v", err)
 	}
-	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
 	if _, err := services.Codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
 		t.Fatalf("expected create to succeed, got %v", err)
 	}
@@ -379,7 +497,7 @@ func TestDashboardDoesNotExposeRawCodexCredential(t *testing.T) {
 func TestCodexCreateProfileDoesNotExposeRawAuthPayload(t *testing.T) {
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
-	if err := Bootstrap(context.Background(), Environment{ConfigDir: configDir, CodexDir: codexDir}); err != nil {
+	if err := Bootstrap(context.Background(), newBackendTestApplication(t, Environment{ConfigDir: configDir, CodexDir: codexDir})); err != nil {
 		t.Fatalf("expected bootstrap to succeed, got %v", err)
 	}
 
@@ -394,7 +512,7 @@ func TestCodexCreateProfileDoesNotExposeRawAuthPayload(t *testing.T) {
 	}
 
 	name := "Work"
-	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
 	result, err := services.Codex.CreateProfile(context.Background(), CreateCodexProfileRequest{
 		ProfileID: "work",
 		Name:      &name,
@@ -424,7 +542,7 @@ func TestCodexProfileListAndShowUseSharedAppSemantics(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
-	if err := Bootstrap(ctx, Environment{ConfigDir: configDir, CodexDir: codexDir}); err != nil {
+	if err := Bootstrap(ctx, newBackendTestApplication(t, Environment{ConfigDir: configDir, CodexDir: codexDir})); err != nil {
 		t.Fatalf("expected bootstrap to succeed, got %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.ConfigFileName), []byte(`model = "gpt-5-codex"`+"\n"), 0o600); err != nil {
@@ -434,7 +552,7 @@ func TestCodexProfileListAndShowUseSharedAppSemantics(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.AuthFileName), []byte(`{"tokens":{"account_id":"work-account","access_token":"`+accessToken+`"}}`), 0o600); err != nil {
 		t.Fatalf("expected auth fixture to write, got %v", err)
 	}
-	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
 	if _, err := services.Codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
 		t.Fatalf("expected create to succeed, got %v", err)
 	}
@@ -470,12 +588,12 @@ func TestCodexProfileTransferServicesUseSharedCoreAndNotifyImport(t *testing.T) 
 	ctx := context.Background()
 	sourceConfigDir := t.TempDir()
 	codexDir := t.TempDir()
-	if err := Bootstrap(ctx, Environment{ConfigDir: sourceConfigDir, CodexDir: codexDir}); err != nil {
+	if err := Bootstrap(ctx, newBackendTestApplication(t, Environment{ConfigDir: sourceConfigDir, CodexDir: codexDir})); err != nil {
 		t.Fatalf("expected source bootstrap to succeed, got %v", err)
 	}
 	rawSecret := "desktop-transfer-test-value"
 	writeDesktopCodexFiles(t, codexDir, `model = "gpt-test"`+"\n", `{"tokens":{"account_id":"work","access_token":"`+rawSecret+`"}}`)
-	source := NewServices(app.DefaultInfo(), Environment{ConfigDir: sourceConfigDir, CodexDir: codexDir}, nil)
+	source := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: sourceConfigDir, CodexDir: codexDir}, nil)
 	if _, err := source.Codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
 		t.Fatalf("expected source profile create, got %v", err)
 	}
@@ -490,10 +608,10 @@ func TestCodexProfileTransferServicesUseSharedCoreAndNotifyImport(t *testing.T) 
 	}
 
 	targetConfigDir := t.TempDir()
-	if err := Bootstrap(ctx, Environment{ConfigDir: targetConfigDir, CodexDir: codexDir}); err != nil {
+	if err := Bootstrap(ctx, newBackendTestApplication(t, Environment{ConfigDir: targetConfigDir, CodexDir: codexDir})); err != nil {
 		t.Fatalf("expected target bootstrap to succeed, got %v", err)
 	}
-	target := NewServices(app.DefaultInfo(), Environment{ConfigDir: targetConfigDir, CodexDir: codexDir}, nil)
+	target := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: targetConfigDir, CodexDir: codexDir}, nil)
 	events := []DesktopChangeEvent{}
 	target.SubscribeChanges(func(event DesktopChangeEvent) { events = append(events, event) })
 	plan, err := target.Codex.InspectProfileImport(ctx, bundlePath)
@@ -520,12 +638,12 @@ func TestCodexSaveActiveProfileStateReadsCurrentFilesBehindDesktopBoundary(t *te
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
-	if err := Bootstrap(ctx, Environment{ConfigDir: configDir, CodexDir: codexDir}); err != nil {
+	if err := Bootstrap(ctx, newBackendTestApplication(t, Environment{ConfigDir: configDir, CodexDir: codexDir})); err != nil {
 		t.Fatalf("expected bootstrap to succeed, got %v", err)
 	}
 	writeDesktopCodexFiles(t, codexDir, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"work","access_token":"initial"}}`)
 
-	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
 	if _, err := services.Codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
 		t.Fatalf("expected create to succeed, got %v", err)
 	}
@@ -548,12 +666,12 @@ func TestCodexUpdateProfileMetadataPersistsAndNotifies(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
-	if err := Bootstrap(ctx, Environment{ConfigDir: configDir, CodexDir: codexDir}); err != nil {
+	if err := Bootstrap(ctx, newBackendTestApplication(t, Environment{ConfigDir: configDir, CodexDir: codexDir})); err != nil {
 		t.Fatalf("expected bootstrap to succeed, got %v", err)
 	}
 	writeDesktopCodexFiles(t, codexDir, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"work","access_token":"initial"}}`)
 
-	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
 	if _, err := services.Codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
 		t.Fatalf("expected create to succeed, got %v", err)
 	}
@@ -581,11 +699,11 @@ func TestCodexUpdateProfileMetadataPersistsAndNotifies(t *testing.T) {
 
 	emptyName := " "
 	_, err = services.Codex.UpdateProfileMetadata(ctx, UpdateCodexProfileMetadataRequest{ProfileID: "work", Name: &emptyName})
-	var appErr *app.AppError
-	if !errors.As(err, &appErr) || appErr.Code != app.ErrorProfileInvalid {
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.Code != apperror.ProfileInvalid {
 		t.Fatalf("expected metadata validation error, got %v", err)
 	}
-	if len(events) != 2 || events[1].Status != DesktopChangeStatusFailure || events[1].Error == nil || events[1].Error.Code != string(app.ErrorProfileInvalid) {
+	if len(events) != 2 || events[1].Status != DesktopChangeStatusFailure || events[1].Error == nil || events[1].Error.Code != string(apperror.ProfileInvalid) {
 		t.Fatalf("expected failed metadata notification, got %#v", events)
 	}
 }
@@ -594,12 +712,12 @@ func TestCodexConfigSetServiceCRUDAndNotifications(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
-	if err := Bootstrap(ctx, Environment{ConfigDir: configDir, CodexDir: codexDir}); err != nil {
+	if err := Bootstrap(ctx, newBackendTestApplication(t, Environment{ConfigDir: configDir, CodexDir: codexDir})); err != nil {
 		t.Fatalf("expected bootstrap to succeed, got %v", err)
 	}
 	writeDesktopCodexFiles(t, codexDir, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"shared","access_token":"initial"}}`)
 
-	services := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
 	if _, err := services.Codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
 		t.Fatalf("expected create to succeed, got %v", err)
 	}
@@ -638,16 +756,16 @@ func TestCodexConfigSetServiceCRUDAndNotifications(t *testing.T) {
 func TestUsageReportServiceDefaultsAndValidatesRange(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	if err := Bootstrap(ctx, Environment{ConfigDir: configDir}); err != nil {
+	if err := Bootstrap(ctx, newBackendTestApplication(t, Environment{ConfigDir: configDir})); err != nil {
 		t.Fatalf("expected bootstrap to succeed, got %v", err)
 	}
-	service := NewServices(app.DefaultInfo(), Environment{ConfigDir: configDir}, nil).Usage
+	service := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir}, nil).Usage
 
 	report, err := service.Report(ctx, "", "")
 	if err != nil {
 		t.Fatalf("expected default usage report, got %v", err)
 	}
-	if report.ProviderID != codexconfig.ProviderID || report.Range.Preset != app.UsageRange7Days || len(report.Trend) != 7 {
+	if report.ProviderID != codexconfig.ProviderID || report.Range.Preset != usage.UsageRange7Days || len(report.Trend) != 7 {
 		t.Fatalf("unexpected default usage report: %#v", report)
 	}
 	if _, err := service.Report(ctx, codexconfig.ProviderID, "14d"); err == nil {

@@ -8,7 +8,8 @@ import (
 
 	urfavecli "github.com/urfave/cli/v3"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/switching"
 )
 
 func newBackupCommand() *urfavecli.Command {
@@ -30,9 +31,11 @@ func newBackupListCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.ListBackups(ctx, app.ListBackupsRequest{
-				ConfigDir: configDirValue(cmd),
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Switching().ListBackups(ctx)
 			if err != nil {
 				return err
 			}
@@ -54,14 +57,15 @@ func newBackupShowCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			backupID, err := singleIDArg(cmd, app.ErrorBackupInvalid)
+			backupID, err := singleIDArg(cmd, apperror.BackupInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.ShowBackup(ctx, app.ShowBackupRequest{
-				ConfigDir: configDirValue(cmd),
-				BackupID:  backupID,
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Switching().ShowBackup(ctx, backupID)
 			if err != nil {
 				return err
 			}
@@ -84,14 +88,17 @@ func newRollbackCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			backupID, err := singleIDArg(cmd, app.ErrorBackupInvalid)
+			backupID, err := singleIDArg(cmd, apperror.BackupInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.ApplyRollback(ctx, app.ApplyRollbackRequest{
-				ConfigDir: configDirValue(cmd),
-				BackupID:  backupID,
-				Confirm:   cmd.Bool(yesFlagName),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Switching().Rollback(ctx, switching.ApplyRollbackRequest{
+				BackupID: backupID,
+				Confirm:  cmd.Bool(yesFlagName),
 			})
 			if err != nil {
 				return err
@@ -105,7 +112,7 @@ func newRollbackCommand() *urfavecli.Command {
 	}
 }
 
-func writeBackupList(w io.Writer, result app.ListBackupsResult) error {
+func writeBackupList(w io.Writer, result switching.ListBackupsResult) error {
 	if len(result.Backups) == 0 {
 		_, err := fmt.Fprintln(w, "No backups")
 		return err
@@ -134,7 +141,7 @@ func writeBackupList(w io.Writer, result app.ListBackupsResult) error {
 	return tw.Flush()
 }
 
-func writeBackupDetail(w io.Writer, detail app.BackupDetail) error {
+func writeBackupDetail(w io.Writer, detail switching.BackupDetail) error {
 	supported := "false"
 	if detail.RollbackSupported {
 		supported = "true"
@@ -178,7 +185,7 @@ func writeBackupDetail(w io.Writer, detail app.BackupDetail) error {
 	return tw.Flush()
 }
 
-func writeRollbackResult(w io.Writer, result app.ApplyRollbackResult) error {
+func writeRollbackResult(w io.Writer, result switching.ApplyRollbackResult) error {
 	if _, err := fmt.Fprintf(
 		w,
 		"Rollback applied\noperation: %s\nsource_operation: %s\nprovider: %s\nprofile: %s\nrestored_profile: %s\nbackup: %s\nchanges: restore=%d remove=%d noop=%d\n",

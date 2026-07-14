@@ -7,36 +7,36 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as app$0 from "../../internal/app/models.js";
+import * as claudecode$0 from "../../internal/claudecode/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
-export function AuthorizeKeychain(): $CancellablePromise<app$0.ClaudeCodeDetectResult> {
+export function AuthorizeKeychain(): $CancellablePromise<claudecode$0.ClaudeCodeDetectResult> {
     return $Call.ByID(1840431985);
 }
 
-export function CreateProfile(req: $models.CreateClaudeCodeProfileRequest): $CancellablePromise<app$0.ClaudeCodeProfileSaveResult> {
+export function CreateProfile(req: $models.CreateClaudeCodeProfileRequest): $CancellablePromise<claudecode$0.ClaudeCodeProfileSaveResult> {
     return $Call.ByID(4256281031, req);
 }
 
-export function Detect(): $CancellablePromise<app$0.ClaudeCodeDetectResult> {
+export function Detect(): $CancellablePromise<claudecode$0.ClaudeCodeDetectResult> {
     return $Call.ByID(4104865097);
 }
 
-export function ListProfiles(): $CancellablePromise<app$0.ClaudeCodeProfileListResult> {
+export function ListProfiles(): $CancellablePromise<claudecode$0.ClaudeCodeProfileListResult> {
     return $Call.ByID(2487267564);
 }
 
-export function SaveCurrent(confirmShared: boolean): $CancellablePromise<app$0.ClaudeCodeProfileSaveResult> {
+export function SaveCurrent(confirmShared: boolean): $CancellablePromise<claudecode$0.ClaudeCodeProfileSaveResult> {
     return $Call.ByID(1016544372, confirmShared);
 }
 
-export function ShowProfile(profileID: string): $CancellablePromise<app$0.ClaudeCodeProfileDetail> {
+export function ShowProfile(profileID: string): $CancellablePromise<claudecode$0.ClaudeCodeProfileDetail> {
     return $Call.ByID(1294530364, profileID);
 }
 
-export function UpdateProfile(req: $models.UpdateClaudeCodeProfileRequest): $CancellablePromise<app$0.ClaudeCodeProfileDetail> {
+export function UpdateProfile(req: $models.UpdateClaudeCodeProfileRequest): $CancellablePromise<claudecode$0.ClaudeCodeProfileDetail> {
     return $Call.ByID(3263369448, req);
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 
 	"github.com/strahe/profiledeck/desktop/backend"
+	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/app"
 )
 
@@ -40,14 +41,23 @@ func main() {
 	desktopCtx, cancelDesktop := context.WithCancel(context.Background())
 	defer cancelDesktop()
 
-	startupErr := backend.Bootstrap(desktopCtx, env)
-	services := backend.NewServices(info, env, startupErr)
+	core, err := app.New(app.Config{
+		ConfigDir:   env.ConfigDir,
+		CodexDir:    env.CodexDir,
+		AgentAccess: agent.AccessDesktopPreferences,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	startupErr := backend.Bootstrap(desktopCtx, core)
+	services := backend.NewServices(core, info, env, startupErr)
 
 	wailsApp := application.New(application.Options{
 		Name:        app.ProductName,
 		Description: "Provider/profile switcher and local usage tracker for AI coding tools",
 		Services: []application.Service{
 			application.NewService(services.App),
+			application.NewService(services.Agent),
 			application.NewService(services.Antigravity),
 			application.NewService(services.ClaudeCode),
 			application.NewService(services.Codex),

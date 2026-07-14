@@ -7,20 +7,20 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as app$0 from "../../internal/app/models.js";
+import * as switching$0 from "../../internal/switching/models.js";
 
-export function ApplyRollback(backupID: string, confirm: boolean): $CancellablePromise<app$0.ApplyRollbackResult> {
+export function ApplyRollback(backupID: string, confirm: boolean): $CancellablePromise<switching$0.ApplyRollbackResult> {
     return $Call.ByID(3461217397, backupID, confirm);
 }
 
-export function ListBackups(): $CancellablePromise<app$0.ListBackupsResult> {
+export function ListBackups(): $CancellablePromise<switching$0.ListBackupsResult> {
     return $Call.ByID(3400155686);
 }
 
-export function RecoverFailedSwitch(operationID: string, confirm: boolean): $CancellablePromise<app$0.RecoverFailedSwitchResult> {
+export function RecoverFailedSwitch(operationID: string, confirm: boolean): $CancellablePromise<switching$0.RecoverFailedSwitchResult> {
     return $Call.ByID(4165928292, operationID, confirm);
 }
 
-export function ShowBackup(backupID: string): $CancellablePromise<app$0.BackupDetail> {
+export function ShowBackup(backupID: string): $CancellablePromise<switching$0.BackupDetail> {
     return $Call.ByID(2296310760, backupID);
 }

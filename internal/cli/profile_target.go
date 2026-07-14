@@ -8,7 +8,9 @@ import (
 
 	urfavecli "github.com/urfave/cli/v3"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/profiletarget"
+	"github.com/strahe/profiledeck/internal/switching"
 )
 
 const (
@@ -27,12 +29,15 @@ func newPlanCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			providerID, profileID, err := twoIDArgs(cmd, app.ErrorProviderInvalid)
+			providerID, profileID, err := twoIDArgs(cmd, apperror.ProviderInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.BuildPlan(ctx, app.BuildPlanRequest{
-				ConfigDir:  configDirValue(cmd),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Switching().BuildPlan(ctx, switching.BuildPlanRequest{
 				ProviderID: providerID,
 				ProfileID:  profileID,
 			})
@@ -79,13 +84,16 @@ func newProfileTargetAddCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			profileID, targetID, err := twoIDArgs(cmd, app.ErrorTargetInvalid)
+			profileID, targetID, err := twoIDArgs(cmd, apperror.TargetInvalid)
 			if err != nil {
 				return err
 			}
 			enabled := !cmd.Bool(disabledFlagName)
-			result, err := app.CreateProfileTarget(ctx, app.CreateProfileTargetRequest{
-				ConfigDir:    configDirValue(cmd),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Targets().Create(ctx, profiletarget.CreateProfileTargetRequest{
 				ProfileID:    profileID,
 				ProviderID:   cmd.String(providerFlagName),
 				TargetID:     targetID,
@@ -119,12 +127,15 @@ func newProfileTargetListCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			profileID, err := singleIDArg(cmd, app.ErrorTargetInvalid)
+			profileID, err := singleIDArg(cmd, apperror.TargetInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.ListProfileTargets(ctx, app.ListProfileTargetsRequest{
-				ConfigDir:       configDirValue(cmd),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Targets().List(ctx, profiletarget.ListProfileTargetsRequest{
 				ProfileID:       profileID,
 				ProviderID:      cmd.String(providerFlagName),
 				IncludeDisabled: cmd.Bool(allFlagName),
@@ -150,12 +161,15 @@ func newProfileTargetShowCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			profileID, providerID, targetID, err := threeIDArgs(cmd, app.ErrorTargetInvalid)
+			profileID, providerID, targetID, err := threeIDArgs(cmd, apperror.TargetInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.GetProfileTarget(ctx, app.GetProfileTargetRequest{
-				ConfigDir:  configDirValue(cmd),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Targets().Get(ctx, profiletarget.GetProfileTargetRequest{
 				ProfileID:  profileID,
 				ProviderID: providerID,
 				TargetID:   targetID,
@@ -188,16 +202,19 @@ func newProfileTargetUpdateCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			profileID, providerID, targetID, err := threeIDArgs(cmd, app.ErrorTargetInvalid)
+			profileID, providerID, targetID, err := threeIDArgs(cmd, apperror.TargetInvalid)
 			if err != nil {
 				return err
 			}
-			enabled, err := enabledFlagPtrWithCode(cmd, app.ErrorTargetInvalid)
+			enabled, err := enabledFlagPtrWithCode(cmd, apperror.TargetInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.UpdateProfileTarget(ctx, app.UpdateProfileTargetRequest{
-				ConfigDir:    configDirValue(cmd),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Targets().Update(ctx, profiletarget.UpdateProfileTargetRequest{
 				ProfileID:    profileID,
 				ProviderID:   providerID,
 				TargetID:     targetID,
@@ -230,12 +247,15 @@ func newProfileTargetDeleteCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			profileID, providerID, targetID, err := threeIDArgs(cmd, app.ErrorTargetInvalid)
+			profileID, providerID, targetID, err := threeIDArgs(cmd, apperror.TargetInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.DeleteProfileTarget(ctx, app.DeleteProfileTargetRequest{
-				ConfigDir:  configDirValue(cmd),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Targets().Delete(ctx, profiletarget.DeleteProfileTargetRequest{
 				ProfileID:  profileID,
 				ProviderID: providerID,
 				TargetID:   targetID,
@@ -254,21 +274,21 @@ func newProfileTargetDeleteCommand() *urfavecli.Command {
 	}
 }
 
-func twoIDArgs(cmd *urfavecli.Command, code app.ErrorCode) (string, string, error) {
+func twoIDArgs(cmd *urfavecli.Command, code apperror.Code) (string, string, error) {
 	if cmd.Args().Len() != 2 {
-		return "", "", app.NewError(code, "exactly two id arguments are required")
+		return "", "", apperror.New(code, "exactly two id arguments are required")
 	}
 	return cmd.Args().Get(0), cmd.Args().Get(1), nil
 }
 
-func threeIDArgs(cmd *urfavecli.Command, code app.ErrorCode) (string, string, string, error) {
+func threeIDArgs(cmd *urfavecli.Command, code apperror.Code) (string, string, string, error) {
 	if cmd.Args().Len() != 3 {
-		return "", "", "", app.NewError(code, "exactly three id arguments are required")
+		return "", "", "", apperror.New(code, "exactly three id arguments are required")
 	}
 	return cmd.Args().Get(0), cmd.Args().Get(1), cmd.Args().Get(2), nil
 }
 
-func writeProfileTargetList(w io.Writer, targets []app.ProfileTarget) error {
+func writeProfileTargetList(w io.Writer, targets []profiletarget.ProfileTarget) error {
 	if len(targets) == 0 {
 		_, err := fmt.Fprintln(w, "No profile targets")
 		return err
@@ -291,7 +311,7 @@ func writeProfileTargetList(w io.Writer, targets []app.ProfileTarget) error {
 	return tw.Flush()
 }
 
-func writeProfileTarget(w io.Writer, target app.ProfileTarget) error {
+func writeProfileTarget(w io.Writer, target profiletarget.ProfileTarget) error {
 	metadata, err := compactJSON(target.Metadata)
 	if err != nil {
 		return err
@@ -315,7 +335,7 @@ func writeProfileTarget(w io.Writer, target app.ProfileTarget) error {
 	return err
 }
 
-func writePlan(w io.Writer, plan app.SwitchPlan) error {
+func writePlan(w io.Writer, plan switching.SwitchPlan) error {
 	if _, err := fmt.Fprintf(
 		w,
 		"Switch plan\nprovider: %s (%s)\nprofile: %s (%s)\nplan_fingerprint: %s\noperations: %d\n",

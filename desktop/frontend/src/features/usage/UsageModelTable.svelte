@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import type { UsageModelSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { UsageModelSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/usage/models";
 
 	import { Badge } from "$lib/components/ui/badge";
 	import * as Table from "$lib/components/ui/table";

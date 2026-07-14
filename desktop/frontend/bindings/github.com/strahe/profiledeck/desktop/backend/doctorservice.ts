@@ -7,12 +7,12 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as app$0 from "../../internal/app/models.js";
+import * as doctor$0 from "../../internal/doctor/models.js";
 
-export function RepairLock(confirm: boolean): $CancellablePromise<app$0.DoctorRepairLockResult> {
+export function RepairLock(confirm: boolean): $CancellablePromise<doctor$0.DoctorRepairLockResult> {
     return $Call.ByID(19841452, confirm);
 }
 
-export function Run(): $CancellablePromise<app$0.DoctorResult> {
+export function Run(): $CancellablePromise<doctor$0.DoctorResult> {
     return $Call.ByID(3471832615);
 }

@@ -6,7 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/codex"
+	"github.com/strahe/profiledeck/internal/usage"
 )
 
 const (
@@ -68,6 +69,7 @@ type usageAutoSyncRuntime struct {
 	lifecycleMu sync.Mutex
 	started     bool
 	cancel      context.CancelFunc
+	pause       chan struct{}
 	loopWG      sync.WaitGroup
 	workerWG    sync.WaitGroup
 
@@ -75,32 +77,30 @@ type usageAutoSyncRuntime struct {
 	now             func() time.Time
 	newTicker       func(time.Duration) usageAutoSyncTicker
 	timeout         time.Duration
-	loadSettings    func(context.Context) (app.CodexSettings, error)
-	syncCodex       func(context.Context) (app.UsageSyncResult, error)
+	loadSettings    func(context.Context) (codex.CodexSettings, error)
+	syncCodex       func(context.Context) (usage.UsageSyncResult, error)
 }
 
-func newUsageAutoSyncRuntime(env Environment) *usageAutoSyncRuntime {
-	runtime := &usageAutoSyncRuntime{
+func newUsageAutoSyncRuntime(
+	loadSettings func(context.Context) (codex.CodexSettings, error),
+	syncCodex func(context.Context) (usage.UsageSyncResult, error),
+) *usageAutoSyncRuntime {
+	return &usageAutoSyncRuntime{
 		status:          defaultUsageAutoSyncStatus(),
 		intervalUpdates: make(chan struct{}, 1),
 		now:             time.Now,
 		newTicker: func(interval time.Duration) usageAutoSyncTicker {
 			return realUsageAutoSyncTicker{ticker: time.NewTicker(interval)}
 		},
-		timeout: usageAutoSyncTimeout,
+		timeout:      usageAutoSyncTimeout,
+		loadSettings: loadSettings,
+		syncCodex:    syncCodex,
 	}
-	runtime.loadSettings = func(ctx context.Context) (app.CodexSettings, error) {
-		return app.GetCodexSettings(ctx, app.CodexSettingsRequest{ConfigDir: env.ConfigDir})
-	}
-	runtime.syncCodex = func(ctx context.Context) (app.UsageSyncResult, error) {
-		return app.UsageSyncCodex(ctx, app.UsageSyncCodexRequest{ConfigDir: env.ConfigDir, CodexDir: env.CodexDir})
-	}
-	return runtime
 }
 
 func defaultUsageAutoSyncStatus() UsageAutoSyncStatus {
 	return UsageAutoSyncStatus{
-		IntervalSeconds: app.CodexUsageSyncIntervalDefault,
+		IntervalSeconds: codex.CodexUsageSyncIntervalDefault,
 		Outcome:         UsageAutoSyncOutcomeIdle,
 	}
 }
@@ -115,6 +115,7 @@ func (r *usageAutoSyncRuntime) Start(ctx context.Context, emitter func(UsageAuto
 		return
 	}
 	runCtx, cancel := context.WithCancel(ctx)
+	pause := make(chan struct{})
 	r.mu.Lock()
 	r.emitter = emitter
 	r.mu.Unlock()
@@ -123,11 +124,36 @@ func (r *usageAutoSyncRuntime) Start(ctx context.Context, emitter func(UsageAuto
 	r.loopWG.Add(1)
 	r.started = true
 	r.cancel = cancel
-	go r.run(runCtx)
+	r.pause = pause
+	go r.run(runCtx, pause)
 	r.lifecycleMu.Unlock()
 }
 
+func (r *usageAutoSyncRuntime) SetEmitter(emitter func(UsageAutoSyncStatus)) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.emitter = emitter
+	r.mu.Unlock()
+}
+
+func (r *usageAutoSyncRuntime) startAgentRuntime(ctx context.Context) {
+	r.mu.RLock()
+	emitter := r.emitter
+	r.mu.RUnlock()
+	r.Start(ctx, emitter)
+}
+
 func (r *usageAutoSyncRuntime) Stop() {
+	r.stop(false)
+}
+
+func (r *usageAutoSyncRuntime) stopAgentRuntime() {
+	r.stop(true)
+}
+
+func (r *usageAutoSyncRuntime) stop(graceful bool) {
 	if r == nil {
 		return
 	}
@@ -139,11 +165,19 @@ func (r *usageAutoSyncRuntime) Stop() {
 	// Keep lifecycle transitions serialized until the old loop and worker have
 	// exited. This prevents a concurrent Start or second Stop from reusing and
 	// then clobbering the wait groups for a newer scheduler generation.
-	r.cancel()
+	if graceful {
+		close(r.pause)
+	} else {
+		r.cancel()
+	}
 	r.loopWG.Wait()
 	r.workerWG.Wait()
+	if graceful {
+		r.cancel()
+	}
 	r.started = false
 	r.cancel = nil
+	r.pause = nil
 	r.lifecycleMu.Unlock()
 }
 
@@ -174,10 +208,10 @@ func (r *usageAutoSyncRuntime) SetInterval(interval int) {
 	}
 }
 
-func (r *usageAutoSyncRuntime) run(ctx context.Context) {
+func (r *usageAutoSyncRuntime) run(ctx context.Context, pause <-chan struct{}) {
 	defer r.loopWG.Done()
 
-	interval := app.CodexUsageSyncIntervalDefault
+	interval := codex.CodexUsageSyncIntervalDefault
 	r.mu.RLock()
 	loadRevision := r.intervalRevision
 	r.mu.RUnlock()
@@ -205,6 +239,8 @@ func (r *usageAutoSyncRuntime) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-pause:
 			return
 		case <-r.intervalUpdates:
 			interval = r.Status().IntervalSeconds
@@ -252,7 +288,7 @@ func (r *usageAutoSyncRuntime) startSync(parent context.Context) bool {
 	return true
 }
 
-func (r *usageAutoSyncRuntime) completeWithResult(result app.UsageSyncResult) {
+func (r *usageAutoSyncRuntime) completeWithResult(result usage.UsageSyncResult) {
 	completedAt := r.now().UnixMilli()
 	outcome := UsageAutoSyncOutcomeSuccess
 	if len(result.Errors) > 0 {

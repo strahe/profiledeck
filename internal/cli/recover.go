@@ -7,7 +7,8 @@ import (
 
 	urfavecli "github.com/urfave/cli/v3"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/switching"
 )
 
 func newRecoverCommand() *urfavecli.Command {
@@ -20,12 +21,15 @@ func newRecoverCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			operationID, err := singleIDArg(cmd, app.ErrorRecoveryUnsupported)
+			operationID, err := singleIDArg(cmd, apperror.RecoveryUnsupported)
 			if err != nil {
 				return err
 			}
-			result, err := app.RecoverFailedSwitch(ctx, app.RecoverFailedSwitchParams{
-				ConfigDir:   configDirValue(cmd),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Switching().RecoverFailedSwitch(ctx, switching.RecoverFailedSwitchParams{
 				OperationID: operationID,
 				Confirm:     cmd.Bool(yesFlagName),
 			})
@@ -41,7 +45,7 @@ func newRecoverCommand() *urfavecli.Command {
 	}
 }
 
-func writeRecoverResult(w io.Writer, result app.RecoverFailedSwitchResult) error {
+func writeRecoverResult(w io.Writer, result switching.RecoverFailedSwitchResult) error {
 	if _, err := fmt.Fprintf(
 		w,
 		"Recovery applied\noperation: %s\nsource_operation: %s\noperation_type: %s\nrollback_kind: %s\nprovider: %s\nprofile: %s\nrestored_profile: %s\nbackup: %s\nchanges: restore=%d remove=%d noop=%d\n",

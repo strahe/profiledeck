@@ -8,10 +8,11 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/strahe/profiledeck/desktop/backend"
+	"github.com/strahe/profiledeck/internal/agent"
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
-	"github.com/strahe/profiledeck/internal/app"
 	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	"github.com/strahe/profiledeck/internal/profile"
 )
 
 type trayUI interface {
@@ -154,9 +155,15 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 		menu.Add("ProfileDeck: unavailable").SetEnabled(false)
 		menu.Add(trayErrorLabel(dashboardErr, trayDashboardUnavailableLabel)).SetEnabled(false)
 	} else {
-		menu.Add(currentProfileLabel(dashboard)).SetEnabled(false)
-		menu.Add(providerCurrentProfileLabel(dashboard, agyconfig.ProviderID, "Antigravity")).SetEnabled(false)
-		menu.Add(providerCurrentProfileLabel(dashboard, claudecodeconfig.ProviderID, "Claude Code")).SetEnabled(false)
+		if trayAgentEnabled(dashboard, agent.Codex) {
+			menu.Add(currentProfileLabel(dashboard)).SetEnabled(false)
+		}
+		if trayAgentEnabled(dashboard, agent.Antigravity) {
+			menu.Add(providerCurrentProfileLabel(dashboard, agyconfig.ProviderID, "Antigravity")).SetEnabled(false)
+		}
+		if trayAgentEnabled(dashboard, agent.ClaudeCode) {
+			menu.Add(providerCurrentProfileLabel(dashboard, claudecodeconfig.ProviderID, "Claude Code")).SetEnabled(false)
+		}
 		for _, missing := range missingActiveProfileLabels(dashboard) {
 			menu.Add(missing).SetEnabled(false)
 		}
@@ -174,7 +181,9 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 			codexProfiles = append(codexProfiles, trayProfile{Profile: profile.Profile, Active: profile.Active})
 		}
 	}
-	addTrayProfilesMenu(menu, "Codex Profiles", codexconfig.ProviderID, codexProfiles, dashboard.CodexProfiles != nil, "No Codex profiles", trayCodexProfilesUnavailableLabel, actions)
+	if trayAgentEnabled(dashboard, agent.Codex) {
+		addTrayProfilesMenu(menu, "Codex Profiles", codexconfig.ProviderID, codexProfiles, dashboard.CodexProfiles != nil, "No Codex profiles", trayCodexProfilesUnavailableLabel, actions)
+	}
 
 	var antigravityProfiles []trayProfile
 	if dashboard.AntigravityProfiles != nil {
@@ -182,7 +191,9 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 			antigravityProfiles = append(antigravityProfiles, trayProfile{Profile: profile.Profile, Active: profile.Active})
 		}
 	}
-	addTrayProfilesMenu(menu, "Antigravity Profiles", agyconfig.ProviderID, antigravityProfiles, dashboard.AntigravityProfiles != nil, "No Antigravity profiles", trayAntigravityProfilesUnavailableLabel, actions)
+	if trayAgentEnabled(dashboard, agent.Antigravity) {
+		addTrayProfilesMenu(menu, "Antigravity Profiles", agyconfig.ProviderID, antigravityProfiles, dashboard.AntigravityProfiles != nil, "No Antigravity profiles", trayAntigravityProfilesUnavailableLabel, actions)
+	}
 
 	var claudeCodeProfiles []trayProfile
 	if dashboard.ClaudeCodeProfiles != nil {
@@ -190,7 +201,9 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 			claudeCodeProfiles = append(claudeCodeProfiles, trayProfile{Profile: profile.Profile, Active: profile.Active})
 		}
 	}
-	addTrayProfilesMenu(menu, "Claude Code Profiles", claudecodeconfig.ProviderID, claudeCodeProfiles, dashboard.ClaudeCodeProfiles != nil, "No Claude Code profiles", trayClaudeCodeProfilesUnavailableLabel, actions)
+	if trayAgentEnabled(dashboard, agent.ClaudeCode) {
+		addTrayProfilesMenu(menu, "Claude Code Profiles", claudecodeconfig.ProviderID, claudeCodeProfiles, dashboard.ClaudeCodeProfiles != nil, "No Claude Code profiles", trayClaudeCodeProfilesUnavailableLabel, actions)
+	}
 
 	menu.AddSeparator()
 	menu.Add("Refresh Menu").OnClick(func(*application.Context) {
@@ -203,8 +216,20 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 }
 
 type trayProfile struct {
-	Profile app.Profile
+	Profile profile.Profile
 	Active  bool
+}
+
+func trayAgentEnabled(dashboard backend.DashboardResult, id agent.ID) bool {
+	if len(dashboard.Agents) == 0 {
+		return true
+	}
+	for _, state := range dashboard.Agents {
+		if state.Manifest.ID == id {
+			return state.Enabled
+		}
+	}
+	return false
 }
 
 func addTrayProfilesMenu(menu *application.Menu, title, providerID string, profiles []trayProfile, loaded bool, emptyLabel, unavailableLabel string, actions trayMenuActions) {

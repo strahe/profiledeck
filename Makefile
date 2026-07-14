@@ -30,7 +30,7 @@ DESKTOP_GO_ENV += CGO_CXXFLAGS="$(CGO_CXXFLAGS) -mmacosx-version-min=$(MACOS_MIN
 DESKTOP_GO_ENV += CGO_LDFLAGS="$(CGO_LDFLAGS) -mmacosx-version-min=$(MACOS_MIN_VERSION)"
 endif
 
-.PHONY: fmt vet lint lint-core lint-desktop test build core-check check clean wails-boundary desktop-go-fmt desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-frontend-build desktop-build desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-core-check ci-desktop-check
+.PHONY: fmt vet lint lint-core lint-desktop test build core-boundary core-check check clean wails-boundary desktop-go-fmt desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-frontend-build desktop-build desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-core-check ci-desktop-check
 
 fmt:
 	$(GOLANGCI_LINT) fmt $(GO_PKGS)
@@ -52,7 +52,10 @@ build:
 	mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/$(BINARY) $(CMD)
 
-core-check: lint-core test build
+core-boundary:
+	go test ./internal/architecture
+
+core-check: lint-core core-boundary test build
 
 check: core-check desktop-check docs-check
 

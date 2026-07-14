@@ -7,7 +7,7 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as app$0 from "../../internal/app/models.js";
+import * as usage$0 from "../../internal/usage/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -17,10 +17,10 @@ export function AutoSyncStatus(): $CancellablePromise<$models.UsageAutoSyncStatu
     return $Call.ByID(2973972616);
 }
 
-export function Report(providerID: string, rangeValue: string): $CancellablePromise<app$0.UsageReportResult> {
+export function Report(providerID: string, rangeValue: string): $CancellablePromise<usage$0.UsageReportResult> {
     return $Call.ByID(2463093428, providerID, rangeValue);
 }
 
-export function Summary(providerID: string): $CancellablePromise<app$0.UsageSummaryResult> {
+export function Summary(providerID: string): $CancellablePromise<usage$0.UsageSummaryResult> {
     return $Call.ByID(2239958706, providerID);
 }

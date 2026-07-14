@@ -1,4 +1,4 @@
-import type { CodexConfigSet, CodexProfileQuota, CodexProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+import type { CodexConfigSet, CodexProfileQuota, CodexProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
 
 export type CodexProfileRoute =
 	| { kind: "list"; profileID: "" }

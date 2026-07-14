@@ -15,7 +15,7 @@
 	import { Spinner } from "$lib/components/ui/spinner";
 	import { translate } from "$lib/i18n";
 
-	import type { CodexDetectResult, CodexProfileDetail } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { CodexDetectResult, CodexProfileDetail } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
 	import ProfileForm from "./ProfileForm.svelte";
 	import type { CodexForkBinding } from "./types";
 

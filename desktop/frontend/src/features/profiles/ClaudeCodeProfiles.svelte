@@ -13,8 +13,9 @@
 	import { ClaudeCodeService, SwitchService } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type { CreateClaudeCodeProfileRequest, UpdateClaudeCodeProfileRequest } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type {
-		ClaudeCodeDetectResult, ClaudeCodeProfileDetail, ClaudeCodeProfileSummary, SwitchPlan,
-	} from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+		ClaudeCodeDetectResult, ClaudeCodeProfileDetail, ClaudeCodeProfileSummary,
+	} from "../../../bindings/github.com/strahe/profiledeck/internal/claudecode/models";
+	import type { SwitchPlan } from "../../../bindings/github.com/strahe/profiledeck/internal/switching/models";
 	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
 	import PageHeader from "$lib/components/app/PageHeader.svelte";
 	import StatusBadge from "$lib/components/app/StatusBadge.svelte";

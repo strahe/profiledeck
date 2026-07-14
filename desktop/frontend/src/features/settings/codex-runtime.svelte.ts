@@ -11,7 +11,7 @@ import type {
 	CodexProfileSettings,
 	CodexProfileSummary,
 	CodexSettings,
-} from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+} from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
 import { isCancelError } from "$lib/desktop-errors";
 import { translate } from "$lib/i18n";
 
@@ -46,10 +46,10 @@ export class CodexRuntimeController {
 		this.#options = options;
 	}
 
-	start() {
+	start(loadInitial = true) {
 		if (this.#started) return () => this.stop();
 		this.#started = true;
-		void this.load();
+		if (loadInitial) void this.load();
 		this.#disposeEvent = Events.On("profiledeck:codex-quota-status", (event) => {
 			const previousCompletion = this.latestRuntimeCompletion(this.runtime);
 			const next = (event.data as CodexQuotaRuntimeStatus) ?? { app_server_status: "unknown", profiles: [] };
@@ -65,6 +65,17 @@ export class CodexRuntimeController {
 		this.#started = false;
 		for (const promise of this.#inFlight.values()) promise.cancel("unmount");
 		this.#inFlight.clear();
+	}
+
+	reset() {
+		for (const promise of this.#inFlight.values()) promise.cancel("agent-disabled");
+		this.#inFlight.clear();
+		this.settings = null;
+		this.runtime = { app_server_status: "unknown", profiles: [] };
+		this.quotaByProfileID = {};
+		this.requestedQuotaProfileIDs = [];
+		this.runtimeQuotaLoadingProfileIDs = [];
+		this.loading = false;
 	}
 
 	setProfiles(profiles: CodexProfileSummary[]) {
@@ -145,7 +156,7 @@ export class CodexRuntimeController {
 	async changeUsageSyncInterval(value: string) {
 		const interval = Number(value);
 		if (!usageIntervals.includes(interval as (typeof usageIntervals)[number]) || this.settings?.usage_sync_interval_seconds === interval) return;
-		await this.update("usage", { config_dir: "", usage_sync_interval_seconds: interval });
+		await this.update("usage", { usage_sync_interval_seconds: interval });
 	}
 
 	async changeQuotaInterval(profile: CodexProfileSettings, value: string) {
@@ -153,7 +164,6 @@ export class CodexRuntimeController {
 		if (!quotaIntervals.includes(interval as (typeof quotaIntervals)[number]) || profile.quota_refresh_interval_seconds === interval) return;
 		if (!profile.quota_supported && interval !== 0) return;
 		await this.update(`quota:${profile.profile_id}`, {
-			config_dir: "",
 			profile_id: profile.profile_id,
 			quota_refresh_interval_seconds: interval,
 		});
@@ -162,7 +172,6 @@ export class CodexRuntimeController {
 	async changeKeepalive(profile: CodexProfileSettings, enabled: boolean) {
 		if (profile.auth_keepalive_enabled === enabled || (!profile.auth_keepalive_supported && enabled)) return;
 		await this.update(`keepalive:${profile.profile_id}`, {
-			config_dir: "",
 			profile_id: profile.profile_id,
 			auth_keepalive_enabled: enabled,
 		});

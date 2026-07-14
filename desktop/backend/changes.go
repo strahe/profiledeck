@@ -1,6 +1,10 @@
 package backend
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/strahe/profiledeck/internal/agent"
+)
 
 const (
 	DesktopChangeInitialized               = "initialized"
@@ -12,6 +16,7 @@ const (
 	DesktopChangeLockRepaired              = "lock-repaired"
 	DesktopChangeRollbackApplied           = "rollback-applied"
 	DesktopChangeSwitchRecovered           = "switch-recovered"
+	DesktopChangeAgentStateChanged         = "agent-state-changed"
 
 	DesktopChangeStatusSuccess  = "success"
 	DesktopChangeStatusFailure  = "failure"
@@ -26,6 +31,8 @@ type DesktopChangeEvent struct {
 	ProviderID         string        `json:"provider_id,omitempty"`
 	ProfileID          string        `json:"profile_id,omitempty"`
 	OperationID        string        `json:"operation_id,omitempty"`
+	AgentID            agent.ID      `json:"agent_id,omitempty"`
+	AgentEnabled       *bool         `json:"agent_enabled,omitempty"`
 	ProfileChanged     bool          `json:"profile_changed,omitempty"`
 	ConfigSetsChanged  bool          `json:"config_sets_changed,omitempty"`
 	ActiveStateChanged bool          `json:"active_state_changed,omitempty"`

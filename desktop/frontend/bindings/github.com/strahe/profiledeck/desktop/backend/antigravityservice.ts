@@ -7,32 +7,32 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as app$0 from "../../internal/app/models.js";
+import * as antigravity$0 from "../../internal/antigravity/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
-export function CreateProfile(req: $models.CreateAntigravityProfileRequest): $CancellablePromise<app$0.AntigravityProfileSaveResult> {
+export function CreateProfile(req: $models.CreateAntigravityProfileRequest): $CancellablePromise<antigravity$0.AntigravityProfileSaveResult> {
     return $Call.ByID(1779211844, req);
 }
 
-export function Detect(): $CancellablePromise<app$0.AntigravityDetectResult> {
+export function Detect(): $CancellablePromise<antigravity$0.AntigravityDetectResult> {
     return $Call.ByID(84501948);
 }
 
-export function ListProfiles(): $CancellablePromise<app$0.AntigravityProfileListResult> {
+export function ListProfiles(): $CancellablePromise<antigravity$0.AntigravityProfileListResult> {
     return $Call.ByID(945719165);
 }
 
-export function SaveCurrent(): $CancellablePromise<app$0.AntigravityProfileSaveResult> {
+export function SaveCurrent(): $CancellablePromise<antigravity$0.AntigravityProfileSaveResult> {
     return $Call.ByID(1314540511);
 }
 
-export function ShowProfile(profileID: string): $CancellablePromise<app$0.AntigravityProfileDetail> {
+export function ShowProfile(profileID: string): $CancellablePromise<antigravity$0.AntigravityProfileDetail> {
     return $Call.ByID(3573442403, profileID);
 }
 
-export function UpdateProfile(req: $models.UpdateAntigravityProfileRequest): $CancellablePromise<app$0.AntigravityProfileDetail> {
+export function UpdateProfile(req: $models.UpdateAntigravityProfileRequest): $CancellablePromise<antigravity$0.AntigravityProfileDetail> {
     return $Call.ByID(3902032231, req);
 }

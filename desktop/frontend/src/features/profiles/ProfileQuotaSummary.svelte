@@ -7,7 +7,7 @@
 	import { currentDesktopLocale } from "$lib/i18n";
 	import { cn } from "$lib/utils";
 
-	import type { CodexProfileQuota, CodexQuotaWindow } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { CodexProfileQuota, CodexQuotaWindow } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
 
 	let {
 		quota,

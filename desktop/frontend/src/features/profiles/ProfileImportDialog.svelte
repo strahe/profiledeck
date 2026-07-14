@@ -10,7 +10,7 @@
 	import { Button } from "$lib/components/ui/button";
 	import { Spinner } from "$lib/components/ui/spinner";
 
-	import type { CodexProfileImportPlan } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { CodexProfileImportPlan } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
 
 	interface Props {
 		open?: boolean;

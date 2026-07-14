@@ -8,7 +8,8 @@ import (
 
 	urfavecli "github.com/urfave/cli/v3"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/antigravity"
+	"github.com/strahe/profiledeck/internal/apperror"
 )
 
 func newAntigravityCommand() *urfavecli.Command {
@@ -25,7 +26,11 @@ func newAntigravityDetectCommand() *urfavecli.Command {
 		Name: "detect", Usage: "Detect the Antigravity agy v2 login",
 		Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.AntigravityDetect(ctx, app.AntigravityDetectRequest{ConfigDir: configDirValue(cmd)})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Antigravity().Detect(ctx)
 			if err != nil {
 				return err
 			}
@@ -53,7 +58,11 @@ func newAntigravityProfileListCommand() *urfavecli.Command {
 		Name: "list", Usage: "List stored Antigravity profiles",
 		Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.ListAntigravityProfiles(ctx, app.ListAntigravityProfilesRequest{ConfigDir: configDirValue(cmd)})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Antigravity().ListProfiles(ctx)
 			if err != nil {
 				return err
 			}
@@ -70,11 +79,15 @@ func newAntigravityProfileShowCommand() *urfavecli.Command {
 		Name: "show", Usage: "Show a stored Antigravity profile", ArgsUsage: "<profile-id>",
 		Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			profileID, err := singleIDArg(cmd, app.ErrorProfileInvalid)
+			profileID, err := singleIDArg(cmd, apperror.ProfileInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.GetAntigravityProfile(ctx, app.GetAntigravityProfileRequest{ConfigDir: configDirValue(cmd), ProfileID: profileID})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Antigravity().GetProfile(ctx, antigravity.GetAntigravityProfileRequest{ProfileID: profileID})
 			if err != nil {
 				return err
 			}
@@ -94,13 +107,17 @@ func newAntigravityProfileCreateCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			profileID, err := singleIDArg(cmd, app.ErrorProfileInvalid)
+			profileID, err := singleIDArg(cmd, apperror.ProfileInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.CreateAntigravityProfile(ctx, app.CreateAntigravityProfileRequest{
-				ConfigDir: configDirValue(cmd), ProfileID: profileID,
-				Name: stringFlagPtr(cmd, nameFlagName), Description: stringFlagPtr(cmd, descriptionFlagName),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Antigravity().CreateProfile(ctx, antigravity.CreateAntigravityProfileRequest{
+				ProfileID: profileID,
+				Name:      stringFlagPtr(cmd, nameFlagName), Description: stringFlagPtr(cmd, descriptionFlagName),
 			})
 			if err != nil {
 				return err
@@ -121,13 +138,17 @@ func newAntigravityProfileUpdateCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			profileID, err := singleIDArg(cmd, app.ErrorProfileInvalid)
+			profileID, err := singleIDArg(cmd, apperror.ProfileInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.UpdateAntigravityProfile(ctx, app.UpdateAntigravityProfileRequest{
-				ConfigDir: configDirValue(cmd), ProfileID: profileID,
-				Name: stringFlagPtr(cmd, nameFlagName), Description: stringFlagPtr(cmd, descriptionFlagName),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Antigravity().UpdateProfile(ctx, antigravity.UpdateAntigravityProfileRequest{
+				ProfileID: profileID,
+				Name:      stringFlagPtr(cmd, nameFlagName), Description: stringFlagPtr(cmd, descriptionFlagName),
 			})
 			if err != nil {
 				return err
@@ -145,7 +166,11 @@ func newAntigravityProfileSaveCurrentCommand() *urfavecli.Command {
 		Name: "save-current", Usage: "Save the current agy v2 login into the active Antigravity Profile",
 		Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.SaveActiveAntigravityProfile(ctx, app.SaveActiveAntigravityProfileRequest{ConfigDir: configDirValue(cmd)})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Antigravity().SaveActiveProfile(ctx)
 			if err != nil {
 				return err
 			}
@@ -157,14 +182,14 @@ func newAntigravityProfileSaveCurrentCommand() *urfavecli.Command {
 	}
 }
 
-func writeAntigravityDetect(w io.Writer, result app.AntigravityDetectResult) error {
+func writeAntigravityDetect(w io.Writer, result antigravity.AntigravityDetectResult) error {
 	if _, err := fmt.Fprintf(w, "Antigravity agy v2\nlogin: %s\nprovider: %s\ncompatible: %t\n", result.CredentialStatus, result.ProviderID, result.ProviderCompatible); err != nil {
 		return err
 	}
 	return writeWarnings(w, result.Warnings)
 }
 
-func writeAntigravityProfileList(w io.Writer, result app.AntigravityProfileListResult) error {
+func writeAntigravityProfileList(w io.Writer, result antigravity.AntigravityProfileListResult) error {
 	if len(result.Profiles) == 0 {
 		_, err := fmt.Fprintln(w, "No Antigravity profiles")
 		return err
@@ -189,7 +214,7 @@ func writeAntigravityProfileList(w io.Writer, result app.AntigravityProfileListR
 	return nil
 }
 
-func writeAntigravityProfileDetail(w io.Writer, detail app.AntigravityProfileDetail) error {
+func writeAntigravityProfileDetail(w io.Writer, detail antigravity.AntigravityProfileDetail) error {
 	summary := detail.Summary
 	if _, err := fmt.Fprintf(w, "Antigravity profile\nprofile: %s\nname: %s\nactive: %t\nexpires: %s\nlogin references: %d\nupdated: %d\n",
 		summary.Profile.ID, summary.Profile.Name, summary.Active, formatAntigravityExpiry(summary.ExpiresAtUnixMS),
@@ -199,7 +224,7 @@ func writeAntigravityProfileDetail(w io.Writer, detail app.AntigravityProfileDet
 	return writeWarnings(w, summary.Warnings)
 }
 
-func writeAntigravityProfileSave(w io.Writer, title string, result app.AntigravityProfileSaveResult) error {
+func writeAntigravityProfileSave(w io.Writer, title string, result antigravity.AntigravityProfileSaveResult) error {
 	if _, err := fmt.Fprintf(w, "%s\noperation: %s\nprovider: %s\nprofile: %s\nexpires: %s\nlogin references: %d\n",
 		title, result.OperationID, result.Summary.ProviderID, result.Summary.Profile.ID,
 		formatAntigravityExpiry(result.Summary.ExpiresAtUnixMS), result.Summary.CredentialReferenceCount); err != nil {

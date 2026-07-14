@@ -24,8 +24,10 @@ import (
 )
 
 const (
-	sqliteDriverName  = "sqlite"
-	sqliteBusyTimeout = 5 * time.Second
+	sqliteDriverName             = "sqlite"
+	sqliteBusyTimeout            = 5 * time.Second
+	sqliteMigrationMaxAttempts   = 3
+	sqliteMigrationRetryBaseWait = 25 * time.Millisecond
 
 	OperationTypeSwitch      = "switch"
 	OperationTypeRollback    = "rollback"
@@ -878,6 +880,30 @@ func (s *Store) executor() dbExecutor {
 }
 
 func (s *Store) Migrate(ctx context.Context) (MigrationResult, error) {
+	return migrateWithRetry(ctx, s.migrateOnce)
+}
+
+func migrateWithRetry(
+	ctx context.Context,
+	migrate func(context.Context) (MigrationResult, error),
+) (MigrationResult, error) {
+	var result MigrationResult
+	var err error
+	// Concurrent CLI and Desktop startup can outlive one busy timeout on Windows;
+	// retry only SQLite lock errors so migration failures are never masked.
+	for attempt := range sqliteMigrationMaxAttempts {
+		result, err = migrate(ctx)
+		if err == nil || !isSQLiteBusyError(err) || attempt == sqliteMigrationMaxAttempts-1 {
+			return result, err
+		}
+		if err := waitForMigrationRetry(ctx, sqliteMigrationRetryBaseWait<<attempt); err != nil {
+			return MigrationResult{}, err
+		}
+	}
+	return result, err
+}
+
+func (s *Store) migrateOnce(ctx context.Context) (MigrationResult, error) {
 	migrator := migrate.NewMigrator(
 		s.db,
 		migrations.Migrations,
@@ -892,6 +918,17 @@ func (s *Store) Migrate(ctx context.Context) (MigrationResult, error) {
 		return MigrationResult{}, err
 	}
 	return MigrationResult{Applied: len(group.Migrations)}, nil
+}
+
+func waitForMigrationRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (s *Store) Status(ctx context.Context) (Status, error) {
@@ -1458,6 +1495,38 @@ func (s *Store) GetSetting(ctx context.Context, key string) (Setting, error) {
 		return Setting{}, ErrNotFound
 	}
 	return setting, err
+}
+
+func (s *Store) ListSettingsByPrefix(ctx context.Context, prefix string) ([]Setting, error) {
+	prefix = strings.TrimSpace(prefix)
+	rows, err := s.executor().QueryContext(ctx, `
+		SELECT key, value_json, updated_at_unix_ms
+		FROM settings
+		WHERE key LIKE ? ESCAPE '!'
+		ORDER BY key ASC
+	`, escapeLikePrefix(prefix)+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	settings := []Setting{}
+	for rows.Next() {
+		setting, err := scanSetting(rows)
+		if err != nil {
+			return nil, err
+		}
+		settings = append(settings, setting)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return settings, nil
+}
+
+func escapeLikePrefix(value string) string {
+	replacer := strings.NewReplacer(`!`, `!!`, `%`, `!%`, `_`, `!_`)
+	return replacer.Replace(value)
 }
 
 func (s *Store) DeleteSetting(ctx context.Context, key string) error {
@@ -3799,6 +3868,15 @@ func scanUsageImportCursor(row rowScanner) (UsageImportCursor, error) {
 func isSQLiteConstraintError(err error) bool {
 	var sqliteErr *sqlite.Error
 	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqlite3.SQLITE_CONSTRAINT
+}
+
+func isSQLiteBusyError(err error) bool {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	code := sqliteErr.Code() & 0xff
+	return code == sqlite3.SQLITE_BUSY || code == sqlite3.SQLITE_LOCKED
 }
 
 func profileTargetConstraintError(err error) error {

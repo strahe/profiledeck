@@ -23,16 +23,10 @@
 		SettingsService,
 	} from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type { DashboardResult, DesktopError } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
-	import type {
-		AntigravityDetectResult,
-		AntigravityProfileSummary,
-		CodexConfigSet,
-		CodexDetectResult,
-		CodexProfileSummary,
-		ClaudeCodeDetectResult,
-		ClaudeCodeProfileSummary,
-		DoctorResult,
-	} from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { AntigravityDetectResult, AntigravityProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/antigravity/models";
+	import type { ClaudeCodeDetectResult, ClaudeCodeProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/claudecode/models";
+	import type { CodexConfigSet, CodexDetectResult, CodexProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
+	import type { DoctorResult } from "../../../bindings/github.com/strahe/profiledeck/internal/doctor/models";
 	import StatusBadge from "$lib/components/app/StatusBadge.svelte";
 	import * as Alert from "$lib/components/ui/alert";
 	import { Badge } from "$lib/components/ui/badge";
@@ -73,6 +67,8 @@
 		config_sets_changed?: boolean;
 		active_state_changed?: boolean;
 		provider_id?: string;
+		agent_id?: string;
+		agent_enabled?: boolean;
 	};
 
 	type DashboardUpdatePayload = {
@@ -145,6 +141,13 @@
 	let workspaceRoute = $derived(parseWorkspaceRoute(currentPath));
 	let agentWorkspace = $derived(isAgentWorkspace(workspaceRoute.view));
 	let selectedAgent = $derived<AgentID | null>(workspaceRoute.view === "antigravity-profiles" ? "antigravity" : workspaceRoute.view === "claude-code-profiles" ? "claude-code" : agentWorkspace ? "codex" : null);
+	let agentWorkspaceReady = $derived(!agentWorkspace || (dashboard !== null && dashboard.status.initialized && dashboard.status.schema_healthy && selectedAgent !== null && isAgentEnabled(selectedAgent)));
+	let enabledAgents = $derived.by(() => {
+		const states = dashboard?.agents;
+		if (!states?.length) return agents;
+		const enabled = new Set<string>(states.filter((state) => state.enabled).map((state) => String(state.manifest.id)));
+		return agents.filter((agent) => enabled.has(agent.id));
+	});
 	let activeAgentTab = $derived(workspaceRoute.view === "codex-settings" ? "settings" : workspaceRoute.view === "antigravity-profiles" || workspaceRoute.view === "claude-code-profiles" ? "profiles" : workspaceRoute.view);
 	let codexActiveProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === codexProviderID)?.profile_id ?? "");
 	let antigravityActiveProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === antigravityProviderID)?.profile_id ?? "");
@@ -185,15 +188,17 @@
 
 	$effect(() => {
 		const path = currentPath;
+		const available = enabledAgents;
 		if (path === "/codex/health") {
 			void replace("/diagnostics");
 			return;
 		}
-		if (workspaceRoute.valid) {
+		const routeAgent = agentForWorkspace(workspaceRoute.view);
+		if (workspaceRoute.valid && (!routeAgent || available.some((agent) => agent.id === routeAgent))) {
 			invalidRoute = "";
 		} else if (invalidRoute !== path) {
 			invalidRoute = path;
-			void replace(path.startsWith("/antigravity/") ? "/antigravity/profiles" : path.startsWith("/claude-code/") ? "/claude-code/profiles" : "/codex/profiles");
+			void replace(available.length ? agentHome(available[0].id) : "/settings");
 		}
 	});
 
@@ -204,19 +209,19 @@
 		window.addEventListener("hashchange", syncPath);
 		syncPath();
 		void loadSettings();
-		const stopRuntime = codexRuntime.start();
-		void refreshAll(false);
+		const stopRuntime = codexRuntime.start(false);
+		void refreshAll();
 		const off = [
 			Events.On("profiledeck:open-switch", (event) => {
 				const payload = event.data ?? {};
 				if (!payload.profile_id) return;
-				if (payload.provider_id === codexProviderID) {
+				if (payload.provider_id === codexProviderID && isAgentEnabled("codex")) {
 					useRequest = { profileID: payload.profile_id, sequence: ++useRequestSequence };
 					void push("/codex/profiles");
-				} else if (payload.provider_id === antigravityProviderID) {
+				} else if (payload.provider_id === antigravityProviderID && isAgentEnabled("antigravity")) {
 					antigravityUseRequest = { profileID: payload.profile_id, sequence: ++useRequestSequence };
 					void push("/antigravity/profiles");
-				} else if (payload.provider_id === claudeCodeProviderID) {
+				} else if (payload.provider_id === claudeCodeProviderID && isAgentEnabled("claude-code")) {
 					claudeCodeUseRequest = { profileID: payload.profile_id, sequence: ++useRequestSequence };
 					void push("/claude-code/profiles");
 				}
@@ -242,14 +247,17 @@
 	async function refreshAll(reloadRuntime = true) {
 		loading = true;
 		try {
-			const detectCurrentAgent = selectedAgent === "antigravity" ? refreshAntigravityDetect() : selectedAgent === "claude-code" ? refreshClaudeCodeDetect() : refreshDetect();
-			const [dashboardResult] = await Promise.all([
-				track("dashboard", AppService.Dashboard()),
-				detectCurrentAgent,
-			]);
+			const dashboardResult = await track("dashboard", AppService.Dashboard());
 			applyDashboardResult(dashboardResult);
 			dashboardError = "";
-			if (reloadRuntime) await codexRuntime.load();
+
+			const tasks: Promise<unknown>[] = [];
+			const routeAgent = agentForWorkspace(workspaceRoute.view);
+			if (routeAgent && isAgentEnabled(routeAgent)) {
+				tasks.push(routeAgent === "antigravity" ? refreshAntigravityDetect() : routeAgent === "claude-code" ? refreshClaudeCodeDetect() : refreshDetect());
+			}
+			if (reloadRuntime && isAgentEnabled("codex")) tasks.push(codexRuntime.load());
+			await Promise.all(tasks);
 		} catch (error) {
 			if (!isCancelError(error)) {
 				dashboardError = formatError(error);
@@ -285,7 +293,7 @@
 		languagePreference = applyDesktopLanguagePreference(next);
 		languageBusy = true;
 		try {
-			const settings = await track("settings-language", SettingsService.Update({ config_dir: "", language: next }));
+			const settings = await track("settings-language", SettingsService.Update({ language: next }));
 			languagePreference = applyDesktopLanguagePreference(settings.language);
 			showNotice(translate("notice.settingsSaved.title"), translate("notice.settingsSaved.description"));
 		} catch (error) {
@@ -304,7 +312,7 @@
 		setMode(next);
 		appearanceBusy = true;
 		try {
-			const settings = await track("settings-appearance", SettingsService.Update({ config_dir: "", appearance: next }));
+			const settings = await track("settings-appearance", SettingsService.Update({ appearance: next }));
 			appearance = normalizeAppearance(settings.appearance);
 			persistedAppearance = appearance;
 			setMode(appearance);
@@ -326,7 +334,7 @@
 		}
 		sidebarBusy = true;
 		try {
-			const settings = await SettingsService.Update({ config_dir: "", sidebar_collapsed: !open });
+			const settings = await SettingsService.Update({ sidebar_collapsed: !open });
 			persistedSidebarCollapsed = settings.sidebar_collapsed;
 			sidebarOpen = !settings.sidebar_collapsed;
 		} catch (error) {
@@ -481,14 +489,31 @@
 		if (payload.error && !isCancelError(payload.error)) showError(payload.error);
 		if (payload.event?.error && !isCancelError(payload.event.error)) showError(payload.event.error);
 		if (payload.event?.profile_changed || payload.event?.active_state_changed) {
-			if (payload.event.provider_id === antigravityProviderID) void refreshAntigravityDetect();
-			else if (payload.event.provider_id === claudeCodeProviderID) void refreshClaudeCodeDetect();
-			else void refreshDetect();
+			if (payload.event.provider_id === antigravityProviderID && isAgentEnabled("antigravity")) void refreshAntigravityDetect();
+			else if (payload.event.provider_id === claudeCodeProviderID && isAgentEnabled("claude-code")) void refreshClaudeCodeDetect();
+			else if (payload.event.provider_id === codexProviderID && isAgentEnabled("codex")) void refreshDetect();
+		}
+		if (payload.event?.kind === "agent-state-changed" && payload.event.agent_id === "codex" && payload.event.agent_enabled) {
+			void codexRuntime.load();
 		}
 	}
 
 	function applyDashboardResult(next: DashboardResult) {
 		dashboard = next;
+		if (!agentEnabled(next.agents ?? [], "codex")) {
+			detectResult = null;
+			detectError = "";
+			startupQuotaReadStarted = false;
+			codexRuntime.reset();
+		}
+		if (!agentEnabled(next.agents ?? [], "antigravity")) {
+			antigravityDetectResult = null;
+			antigravityDetectError = "";
+		}
+		if (!agentEnabled(next.agents ?? [], "claude-code")) {
+			claudeCodeDetectResult = null;
+			claudeCodeDetectError = "";
+		}
 		doctorResult = next.doctor ?? null;
 		doctorError = "";
 		codexProfileSummaries = next.codex_profiles?.profiles ?? [];
@@ -500,6 +525,10 @@
 		loadingClaudeCodeProfiles = false;
 		if (next.startup_error) dashboardError = desktopErrorMessage(next.startup_error, translate("errors.desktopUnavailable"));
 		else dashboardError = "";
+	}
+
+	function agentEnabled(states: DashboardResult["agents"], id: AgentID): boolean {
+		return states?.some((state) => String(state.manifest.id) === id && state.enabled) ?? false;
 	}
 
 	function parseWorkspaceRoute(path: string): WorkspaceRoute {
@@ -560,9 +589,24 @@
 	}
 
 	function selectAgent(agentID: AgentID) {
-		if (agentID === "codex") void push("/codex/profiles");
-		else if (agentID === "antigravity") void push("/antigravity/profiles");
-		else void push("/claude-code/profiles");
+		if (isAgentEnabled(agentID)) void push(agentHome(agentID));
+	}
+
+	function agentForWorkspace(view: WorkspaceView): AgentID | null {
+		if (view === "antigravity-profiles") return "antigravity";
+		if (view === "claude-code-profiles") return "claude-code";
+		return view === "profiles" || view === "usage" || view === "codex-settings" ? "codex" : null;
+	}
+
+	function agentHome(agentID: AgentID): string {
+		if (agentID === "antigravity") return "/antigravity/profiles";
+		if (agentID === "claude-code") return "/claude-code/profiles";
+		return "/codex/profiles";
+	}
+
+	function isAgentEnabled(agentID: AgentID): boolean {
+		const states = dashboard?.agents;
+		return !states?.length || states.some((state) => state.manifest.id === agentID && state.enabled);
 	}
 
 	function selectAgentTab(value: string) {
@@ -718,7 +762,7 @@
 					<Sidebar.GroupLabel>{$_("nav.agents")}</Sidebar.GroupLabel>
 					<Sidebar.GroupContent>
 						<Sidebar.Menu>
-							{#each agents as agent (agent.id)}
+							{#each enabledAgents as agent (agent.id)}
 								{@const AgentIcon = agent.icon}
 								<Sidebar.MenuItem>
 									<Sidebar.MenuButton
@@ -795,7 +839,9 @@
 			{/if}
 
 			<div class="min-h-0 flex-1 overflow-auto p-4">
-				{#if workspaceRoute.view === "profiles"}
+				{#if !agentWorkspaceReady}
+					{#if loading}<div class="grid h-full place-items-center"><Spinner /></div>{/if}
+				{:else if workspaceRoute.view === "profiles"}
 					<CodexProfiles
 						route={workspaceRoute.codexProfile}
 						profiles={codexProfileSummaries}

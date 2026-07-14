@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
 
-	import type { CodexProfileSettings } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { CodexProfileSettings } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
 	import SettingsRow from "$lib/components/app/SettingsRow.svelte";
 	import StatusBadge from "$lib/components/app/StatusBadge.svelte";
 	import * as Select from "$lib/components/ui/select";

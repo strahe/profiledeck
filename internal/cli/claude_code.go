@@ -8,7 +8,8 @@ import (
 
 	urfavecli "github.com/urfave/cli/v3"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/claudecode"
 )
 
 func newClaudeCodeCommand() *urfavecli.Command {
@@ -23,7 +24,11 @@ func newClaudeCodeDetectCommand() *urfavecli.Command {
 		Name: "detect", Usage: "Detect the official Claude Code subscription login",
 		Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.ClaudeCodeDetect(ctx, app.ClaudeCodeDetectRequest{ConfigDir: configDirValue(cmd)})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.ClaudeCode().Detect(ctx, claudecode.ClaudeCodeDetectRequest{})
 			if err != nil {
 				return err
 			}
@@ -53,13 +58,17 @@ func newClaudeCodeProfileCreateCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			profileID, err := singleIDArg(cmd, app.ErrorProfileInvalid)
+			profileID, err := singleIDArg(cmd, apperror.ProfileInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.CreateClaudeCodeProfile(ctx, app.CreateClaudeCodeProfileRequest{
-				ConfigDir: configDirValue(cmd), ProfileID: profileID,
-				Name: stringFlagPtr(cmd, nameFlagName), Description: stringFlagPtr(cmd, descriptionFlagName),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.ClaudeCode().CreateProfile(ctx, claudecode.CreateClaudeCodeProfileRequest{
+				ProfileID: profileID,
+				Name:      stringFlagPtr(cmd, nameFlagName), Description: stringFlagPtr(cmd, descriptionFlagName),
 			})
 			if err != nil {
 				return err
@@ -77,7 +86,11 @@ func newClaudeCodeProfileListCommand() *urfavecli.Command {
 		Name: "list", Usage: "List stored Claude Code Profiles",
 		Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.ListClaudeCodeProfiles(ctx, app.ListClaudeCodeProfilesRequest{ConfigDir: configDirValue(cmd)})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.ClaudeCode().ListProfiles(ctx)
 			if err != nil {
 				return err
 			}
@@ -94,11 +107,15 @@ func newClaudeCodeProfileShowCommand() *urfavecli.Command {
 		Name: "show", Usage: "Show a stored Claude Code Profile", ArgsUsage: "<profile-id>",
 		Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			profileID, err := singleIDArg(cmd, app.ErrorProfileInvalid)
+			profileID, err := singleIDArg(cmd, apperror.ProfileInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.GetClaudeCodeProfile(ctx, app.GetClaudeCodeProfileRequest{ConfigDir: configDirValue(cmd), ProfileID: profileID})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.ClaudeCode().GetProfile(ctx, claudecode.GetClaudeCodeProfileRequest{ProfileID: profileID})
 			if err != nil {
 				return err
 			}
@@ -118,13 +135,17 @@ func newClaudeCodeProfileUpdateCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			profileID, err := singleIDArg(cmd, app.ErrorProfileInvalid)
+			profileID, err := singleIDArg(cmd, apperror.ProfileInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.UpdateClaudeCodeProfile(ctx, app.UpdateClaudeCodeProfileRequest{
-				ConfigDir: configDirValue(cmd), ProfileID: profileID,
-				Name: stringFlagPtr(cmd, nameFlagName), Description: stringFlagPtr(cmd, descriptionFlagName),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.ClaudeCode().UpdateProfile(ctx, claudecode.UpdateClaudeCodeProfileRequest{
+				ProfileID: profileID,
+				Name:      stringFlagPtr(cmd, nameFlagName), Description: stringFlagPtr(cmd, descriptionFlagName),
 			})
 			if err != nil {
 				return err
@@ -145,9 +166,11 @@ func newClaudeCodeProfileSaveCurrentCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.SaveActiveClaudeCodeProfile(ctx, app.SaveActiveClaudeCodeProfileRequest{
-				ConfigDir: configDirValue(cmd), ConfirmShared: cmd.Bool(yesFlagName),
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.ClaudeCode().SaveActiveProfile(ctx, claudecode.SaveActiveClaudeCodeProfileRequest{ConfirmShared: cmd.Bool(yesFlagName)})
 			if err != nil {
 				return err
 			}
@@ -159,7 +182,7 @@ func newClaudeCodeProfileSaveCurrentCommand() *urfavecli.Command {
 	}
 }
 
-func writeClaudeCodeDetect(w io.Writer, result app.ClaudeCodeDetectResult) error {
+func writeClaudeCodeDetect(w io.Writer, result claudecode.ClaudeCodeDetectResult) error {
 	if _, err := fmt.Fprintf(w, "Claude Code\nlogin: %s\nprovider: %s\nenabled: %t\ncompatible: %t\nexpires: %s\n",
 		result.CredentialStatus, result.ProviderID, result.ProviderEnabled, result.ProviderCompatible, formatClaudeCodeExpiry(result.ExpiresAtUnixMS)); err != nil {
 		return err
@@ -177,7 +200,7 @@ func writeClaudeCodeDetect(w io.Writer, result app.ClaudeCodeDetectResult) error
 	return writeWarnings(w, result.Warnings)
 }
 
-func writeClaudeCodeProfileList(w io.Writer, result app.ClaudeCodeProfileListResult) error {
+func writeClaudeCodeProfileList(w io.Writer, result claudecode.ClaudeCodeProfileListResult) error {
 	if len(result.Profiles) == 0 {
 		_, err := fmt.Fprintln(w, "No Claude Code Profiles")
 		return err
@@ -198,7 +221,7 @@ func writeClaudeCodeProfileList(w io.Writer, result app.ClaudeCodeProfileListRes
 	return nil
 }
 
-func writeClaudeCodeProfileDetail(w io.Writer, detail app.ClaudeCodeProfileDetail) error {
+func writeClaudeCodeProfileDetail(w io.Writer, detail claudecode.ClaudeCodeProfileDetail) error {
 	summary := detail.Summary
 	if _, err := fmt.Fprintf(w, "Claude Code Profile\nprofile: %s\nname: %s\nactive: %t\nlogin: %s\nexpires: %s\nlogin references: %d\nupdated: %d\n",
 		summary.Profile.ID, summary.Profile.Name, summary.Active, summary.CredentialStatus,
@@ -208,7 +231,7 @@ func writeClaudeCodeProfileDetail(w io.Writer, detail app.ClaudeCodeProfileDetai
 	return writeWarnings(w, summary.Warnings)
 }
 
-func writeClaudeCodeProfileSave(w io.Writer, title string, result app.ClaudeCodeProfileSaveResult) error {
+func writeClaudeCodeProfileSave(w io.Writer, title string, result claudecode.ClaudeCodeProfileSaveResult) error {
 	if _, err := fmt.Fprintf(w, "%s\noperation: %s\nprovider: %s\nprofile: %s\nlogin: %s\nexpires: %s\nlogin references: %d\n",
 		title, result.OperationID, result.Summary.ProviderID, result.Summary.Profile.ID, result.Summary.CredentialStatus,
 		formatClaudeCodeExpiry(result.Summary.ExpiresAtUnixMS), result.Summary.CredentialReferenceCount); err != nil {

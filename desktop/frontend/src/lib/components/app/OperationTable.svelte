@@ -2,7 +2,7 @@
 	import { _ } from "svelte-i18n";
 	import ClipboardIcon from "@lucide/svelte/icons/clipboard";
 
-	import type { DoctorOperation } from "../../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { DoctorOperation } from "../../../../bindings/github.com/strahe/profiledeck/internal/doctor/models";
 	import IconAction from "./IconAction.svelte";
 	import * as AlertDialog from "$lib/components/ui/alert-dialog";
 	import { Badge } from "$lib/components/ui/badge";

@@ -16,11 +16,21 @@ import (
 
 	keyring "github.com/zalando/go-keyring"
 
+	"github.com/strahe/profiledeck/internal/antigravity"
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
 	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
+	"github.com/strahe/profiledeck/internal/codex"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	"github.com/strahe/profiledeck/internal/doctor"
+	"github.com/strahe/profiledeck/internal/profile"
+	"github.com/strahe/profiledeck/internal/profiletarget"
+	"github.com/strahe/profiledeck/internal/provider"
+	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
+	"github.com/strahe/profiledeck/internal/switching"
+	"github.com/strahe/profiledeck/internal/usage"
 )
 
 func TestNewCommandBuildsRootCommand(t *testing.T) {
@@ -100,12 +110,48 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	}
 }
 
+func TestCLICommandsIgnoreDesktopAgentPreferences(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("initialize CLI runtime: %v", err)
+	}
+	application, err := app.New(app.Config{ConfigDir: configDir})
+	if err != nil {
+		t.Fatalf("create unrestricted Application: %v", err)
+	}
+	db, err := application.Runtime().StoreFactory().OpenHealthy(ctx, false)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	if _, err := db.UpsertSetting(ctx, store.UpsertSettingParams{
+		Key: "desktop.agent.codex.enabled", ValueJSON: "false",
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("save Desktop Agent preference: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+
+	raw, err := runCLI(
+		t, "--config-dir", configDir, "codex", "detect", "--codex-dir", t.TempDir(), "--json",
+	)
+	if err != nil {
+		t.Fatalf("Desktop Agent preference disabled CLI Codex command: %v", err)
+	}
+	var result codex.CodexDetectResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil || result.ProviderID != codexconfig.ProviderID {
+		t.Fatalf("unexpected Codex detect result: raw=%q result=%#v err=%v", raw, result, err)
+	}
+}
+
 func TestWritePlanUsesSafeTargetLabelWithoutPath(t *testing.T) {
 	var output bytes.Buffer
-	err := writePlan(&output, app.SwitchPlan{
-		Provider: app.PlanProvider{ID: agyconfig.ProviderID, Name: "Antigravity"},
-		Profile:  app.PlanProfile{ID: "work", Name: "Work"},
-		Operations: []app.PlanOperation{{
+	err := writePlan(&output, switching.SwitchPlan{
+		Provider: switching.PlanProvider{ID: agyconfig.ProviderID, Name: "Antigravity"},
+		Profile:  switching.PlanProfile{ID: "work", Name: "Work"},
+		Operations: []switching.PlanOperation{{
 			TargetID: "auth", BackendID: "keyring", TargetLabel: "Antigravity login",
 			Action: "update", StatusReason: "target_different_content",
 		}},
@@ -120,9 +166,9 @@ func TestWritePlanUsesSafeTargetLabelWithoutPath(t *testing.T) {
 
 func TestWriteBackupDetailUsesSafeTargetLabelWithoutPath(t *testing.T) {
 	var output bytes.Buffer
-	err := writeBackupDetail(&output, app.BackupDetail{
-		BackupSummary: app.BackupSummary{BackupID: "switch-test", ProviderID: agyconfig.ProviderID},
-		Entries: []app.BackupEntrySummary{{
+	err := writeBackupDetail(&output, switching.BackupDetail{
+		BackupSummary: switching.BackupSummary{BackupID: "switch-test", ProviderID: agyconfig.ProviderID},
+		Entries: []switching.BackupEntrySummary{{
 			TargetID: "auth", BackendID: "keyring", TargetLabel: "Antigravity login", Action: "update", Existed: true,
 		}},
 	})
@@ -149,7 +195,7 @@ func TestAntigravityProfileCLIUsesAgyV2KeyringState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected Antigravity profile create to succeed, got %v", err)
 	}
-	var created app.AntigravityProfileSaveResult
+	var created antigravity.AntigravityProfileSaveResult
 	if err := json.Unmarshal([]byte(createdRaw), &created); err != nil {
 		t.Fatalf("expected Antigravity create JSON, got %q: %v", createdRaw, err)
 	}
@@ -187,10 +233,22 @@ func TestClaudeCodeProfileCLIUsesOfficialLoginWithoutExposingTokens(t *testing.T
 		t.Fatal(err)
 	}
 	metadataJSON := string(metadata)
-	if _, err := app.CreateProvider(context.Background(), app.CreateProviderRequest{
-		ConfigDir: configDir, ID: claudecodeconfig.ProviderID, Name: claudecodeconfig.ProviderName,
-		AdapterID: claudecodeconfig.AdapterID, MetadataJSON: &metadataJSON,
+	application, err := app.New(app.Config{ConfigDir: configDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := application.Runtime().StoreFactory().OpenHealthy(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateProvider(context.Background(), store.CreateProviderParams{
+		ID: claudecodeconfig.ProviderID, Name: claudecodeconfig.ProviderName, Enabled: true,
+		AdapterID: claudecodeconfig.AdapterID, MetadataJSON: metadataJSON,
 	}); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	created, err := runCLI(t, "--config-dir", configDir, "claude-code", "profile", "create", "work", "--json")
@@ -266,7 +324,7 @@ func TestStatusJSONBeforeInit(t *testing.T) {
 		t.Fatalf("expected status to succeed, got %v", err)
 	}
 
-	var result app.StatusResult
+	var result profilesruntime.StatusResult
 	decodeCLIJSON(t, out.Bytes(), &result)
 	if result.ConfigDir != configDir {
 		t.Fatalf("expected config_dir %q, got %q", configDir, result.ConfigDir)
@@ -292,7 +350,7 @@ func TestInitJSONCreatesRuntimeAndDatabase(t *testing.T) {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 
-	var result app.InitResult
+	var result profilesruntime.InitResult
 	decodeCLIJSON(t, out.Bytes(), &result)
 	if result.ConfigDir != configDir {
 		t.Fatalf("expected config_dir %q, got %q", configDir, result.ConfigDir)
@@ -339,7 +397,7 @@ func TestInitTwiceAndStatusJSONAfterInit(t *testing.T) {
 	if err := secondInitCmd.Run(context.Background(), []string{app.CLIName, "--config-dir", configDir, "init", "--json"}); err != nil {
 		t.Fatalf("expected second init to succeed, got %v", err)
 	}
-	var secondInit app.InitResult
+	var secondInit profilesruntime.InitResult
 	decodeCLIJSON(t, secondInitOut.Bytes(), &secondInit)
 	if secondInit.MigrationsApplied != 0 {
 		t.Fatalf("expected second init to apply no migrations, got %d", secondInit.MigrationsApplied)
@@ -352,7 +410,7 @@ func TestInitTwiceAndStatusJSONAfterInit(t *testing.T) {
 		t.Fatalf("expected status to succeed, got %v", err)
 	}
 
-	var status app.StatusResult
+	var status profilesruntime.StatusResult
 	decodeCLIJSON(t, statusOut.Bytes(), &status)
 	if !status.Initialized || !status.SchemaHealthy {
 		t.Fatalf("expected status after init to be initialized and healthy, got %#v", status)
@@ -384,7 +442,7 @@ func TestUsageSyncCodexAndSummaryJSON(t *testing.T) {
 			t.Fatalf("expected usage sync output to exclude %q, got %q", forbidden, syncOut)
 		}
 	}
-	var syncResult app.UsageSyncResult
+	var syncResult usage.UsageSyncResult
 	decodeCLIJSON(t, []byte(syncOut), &syncResult)
 	if syncResult.ImportedEvents != 1 || syncResult.ScannedFiles != 1 {
 		t.Fatalf("unexpected usage sync result: %#v", syncResult)
@@ -399,7 +457,7 @@ func TestUsageSyncCodexAndSummaryJSON(t *testing.T) {
 			t.Fatalf("expected usage summary output to exclude %q, got %q", forbidden, summaryOut)
 		}
 	}
-	var summary app.UsageSummaryResult
+	var summary usage.UsageSummaryResult
 	decodeCLIJSON(t, []byte(summaryOut), &summary)
 	if summary.EventCount != 1 || summary.InputTokens != 10 || summary.CachedInputTokens != 2 || summary.OutputTokens != 3 || summary.TotalTokens != 13 {
 		t.Fatalf("unexpected usage summary: %#v", summary)
@@ -417,9 +475,9 @@ func TestUsageSyncCodexAndSummaryJSON(t *testing.T) {
 			t.Fatalf("expected usage report output to exclude %q, got %q", forbidden, reportOut)
 		}
 	}
-	var report app.UsageReportResult
+	var report usage.UsageReportResult
 	decodeCLIJSON(t, []byte(reportOut), &report)
-	if report.Range.Preset != app.UsageRange7Days || report.Summary.EventCount != 0 || report.Summary.UndatedEventCount != 1 || len(report.Trend) != 7 {
+	if report.Range.Preset != usage.UsageRange7Days || report.Summary.EventCount != 0 || report.Summary.UndatedEventCount != 1 || len(report.Trend) != 7 {
 		t.Fatalf("unexpected default usage report: %#v", report)
 	}
 	humanReport, err := runCLI(t, "--config-dir", configDir, "usage", "report", "--range", "all")
@@ -453,7 +511,7 @@ func TestUsageSyncCodexDefaultsToCodexHomeEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected usage sync with CODEX_HOME to succeed, got %v", err)
 	}
-	var result app.UsageSyncResult
+	var result usage.UsageSyncResult
 	decodeCLIJSON(t, []byte(out), &result)
 	if result.ScannedFiles != 1 || result.ImportedEvents != 1 {
 		t.Fatalf("expected CODEX_HOME usage file to be imported, got %#v", result)
@@ -465,7 +523,7 @@ func TestUsageBucketLabelDistinguishesRepeatedDSTHour(t *testing.T) {
 	if err != nil {
 		t.Skipf("timezone data unavailable: %v", err)
 	}
-	resolved := app.UsageResolvedRange{BucketUnit: "hour", TimeZone: location.String()}
+	resolved := usage.UsageResolvedRange{BucketUnit: "hour", TimeZone: location.String()}
 	first := usageBucketLabel(resolved, time.Date(2026, time.November, 1, 8, 30, 0, 0, time.UTC).UnixMilli())
 	second := usageBucketLabel(resolved, time.Date(2026, time.November, 1, 9, 30, 0, 0, time.UTC).UnixMilli())
 	if first == second || !strings.Contains(first, "PDT") || !strings.Contains(second, "PST") {
@@ -496,7 +554,7 @@ func TestCodexDetectAndProfileCreatePlanSwitchJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected codex detect before init to succeed, got %v", err)
 	}
-	var detect app.CodexDetectResult
+	var detect codex.CodexDetectResult
 	decodeCLIJSON(t, []byte(out), &detect)
 	if detect.ProfileDeckInitialized || detect.ConfigStatus != "valid" {
 		t.Fatalf("unexpected detect result before init: %#v", detect)
@@ -516,7 +574,7 @@ func TestCodexDetectAndProfileCreatePlanSwitchJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected codex profile create to succeed, got %v", err)
 	}
-	var createResult app.CodexProfileSaveResult
+	var createResult codex.CodexProfileSaveResult
 	decodeCLIJSON(t, []byte(out), &createResult)
 	if createResult.Provider.ID != codexconfig.ProviderID || createResult.Profile.ID != "work" || createResult.ConfigSet.ID != "shared" {
 		t.Fatalf("unexpected codex profile create result: %#v", createResult)
@@ -529,7 +587,7 @@ func TestCodexDetectAndProfileCreatePlanSwitchJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected codex plan to succeed, got %v", err)
 	}
-	var plan app.SwitchPlan
+	var plan switching.SwitchPlan
 	decodeCLIJSON(t, []byte(out), &plan)
 	if len(plan.Operations) != 2 || len(plan.StateCaptures) != 1 || !hasCLIPlanOperation(plan.Operations, codexconfig.TargetID, "noop") {
 		t.Fatalf("unexpected codex plan: %#v", plan)
@@ -542,7 +600,7 @@ func TestCodexDetectAndProfileCreatePlanSwitchJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected codex switch to succeed, got %v", err)
 	}
-	var switchResult app.ApplySwitchResult
+	var switchResult switching.ApplySwitchResult
 	decodeCLIJSON(t, []byte(out), &switchResult)
 	if switchResult.Status != store.OperationStatusApplied || switchResult.Counts.Noop != 2 {
 		t.Fatalf("unexpected codex switch result: %#v", switchResult)
@@ -585,7 +643,7 @@ func TestCodexProfileCreateCLIJSONRedactsAuth(t *testing.T) {
 	if strings.Contains(out, "desired-secret") || strings.Contains(out, "desired-refresh") {
 		t.Fatalf("expected create output to redact raw auth, got %q", out)
 	}
-	var created app.CodexProfileSaveResult
+	var created codex.CodexProfileSaveResult
 	decodeCLIJSON(t, []byte(out), &created)
 	if created.Profile.ID != "work" || created.Summary.CredentialID == "" || created.ConfigSet.ID != "shared" {
 		t.Fatalf("unexpected create result: %#v", created)
@@ -653,7 +711,7 @@ func TestCodexProfileCreateRejectsExtraArgs(t *testing.T) {
 		"--codex-dir", codexDir,
 		"--json",
 	)
-	assertCLIAppErrorCode(t, err, app.ErrorProfileInvalid)
+	assertCLIAppErrorCode(t, err, apperror.ProfileInvalid)
 }
 
 func TestCodexProfileCreateForkAndSaveCurrentCLI(t *testing.T) {
@@ -674,7 +732,7 @@ func TestCodexProfileCreateForkAndSaveCurrentCLI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected codex profile create to succeed, got %v", err)
 	}
-	var created app.CodexProfileSaveResult
+	var created codex.CodexProfileSaveResult
 	decodeCLIJSON(t, []byte(out), &created)
 	if created.Profile.ID != "work" || created.Summary.CredentialID == "" {
 		t.Fatalf("unexpected create result: %#v", created)
@@ -687,15 +745,15 @@ func TestCodexProfileCreateForkAndSaveCurrentCLI(t *testing.T) {
 		"--config-dir", configDir,
 		"codex", "profile", "fork", "work", "shared-child",
 		"--codex-dir", codexDir,
-		"--credential-binding", app.CodexForkBindingShareParent,
-		"--config-binding", app.CodexForkBindingCopyNew,
+		"--credential-binding", codex.CodexForkBindingShareParent,
+		"--config-binding", codex.CodexForkBindingCopyNew,
 		"--new-config-set", "shared-child-config",
 		"--json",
 	)
 	if err != nil {
 		t.Fatalf("expected codex profile fork to succeed, got %v", err)
 	}
-	var forked app.CodexProfileSaveResult
+	var forked codex.CodexProfileSaveResult
 	decodeCLIJSON(t, []byte(out), &forked)
 	if forked.Profile.ID != "shared-child" {
 		t.Fatalf("unexpected fork result: %#v", forked)
@@ -711,7 +769,7 @@ func TestCodexProfileCreateForkAndSaveCurrentCLI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected codex profile save-current to succeed, got %v", err)
 	}
-	var saved app.CodexProfileStateSaveResult
+	var saved codex.CodexProfileStateSaveResult
 	decodeCLIJSON(t, []byte(out), &saved)
 	if saved.ProfileID != "work" {
 		t.Fatalf("unexpected save-current result: %#v", saved)
@@ -752,7 +810,7 @@ func TestCodexProfileExportImportCLI(t *testing.T) {
 	if strings.Contains(out, rawAuthSecret) || strings.Contains(out, rawConfigSecret) {
 		t.Fatalf("expected export command output to contain metadata only, got %q", out)
 	}
-	var exported app.CodexProfileExportResult
+	var exported codex.CodexProfileExportResult
 	decodeCLIJSON(t, []byte(out), &exported)
 	if exported.Path != bundlePath || exported.ProfileCount != 1 || exported.SHA256 == "" {
 		t.Fatalf("unexpected export result: %#v", exported)
@@ -776,13 +834,13 @@ func TestCodexProfileExportImportCLI(t *testing.T) {
 	if strings.Contains(out, rawAuthSecret) || strings.Contains(out, rawConfigSecret) {
 		t.Fatalf("expected import plan output to contain metadata only, got %q", out)
 	}
-	var plan app.CodexProfileImportPlan
+	var plan codex.CodexProfileImportPlan
 	decodeCLIJSON(t, []byte(out), &plan)
 	if !plan.CanApply || plan.PlanFingerprint == "" {
 		t.Fatalf("unexpected import plan: %#v", plan)
 	}
 	_, err = runCLI(t, "--config-dir", targetConfigDir, "codex", "profile", "import", "apply", bundlePath, "--codex-dir", codexDir, "--plan-fingerprint", plan.PlanFingerprint, "--json")
-	assertCLIAppErrorCode(t, err, app.ErrorConfirmationRequired)
+	assertCLIAppErrorCode(t, err, apperror.ConfirmationRequired)
 	out, err = runCLI(t, "--config-dir", targetConfigDir, "codex", "profile", "import", "apply", bundlePath, "--codex-dir", codexDir, "--plan-fingerprint", plan.PlanFingerprint, "--yes", "--json")
 	if err != nil {
 		t.Fatalf("expected CLI import apply to succeed, got %v", err)
@@ -790,7 +848,7 @@ func TestCodexProfileExportImportCLI(t *testing.T) {
 	if strings.Contains(out, rawAuthSecret) || strings.Contains(out, rawConfigSecret) {
 		t.Fatalf("expected import result output to contain metadata only, got %q", out)
 	}
-	var imported app.CodexProfileImportResult
+	var imported codex.CodexProfileImportResult
 	decodeCLIJSON(t, []byte(out), &imported)
 	if !imported.Changed || imported.OperationID == "" {
 		t.Fatalf("unexpected import result: %#v", imported)
@@ -818,14 +876,14 @@ func TestCodexConfigSetAndProfileBindingCLI(t *testing.T) {
 	if strings.Contains(out, "config-secret") {
 		t.Fatalf("expected Config Set output not to expose raw TOML, got %q", out)
 	}
-	if _, err := runCLI(t, "--config-dir", configDir, "codex", "profile", "fork", "work", "child", "--codex-dir", codexDir, "--credential-binding", app.CodexForkBindingCopyNew, "--config-binding", app.CodexForkBindingShareParent, "--json"); err != nil {
+	if _, err := runCLI(t, "--config-dir", configDir, "codex", "profile", "fork", "work", "child", "--codex-dir", codexDir, "--credential-binding", codex.CodexForkBindingCopyNew, "--config-binding", codex.CodexForkBindingShareParent, "--json"); err != nil {
 		t.Fatalf("expected child fork to succeed, got %v", err)
 	}
 	out, err = runCLI(t, "--config-dir", configDir, "codex", "profile", "set-config", "child", "other", "--json")
 	if err != nil {
 		t.Fatalf("expected inactive profile rebind to succeed, got %v", err)
 	}
-	var detail app.CodexProfileDetail
+	var detail codex.CodexProfileDetail
 	decodeCLIJSON(t, []byte(out), &detail)
 	if detail.Summary.ConfigSetID != "other" {
 		t.Fatalf("expected child to use other Config Set, got %#v", detail.Summary)
@@ -840,7 +898,7 @@ func TestCodexConfigSetAndProfileBindingCLI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected Config Set show to succeed, got %v", err)
 	}
-	var shown app.CodexConfigSet
+	var shown codex.CodexConfigSet
 	decodeCLIJSON(t, []byte(out), &shown)
 	if shown.Name != "Renamed" || strings.Contains(out, "config-secret") {
 		t.Fatalf("unexpected Config Set summary output: %q", out)
@@ -881,12 +939,12 @@ func TestCodexProfileListAndShowCLI(t *testing.T) {
 	if strings.Contains(out, rawConfigSecret) || strings.Contains(out, rawAuthSecret) {
 		t.Fatalf("expected codex profile list output to redact raw secrets, got %q", out)
 	}
-	var list app.CodexProfileListResult
+	var list codex.CodexProfileListResult
 	decodeCLIJSON(t, []byte(out), &list)
 	if len(list.Profiles) != 1 {
 		t.Fatalf("expected one Codex profile, got %#v", list)
 	}
-	byID := map[string]app.CodexProfileSummary{}
+	byID := map[string]codex.CodexProfileSummary{}
 	for _, summary := range list.Profiles {
 		byID[summary.Profile.ID] = summary
 	}
@@ -909,7 +967,7 @@ func TestCodexProfileListAndShowCLI(t *testing.T) {
 	if strings.Contains(out, rawConfigSecret) || strings.Contains(out, rawAuthSecret) || strings.Contains(out, "access_token") {
 		t.Fatalf("expected codex profile show output to redact raw secrets, got %q", out)
 	}
-	var detail app.CodexProfileDetail
+	var detail codex.CodexProfileDetail
 	decodeCLIJSON(t, []byte(out), &detail)
 	if detail.Summary.Profile.ID != "work" || detail.Login == nil || detail.ConfigSet == nil {
 		t.Fatalf("unexpected codex profile detail: %#v", detail)
@@ -926,7 +984,7 @@ func TestCodexProfileListAndShowCLI(t *testing.T) {
 		t.Fatalf("expected generic profile create to succeed, got %v", err)
 	}
 	_, err = runCLI(t, "--config-dir", configDir, "codex", "profile", "show", "generic", "--json")
-	assertCLIAppErrorCode(t, err, app.ErrorProfileNotFound)
+	assertCLIAppErrorCode(t, err, apperror.ProfileNotFound)
 }
 
 func TestCodexProfileRemovedCommandsFail(t *testing.T) {
@@ -984,10 +1042,10 @@ func TestProviderCLIJSONFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected disabled provider create to succeed, got %v", err)
 	}
-	var provider app.Provider
-	decodeCLIJSON(t, []byte(out), &provider)
-	if provider.ID != "provider-b" || provider.Enabled || provider.Metadata["tier"] != "paid" {
-		t.Fatalf("unexpected created provider: %#v", provider)
+	var createdProvider provider.Provider
+	decodeCLIJSON(t, []byte(out), &createdProvider)
+	if createdProvider.ID != "provider-b" || createdProvider.Enabled || createdProvider.Metadata["tier"] != "paid" {
+		t.Fatalf("unexpected created provider: %#v", createdProvider)
 	}
 
 	if _, err := runCLI(t,
@@ -1004,7 +1062,7 @@ func TestProviderCLIJSONFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected provider list to succeed, got %v", err)
 	}
-	var providers []app.Provider
+	var providers []provider.Provider
 	decodeCLIJSON(t, []byte(out), &providers)
 	if providerIDs(providers) != "provider-a" {
 		t.Fatalf("expected default list to include only enabled providers, got %#v", providers)
@@ -1023,22 +1081,22 @@ func TestProviderCLIJSONFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected provider update to succeed, got %v", err)
 	}
-	decodeCLIJSON(t, []byte(out), &provider)
-	if !provider.Enabled {
+	decodeCLIJSON(t, []byte(out), &createdProvider)
+	if !createdProvider.Enabled {
 		t.Fatalf("expected provider to be enabled after update")
 	}
 
 	_, err = runCLI(t, "--config-dir", configDir, "provider", "update", "provider-b", "--enabled", "--disabled", "--json")
-	assertCLIAppErrorCode(t, err, app.ErrorProviderInvalid)
+	assertCLIAppErrorCode(t, err, apperror.ProviderInvalid)
 
 	_, err = runCLI(t, "--config-dir", configDir, "provider", "delete", "provider-b", "--json")
-	assertCLIAppErrorCode(t, err, app.ErrorConfirmationRequired)
+	assertCLIAppErrorCode(t, err, apperror.ConfirmationRequired)
 
 	out, err = runCLI(t, "--config-dir", configDir, "provider", "delete", "provider-b", "--yes", "--json")
 	if err != nil {
 		t.Fatalf("expected provider delete to succeed, got %v", err)
 	}
-	var deleted app.DeleteResult
+	var deleted provider.DeleteResult
 	decodeCLIJSON(t, []byte(out), &deleted)
 	if !deleted.Deleted || deleted.ID != "provider-b" {
 		t.Fatalf("unexpected delete result: %#v", deleted)
@@ -1071,14 +1129,14 @@ func TestProfileCLIJSONFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected profile-a create to succeed, got %v", err)
 	}
-	var profile app.Profile
-	decodeCLIJSON(t, []byte(out), &profile)
-	if profile.ID != "profile-a" || profile.Metadata["max_tokens"] == nil {
-		t.Fatalf("unexpected created profile: %#v", profile)
+	var createdProfile profile.Profile
+	decodeCLIJSON(t, []byte(out), &createdProfile)
+	if createdProfile.ID != "profile-a" || createdProfile.Metadata["max_tokens"] == nil {
+		t.Fatalf("unexpected created profile: %#v", createdProfile)
 	}
 
 	_, err = runCLI(t, "--config-dir", configDir, "profile", "update", "profile-a", "--json")
-	assertCLIAppErrorCode(t, err, app.ErrorProfileInvalid)
+	assertCLIAppErrorCode(t, err, apperror.ProfileInvalid)
 
 	out, err = runCLI(t,
 		"--config-dir", configDir,
@@ -1090,16 +1148,16 @@ func TestProfileCLIJSONFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected profile update to succeed, got %v", err)
 	}
-	decodeCLIJSON(t, []byte(out), &profile)
-	if profile.Description != "Updated profile" || profile.Metadata["mode"] != "work" {
-		t.Fatalf("unexpected updated profile: %#v", profile)
+	decodeCLIJSON(t, []byte(out), &createdProfile)
+	if createdProfile.Description != "Updated profile" || createdProfile.Metadata["mode"] != "work" {
+		t.Fatalf("unexpected updated profile: %#v", createdProfile)
 	}
 
 	out, err = runCLI(t, "--config-dir", configDir, "profile", "list", "--json")
 	if err != nil {
 		t.Fatalf("expected profile list to succeed, got %v", err)
 	}
-	var profiles []app.Profile
+	var profiles []profile.Profile
 	decodeCLIJSON(t, []byte(out), &profiles)
 	if profileIDs(profiles) != "profile-a,profile-b" {
 		t.Fatalf("expected id-sorted profiles, got %#v", profiles)
@@ -1109,7 +1167,7 @@ func TestProfileCLIJSONFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected profile delete to succeed, got %v", err)
 	}
-	var deleted app.DeleteResult
+	var deleted profile.DeleteResult
 	decodeCLIJSON(t, []byte(out), &deleted)
 	if !deleted.Deleted || deleted.ID != "profile-b" {
 		t.Fatalf("unexpected delete result: %#v", deleted)
@@ -1157,7 +1215,7 @@ func TestProfileTargetAndPlanCLIFlow(t *testing.T) {
 	if strings.Contains(out, "raw-key") || !strings.Contains(out, "[REDACTED]") {
 		t.Fatalf("expected target add JSON to redact raw key, got %q", out)
 	}
-	var target app.ProfileTarget
+	var target profiletarget.ProfileTarget
 	decodeCLIJSON(t, []byte(out), &target)
 	if target.TargetID != "target-a" || target.ValuePreview.Content == "" {
 		t.Fatalf("unexpected target add result: %#v", target)
@@ -1170,7 +1228,7 @@ func TestProfileTargetAndPlanCLIFlow(t *testing.T) {
 	if strings.Contains(out, "raw-key") {
 		t.Fatalf("expected target list JSON to redact raw key, got %q", out)
 	}
-	var targets []app.ProfileTarget
+	var targets []profiletarget.ProfileTarget
 	decodeCLIJSON(t, []byte(out), &targets)
 	if len(targets) != 1 || targets[0].TargetID != "target-a" {
 		t.Fatalf("unexpected target list result: %#v", targets)
@@ -1191,7 +1249,7 @@ func TestProfileTargetAndPlanCLIFlow(t *testing.T) {
 	if strings.Contains(out, "raw-key") {
 		t.Fatalf("expected plan JSON to redact raw key, got %q", out)
 	}
-	var plan app.SwitchPlan
+	var plan switching.SwitchPlan
 	decodeCLIJSON(t, []byte(out), &plan)
 	if !plan.ReadOnly || len(plan.Operations) != 1 || plan.Operations[0].Action != "create" {
 		t.Fatalf("unexpected plan result: %#v", plan)
@@ -1204,7 +1262,7 @@ func TestProfileTargetAndPlanCLIFlow(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected unconfirmed switch to fail")
 	}
-	assertCLIAppErrorCode(t, err, app.ErrorConfirmationRequired)
+	assertCLIAppErrorCode(t, err, apperror.ConfirmationRequired)
 	if !strings.Contains(humanOut, "Switch plan") || !strings.Contains(humanOut, "plan_fingerprint:") {
 		t.Fatalf("expected unconfirmed switch to print plan, got %q", humanOut)
 	}
@@ -1228,7 +1286,7 @@ func TestProfileTargetAndPlanCLIFlow(t *testing.T) {
 	if strings.Contains(out, "raw-key") {
 		t.Fatalf("expected switch JSON to exclude raw key, got %q", out)
 	}
-	var switchResult app.ApplySwitchResult
+	var switchResult switching.ApplySwitchResult
 	decodeCLIJSON(t, []byte(out), &switchResult)
 	if switchResult.Status != "applied" || switchResult.Counts.Create != 1 || switchResult.OperationID == "" || switchResult.BackupPath == "" {
 		t.Fatalf("unexpected switch result: %#v", switchResult)
@@ -1242,7 +1300,7 @@ func TestProfileTargetAndPlanCLIFlow(t *testing.T) {
 	}
 
 	if _, err := runCLI(t, "--config-dir", configDir, "profile", "target", "update", "profile-a", "provider-a", "target-a", "--enabled", "--disabled", "--json"); err != nil {
-		assertCLIAppErrorCode(t, err, app.ErrorTargetInvalid)
+		assertCLIAppErrorCode(t, err, apperror.TargetInvalid)
 	} else {
 		t.Fatalf("expected enabled/disabled conflict to fail")
 	}
@@ -1250,7 +1308,7 @@ func TestProfileTargetAndPlanCLIFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected profile target delete to succeed, got %v", err)
 	}
-	var deleted app.DeleteResult
+	var deleted profiletarget.DeleteResult
 	decodeCLIJSON(t, []byte(out), &deleted)
 	if !deleted.Deleted || deleted.ID != "target-a" {
 		t.Fatalf("unexpected target delete result: %#v", deleted)
@@ -1298,7 +1356,7 @@ func TestSwitchCLIRejectsStalePlanFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected plan to succeed, got %v", err)
 	}
-	var plan app.SwitchPlan
+	var plan switching.SwitchPlan
 	decodeCLIJSON(t, []byte(out), &plan)
 	if err := os.WriteFile(targetPath, []byte("external\n"), 0o600); err != nil {
 		t.Fatalf("expected external write to succeed, got %v", err)
@@ -1311,7 +1369,7 @@ func TestSwitchCLIRejectsStalePlanFingerprint(t *testing.T) {
 		"--plan-fingerprint", plan.PlanFingerprint,
 		"--json",
 	)
-	assertCLIAppErrorCode(t, err, app.ErrorTargetChanged)
+	assertCLIAppErrorCode(t, err, apperror.TargetChanged)
 	raw, err := os.ReadFile(targetPath)
 	if err != nil {
 		t.Fatalf("expected target read to succeed, got %v", err)
@@ -1368,14 +1426,14 @@ func TestRollbackCLIJSONFlow(t *testing.T) {
 	if strings.Contains(switchOut, "raw-key") {
 		t.Fatalf("expected switch output to exclude raw key, got %q", switchOut)
 	}
-	var switchResult app.ApplySwitchResult
+	var switchResult switching.ApplySwitchResult
 	decodeCLIJSON(t, []byte(switchOut), &switchResult)
 	if switchResult.OperationID == "" || switchResult.Counts.Update != 1 {
 		t.Fatalf("unexpected switch result: %#v", switchResult)
 	}
 
 	_, err = runCLI(t, "--config-dir", configDir, "rollback", switchResult.OperationID, "--json")
-	assertCLIAppErrorCode(t, err, app.ErrorConfirmationRequired)
+	assertCLIAppErrorCode(t, err, apperror.ConfirmationRequired)
 	assertFileString(t, targetPath, "OPENAI_API_KEY=raw-key\n")
 
 	listOut, err := runCLI(t, "--config-dir", configDir, "backup", "list", "--json")
@@ -1385,7 +1443,7 @@ func TestRollbackCLIJSONFlow(t *testing.T) {
 	if strings.Contains(listOut, "raw-key") {
 		t.Fatalf("expected backup list output to exclude raw key, got %q", listOut)
 	}
-	var listResult app.ListBackupsResult
+	var listResult switching.ListBackupsResult
 	decodeCLIJSON(t, []byte(listOut), &listResult)
 	if len(listResult.Backups) != 1 || !listResult.Backups[0].RollbackSupported {
 		t.Fatalf("unexpected backup list result: %#v", listResult)
@@ -1398,7 +1456,7 @@ func TestRollbackCLIJSONFlow(t *testing.T) {
 	if strings.Contains(showOut, "raw-key") {
 		t.Fatalf("expected backup show output to exclude raw key, got %q", showOut)
 	}
-	var detail app.BackupDetail
+	var detail switching.BackupDetail
 	decodeCLIJSON(t, []byte(showOut), &detail)
 	if !detail.RollbackSupported || len(detail.Entries) != 1 {
 		t.Fatalf("unexpected backup detail: %#v", detail)
@@ -1411,7 +1469,7 @@ func TestRollbackCLIJSONFlow(t *testing.T) {
 	if strings.Contains(rollbackOut, "raw-key") {
 		t.Fatalf("expected rollback output to exclude raw key, got %q", rollbackOut)
 	}
-	var rollbackResult app.ApplyRollbackResult
+	var rollbackResult switching.ApplyRollbackResult
 	decodeCLIJSON(t, []byte(rollbackOut), &rollbackResult)
 	if rollbackResult.Status != "applied" || rollbackResult.SourceOperationID != switchResult.OperationID || rollbackResult.Counts.Restore != 1 {
 		t.Fatalf("unexpected rollback result: %#v", rollbackResult)
@@ -1425,7 +1483,7 @@ func TestRecoverCLIJSONAndHumanFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	var initResult app.InitResult
+	var initResult profilesruntime.InitResult
 	decodeCLIJSON(t, []byte(initOut), &initResult)
 	if _, err := runCLI(t,
 		"--config-dir", configDir,
@@ -1471,18 +1529,18 @@ func TestRecoverCLIJSONAndHumanFlow(t *testing.T) {
 	}
 
 	_, err = runCLI(t, "--config-dir", configDir, "switch", "provider-a", "profile-a", "--yes", "--json")
-	assertCLIAppErrorCode(t, err, app.ErrorTargetWriteFailed)
+	assertCLIAppErrorCode(t, err, apperror.TargetWriteFailed)
 	assertFileString(t, firstPath, "first\n")
 	failedSwitchID := singleCLIOperationIDByTypeStatus(t, initResult.DatabasePath, store.OperationTypeSwitch, store.OperationStatusFailed)
 
 	_, err = runCLI(t, "--config-dir", configDir, "recover", failedSwitchID, "--json")
-	assertCLIAppErrorCode(t, err, app.ErrorConfirmationRequired)
+	assertCLIAppErrorCode(t, err, apperror.ConfirmationRequired)
 
 	recoverOut, err := runCLI(t, "--config-dir", configDir, "recover", failedSwitchID, "--yes", "--json")
 	if err != nil {
 		t.Fatalf("expected recovery JSON to succeed, got %v", err)
 	}
-	var recovery app.RecoverFailedSwitchResult
+	var recovery switching.RecoverFailedSwitchResult
 	decodeCLIJSON(t, []byte(recoverOut), &recovery)
 	if recovery.OperationType != store.OperationTypeRollback || recovery.RollbackKind != "failed_switch_recovery" || recovery.SourceOperationID != failedSwitchID || recovery.Counts.Remove != 1 {
 		t.Fatalf("unexpected recovery result: %#v", recovery)
@@ -1504,7 +1562,7 @@ func TestRecoverCLIJSONAndHumanFlow(t *testing.T) {
 
 func TestRecoverHumanOutputIncludesWarnings(t *testing.T) {
 	var out bytes.Buffer
-	err := writeRecoverResult(&out, app.RecoverFailedSwitchResult{
+	err := writeRecoverResult(&out, switching.RecoverFailedSwitchResult{
 		OperationID:       "rollback-recovery",
 		OperationType:     store.OperationTypeRollback,
 		RollbackKind:      "failed_switch_recovery",
@@ -1512,7 +1570,7 @@ func TestRecoverHumanOutputIncludesWarnings(t *testing.T) {
 		SourceOperationID: "switch-failed",
 		ProviderID:        "provider-a",
 		ProfileID:         "profile-a",
-		Counts:            app.RollbackCounts{Noop: 1},
+		Counts:            switching.RollbackCounts{Noop: 1},
 		BackupPath:        "/tmp/profiledeck-backup",
 		Warnings:          []string{"target already restored"},
 	})
@@ -1531,7 +1589,7 @@ func TestBackupShowMissingReturnsNotFound(t *testing.T) {
 	}
 
 	_, err := runCLI(t, "--config-dir", configDir, "backup", "show", "missing-backup", "--json")
-	assertCLIAppErrorCode(t, err, app.ErrorBackupNotFound)
+	assertCLIAppErrorCode(t, err, apperror.BackupNotFound)
 }
 
 func TestDoctorCLIJSONAndHumanOutput(t *testing.T) {
@@ -1540,9 +1598,9 @@ func TestDoctorCLIJSONAndHumanOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected doctor before init to succeed, got %v", err)
 	}
-	var result app.DoctorResult
+	var result doctor.DoctorResult
 	decodeCLIJSON(t, []byte(out), &result)
-	if result.OverallLevel != app.DoctorLevelWarning || len(result.Findings) != 1 {
+	if result.OverallLevel != doctor.LevelWarning || len(result.Findings) != 1 {
 		t.Fatalf("unexpected doctor before init result: %#v", result)
 	}
 	if _, err := os.Stat(configDir); !os.IsNotExist(err) {
@@ -1553,7 +1611,7 @@ func TestDoctorCLIJSONAndHumanOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	var initResult app.InitResult
+	var initResult profilesruntime.InitResult
 	decodeCLIJSON(t, []byte(initOut), &initResult)
 	insertFailedOperation(t, initResult.DatabasePath, "switch-cli-failed")
 
@@ -1562,7 +1620,7 @@ func TestDoctorCLIJSONAndHumanOutput(t *testing.T) {
 		t.Fatalf("expected doctor with failed operation to succeed, got %v", err)
 	}
 	decodeCLIJSON(t, []byte(out), &result)
-	if result.OverallLevel != app.DoctorLevelError || len(result.Operations) != 1 || result.Operations[0].ID != "switch-cli-failed" {
+	if result.OverallLevel != doctor.LevelError || len(result.Operations) != 1 || result.Operations[0].ID != "switch-cli-failed" {
 		t.Fatalf("unexpected doctor failed operation result: %#v", result)
 	}
 
@@ -1579,9 +1637,9 @@ func TestDoctorCLIJSONAndHumanOutput(t *testing.T) {
 
 func TestDoctorHumanOperationsUseStableColumns(t *testing.T) {
 	var out bytes.Buffer
-	err := writeDoctorOperations(&out, []app.DoctorOperation{
+	err := writeDoctorOperations(&out, []doctor.DoctorOperation{
 		{
-			Level:         app.DoctorLevelError,
+			Level:         doctor.LevelError,
 			ID:            "switch-pending",
 			OperationType: "switch",
 			Status:        "pending",
@@ -1589,7 +1647,7 @@ func TestDoctorHumanOperationsUseStableColumns(t *testing.T) {
 			Reason:        "pending_operation_without_active_lock",
 		},
 		{
-			Level:         app.DoctorLevelError,
+			Level:         doctor.LevelError,
 			ID:            "switch-failed",
 			OperationType: "switch",
 			Status:        "failed",
@@ -1621,7 +1679,7 @@ func TestDoctorRepairLockCLIFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	var initResult app.InitResult
+	var initResult profilesruntime.InitResult
 	decodeCLIJSON(t, []byte(initOut), &initResult)
 	insertFailedOperation(t, initResult.DatabasePath, "switch-cli-stale")
 	lockPath := filepath.Join(initResult.RuntimeRoot, "locks", "switch.lock")
@@ -1630,13 +1688,13 @@ func TestDoctorRepairLockCLIFlow(t *testing.T) {
 	}
 
 	_, err = runCLI(t, "--config-dir", configDir, "doctor", "repair-lock", "--json")
-	assertCLIAppErrorCode(t, err, app.ErrorConfirmationRequired)
+	assertCLIAppErrorCode(t, err, apperror.ConfirmationRequired)
 
 	out, err := runCLI(t, "--config-dir", configDir, "doctor", "repair-lock", "--yes", "--json")
 	if err != nil {
 		t.Fatalf("expected doctor repair-lock to succeed, got %v", err)
 	}
-	var repair app.DoctorRepairLockResult
+	var repair doctor.DoctorRepairLockResult
 	decodeCLIJSON(t, []byte(out), &repair)
 	if !repair.Repaired || repair.Path != lockPath {
 		t.Fatalf("unexpected repair result: %#v", repair)
@@ -1652,7 +1710,7 @@ func TestProviderCLIOutputRedactsSensitiveMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	var initResult app.InitResult
+	var initResult profilesruntime.InitResult
 	decodeCLIJSON(t, []byte(initOut), &initResult)
 
 	sqlDB, err := sql.Open("sqlite", initResult.DatabasePath)
@@ -1675,7 +1733,7 @@ func TestProviderCLIOutputRedactsSensitiveMetadata(t *testing.T) {
 	if strings.Contains(jsonOut, "raw-key") {
 		t.Fatalf("expected JSON output to redact raw key, got %q", jsonOut)
 	}
-	var provider app.Provider
+	var provider provider.Provider
 	decodeCLIJSON(t, []byte(jsonOut), &provider)
 	if provider.Metadata["apiKey"] != "[REDACTED]" || provider.Metadata["safe"] != "ok" {
 		t.Fatalf("unexpected redacted metadata: %#v", provider.Metadata)
@@ -1710,13 +1768,13 @@ func runCLI(t *testing.T, args ...string) (string, error) {
 	return out.String(), err
 }
 
-func assertCLIAppErrorCode(t *testing.T, err error, code app.ErrorCode) {
+func assertCLIAppErrorCode(t *testing.T, err error, code apperror.Code) {
 	t.Helper()
 
 	if err == nil {
 		t.Fatalf("expected error code %s, got nil", code)
 	}
-	var appErr *app.AppError
+	var appErr *apperror.Error
 	if !errors.As(err, &appErr) {
 		t.Fatalf("expected AppError code %s, got %T: %v", code, err, err)
 	}
@@ -1785,7 +1843,7 @@ func writeCLICodexProfileFixture(t *testing.T, codexDir, config, auth string) {
 	}
 }
 
-func hasCLIPlanOperation(operations []app.PlanOperation, targetID, action string) bool {
+func hasCLIPlanOperation(operations []switching.PlanOperation, targetID, action string) bool {
 	for _, operation := range operations {
 		if operation.TargetID == targetID && operation.Action == action {
 			return true
@@ -1831,7 +1889,7 @@ func singleCLIOperationIDByTypeStatus(t *testing.T, databasePath, operationType,
 	return ids[0]
 }
 
-func providerIDs(providers []app.Provider) string {
+func providerIDs(providers []provider.Provider) string {
 	ids := make([]string, 0, len(providers))
 	for _, provider := range providers {
 		ids = append(ids, provider.ID)
@@ -1839,7 +1897,7 @@ func providerIDs(providers []app.Provider) string {
 	return strings.Join(ids, ",")
 }
 
-func profileIDs(profiles []app.Profile) string {
+func profileIDs(profiles []profile.Profile) string {
 	ids := make([]string, 0, len(profiles))
 	for _, profile := range profiles {
 		ids = append(ids, profile.ID)

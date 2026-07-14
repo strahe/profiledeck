@@ -10,7 +10,7 @@ import (
 
 	urfavecli "github.com/urfave/cli/v3"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/usage"
 )
 
 const (
@@ -36,14 +36,17 @@ func newUsageReportCommand() *urfavecli.Command {
 		Usage: "Analyze local token usage by time and model",
 		Flags: []urfavecli.Flag{
 			stringFlag(providerFlagName, "Usage provider id"),
-			&urfavecli.StringFlag{Name: usageRangeFlagName, Value: string(app.UsageRange7Days), Usage: "Time range: today, 7d, 30d, or all"},
+			&urfavecli.StringFlag{Name: usageRangeFlagName, Value: string(usage.UsageRange7Days), Usage: "Time range: today, 7d, 30d, or all"},
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.UsageReport(ctx, app.UsageReportRequest{
-				ConfigDir:  configDirValue(cmd),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Usage().Report(ctx, usage.UsageReportRequest{
 				ProviderID: cmd.String(providerFlagName),
-				Range:      app.UsageRangePreset(cmd.String(usageRangeFlagName)),
+				Range:      usage.UsageRangePreset(cmd.String(usageRangeFlagName)),
 			})
 			if err != nil {
 				return err
@@ -76,10 +79,11 @@ func newUsageSyncCodexCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.UsageSyncCodex(ctx, app.UsageSyncCodexRequest{
-				ConfigDir: configDirValue(cmd),
-				CodexDir:  cmd.String(codexDirFlagName),
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Usage().SyncCodex(ctx)
 			if err != nil {
 				return err
 			}
@@ -101,8 +105,11 @@ func newUsageSummaryCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.UsageSummary(ctx, app.UsageSummaryRequest{
-				ConfigDir:  configDirValue(cmd),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Usage().Summary(ctx, usage.UsageSummaryRequest{
 				ProviderID: cmd.String(providerFlagName),
 			})
 			if err != nil {
@@ -117,7 +124,7 @@ func newUsageSummaryCommand() *urfavecli.Command {
 	}
 }
 
-func writeUsageSyncResult(w io.Writer, result app.UsageSyncResult) error {
+func writeUsageSyncResult(w io.Writer, result usage.UsageSyncResult) error {
 	if _, err := fmt.Fprintf(
 		w,
 		"Usage sync\nprovider: %s\nsource: %s\nscanned files: %d\nskipped unchanged files: %d\nimported events: %d\nskipped duplicate events: %d\nunsupported lines: %d\ninvalid lines: %d\nerrors: %d\n",
@@ -151,7 +158,7 @@ func writeUsageSyncResult(w io.Writer, result app.UsageSyncResult) error {
 	return nil
 }
 
-func writeUsageSummary(w io.Writer, result app.UsageSummaryResult) error {
+func writeUsageSummary(w io.Writer, result usage.UsageSummaryResult) error {
 	cost := "unknown"
 	if result.EstimatedCostUSD != nil {
 		cost = *result.EstimatedCostUSD
@@ -175,7 +182,7 @@ func writeUsageSummary(w io.Writer, result app.UsageSummaryResult) error {
 	return err
 }
 
-func writeUsageReport(w io.Writer, result app.UsageReportResult) error {
+func writeUsageReport(w io.Writer, result usage.UsageReportResult) error {
 	lastSync := "never"
 	if result.Import.LastSyncedAtUnixMS > 0 {
 		lastSync = time.UnixMilli(result.Import.LastSyncedAtUnixMS).Format(time.RFC3339)
@@ -250,7 +257,7 @@ func writeUsageReport(w io.Writer, result app.UsageReportResult) error {
 	return table.Flush()
 }
 
-func usageBucketLabel(resolved app.UsageResolvedRange, unixMS int64) string {
+func usageBucketLabel(resolved usage.UsageResolvedRange, unixMS int64) string {
 	location := time.Local
 	if resolved.TimeZone != "" {
 		if parsed, err := time.LoadLocation(resolved.TimeZone); err == nil {

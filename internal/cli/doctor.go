@@ -9,7 +9,7 @@ import (
 
 	urfavecli "github.com/urfave/cli/v3"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/doctor"
 )
 
 func newDoctorCommand() *urfavecli.Command {
@@ -23,9 +23,11 @@ func newDoctorCommand() *urfavecli.Command {
 			newDoctorRepairLockCommand(),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.Doctor(ctx, app.DoctorRequest{
-				ConfigDir: configDirValue(cmd),
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Doctor().Run(ctx)
 			if err != nil {
 				return err
 			}
@@ -46,10 +48,11 @@ func newDoctorRepairLockCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.RepairDoctorLock(ctx, app.DoctorRepairLockRequest{
-				ConfigDir: configDirValue(cmd),
-				Confirm:   cmd.Bool(yesFlagName),
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Doctor().RepairLock(ctx, cmd.Bool(yesFlagName))
 			if err != nil {
 				return err
 			}
@@ -62,7 +65,7 @@ func newDoctorRepairLockCommand() *urfavecli.Command {
 	}
 }
 
-func writeDoctorResult(w io.Writer, result app.DoctorResult) error {
+func writeDoctorResult(w io.Writer, result doctor.DoctorResult) error {
 	if _, err := fmt.Fprintf(
 		w,
 		"ProfileDeck doctor\noverall: %s\nconfig dir: %s\nruntime root: %s\n",
@@ -81,7 +84,7 @@ func writeDoctorResult(w io.Writer, result app.DoctorResult) error {
 	return writeDoctorLock(w, result.Lock)
 }
 
-func writeDoctorFindings(w io.Writer, findings []app.DoctorFinding) error {
+func writeDoctorFindings(w io.Writer, findings []doctor.Finding) error {
 	if _, err := fmt.Fprintln(w, "database:"); err != nil {
 		return err
 	}
@@ -93,7 +96,7 @@ func writeDoctorFindings(w io.Writer, findings []app.DoctorFinding) error {
 	return nil
 }
 
-func writeDoctorOperations(w io.Writer, operations []app.DoctorOperation) error {
+func writeDoctorOperations(w io.Writer, operations []doctor.DoctorOperation) error {
 	if _, err := fmt.Fprintln(w, "operations:"); err != nil {
 		return err
 	}
@@ -121,7 +124,7 @@ func writeDoctorOperations(w io.Writer, operations []app.DoctorOperation) error 
 	return tw.Flush()
 }
 
-func doctorOperationErrorDetails(operation app.DoctorOperation) string {
+func doctorOperationErrorDetails(operation doctor.DoctorOperation) string {
 	errorCode := doctorOutputField(operation.ErrorCode)
 	if errorCode == "" {
 		errorCode = "-"
@@ -150,7 +153,7 @@ func doctorOutputField(value string) string {
 	return value
 }
 
-func writeDoctorLock(w io.Writer, lock app.DoctorLock) error {
+func writeDoctorLock(w io.Writer, lock doctor.DoctorLock) error {
 	if _, err := fmt.Fprintln(w, "lock:"); err != nil {
 		return err
 	}

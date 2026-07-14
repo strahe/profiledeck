@@ -3,7 +3,31 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as agent$0 from "../../internal/agent/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as antigravity$0 from "../../internal/antigravity/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as app$0 from "../../internal/app/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as claudecode$0 from "../../internal/claudecode/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as codex$0 from "../../internal/codex/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as doctor$0 from "../../internal/doctor/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as provider$0 from "../../internal/provider/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as runtime$0 from "../../internal/runtime/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as usage$0 from "../../internal/usage/models.js";
 
 export interface ApplyCodexProfileImportRequest {
     "input_path": string;
@@ -19,8 +43,8 @@ export interface CodexProfileQuotaRuntimeStatus {
     "last_completed_at_unix_ms": number;
     "last_success_at_unix_ms": number;
     "next_run_at_unix_ms": number;
-    "status": app$0.CodexProfileQuotaStatus;
-    "snapshot"?: app$0.CodexQuotaSnapshot | null;
+    "status": codex$0.CodexProfileQuotaStatus;
+    "snapshot"?: codex$0.CodexQuotaSnapshot | null;
     "error_code"?: string;
 }
 
@@ -66,16 +90,16 @@ export interface CreateCodexProfileRequest {
 export interface DashboardResult {
     "info": app$0.Info;
     "environment": Environment;
-    "status": app$0.StatusResult;
-    "doctor"?: app$0.DoctorResult | null;
-    "providers": app$0.Provider[] | null;
-    "profiles": app$0.Profile[] | null;
-    "active_states": app$0.ActiveProviderState[] | null;
-    "codex_profiles"?: app$0.CodexProfileListResult | null;
-    "codex_config_sets"?: app$0.CodexConfigSetListResult | null;
-    "antigravity_profiles"?: app$0.AntigravityProfileListResult | null;
-    "claude_code_profiles"?: app$0.ClaudeCodeProfileListResult | null;
-    "usage"?: app$0.UsageSummaryResult | null;
+    "status": runtime$0.StatusResult;
+    "agents": agent$0.State[] | null;
+    "doctor"?: doctor$0.DoctorResult | null;
+    "providers": provider$0.Provider[] | null;
+    "active_states": provider$0.ActiveState[] | null;
+    "codex_profiles"?: codex$0.CodexProfileListResult | null;
+    "codex_config_sets"?: codex$0.CodexConfigSetListResult | null;
+    "antigravity_profiles"?: antigravity$0.AntigravityProfileListResult | null;
+    "claude_code_profiles"?: claudecode$0.ClaudeCodeProfileListResult | null;
+    "usage"?: usage$0.UsageSummaryResult | null;
     "startup_error"?: DesktopError | null;
     "generated_at_unix_ms": number;
 }

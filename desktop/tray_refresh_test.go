@@ -11,11 +11,30 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/strahe/profiledeck/desktop/backend"
+	"github.com/strahe/profiledeck/internal/agent"
+	"github.com/strahe/profiledeck/internal/antigravity"
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/claudecode"
 	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
+	"github.com/strahe/profiledeck/internal/codex"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	"github.com/strahe/profiledeck/internal/profile"
 )
+
+func newDesktopTestServices(t *testing.T, env backend.Environment) backend.Services {
+	t.Helper()
+	if env.ConfigDir == "" {
+		env.ConfigDir = t.TempDir()
+	}
+	core, err := app.New(app.Config{
+		ConfigDir: env.ConfigDir, CodexDir: env.CodexDir, AgentAccess: agent.AccessDesktopPreferences,
+	})
+	if err != nil {
+		t.Fatalf("create test Application: %v", err)
+	}
+	return backend.NewServices(core, app.DefaultInfo(), env, nil)
+}
 
 func TestDesktopChangeDebouncerCoalescesLatestEvent(t *testing.T) {
 	events := make(chan backend.DesktopChangeEvent, 2)
@@ -155,11 +174,30 @@ func TestBuildTrayMenuUsesDashboardClaudeCodeProfiles(t *testing.T) {
 	})
 }
 
+func TestBuildTrayMenuKeepsSafetyActionsWhenAllAgentsDisabled(t *testing.T) {
+	states := make([]agent.State, 0, 3)
+	for _, manifest := range agent.BuiltinRegistry().Manifests() {
+		states = append(states, agent.State{Manifest: manifest, Enabled: false})
+	}
+	menu := buildTrayMenu(backend.DashboardResult{Agents: states}, nil, trayMenuActions{})
+
+	for _, label := range []string{"Codex Profiles", "Antigravity Profiles", "Claude Code Profiles"} {
+		if item := menu.FindByLabel(label); item != nil {
+			t.Fatalf("disabled Agent remained in tray menu: %q", label)
+		}
+	}
+	for _, label := range []string{"Open ProfileDeck", "Run Doctor", "Refresh Menu", "Quit"} {
+		if item := menu.FindByLabel(label); item == nil {
+			t.Fatalf("Agent-independent tray action is missing: %q", label)
+		}
+	}
+}
+
 func TestTrayControllerOpensAntigravitySwitch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ui := newFakeTrayUI()
-	controller := newTrayController(ctx, backend.NewServices(app.DefaultInfo(), backend.Environment{ConfigDir: t.TempDir()}, nil), ui)
+	controller := newTrayController(ctx, newDesktopTestServices(t, backend.Environment{ConfigDir: t.TempDir()}), ui)
 	controller.openSwitch(agyconfig.ProviderID, "work")
 	event := waitForEvent(t, ui)
 	if event.name != "profiledeck:open-switch" || len(event.data) != 1 {
@@ -174,7 +212,7 @@ func TestTrayControllerOpensAntigravitySwitch(t *testing.T) {
 func TestTrayControllerRefreshDropsStaleDashboard(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	services := backend.NewServices(app.DefaultInfo(), backend.Environment{ConfigDir: t.TempDir()}, nil)
+	services := newDesktopTestServices(t, backend.Environment{ConfigDir: t.TempDir()})
 	ui := newFakeTrayUI()
 	controller := newTrayController(ctx, services, ui)
 
@@ -222,7 +260,7 @@ func TestTrayControllerRefreshDropsStaleDashboard(t *testing.T) {
 func TestTrayControllerMenuRefreshDoesNotDropPendingDashboardEvent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	services := backend.NewServices(app.DefaultInfo(), backend.Environment{ConfigDir: t.TempDir()}, nil)
+	services := newDesktopTestServices(t, backend.Environment{ConfigDir: t.TempDir()})
 	ui := newFakeTrayUI()
 	controller := newTrayController(ctx, services, ui)
 
@@ -285,7 +323,7 @@ func TestTrayControllerMenuRefreshDoesNotDropPendingDashboardEvent(t *testing.T)
 func TestTrayControllerRefreshSetsMenuBeforeDashboardEvent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	services := backend.NewServices(app.DefaultInfo(), backend.Environment{ConfigDir: t.TempDir()}, nil)
+	services := newDesktopTestServices(t, backend.Environment{ConfigDir: t.TempDir()})
 	ui := newFakeTrayUI()
 	controller := newTrayController(ctx, services, ui)
 	controller.loadDashboard = func(context.Context) (backend.DashboardResult, error) {
@@ -402,23 +440,23 @@ func requireMenuSubmenu(t *testing.T, menu *application.Menu, label string) *app
 	return submenu
 }
 
-func dashboardWithCodexProfiles(profiles ...app.CodexProfileSummary) backend.DashboardResult {
+func dashboardWithCodexProfiles(profiles ...codex.CodexProfileSummary) backend.DashboardResult {
 	return backend.DashboardResult{
-		CodexProfiles: &app.CodexProfileListResult{Profiles: profiles},
+		CodexProfiles: &codex.CodexProfileListResult{Profiles: profiles},
 	}
 }
 
-func dashboardWithAntigravityProfiles(profiles ...app.AntigravityProfileSummary) backend.DashboardResult {
-	return backend.DashboardResult{AntigravityProfiles: &app.AntigravityProfileListResult{Profiles: profiles}}
+func dashboardWithAntigravityProfiles(profiles ...antigravity.AntigravityProfileSummary) backend.DashboardResult {
+	return backend.DashboardResult{AntigravityProfiles: &antigravity.AntigravityProfileListResult{Profiles: profiles}}
 }
 
-func dashboardWithClaudeCodeProfiles(profiles ...app.ClaudeCodeProfileSummary) backend.DashboardResult {
-	return backend.DashboardResult{ClaudeCodeProfiles: &app.ClaudeCodeProfileListResult{Profiles: profiles}}
+func dashboardWithClaudeCodeProfiles(profiles ...claudecode.ClaudeCodeProfileSummary) backend.DashboardResult {
+	return backend.DashboardResult{ClaudeCodeProfiles: &claudecode.ClaudeCodeProfileListResult{Profiles: profiles}}
 }
 
-func codexProfileSummary(profileID, name string, active bool) app.CodexProfileSummary {
-	return app.CodexProfileSummary{
-		Profile: app.Profile{
+func codexProfileSummary(profileID, name string, active bool) codex.CodexProfileSummary {
+	return codex.CodexProfileSummary{
+		Profile: profile.Profile{
 			ID:   profileID,
 			Name: name,
 		},
@@ -427,14 +465,14 @@ func codexProfileSummary(profileID, name string, active bool) app.CodexProfileSu
 	}
 }
 
-func antigravityProfileSummary(profileID, name string, active bool) app.AntigravityProfileSummary {
-	return app.AntigravityProfileSummary{
-		Profile: app.Profile{ID: profileID, Name: name}, ProviderID: agyconfig.ProviderID, Active: active,
+func antigravityProfileSummary(profileID, name string, active bool) antigravity.AntigravityProfileSummary {
+	return antigravity.AntigravityProfileSummary{
+		Profile: profile.Profile{ID: profileID, Name: name}, ProviderID: agyconfig.ProviderID, Active: active,
 	}
 }
 
-func claudeCodeProfileSummary(profileID, name string, active bool) app.ClaudeCodeProfileSummary {
-	return app.ClaudeCodeProfileSummary{
-		Profile: app.Profile{ID: profileID, Name: name}, ProviderID: claudecodeconfig.ProviderID, Active: active,
+func claudeCodeProfileSummary(profileID, name string, active bool) claudecode.ClaudeCodeProfileSummary {
+	return claudecode.ClaudeCodeProfileSummary{
+		Profile: profile.Profile{ID: profileID, Name: name}, ProviderID: claudecodeconfig.ProviderID, Active: active,
 	}
 }

@@ -13,7 +13,7 @@
 	import { Spinner } from "$lib/components/ui/spinner";
 	import { joinUserMessages, switchWarningMessage } from "$lib/user-facing-messages";
 
-	import type { PlanOperation, SwitchPlan } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { PlanOperation, SwitchPlan } from "../../../bindings/github.com/strahe/profiledeck/internal/switching/models";
 	import type { SwitchProfileItem } from "./types";
 
 	let {

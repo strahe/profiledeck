@@ -8,6 +8,9 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as app$0 from "../../internal/app/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as runtime$0 from "../../internal/runtime/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -25,6 +28,6 @@ export function Info(): $CancellablePromise<app$0.Info> {
     return $Call.ByID(929178434);
 }
 
-export function Initialize(): $CancellablePromise<app$0.InitResult> {
+export function Initialize(): $CancellablePromise<runtime$0.InitResult> {
     return $Call.ByID(4207113600);
 }

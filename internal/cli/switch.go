@@ -7,7 +7,8 @@ import (
 
 	urfavecli "github.com/urfave/cli/v3"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/switching"
 )
 
 const planFingerprintFlagName = "plan-fingerprint"
@@ -23,15 +24,18 @@ func newSwitchCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			providerID, profileID, err := twoIDArgs(cmd, app.ErrorProviderInvalid)
+			providerID, profileID, err := twoIDArgs(cmd, apperror.ProviderInvalid)
+			if err != nil {
+				return err
+			}
+			application, err := applicationFor(cmd)
 			if err != nil {
 				return err
 			}
 
 			w := outputWriter(cmd)
 			if !cmd.Bool(yesFlagName) {
-				result, err := app.BuildPlan(ctx, app.BuildPlanRequest{
-					ConfigDir:  configDirValue(cmd),
+				result, err := application.Switching().BuildPlan(ctx, switching.BuildPlanRequest{
 					ProviderID: providerID,
 					ProfileID:  profileID,
 				})
@@ -45,11 +49,10 @@ func newSwitchCommand() *urfavecli.Command {
 				} else if err := writePlan(w, result); err != nil {
 					return err
 				}
-				return app.NewError(app.ErrorConfirmationRequired, "switch apply requires --yes")
+				return apperror.New(apperror.ConfirmationRequired, "switch apply requires --yes")
 			}
 
-			result, err := app.ApplySwitch(ctx, app.ApplySwitchRequest{
-				ConfigDir:               configDirValue(cmd),
+			result, err := application.Switching().Apply(ctx, switching.ApplySwitchRequest{
 				ProviderID:              providerID,
 				ProfileID:               profileID,
 				Confirm:                 true,
@@ -66,7 +69,7 @@ func newSwitchCommand() *urfavecli.Command {
 	}
 }
 
-func writeSwitchResult(w io.Writer, result app.ApplySwitchResult) error {
+func writeSwitchResult(w io.Writer, result switching.ApplySwitchResult) error {
 	if _, err := fmt.Fprintf(
 		w,
 		"Switch applied\noperation: %s\nprovider: %s (%s)\nprofile: %s (%s)\nplan_fingerprint: %s\nbackup: %s\nchanges: create=%d update=%d noop=%d\n",

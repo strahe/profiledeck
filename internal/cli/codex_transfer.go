@@ -7,7 +7,8 @@ import (
 
 	urfavecli "github.com/urfave/cli/v3"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/codex"
 )
 
 const (
@@ -24,8 +25,12 @@ func newCodexProfileExportCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON metadata output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.ExportCodexProfiles(ctx, app.ExportCodexProfilesRequest{
-				ConfigDir: configDirValue(cmd), ProfileIDs: cmd.Args().Slice(),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().ExportProfiles(ctx, codex.ExportCodexProfilesRequest{
+				ProfileIDs: cmd.Args().Slice(),
 				OutputPath: cmd.String(outputFlagName), Overwrite: cmd.Bool(forceFlagName),
 			})
 			if err != nil {
@@ -55,9 +60,11 @@ func newCodexProfileImportInspectCommand() *urfavecli.Command {
 			if err != nil {
 				return err
 			}
-			result, err := app.InspectCodexProfileImport(ctx, app.InspectCodexProfileImportRequest{
-				ConfigDir: configDirValue(cmd), CodexDir: cmd.String(codexDirFlagName), InputPath: path,
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().InspectProfileImport(ctx, codex.InspectCodexProfileImportRequest{InputPath: path})
 			if err != nil {
 				return err
 			}
@@ -83,8 +90,12 @@ func newCodexProfileImportApplyCommand() *urfavecli.Command {
 			if err != nil {
 				return err
 			}
-			result, err := app.ImportCodexProfiles(ctx, app.ImportCodexProfilesRequest{
-				ConfigDir: configDirValue(cmd), CodexDir: cmd.String(codexDirFlagName), InputPath: path,
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Codex().ImportProfiles(ctx, codex.ImportCodexProfilesRequest{
+				InputPath:               path,
 				ExpectedPlanFingerprint: cmd.String(planFingerprintFlagName), Confirm: cmd.Bool(yesFlagName),
 			})
 			if err != nil {
@@ -100,12 +111,12 @@ func newCodexProfileImportApplyCommand() *urfavecli.Command {
 
 func singlePathArg(cmd *urfavecli.Command) (string, error) {
 	if cmd.Args().Len() != 1 {
-		return "", app.NewError(app.ErrorImportInvalid, "exactly one bundle path is required")
+		return "", apperror.New(apperror.ImportInvalid, "exactly one bundle path is required")
 	}
 	return cmd.Args().Get(0), nil
 }
 
-func writeCodexProfileExportResult(w io.Writer, result app.CodexProfileExportResult) error {
+func writeCodexProfileExportResult(w io.Writer, result codex.CodexProfileExportResult) error {
 	if _, err := fmt.Fprintf(w,
 		"Codex Profiles exported\npath: %s\nsha256: %s\nmode: %s\nprofiles: %d\ncredentials: %d\nconfig_sets: %d\n",
 		result.Path, result.SHA256, result.FileMode, result.ProfileCount, result.CredentialCount, result.ConfigSetCount,
@@ -115,7 +126,7 @@ func writeCodexProfileExportResult(w io.Writer, result app.CodexProfileExportRes
 	return writeWarnings(w, result.Warnings)
 }
 
-func writeCodexProfileImportPlan(w io.Writer, plan app.CodexProfileImportPlan) error {
+func writeCodexProfileImportPlan(w io.Writer, plan codex.CodexProfileImportPlan) error {
 	if _, err := fmt.Fprintf(w,
 		"Codex Profile import plan\npath: %s\nfile_sha256: %s\nplan_fingerprint: %s\ncodex_dir: %s\nprofiles: %d\ncredentials: %d\nconfig_sets: %d\nactions: create=%d unchanged=%d conflict=%d\ncan_apply: %t\nno_changes: %t\n",
 		plan.Path, plan.FileSHA256, plan.PlanFingerprint, plan.CodexDir,
@@ -140,7 +151,7 @@ func writeCodexProfileImportPlan(w io.Writer, plan app.CodexProfileImportPlan) e
 	return writeWarnings(w, plan.Warnings)
 }
 
-func writeCodexProfileImportResult(w io.Writer, result app.CodexProfileImportResult) error {
+func writeCodexProfileImportResult(w io.Writer, result codex.CodexProfileImportResult) error {
 	status := "no changes"
 	if result.Changed {
 		status = "applied"

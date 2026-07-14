@@ -20,7 +20,7 @@
 	import { Separator } from "$lib/components/ui/separator";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 
-	import type { CodexConfigSet } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { CodexConfigSet } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
 
 	interface Props {
 		configSets: CodexConfigSet[];

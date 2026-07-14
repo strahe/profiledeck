@@ -11,15 +11,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/codex"
 )
 
 func TestCodexQuotaRuntimeMergesSharedCredentialSettings(t *testing.T) {
 	now := time.Unix(1780000000, 0)
-	runtime := newCodexQuotaRuntime(Environment{})
+	runtime := newCodexQuotaRuntime(nil, nil)
 	runtime.now = func() time.Time { return now }
 	runtime.random = rand.New(rand.NewSource(1))
-	runtime.applyTargets([]app.CodexAutomationTarget{
+	runtime.applyTargets([]codex.CodexAutomationTarget{
 		{ProfileID: "slow", CredentialID: "credential-1", CredentialSHA256: "hash", QuotaRefreshIntervalSeconds: 600, QuotaSupported: true},
 		{ProfileID: "fast", CredentialID: "credential-1", CredentialSHA256: "hash", QuotaRefreshIntervalSeconds: 300, AuthKeepaliveEnabled: true, QuotaSupported: true, AuthKeepaliveSupported: true},
 	})
@@ -30,7 +31,7 @@ func TestCodexQuotaRuntimeMergesSharedCredentialSettings(t *testing.T) {
 	if schedule == nil || schedule.interval != 5*time.Minute || !schedule.keepalive {
 		t.Fatalf("expected shortest interval and OR keepalive, got %#v", schedule)
 	}
-	if schedule.nextKind != app.CodexCredentialJobQuota {
+	if schedule.nextKind != codex.CodexCredentialJobQuota {
 		t.Fatalf("expected quota refresh to subsume keepalive, got %q", schedule.nextKind)
 	}
 	if schedule.nextRunAt.Before(now) || schedule.nextRunAt.After(now.Add(5*time.Minute)) {
@@ -42,8 +43,8 @@ func TestCodexQuotaRuntimeMergesSharedCredentialSettings(t *testing.T) {
 }
 
 func TestCodexQuotaRuntimeStatusDoesNotExposeCredentialInternals(t *testing.T) {
-	runtime := newCodexQuotaRuntime(Environment{CodexDir: "/private/runtime-path"})
-	runtime.applyTargets([]app.CodexAutomationTarget{{
+	runtime := newCodexQuotaRuntime(nil, nil)
+	runtime.applyTargets([]codex.CodexAutomationTarget{{
 		ProfileID: "work", CredentialID: "credential-secret", CredentialSHA256: "payload-hash-secret",
 		QuotaRefreshIntervalSeconds: 300, QuotaSupported: true,
 	}})
@@ -60,18 +61,18 @@ func TestCodexQuotaRuntimeStatusDoesNotExposeCredentialInternals(t *testing.T) {
 
 func TestCodexQuotaRuntimeKeepsPermanentFailurePausedUntilCredentialChanges(t *testing.T) {
 	now := time.Unix(1780000000, 0)
-	runtime := newCodexQuotaRuntime(Environment{})
+	runtime := newCodexQuotaRuntime(nil, nil)
 	runtime.now = func() time.Time { return now }
-	target := app.CodexAutomationTarget{
+	target := codex.CodexAutomationTarget{
 		ProfileID: "work", CredentialID: "credential-1", CredentialSHA256: "hash-1",
 		QuotaRefreshIntervalSeconds: 300, QuotaSupported: true,
 	}
-	runtime.applyTargets([]app.CodexAutomationTarget{target})
+	runtime.applyTargets([]codex.CodexAutomationTarget{target})
 	runtime.mu.Lock()
 	runtime.schedules["credential-1"].pausedHash = "hash-1"
 	runtime.schedules["credential-1"].nextRunAt = time.Time{}
 	runtime.mu.Unlock()
-	runtime.applyTargets([]app.CodexAutomationTarget{target})
+	runtime.applyTargets([]codex.CodexAutomationTarget{target})
 	runtime.mu.RLock()
 	paused := runtime.schedules["credential-1"]
 	runtime.mu.RUnlock()
@@ -80,7 +81,7 @@ func TestCodexQuotaRuntimeKeepsPermanentFailurePausedUntilCredentialChanges(t *t
 	}
 
 	target.CredentialSHA256 = "hash-2"
-	runtime.applyTargets([]app.CodexAutomationTarget{target})
+	runtime.applyTargets([]codex.CodexAutomationTarget{target})
 	runtime.mu.RLock()
 	resumed := runtime.schedules["credential-1"]
 	runtime.mu.RUnlock()
@@ -90,20 +91,20 @@ func TestCodexQuotaRuntimeKeepsPermanentFailurePausedUntilCredentialChanges(t *t
 }
 
 func TestCodexQuotaRuntimeInvalidatesSnapshotOnUnrelatedCredentialChange(t *testing.T) {
-	runtime := newCodexQuotaRuntime(Environment{})
-	target := app.CodexAutomationTarget{
+	runtime := newCodexQuotaRuntime(nil, nil)
+	target := codex.CodexAutomationTarget{
 		ProfileID: "work", CredentialID: "credential", CredentialSHA256: "hash-1", QuotaSupported: true,
 	}
-	runtime.applyTargets([]app.CodexAutomationTarget{target})
+	runtime.applyTargets([]codex.CodexAutomationTarget{target})
 	runtime.mu.Lock()
 	runtime.profileStatus["work"] = CodexProfileQuotaRuntimeStatus{
-		ProfileID: "work", LastCompletedAtUnixMS: 1780000000000, Status: app.CodexProfileQuotaAvailable,
-		Snapshot: &app.CodexQuotaSnapshot{FetchedAtUnixMS: 1780000000000},
+		ProfileID: "work", LastCompletedAtUnixMS: 1780000000000, Status: codex.CodexProfileQuotaAvailable,
+		Snapshot: &codex.CodexQuotaSnapshot{FetchedAtUnixMS: 1780000000000},
 	}
 	runtime.rebuildStatusLocked()
 	runtime.mu.Unlock()
 	target.CredentialSHA256 = "hash-2"
-	runtime.applyTargets([]app.CodexAutomationTarget{target})
+	runtime.applyTargets([]codex.CodexAutomationTarget{target})
 	status := runtime.Status().Profiles[0]
 	if status.Snapshot != nil || status.LastCompletedAtUnixMS != 0 || status.Status != "" {
 		t.Fatalf("expected unrelated credential content to clear quota state, got %#v", status)
@@ -111,23 +112,23 @@ func TestCodexQuotaRuntimeInvalidatesSnapshotOnUnrelatedCredentialChange(t *test
 }
 
 func TestCodexQuotaRuntimePreservesSnapshotAcrossNativeTokenRotation(t *testing.T) {
-	runtime := newCodexQuotaRuntime(Environment{})
-	target := app.CodexAutomationTarget{
+	runtime := newCodexQuotaRuntime(nil, nil)
+	target := codex.CodexAutomationTarget{
 		ProfileID: "work", CredentialID: "credential", CredentialSHA256: "hash-1", QuotaSupported: true,
 	}
-	runtime.applyTargets([]app.CodexAutomationTarget{target})
-	snapshot := &app.CodexQuotaSnapshot{FetchedAtUnixMS: 1780000000000}
+	runtime.applyTargets([]codex.CodexAutomationTarget{target})
+	snapshot := &codex.CodexQuotaSnapshot{FetchedAtUnixMS: 1780000000000}
 	runtime.completeJob(
-		&codexQuotaRuntimeJob{key: "credential", profileID: "work", kind: app.CodexCredentialJobQuota},
-		app.CodexCredentialJobResult{
-			Quota:             app.CodexProfileQuota{Status: app.CodexProfileQuotaAvailable, Snapshot: snapshot},
+		&codexQuotaRuntimeJob{key: "credential", profileID: "work", kind: codex.CodexCredentialJobQuota},
+		codex.CodexCredentialJobResult{
+			Quota:             codex.CodexProfileQuota{Status: codex.CodexProfileQuotaAvailable, Snapshot: snapshot},
 			CredentialUpdated: true, CredentialSHA256: "hash-2", NativeAttempted: true,
 		},
 		nil,
 		time.Unix(1780000000, 0),
 	)
 	target.CredentialSHA256 = "hash-2"
-	runtime.applyTargets([]app.CodexAutomationTarget{target})
+	runtime.applyTargets([]codex.CodexAutomationTarget{target})
 	status := runtime.Status().Profiles[0]
 	if status.Snapshot == nil || status.Snapshot.FetchedAtUnixMS != snapshot.FetchedAtUnixMS {
 		t.Fatalf("expected snapshot from rotating native request to remain current, got %#v", status)
@@ -135,7 +136,7 @@ func TestCodexQuotaRuntimePreservesSnapshotAcrossNativeTokenRotation(t *testing.
 }
 
 func TestCodexQuotaRuntimeUsesJitterAndBoundedBackoff(t *testing.T) {
-	runtime := newCodexQuotaRuntime(Environment{})
+	runtime := newCodexQuotaRuntime(nil, nil)
 	runtime.random = rand.New(rand.NewSource(2))
 	for i := 0; i < 100; i++ {
 		got := runtime.randomJitterLocked(10 * time.Minute)
@@ -143,7 +144,7 @@ func TestCodexQuotaRuntimeUsesJitterAndBoundedBackoff(t *testing.T) {
 			t.Fatalf("expected +/-10%% jitter, got %s", got)
 		}
 	}
-	schedule := &codexCredentialSchedule{nextKind: app.CodexCredentialJobQuota}
+	schedule := &codexCredentialSchedule{nextKind: codex.CodexCredentialJobQuota}
 	now := time.Unix(1780000000, 0)
 	for i, expected := range []time.Duration{5 * time.Minute, 15 * time.Minute, time.Hour, 6 * time.Hour, 6 * time.Hour} {
 		runtime.scheduleRetryLocked(schedule, now)
@@ -155,10 +156,10 @@ func TestCodexQuotaRuntimeUsesJitterAndBoundedBackoff(t *testing.T) {
 
 func TestCodexQuotaRuntimePrioritizesManualJobs(t *testing.T) {
 	now := time.Unix(1780000000, 0)
-	runtime := newCodexQuotaRuntime(Environment{})
+	runtime := newCodexQuotaRuntime(nil, nil)
 	runtime.now = func() time.Time { return now }
 	runtime.schedules = map[string]*codexCredentialSchedule{
-		"auto":   {key: "auto", profileIDs: []string{"auto-profile"}, nextKind: app.CodexCredentialJobQuota, nextRunAt: now},
+		"auto":   {key: "auto", profileIDs: []string{"auto-profile"}, nextKind: codex.CodexCredentialJobQuota, nextRunAt: now},
 		"manual": {key: "manual", profileIDs: []string{"manual-profile"}},
 	}
 	runtime.profileStatus = map[string]CodexProfileQuotaRuntimeStatus{
@@ -175,7 +176,7 @@ func TestCodexQuotaRuntimePrioritizesManualJobs(t *testing.T) {
 }
 
 func TestCodexQuotaRuntimeRefreshesCrossCredentialGapAfterEveryCompletion(t *testing.T) {
-	runtime := newCodexQuotaRuntime(Environment{})
+	runtime := newCodexQuotaRuntime(nil, nil)
 	runtime.random = rand.New(rand.NewSource(3))
 	runtime.schedules = map[string]*codexCredentialSchedule{
 		"credential-a": {key: "credential-a", profileIDs: []string{"profile-a"}},
@@ -187,8 +188,8 @@ func TestCodexQuotaRuntimeRefreshesCrossCredentialGapAfterEveryCompletion(t *tes
 	runtime.nextCredentialAt = time.Unix(1780000000, 0)
 	completedAt := time.Unix(1780000100, 0)
 	runtime.completeJob(
-		&codexQuotaRuntimeJob{key: "credential-a", profileID: "profile-a", kind: app.CodexCredentialJobQuota},
-		app.CodexCredentialJobResult{Quota: app.CodexProfileQuota{Status: app.CodexProfileQuotaAvailable}},
+		&codexQuotaRuntimeJob{key: "credential-a", profileID: "profile-a", kind: codex.CodexCredentialJobQuota},
+		codex.CodexCredentialJobResult{Quota: codex.CodexProfileQuota{Status: codex.CodexProfileQuotaAvailable}},
 		nil,
 		completedAt,
 	)
@@ -206,7 +207,7 @@ func TestCodexQuotaRuntimeRefreshesCrossCredentialGapAfterEveryCompletion(t *tes
 }
 
 func TestCodexQuotaRuntimeChangesAppServerStatusOnlyAfterNativeAttempt(t *testing.T) {
-	runtime := newCodexQuotaRuntime(Environment{})
+	runtime := newCodexQuotaRuntime(nil, nil)
 	runtime.status.AppServerStatus = CodexAppServerUnavailable
 	runtime.schedules = map[string]*codexCredentialSchedule{
 		"credential": {key: "credential", profileIDs: []string{"profile"}},
@@ -214,16 +215,16 @@ func TestCodexQuotaRuntimeChangesAppServerStatusOnlyAfterNativeAttempt(t *testin
 	runtime.profileStatus = map[string]CodexProfileQuotaRuntimeStatus{
 		"profile": {ProfileID: "profile"},
 	}
-	job := &codexQuotaRuntimeJob{key: "credential", profileID: "profile", kind: app.CodexCredentialJobQuota}
-	runtime.completeJob(job, app.CodexCredentialJobResult{
-		Quota: app.CodexProfileQuota{Status: app.CodexProfileQuotaUnsupported},
+	job := &codexQuotaRuntimeJob{key: "credential", profileID: "profile", kind: codex.CodexCredentialJobQuota}
+	runtime.completeJob(job, codex.CodexCredentialJobResult{
+		Quota: codex.CodexProfileQuota{Status: codex.CodexProfileQuotaUnsupported},
 	}, nil, time.Unix(1780000000, 0))
 	if got := runtime.Status().AppServerStatus; got != CodexAppServerUnavailable {
 		t.Fatalf("expected unsupported auth not to claim app-server availability, got %q", got)
 	}
 
-	runtime.completeJob(job, app.CodexCredentialJobResult{
-		Quota: app.CodexProfileQuota{Status: app.CodexProfileQuotaAvailable}, NativeAttempted: true,
+	runtime.completeJob(job, codex.CodexCredentialJobResult{
+		Quota: codex.CodexProfileQuota{Status: codex.CodexProfileQuotaAvailable}, NativeAttempted: true,
 	}, nil, time.Unix(1780000010, 0))
 	if got := runtime.Status().AppServerStatus; got != CodexAppServerAvailable {
 		t.Fatalf("expected successful native attempt to mark app-server available, got %q", got)
@@ -231,7 +232,7 @@ func TestCodexQuotaRuntimeChangesAppServerStatusOnlyAfterNativeAttempt(t *testin
 }
 
 func TestCodexQuotaRuntimeManualFailureDoesNotEnableAutomaticRetry(t *testing.T) {
-	runtime := newCodexQuotaRuntime(Environment{})
+	runtime := newCodexQuotaRuntime(nil, nil)
 	runtime.schedules = map[string]*codexCredentialSchedule{
 		"credential": {key: "credential", profileIDs: []string{"profile"}},
 	}
@@ -239,8 +240,8 @@ func TestCodexQuotaRuntimeManualFailureDoesNotEnableAutomaticRetry(t *testing.T)
 		"profile": {ProfileID: "profile"},
 	}
 	runtime.completeJob(
-		&codexQuotaRuntimeJob{key: "credential", profileID: "profile", kind: app.CodexCredentialJobQuota, manual: true},
-		app.CodexCredentialJobResult{},
+		&codexQuotaRuntimeJob{key: "credential", profileID: "profile", kind: codex.CodexCredentialJobQuota, manual: true},
+		codex.CodexCredentialJobResult{},
 		errors.New("manual request failed"),
 		time.Unix(1780000000, 0),
 	)
@@ -253,16 +254,16 @@ func TestCodexQuotaRuntimeManualFailureDoesNotEnableAutomaticRetry(t *testing.T)
 }
 
 func TestCodexQuotaRuntimeDoesNotRestoreRemovedProfileAfterJobCompletion(t *testing.T) {
-	runtime := newCodexQuotaRuntime(Environment{})
+	runtime := newCodexQuotaRuntime(nil, nil)
 	runtime.schedules = map[string]*codexCredentialSchedule{}
 	runtime.profileToKey = map[string]string{}
 	runtime.profileStatus = map[string]CodexProfileQuotaRuntimeStatus{}
 	runtime.completeJob(
-		&codexQuotaRuntimeJob{key: "removed", profileID: "removed", kind: app.CodexCredentialJobQuota},
-		app.CodexCredentialJobResult{
-			Quota: app.CodexProfileQuota{
-				Status:   app.CodexProfileQuotaAvailable,
-				Snapshot: &app.CodexQuotaSnapshot{FetchedAtUnixMS: 1780000000000},
+		&codexQuotaRuntimeJob{key: "removed", profileID: "removed", kind: codex.CodexCredentialJobQuota},
+		codex.CodexCredentialJobResult{
+			Quota: codex.CodexProfileQuota{
+				Status:   codex.CodexProfileQuotaAvailable,
+				Snapshot: &codex.CodexQuotaSnapshot{FetchedAtUnixMS: 1780000000000},
 			},
 		},
 		nil,
@@ -274,18 +275,18 @@ func TestCodexQuotaRuntimeDoesNotRestoreRemovedProfileAfterJobCompletion(t *test
 }
 
 func TestCodexQuotaRuntimeMergesManualRequestsForSharedCredentialAndRunsSerially(t *testing.T) {
-	runtime := newCodexQuotaRuntime(Environment{})
-	targets := []app.CodexAutomationTarget{
+	runtime := newCodexQuotaRuntime(nil, nil)
+	targets := []codex.CodexAutomationTarget{
 		{ProfileID: "one", CredentialID: "shared", CredentialSHA256: "hash", QuotaSupported: true},
 		{ProfileID: "two", CredentialID: "shared", CredentialSHA256: "hash", QuotaSupported: true},
 	}
-	runtime.loadTargets = func(context.Context) ([]app.CodexAutomationTarget, error) { return targets, nil }
+	runtime.loadTargets = func(context.Context) ([]codex.CodexAutomationTarget, error) { return targets, nil }
 	started := make(chan struct{}, 2)
 	release := make(chan struct{})
 	var calls atomic.Int32
 	var active atomic.Int32
 	var maxActive atomic.Int32
-	runtime.runJob = func(ctx context.Context, req app.RunCodexCredentialJobRequest) (app.CodexCredentialJobResult, error) {
+	runtime.runJob = func(ctx context.Context, req codex.RunCodexCredentialJobRequest) (codex.CodexCredentialJobResult, error) {
 		calls.Add(1)
 		current := active.Add(1)
 		for {
@@ -298,20 +299,20 @@ func TestCodexQuotaRuntimeMergesManualRequestsForSharedCredentialAndRunsSerially
 		select {
 		case <-ctx.Done():
 			active.Add(-1)
-			return app.CodexCredentialJobResult{}, ctx.Err()
+			return codex.CodexCredentialJobResult{}, ctx.Err()
 		case <-release:
 		}
 		active.Add(-1)
-		return app.CodexCredentialJobResult{Quota: app.CodexProfileQuota{
-			ProfileID: req.ProfileID, CredentialID: "shared", Status: app.CodexProfileQuotaAvailable,
-			Snapshot: &app.CodexQuotaSnapshot{FetchedAtUnixMS: time.Now().UnixMilli(), AdditionalRateLimits: []app.CodexQuotaRateLimit{}},
+		return codex.CodexCredentialJobResult{Quota: codex.CodexProfileQuota{
+			ProfileID: req.ProfileID, CredentialID: "shared", Status: codex.CodexProfileQuotaAvailable,
+			Snapshot: &codex.CodexQuotaSnapshot{FetchedAtUnixMS: time.Now().UnixMilli(), AdditionalRateLimits: []codex.CodexQuotaRateLimit{}},
 		}}, nil
 	}
 	runtime.Start(context.Background(), nil)
 	t.Cleanup(runtime.Stop)
 
 	type response struct {
-		quota app.CodexProfileQuota
+		quota codex.CodexProfileQuota
 		err   error
 	}
 	responses := make(chan response, 2)
@@ -351,17 +352,17 @@ func TestCodexQuotaRuntimeMergesManualRequestsForSharedCredentialAndRunsSerially
 }
 
 func TestCodexQuotaRuntimeDiscardsQuotaFromStaleCredentialCopy(t *testing.T) {
-	runtime := newCodexQuotaRuntime(Environment{})
-	runtime.loadTargets = func(context.Context) ([]app.CodexAutomationTarget, error) {
-		return []app.CodexAutomationTarget{{
+	runtime := newCodexQuotaRuntime(nil, nil)
+	runtime.loadTargets = func(context.Context) ([]codex.CodexAutomationTarget, error) {
+		return []codex.CodexAutomationTarget{{
 			ProfileID: "work", CredentialID: "credential", CredentialSHA256: "hash", QuotaSupported: true,
 		}}, nil
 	}
-	runtime.runJob = func(context.Context, app.RunCodexCredentialJobRequest) (app.CodexCredentialJobResult, error) {
-		return app.CodexCredentialJobResult{
-			Quota: app.CodexProfileQuota{
-				ProfileID: "work", CredentialID: "credential", Status: app.CodexProfileQuotaAvailable,
-				Snapshot: &app.CodexQuotaSnapshot{FetchedAtUnixMS: 1780000000000},
+	runtime.runJob = func(context.Context, codex.RunCodexCredentialJobRequest) (codex.CodexCredentialJobResult, error) {
+		return codex.CodexCredentialJobResult{
+			Quota: codex.CodexProfileQuota{
+				ProfileID: "work", CredentialID: "credential", Status: codex.CodexProfileQuotaAvailable,
+				Snapshot: &codex.CodexQuotaSnapshot{FetchedAtUnixMS: 1780000000000},
 			},
 			CredentialConflict: true,
 		}, nil
@@ -369,26 +370,26 @@ func TestCodexQuotaRuntimeDiscardsQuotaFromStaleCredentialCopy(t *testing.T) {
 	runtime.Start(context.Background(), nil)
 	t.Cleanup(runtime.Stop)
 	quota, err := runtime.ReadProfileQuota(context.Background(), "work")
-	var appErr *app.AppError
-	if !errors.As(err, &appErr) || appErr.Code != app.ErrorCodexInvalid {
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.Code != apperror.CodexInvalid {
 		t.Fatalf("expected stale credential error, got %v", err)
 	}
-	if quota.Status != app.CodexProfileQuotaUnavailable || quota.Snapshot != nil {
+	if quota.Status != codex.CodexProfileQuotaUnavailable || quota.Snapshot != nil {
 		t.Fatalf("expected stale quota snapshot to be discarded, got %#v", quota)
 	}
 }
 
 func TestCodexQuotaRuntimeStopCancelsRunningJob(t *testing.T) {
-	runtime := newCodexQuotaRuntime(Environment{})
-	runtime.loadTargets = func(context.Context) ([]app.CodexAutomationTarget, error) {
-		return []app.CodexAutomationTarget{{ProfileID: "work", CredentialID: "credential", CredentialSHA256: "hash", QuotaSupported: true}}, nil
+	runtime := newCodexQuotaRuntime(nil, nil)
+	runtime.loadTargets = func(context.Context) ([]codex.CodexAutomationTarget, error) {
+		return []codex.CodexAutomationTarget{{ProfileID: "work", CredentialID: "credential", CredentialSHA256: "hash", QuotaSupported: true}}, nil
 	}
 	started := make(chan struct{})
 	var once sync.Once
-	runtime.runJob = func(ctx context.Context, _ app.RunCodexCredentialJobRequest) (app.CodexCredentialJobResult, error) {
+	runtime.runJob = func(ctx context.Context, _ codex.RunCodexCredentialJobRequest) (codex.CodexCredentialJobResult, error) {
 		once.Do(func() { close(started) })
 		<-ctx.Done()
-		return app.CodexCredentialJobResult{}, ctx.Err()
+		return codex.CodexCredentialJobResult{}, ctx.Err()
 	}
 	runtime.Start(context.Background(), nil)
 	result := make(chan error, 1)
@@ -413,9 +414,9 @@ func TestCodexQuotaRuntimeStopCancelsRunningJob(t *testing.T) {
 }
 
 func TestCodexQuotaRuntimeStopDoesNotRestartCanceledOverdueAutomaticJob(t *testing.T) {
-	runtime := newCodexQuotaRuntime(Environment{})
-	runtime.loadTargets = func(context.Context) ([]app.CodexAutomationTarget, error) {
-		return []app.CodexAutomationTarget{{
+	runtime := newCodexQuotaRuntime(nil, nil)
+	runtime.loadTargets = func(context.Context) ([]codex.CodexAutomationTarget, error) {
+		return []codex.CodexAutomationTarget{{
 			ProfileID: "work", CredentialID: "credential", CredentialSHA256: "hash",
 			QuotaRefreshIntervalSeconds: 300, QuotaSupported: true,
 		}}, nil
@@ -423,11 +424,11 @@ func TestCodexQuotaRuntimeStopDoesNotRestartCanceledOverdueAutomaticJob(t *testi
 	started := make(chan struct{})
 	var once sync.Once
 	var calls atomic.Int32
-	runtime.runJob = func(ctx context.Context, _ app.RunCodexCredentialJobRequest) (app.CodexCredentialJobResult, error) {
+	runtime.runJob = func(ctx context.Context, _ codex.RunCodexCredentialJobRequest) (codex.CodexCredentialJobResult, error) {
 		calls.Add(1)
 		once.Do(func() { close(started) })
 		<-ctx.Done()
-		return app.CodexCredentialJobResult{}, ctx.Err()
+		return codex.CodexCredentialJobResult{}, ctx.Err()
 	}
 	runtime.Start(context.Background(), nil)
 	runtime.mu.Lock()

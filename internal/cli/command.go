@@ -9,6 +9,7 @@ import (
 
 	urfavecli "github.com/urfave/cli/v3"
 
+	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/app"
 )
 
@@ -63,9 +64,11 @@ func newInitCommand() *urfavecli.Command {
 			},
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.Init(ctx, app.InitRequest{
-				ConfigDir: configDirValue(cmd),
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Runtime().Init(ctx)
 			if err != nil {
 				return err
 			}
@@ -99,9 +102,11 @@ func newStatusCommand() *urfavecli.Command {
 			},
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.Status(ctx, app.StatusRequest{
-				ConfigDir: configDirValue(cmd),
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Runtime().Status(ctx)
 			if err != nil {
 				return err
 			}
@@ -153,6 +158,16 @@ func configDirValue(cmd *urfavecli.Command) string {
 		return root.String(configDirFlagName)
 	}
 	return ""
+}
+
+func applicationFor(cmd *urfavecli.Command) (*app.Application, error) {
+	codexDir := ""
+	if cmd != nil {
+		codexDir = cmd.String(codexDirFlagName)
+	}
+	return app.New(app.Config{
+		ConfigDir: configDirValue(cmd), CodexDir: codexDir, AgentAccess: agent.AccessUnrestricted,
+	})
 }
 
 func writeJSON(w io.Writer, value any) error {

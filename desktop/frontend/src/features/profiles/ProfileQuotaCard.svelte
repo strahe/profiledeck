@@ -19,7 +19,7 @@
 		CodexProfileQuota,
 		CodexQuotaRateLimit,
 		CodexQuotaWindow,
-	} from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	} from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
 
 	let {
 		quota,

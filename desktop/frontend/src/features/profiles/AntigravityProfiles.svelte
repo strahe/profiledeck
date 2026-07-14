@@ -25,8 +25,8 @@
 		AntigravityDetectResult,
 		AntigravityProfileDetail,
 		AntigravityProfileSummary,
-		SwitchPlan,
-	} from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	} from "../../../bindings/github.com/strahe/profiledeck/internal/antigravity/models";
+	import type { SwitchPlan } from "../../../bindings/github.com/strahe/profiledeck/internal/switching/models";
 
 	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
 	import PageHeader from "$lib/components/app/PageHeader.svelte";

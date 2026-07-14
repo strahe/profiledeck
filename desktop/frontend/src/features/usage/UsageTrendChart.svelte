@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { tick } from "svelte";
 	import { _ } from "svelte-i18n";
-	import type { UsageResolvedRange, UsageTrendPoint } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { UsageResolvedRange, UsageTrendPoint } from "../../../bindings/github.com/strahe/profiledeck/internal/usage/models";
 
 	import { currentDesktopLocale, translate } from "$lib/i18n";
 

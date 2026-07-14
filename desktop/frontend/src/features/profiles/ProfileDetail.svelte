@@ -10,7 +10,7 @@
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 
-	import type { CodexProfileDetail, CodexProfileQuota } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { CodexProfileDetail, CodexProfileQuota } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
 	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
 	import PageHeader from "$lib/components/app/PageHeader.svelte";
 	import SectionCard from "$lib/components/app/SectionCard.svelte";

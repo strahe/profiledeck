@@ -7,16 +7,16 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as app$0 from "../../internal/app/models.js";
+import * as switching$0 from "../../internal/switching/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
-export function Apply(req: $models.SwitchApplyRequest): $CancellablePromise<app$0.ApplySwitchResult> {
+export function Apply(req: $models.SwitchApplyRequest): $CancellablePromise<switching$0.ApplySwitchResult> {
     return $Call.ByID(1472033683, req);
 }
 
-export function BuildPlan(providerID: string, profileID: string): $CancellablePromise<app$0.SwitchPlan> {
+export function BuildPlan(providerID: string, profileID: string): $CancellablePromise<switching$0.SwitchPlan> {
     return $Call.ByID(3697045652, providerID, profileID);
 }

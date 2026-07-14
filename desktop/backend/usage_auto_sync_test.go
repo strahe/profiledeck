@@ -9,7 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/codex"
+	"github.com/strahe/profiledeck/internal/usage"
 )
 
 func TestUsageAutoSyncStartsImmediatelyAndSkipsOverlappingTicks(t *testing.T) {
@@ -17,13 +18,13 @@ func TestUsageAutoSyncStartsImmediatelyAndSkipsOverlappingTicks(t *testing.T) {
 	started := make(chan int32, 3)
 	releaseFirst := make(chan struct{})
 	var calls atomic.Int32
-	runtime.syncCodex = func(context.Context) (app.UsageSyncResult, error) {
+	runtime.syncCodex = func(context.Context) (usage.UsageSyncResult, error) {
 		call := calls.Add(1)
 		started <- call
 		if call == 1 {
 			<-releaseFirst
 		}
-		return app.UsageSyncResult{}, nil
+		return usage.UsageSyncResult{}, nil
 	}
 	statuses := make(chan UsageAutoSyncStatus, 16)
 	runtime.Start(context.Background(), func(status UsageAutoSyncStatus) { statuses <- status })
@@ -52,9 +53,9 @@ func TestUsageAutoSyncStartsImmediatelyAndSkipsOverlappingTicks(t *testing.T) {
 func TestUsageAutoSyncResetsIntervalWithoutImmediateSync(t *testing.T) {
 	runtime, ticker := newTestUsageAutoSyncRuntime()
 	started := make(chan struct{}, 2)
-	runtime.syncCodex = func(context.Context) (app.UsageSyncResult, error) {
+	runtime.syncCodex = func(context.Context) (usage.UsageSyncResult, error) {
 		started <- struct{}{}
-		return app.UsageSyncResult{}, nil
+		return usage.UsageSyncResult{}, nil
 	}
 	runtime.Start(context.Background(), nil)
 	t.Cleanup(runtime.Stop)
@@ -83,18 +84,18 @@ func TestUsageAutoSyncStartupLoadDoesNotOverwriteNewerInterval(t *testing.T) {
 	runtime, ticker := newTestUsageAutoSyncRuntime()
 	loadStarted := make(chan struct{})
 	releaseLoad := make(chan struct{})
-	runtime.loadSettings = func(context.Context) (app.CodexSettings, error) {
+	runtime.loadSettings = func(context.Context) (codex.CodexSettings, error) {
 		close(loadStarted)
 		<-releaseLoad
-		return app.CodexSettings{UsageSyncIntervalSeconds: 15}, nil
+		return codex.CodexSettings{UsageSyncIntervalSeconds: 15}, nil
 	}
 	createdIntervals := make(chan time.Duration, 1)
 	runtime.newTicker = func(interval time.Duration) usageAutoSyncTicker {
 		createdIntervals <- interval
 		return ticker
 	}
-	runtime.syncCodex = func(context.Context) (app.UsageSyncResult, error) {
-		return app.UsageSyncResult{}, nil
+	runtime.syncCodex = func(context.Context) (usage.UsageSyncResult, error) {
+		return usage.UsageSyncResult{}, nil
 	}
 	runtime.Start(context.Background(), nil)
 	t.Cleanup(runtime.Stop)
@@ -123,12 +124,12 @@ func TestUsageAutoSyncRetriesAfterTimeout(t *testing.T) {
 	runtime, ticker := newTestUsageAutoSyncRuntime()
 	runtime.timeout = 20 * time.Millisecond
 	var calls atomic.Int32
-	runtime.syncCodex = func(ctx context.Context) (app.UsageSyncResult, error) {
+	runtime.syncCodex = func(ctx context.Context) (usage.UsageSyncResult, error) {
 		if calls.Add(1) == 1 {
 			<-ctx.Done()
-			return app.UsageSyncResult{}, ctx.Err()
+			return usage.UsageSyncResult{}, ctx.Err()
 		}
-		return app.UsageSyncResult{}, nil
+		return usage.UsageSyncResult{}, nil
 	}
 	statuses := make(chan UsageAutoSyncStatus, 16)
 	runtime.Start(context.Background(), func(status UsageAutoSyncStatus) { statuses <- status })
@@ -152,8 +153,8 @@ func TestUsageAutoSyncRetriesAfterTimeout(t *testing.T) {
 func TestUsageAutoSyncReportsWarningsAndRedactsFatalErrors(t *testing.T) {
 	t.Run("warning", func(t *testing.T) {
 		runtime, _ := newTestUsageAutoSyncRuntime()
-		runtime.syncCodex = func(context.Context) (app.UsageSyncResult, error) {
-			return app.UsageSyncResult{Errors: []app.UsageImportError{{SourceKey: "/private/session.jsonl", Message: "raw session error"}}}, nil
+		runtime.syncCodex = func(context.Context) (usage.UsageSyncResult, error) {
+			return usage.UsageSyncResult{Errors: []usage.UsageImportError{{SourceKey: "/private/session.jsonl", Message: "raw session error"}}}, nil
 		}
 		statuses := make(chan UsageAutoSyncStatus, 8)
 		runtime.Start(context.Background(), func(status UsageAutoSyncStatus) { statuses <- status })
@@ -170,8 +171,8 @@ func TestUsageAutoSyncReportsWarningsAndRedactsFatalErrors(t *testing.T) {
 	t.Run("fatal", func(t *testing.T) {
 		runtime, _ := newTestUsageAutoSyncRuntime()
 		raw := "/Users/alice/.codex/sessions/private.jsonl"
-		runtime.syncCodex = func(context.Context) (app.UsageSyncResult, error) {
-			return app.UsageSyncResult{}, fmt.Errorf("failed to read %s", raw)
+		runtime.syncCodex = func(context.Context) (usage.UsageSyncResult, error) {
+			return usage.UsageSyncResult{}, fmt.Errorf("failed to read %s", raw)
 		}
 		statuses := make(chan UsageAutoSyncStatus, 8)
 		runtime.Start(context.Background(), func(status UsageAutoSyncStatus) { statuses <- status })
@@ -193,11 +194,11 @@ func TestUsageAutoSyncStopCancelsRunningSync(t *testing.T) {
 	runtime, _ := newTestUsageAutoSyncRuntime()
 	started := make(chan struct{})
 	stopped := make(chan struct{})
-	runtime.syncCodex = func(ctx context.Context) (app.UsageSyncResult, error) {
+	runtime.syncCodex = func(ctx context.Context) (usage.UsageSyncResult, error) {
 		close(started)
 		<-ctx.Done()
 		close(stopped)
-		return app.UsageSyncResult{}, ctx.Err()
+		return usage.UsageSyncResult{}, ctx.Err()
 	}
 	runtime.Start(context.Background(), nil)
 	waitUsageSyncSignal(t, started)
@@ -233,13 +234,13 @@ func (t *fakeUsageAutoSyncTicker) tick() {
 }
 
 func newTestUsageAutoSyncRuntime() (*usageAutoSyncRuntime, *fakeUsageAutoSyncTicker) {
-	runtime := newUsageAutoSyncRuntime(Environment{})
+	runtime := newUsageAutoSyncRuntime(nil, nil)
 	ticker := &fakeUsageAutoSyncTicker{
 		ch:     make(chan time.Time),
 		resets: make(chan time.Duration, 4),
 	}
-	runtime.loadSettings = func(context.Context) (app.CodexSettings, error) {
-		return app.CodexSettings{UsageSyncIntervalSeconds: app.CodexUsageSyncIntervalDefault}, nil
+	runtime.loadSettings = func(context.Context) (codex.CodexSettings, error) {
+		return codex.CodexSettings{UsageSyncIntervalSeconds: codex.CodexUsageSyncIntervalDefault}, nil
 	}
 	runtime.newTicker = func(time.Duration) usageAutoSyncTicker { return ticker }
 	return runtime, ticker

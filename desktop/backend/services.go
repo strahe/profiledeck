@@ -7,70 +7,90 @@ import (
 	"sync"
 	"time"
 
+	"github.com/strahe/profiledeck/internal/agent"
+	"github.com/strahe/profiledeck/internal/antigravity"
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/claudecode"
 	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
+	"github.com/strahe/profiledeck/internal/codex"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	"github.com/strahe/profiledeck/internal/doctor"
+	"github.com/strahe/profiledeck/internal/profile"
+	"github.com/strahe/profiledeck/internal/profiletarget"
+	"github.com/strahe/profiledeck/internal/provider"
+	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
+	"github.com/strahe/profiledeck/internal/settings"
+	"github.com/strahe/profiledeck/internal/switching"
+	"github.com/strahe/profiledeck/internal/usage"
 )
 
 type AppService struct {
-	info       app.Info
-	env        Environment
-	mu         sync.RWMutex
-	startupErr error
-	changes    *ChangeNotifier
+	application *app.Application
+	info        app.Info
+	env         Environment
+	mu          sync.RWMutex
+	startupErr  error
+	changes     *ChangeNotifier
 }
 
 type CodexService struct {
-	env        Environment
-	changes    *ChangeNotifier
-	autoSync   *usageAutoSyncRuntime
-	quota      *codexQuotaRuntime
-	settingsMu sync.Mutex
+	application *app.Application
+	changes     *ChangeNotifier
+	autoSync    *usageAutoSyncRuntime
+	quota       *codexQuotaRuntime
+	settingsMu  sync.Mutex
 }
 
 type AntigravityService struct {
-	env     Environment
-	changes *ChangeNotifier
+	application *app.Application
+	changes     *ChangeNotifier
 }
 
 type ClaudeCodeService struct {
-	env     Environment
-	changes *ChangeNotifier
+	application *app.Application
+	changes     *ChangeNotifier
 }
 
 type ProfileService struct {
-	env Environment
+	application *app.Application
 }
 
 type SwitchService struct {
-	env     Environment
-	changes *ChangeNotifier
-	quota   *codexQuotaRuntime
+	application *app.Application
+	changes     *ChangeNotifier
+	quota       *codexQuotaRuntime
 }
 
 type DoctorService struct {
-	env     Environment
-	changes *ChangeNotifier
+	application *app.Application
+	changes     *ChangeNotifier
 }
 
 type BackupService struct {
-	env     Environment
-	changes *ChangeNotifier
-	quota   *codexQuotaRuntime
+	application *app.Application
+	changes     *ChangeNotifier
+	quota       *codexQuotaRuntime
 }
 
 type UsageService struct {
-	env      Environment
-	autoSync *usageAutoSyncRuntime
+	application *app.Application
+	autoSync    *usageAutoSyncRuntime
 }
 
 type SettingsService struct {
-	env Environment
+	application *app.Application
+}
+
+type AgentService struct {
+	application *app.Application
+	changes     *ChangeNotifier
 }
 
 type Services struct {
 	App         *AppService
+	Agent       *AgentService
 	Antigravity *AntigravityService
 	ClaudeCode  *ClaudeCodeService
 	Codex       *CodexService
@@ -83,23 +103,24 @@ type Services struct {
 	changes     *ChangeNotifier
 	autoSync    *usageAutoSyncRuntime
 	quota       *codexQuotaRuntime
+	runtimes    *agentRuntimeManager
 }
 
 type DashboardResult struct {
-	Info                app.Info                          `json:"info"`
-	Environment         Environment                       `json:"environment"`
-	Status              app.StatusResult                  `json:"status"`
-	Doctor              *app.DoctorResult                 `json:"doctor,omitempty"`
-	Providers           []app.Provider                    `json:"providers"`
-	Profiles            []app.Profile                     `json:"profiles"`
-	ActiveStates        []app.ActiveProviderState         `json:"active_states"`
-	CodexProfiles       *app.CodexProfileListResult       `json:"codex_profiles,omitempty"`
-	CodexConfigSets     *app.CodexConfigSetListResult     `json:"codex_config_sets,omitempty"`
-	AntigravityProfiles *app.AntigravityProfileListResult `json:"antigravity_profiles,omitempty"`
-	ClaudeCodeProfiles  *app.ClaudeCodeProfileListResult  `json:"claude_code_profiles,omitempty"`
-	Usage               *app.UsageSummaryResult           `json:"usage,omitempty"`
-	StartupError        *DesktopError                     `json:"startup_error,omitempty"`
-	GeneratedAt         int64                             `json:"generated_at_unix_ms"`
+	Info                app.Info                                  `json:"info"`
+	Environment         Environment                               `json:"environment"`
+	Status              profilesruntime.StatusResult              `json:"status"`
+	Agents              []agent.State                             `json:"agents"`
+	Doctor              *doctor.DoctorResult                      `json:"doctor,omitempty"`
+	Providers           []provider.Provider                       `json:"providers"`
+	ActiveStates        []provider.ActiveState                    `json:"active_states"`
+	CodexProfiles       *codex.CodexProfileListResult             `json:"codex_profiles,omitempty"`
+	CodexConfigSets     *codex.CodexConfigSetListResult           `json:"codex_config_sets,omitempty"`
+	AntigravityProfiles *antigravity.AntigravityProfileListResult `json:"antigravity_profiles,omitempty"`
+	ClaudeCodeProfiles  *claudecode.ClaudeCodeProfileListResult   `json:"claude_code_profiles,omitempty"`
+	Usage               *usage.UsageSummaryResult                 `json:"usage,omitempty"`
+	StartupError        *DesktopError                             `json:"startup_error,omitempty"`
+	GeneratedAt         int64                                     `json:"generated_at_unix_ms"`
 }
 
 type DesktopError struct {
@@ -202,25 +223,31 @@ type ApplyCodexProfileImportRequest struct {
 	Confirm                 bool   `json:"confirm"`
 }
 
-func NewServices(info app.Info, env Environment, startupErr error) Services {
+func NewServices(application *app.Application, info app.Info, env Environment, startupErr error) Services {
 	changes := NewChangeNotifier()
-	autoSync := newUsageAutoSyncRuntime(env)
-	quota := newCodexQuotaRuntime(env)
-	return Services{
-		App:         &AppService{info: info, env: env, startupErr: startupErr, changes: changes},
-		Antigravity: &AntigravityService{env: env, changes: changes},
-		ClaudeCode:  &ClaudeCodeService{env: env, changes: changes},
-		Codex:       &CodexService{env: env, changes: changes, autoSync: autoSync, quota: quota},
-		Profile:     &ProfileService{env: env},
-		Switch:      &SwitchService{env: env, changes: changes, quota: quota},
-		Doctor:      &DoctorService{env: env, changes: changes},
-		Backup:      &BackupService{env: env, changes: changes, quota: quota},
-		Usage:       &UsageService{env: env, autoSync: autoSync},
-		Settings:    &SettingsService{env: env},
+	autoSync := newUsageAutoSyncRuntime(application.Codex().GetSettings, application.Usage().SyncCodex)
+	quota := newCodexQuotaRuntime(application.Codex().ListAutomationTargets, application.Codex().RunCredentialJob)
+	runtimes := newAgentRuntimeManager(application.Agents())
+	services := Services{
+		App:         &AppService{application: application, info: info, env: env, startupErr: startupErr, changes: changes},
+		Agent:       &AgentService{application: application, changes: changes},
+		Antigravity: &AntigravityService{application: application, changes: changes},
+		ClaudeCode:  &ClaudeCodeService{application: application, changes: changes},
+		Codex:       &CodexService{application: application, changes: changes, autoSync: autoSync, quota: quota},
+		Profile:     &ProfileService{application: application},
+		Switch:      &SwitchService{application: application, changes: changes, quota: quota},
+		Doctor:      &DoctorService{application: application, changes: changes},
+		Backup:      &BackupService{application: application, changes: changes, quota: quota},
+		Usage:       &UsageService{application: application, autoSync: autoSync},
+		Settings:    &SettingsService{application: application},
 		changes:     changes,
 		autoSync:    autoSync,
 		quota:       quota,
+		runtimes:    runtimes,
 	}
+	runtimes.Register(agent.Codex, autoSync)
+	runtimes.Register(agent.Codex, quota)
+	return services
 }
 
 func (s Services) SubscribeChanges(listener func(DesktopChangeEvent)) func() {
@@ -228,25 +255,27 @@ func (s Services) SubscribeChanges(listener func(DesktopChangeEvent)) func() {
 }
 
 func (s Services) StartUsageAutoSync(ctx context.Context, emitter func(UsageAutoSyncStatus)) {
-	s.autoSync.Start(ctx, emitter)
+	s.autoSync.SetEmitter(emitter)
+	s.runtimes.Activate(ctx, agent.Codex, s.autoSync)
 }
 
 func (s Services) StopUsageAutoSync() {
-	s.autoSync.Stop()
+	s.runtimes.Deactivate(agent.Codex, s.autoSync)
 }
 
 func (s Services) StartCodexQuotaRuntime(ctx context.Context, emitter func(CodexQuotaRuntimeStatus)) {
-	s.quota.Start(ctx, emitter)
+	s.quota.SetEmitter(emitter)
+	s.runtimes.Activate(ctx, agent.Codex, s.quota)
 }
 
 func (s Services) StopCodexQuotaRuntime() {
-	s.quota.Stop()
+	s.runtimes.Deactivate(agent.Codex, s.quota)
 }
 
-func Bootstrap(ctx context.Context, env Environment) error {
+func Bootstrap(ctx context.Context, application *app.Application) error {
 	// Desktop startup may create ProfileDeck runtime state, but it must not touch
 	// Codex or any other target tool files; target writes stay in switch/rollback.
-	_, err := app.Init(ctx, app.InitRequest{ConfigDir: env.ConfigDir})
+	_, err := application.Runtime().Init(ctx)
 	return err
 }
 
@@ -258,8 +287,8 @@ func (s *AppService) Environment(_ context.Context) Environment {
 	return s.env
 }
 
-func (s *AppService) Initialize(ctx context.Context) (app.InitResult, error) {
-	result, err := app.Init(ctx, app.InitRequest{ConfigDir: s.env.ConfigDir})
+func (s *AppService) Initialize(ctx context.Context) (profilesruntime.InitResult, error) {
+	result, err := s.application.Runtime().Init(ctx)
 	if err == nil {
 		s.mu.Lock()
 		s.startupErr = nil
@@ -273,9 +302,9 @@ func (s *AppService) Dashboard(ctx context.Context) (DashboardResult, error) {
 	result := DashboardResult{
 		Info:         s.info,
 		Environment:  s.env,
-		Providers:    []app.Provider{},
-		Profiles:     []app.Profile{},
-		ActiveStates: []app.ActiveProviderState{},
+		Agents:       []agent.State{},
+		Providers:    []provider.Provider{},
+		ActiveStates: []provider.ActiveState{},
 		GeneratedAt:  time.Now().UnixMilli(),
 	}
 	s.mu.RLock()
@@ -285,7 +314,7 @@ func (s *AppService) Dashboard(ctx context.Context) (DashboardResult, error) {
 		result.StartupError = FormatDesktopErrorPtr(startupErr)
 	}
 
-	status, err := app.Status(ctx, app.StatusRequest{ConfigDir: s.env.ConfigDir})
+	status, err := s.application.Runtime().Status(ctx)
 	if err != nil {
 		return result, err
 	}
@@ -294,65 +323,93 @@ func (s *AppService) Dashboard(ctx context.Context) (DashboardResult, error) {
 		return result, nil
 	}
 
-	doctor, err := app.Doctor(ctx, app.DoctorRequest{ConfigDir: s.env.ConfigDir})
+	doctorResult, err := s.application.Doctor().Run(ctx)
 	if err != nil {
 		return result, err
 	}
-	result.Doctor = &doctor
+	result.Doctor = &doctorResult
 
-	providers, err := app.ListProviders(ctx, app.ListProvidersRequest{ConfigDir: s.env.ConfigDir, IncludeDisabled: true})
+	agents, err := s.application.Agents().List(ctx)
+	if err != nil {
+		return result, err
+	}
+	result.Agents = agents
+
+	providers, err := s.application.Providers().List(ctx, provider.ListRequest{IncludeDisabled: true})
 	if err != nil {
 		return result, err
 	}
 	result.Providers = providers
 
-	profiles, err := app.ListProfiles(ctx, app.ListProfilesRequest{ConfigDir: s.env.ConfigDir})
-	if err != nil {
-		return result, err
-	}
-	result.Profiles = profiles
-
-	activeStates, err := app.ListActiveProviderStates(ctx, app.ListActiveProviderStatesRequest{ConfigDir: s.env.ConfigDir})
+	activeStates, err := s.application.Providers().ListActiveStates(ctx)
 	if err != nil {
 		return result, err
 	}
 	result.ActiveStates = activeStates
 
-	if codexProfiles, err := app.ListCodexProfiles(ctx, app.ListCodexProfilesRequest{ConfigDir: s.env.ConfigDir}); err == nil {
-		result.CodexProfiles = &codexProfiles
+	if agentEnabled(agents, agent.Codex) {
+		if codexProfiles, listErr := s.application.Codex().ListProfiles(ctx); listErr == nil {
+			result.CodexProfiles = &codexProfiles
+		}
+		if codexConfigSets, listErr := s.application.Codex().ListConfigSets(ctx); listErr == nil {
+			result.CodexConfigSets = &codexConfigSets
+		}
+		if usageSummary, summaryErr := s.application.Usage().Summary(ctx, usage.UsageSummaryRequest{ProviderID: codexconfig.ProviderID}); summaryErr == nil {
+			result.Usage = &usageSummary
+		}
 	}
-	if codexConfigSets, err := app.ListCodexConfigSets(ctx, app.ListCodexConfigSetsRequest{ConfigDir: s.env.ConfigDir}); err == nil {
-		result.CodexConfigSets = &codexConfigSets
+	if agentEnabled(agents, agent.Antigravity) {
+		if antigravityProfiles, listErr := s.application.Antigravity().ListProfiles(ctx); listErr == nil {
+			result.AntigravityProfiles = &antigravityProfiles
+		}
 	}
-	if antigravityProfiles, err := app.ListAntigravityProfiles(ctx, app.ListAntigravityProfilesRequest{ConfigDir: s.env.ConfigDir}); err == nil {
-		result.AntigravityProfiles = &antigravityProfiles
-	}
-	if claudeCodeProfiles, err := app.ListClaudeCodeProfiles(ctx, app.ListClaudeCodeProfilesRequest{ConfigDir: s.env.ConfigDir}); err == nil {
-		result.ClaudeCodeProfiles = &claudeCodeProfiles
-	}
-
-	usage, err := app.UsageSummary(ctx, app.UsageSummaryRequest{ConfigDir: s.env.ConfigDir, ProviderID: codexconfig.ProviderID})
-	if err == nil {
-		result.Usage = &usage
+	if agentEnabled(agents, agent.ClaudeCode) {
+		if claudeCodeProfiles, listErr := s.application.ClaudeCode().ListProfiles(ctx); listErr == nil {
+			result.ClaudeCodeProfiles = &claudeCodeProfiles
+		}
 	}
 	return result, nil
 }
 
-func (s *AntigravityService) Detect(ctx context.Context) (app.AntigravityDetectResult, error) {
-	return app.AntigravityDetect(ctx, app.AntigravityDetectRequest{ConfigDir: s.env.ConfigDir})
+func (s *AgentService) List(ctx context.Context) ([]agent.State, error) {
+	return s.application.Agents().List(ctx)
 }
 
-func (s *AntigravityService) ListProfiles(ctx context.Context) (app.AntigravityProfileListResult, error) {
-	return app.ListAntigravityProfiles(ctx, app.ListAntigravityProfilesRequest{ConfigDir: s.env.ConfigDir})
+func (s *AgentService) SetEnabled(ctx context.Context, id string, enabled bool) (agent.State, error) {
+	state, err := s.application.Agents().SetEnabled(ctx, agent.ID(strings.TrimSpace(id)), enabled)
+	if err == nil {
+		s.changes.Notify(DesktopChangeEvent{
+			Kind: DesktopChangeAgentStateChanged, Source: "agent.setEnabled", Status: DesktopChangeStatusSuccess,
+			AgentID: state.Manifest.ID, AgentEnabled: &state.Enabled,
+		})
+	}
+	return state, err
 }
 
-func (s *AntigravityService) ShowProfile(ctx context.Context, profileID string) (app.AntigravityProfileDetail, error) {
-	return app.GetAntigravityProfile(ctx, app.GetAntigravityProfileRequest{ConfigDir: s.env.ConfigDir, ProfileID: profileID})
+func agentEnabled(states []agent.State, id agent.ID) bool {
+	for _, state := range states {
+		if state.Manifest.ID == id {
+			return state.Enabled
+		}
+	}
+	return false
 }
 
-func (s *AntigravityService) CreateProfile(ctx context.Context, req CreateAntigravityProfileRequest) (app.AntigravityProfileSaveResult, error) {
-	result, err := app.CreateAntigravityProfile(ctx, app.CreateAntigravityProfileRequest{
-		ConfigDir: s.env.ConfigDir, ProfileID: req.ProfileID, Name: req.Name, Description: req.Description,
+func (s *AntigravityService) Detect(ctx context.Context) (antigravity.AntigravityDetectResult, error) {
+	return s.application.Antigravity().Detect(ctx)
+}
+
+func (s *AntigravityService) ListProfiles(ctx context.Context) (antigravity.AntigravityProfileListResult, error) {
+	return s.application.Antigravity().ListProfiles(ctx)
+}
+
+func (s *AntigravityService) ShowProfile(ctx context.Context, profileID string) (antigravity.AntigravityProfileDetail, error) {
+	return s.application.Antigravity().GetProfile(ctx, antigravity.GetAntigravityProfileRequest{ProfileID: profileID})
+}
+
+func (s *AntigravityService) CreateProfile(ctx context.Context, req CreateAntigravityProfileRequest) (antigravity.AntigravityProfileSaveResult, error) {
+	result, err := s.application.Antigravity().CreateProfile(ctx, antigravity.CreateAntigravityProfileRequest{
+		ProfileID: req.ProfileID, Name: req.Name, Description: req.Description,
 	})
 	profileID := result.Summary.Profile.ID
 	if profileID == "" {
@@ -362,9 +419,9 @@ func (s *AntigravityService) CreateProfile(ctx context.Context, req CreateAntigr
 	return result, err
 }
 
-func (s *AntigravityService) UpdateProfile(ctx context.Context, req UpdateAntigravityProfileRequest) (app.AntigravityProfileDetail, error) {
-	result, err := app.UpdateAntigravityProfile(ctx, app.UpdateAntigravityProfileRequest{
-		ConfigDir: s.env.ConfigDir, ProfileID: req.ProfileID, Name: req.Name, Description: req.Description,
+func (s *AntigravityService) UpdateProfile(ctx context.Context, req UpdateAntigravityProfileRequest) (antigravity.AntigravityProfileDetail, error) {
+	result, err := s.application.Antigravity().UpdateProfile(ctx, antigravity.UpdateAntigravityProfileRequest{
+		ProfileID: req.ProfileID, Name: req.Name, Description: req.Description,
 	})
 	profileID := result.Summary.Profile.ID
 	if profileID == "" {
@@ -374,31 +431,31 @@ func (s *AntigravityService) UpdateProfile(ctx context.Context, req UpdateAntigr
 	return result, err
 }
 
-func (s *AntigravityService) SaveCurrent(ctx context.Context) (app.AntigravityProfileSaveResult, error) {
-	result, err := app.SaveActiveAntigravityProfile(ctx, app.SaveActiveAntigravityProfileRequest{ConfigDir: s.env.ConfigDir})
+func (s *AntigravityService) SaveCurrent(ctx context.Context) (antigravity.AntigravityProfileSaveResult, error) {
+	result, err := s.application.Antigravity().SaveActiveProfile(ctx)
 	s.notifyMutationResult(DesktopChangeAntigravityProfileChanged, "antigravity.saveCurrent", agyconfig.ProviderID, result.Summary.Profile.ID, result.OperationID, err)
 	return result, err
 }
 
-func (s *ClaudeCodeService) Detect(ctx context.Context) (app.ClaudeCodeDetectResult, error) {
-	return app.ClaudeCodeDetect(ctx, app.ClaudeCodeDetectRequest{ConfigDir: s.env.ConfigDir})
+func (s *ClaudeCodeService) Detect(ctx context.Context) (claudecode.ClaudeCodeDetectResult, error) {
+	return s.application.ClaudeCode().Detect(ctx, claudecode.ClaudeCodeDetectRequest{})
 }
 
-func (s *ClaudeCodeService) AuthorizeKeychain(ctx context.Context) (app.ClaudeCodeDetectResult, error) {
-	return app.ClaudeCodeDetect(ctx, app.ClaudeCodeDetectRequest{ConfigDir: s.env.ConfigDir, AllowKeychainInteraction: true})
+func (s *ClaudeCodeService) AuthorizeKeychain(ctx context.Context) (claudecode.ClaudeCodeDetectResult, error) {
+	return s.application.ClaudeCode().Detect(ctx, claudecode.ClaudeCodeDetectRequest{AllowKeychainInteraction: true})
 }
 
-func (s *ClaudeCodeService) ListProfiles(ctx context.Context) (app.ClaudeCodeProfileListResult, error) {
-	return app.ListClaudeCodeProfiles(ctx, app.ListClaudeCodeProfilesRequest{ConfigDir: s.env.ConfigDir})
+func (s *ClaudeCodeService) ListProfiles(ctx context.Context) (claudecode.ClaudeCodeProfileListResult, error) {
+	return s.application.ClaudeCode().ListProfiles(ctx)
 }
 
-func (s *ClaudeCodeService) ShowProfile(ctx context.Context, profileID string) (app.ClaudeCodeProfileDetail, error) {
-	return app.GetClaudeCodeProfile(ctx, app.GetClaudeCodeProfileRequest{ConfigDir: s.env.ConfigDir, ProfileID: profileID})
+func (s *ClaudeCodeService) ShowProfile(ctx context.Context, profileID string) (claudecode.ClaudeCodeProfileDetail, error) {
+	return s.application.ClaudeCode().GetProfile(ctx, claudecode.GetClaudeCodeProfileRequest{ProfileID: profileID})
 }
 
-func (s *ClaudeCodeService) CreateProfile(ctx context.Context, req CreateClaudeCodeProfileRequest) (app.ClaudeCodeProfileSaveResult, error) {
-	result, err := app.CreateClaudeCodeProfile(ctx, app.CreateClaudeCodeProfileRequest{
-		ConfigDir: s.env.ConfigDir, ProfileID: req.ProfileID, Name: req.Name, Description: req.Description,
+func (s *ClaudeCodeService) CreateProfile(ctx context.Context, req CreateClaudeCodeProfileRequest) (claudecode.ClaudeCodeProfileSaveResult, error) {
+	result, err := s.application.ClaudeCode().CreateProfile(ctx, claudecode.CreateClaudeCodeProfileRequest{
+		ProfileID: req.ProfileID, Name: req.Name, Description: req.Description,
 	})
 	profileID := result.Summary.Profile.ID
 	if profileID == "" {
@@ -408,9 +465,9 @@ func (s *ClaudeCodeService) CreateProfile(ctx context.Context, req CreateClaudeC
 	return result, err
 }
 
-func (s *ClaudeCodeService) UpdateProfile(ctx context.Context, req UpdateClaudeCodeProfileRequest) (app.ClaudeCodeProfileDetail, error) {
-	result, err := app.UpdateClaudeCodeProfile(ctx, app.UpdateClaudeCodeProfileRequest{
-		ConfigDir: s.env.ConfigDir, ProfileID: req.ProfileID, Name: req.Name, Description: req.Description,
+func (s *ClaudeCodeService) UpdateProfile(ctx context.Context, req UpdateClaudeCodeProfileRequest) (claudecode.ClaudeCodeProfileDetail, error) {
+	result, err := s.application.ClaudeCode().UpdateProfile(ctx, claudecode.UpdateClaudeCodeProfileRequest{
+		ProfileID: req.ProfileID, Name: req.Name, Description: req.Description,
 	})
 	profileID := result.Summary.Profile.ID
 	if profileID == "" {
@@ -420,37 +477,36 @@ func (s *ClaudeCodeService) UpdateProfile(ctx context.Context, req UpdateClaudeC
 	return result, err
 }
 
-func (s *ClaudeCodeService) SaveCurrent(ctx context.Context, confirmShared bool) (app.ClaudeCodeProfileSaveResult, error) {
-	result, err := app.SaveActiveClaudeCodeProfile(ctx, app.SaveActiveClaudeCodeProfileRequest{ConfigDir: s.env.ConfigDir, ConfirmShared: confirmShared})
+func (s *ClaudeCodeService) SaveCurrent(ctx context.Context, confirmShared bool) (claudecode.ClaudeCodeProfileSaveResult, error) {
+	result, err := s.application.ClaudeCode().SaveActiveProfile(ctx, claudecode.SaveActiveClaudeCodeProfileRequest{ConfirmShared: confirmShared})
 	s.notifyMutationResult(DesktopChangeClaudeCodeProfileChanged, "claude-code.saveCurrent", claudecodeconfig.ProviderID, result.Summary.Profile.ID, result.OperationID, err)
 	return result, err
 }
 
-func (s *CodexService) Detect(ctx context.Context) (app.CodexDetectResult, error) {
-	return app.CodexDetect(ctx, app.CodexDetectRequest{ConfigDir: s.env.ConfigDir, CodexDir: s.env.CodexDir})
+func (s *CodexService) Detect(ctx context.Context) (codex.CodexDetectResult, error) {
+	return s.application.Codex().Detect(ctx)
 }
 
-func (s *CodexService) ListProfiles(ctx context.Context) (app.CodexProfileListResult, error) {
-	return app.ListCodexProfiles(ctx, app.ListCodexProfilesRequest{ConfigDir: s.env.ConfigDir})
+func (s *CodexService) ListProfiles(ctx context.Context) (codex.CodexProfileListResult, error) {
+	return s.application.Codex().ListProfiles(ctx)
 }
 
-func (s *CodexService) ShowProfile(ctx context.Context, profileID string) (app.CodexProfileDetail, error) {
-	return app.GetCodexProfile(ctx, app.GetCodexProfileRequest{ConfigDir: s.env.ConfigDir, ProfileID: profileID})
+func (s *CodexService) ShowProfile(ctx context.Context, profileID string) (codex.CodexProfileDetail, error) {
+	return s.application.Codex().GetProfile(ctx, profileID)
 }
 
-func (s *CodexService) GetSettings(ctx context.Context) (app.CodexSettings, error) {
-	return app.GetCodexSettings(ctx, app.CodexSettingsRequest{ConfigDir: s.env.ConfigDir})
+func (s *CodexService) GetSettings(ctx context.Context) (codex.CodexSettings, error) {
+	return s.application.Codex().GetSettings(ctx)
 }
 
-func (s *CodexService) UpdateSettings(ctx context.Context, req app.UpdateCodexSettingsRequest) (app.CodexSettings, error) {
+func (s *CodexService) UpdateSettings(ctx context.Context, req codex.UpdateCodexSettingsRequest) (codex.CodexSettings, error) {
 	// Persistence and both in-process schedulers advance together so a slower
 	// older request cannot restore stale runtime intervals after a newer write.
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
-	req.ConfigDir = s.env.ConfigDir
-	settings, err := app.UpdateCodexSettings(ctx, req)
+	settings, err := s.application.Codex().UpdateSettings(ctx, req)
 	if err != nil {
-		return app.CodexSettings{}, err
+		return codex.CodexSettings{}, err
 	}
 	if req.UsageSyncIntervalSeconds != nil {
 		s.autoSync.SetInterval(settings.UsageSyncIntervalSeconds)
@@ -463,19 +519,20 @@ func (s *CodexService) UpdateSettings(ctx context.Context, req app.UpdateCodexSe
 	return settings, nil
 }
 
-func (s *CodexService) ReadProfileQuota(ctx context.Context, profileID string) (app.CodexProfileQuota, error) {
+func (s *CodexService) ReadProfileQuota(ctx context.Context, profileID string) (codex.CodexProfileQuota, error) {
 	return s.quota.ReadProfileQuota(ctx, profileID)
 }
 
-func (s *CodexService) QuotaRuntimeStatus(_ context.Context) CodexQuotaRuntimeStatus {
-	return s.quota.Status()
+func (s *CodexService) QuotaRuntimeStatus(ctx context.Context) (CodexQuotaRuntimeStatus, error) {
+	if err := s.application.Agents().RequireAgent(ctx, agent.Codex); err != nil {
+		return CodexQuotaRuntimeStatus{}, err
+	}
+	return s.quota.Status(), nil
 }
 
-func (s *CodexService) CreateProfile(ctx context.Context, req CreateCodexProfileRequest) (app.CodexProfileSaveResult, error) {
+func (s *CodexService) CreateProfile(ctx context.Context, req CreateCodexProfileRequest) (codex.CodexProfileSaveResult, error) {
 	// Raw desired files and hidden credentials must stay behind the Desktop service boundary.
-	result, err := app.CreateCodexProfile(ctx, app.CreateCodexProfileRequest{
-		ConfigDir:               s.env.ConfigDir,
-		CodexDir:                s.env.CodexDir,
+	result, err := s.application.Codex().CreateProfile(ctx, codex.CreateCodexProfileRequest{
 		ProfileID:               req.ProfileID,
 		Name:                    req.Name,
 		Description:             req.Description,
@@ -491,10 +548,8 @@ func (s *CodexService) CreateProfile(ctx context.Context, req CreateCodexProfile
 	return result, err
 }
 
-func (s *CodexService) ForkProfile(ctx context.Context, req ForkCodexProfileRequest) (app.CodexProfileSaveResult, error) {
-	result, err := app.ForkCodexProfile(ctx, app.ForkCodexProfileRequest{
-		ConfigDir:               s.env.ConfigDir,
-		CodexDir:                s.env.CodexDir,
+func (s *CodexService) ForkProfile(ctx context.Context, req ForkCodexProfileRequest) (codex.CodexProfileSaveResult, error) {
+	result, err := s.application.Codex().ForkProfile(ctx, codex.ForkCodexProfileRequest{
 		SourceProfileID:         req.SourceProfileID,
 		ProfileID:               req.ProfileID,
 		CredentialBinding:       req.CredentialBinding,
@@ -513,59 +568,58 @@ func (s *CodexService) ForkProfile(ctx context.Context, req ForkCodexProfileRequ
 	return result, err
 }
 
-func (s *CodexService) SaveActiveProfileState(ctx context.Context) (app.CodexProfileStateSaveResult, error) {
-	result, err := app.SaveActiveCodexProfileState(ctx, app.SaveActiveCodexProfileStateRequest{ConfigDir: s.env.ConfigDir, CodexDir: s.env.CodexDir})
+func (s *CodexService) SaveActiveProfileState(ctx context.Context) (codex.CodexProfileStateSaveResult, error) {
+	result, err := s.application.Codex().SaveActiveProfileState(ctx)
 	s.notifyMutationResult(DesktopChangeCodexProfileChanged, "codex.saveActiveProfileState", codexconfig.ProviderID, result.ProfileID, result.OperationID, err)
 	return result, err
 }
 
-func (s *CodexService) SetProfileConfig(ctx context.Context, req UpdateCodexProfileConfigSetRequest) (app.CodexProfileDetail, error) {
-	result, err := app.UpdateCodexProfileConfigSet(ctx, app.UpdateCodexProfileConfigSetRequest{ConfigDir: s.env.ConfigDir, ProfileID: req.ProfileID, ConfigSetID: req.ConfigSetID})
+func (s *CodexService) SetProfileConfig(ctx context.Context, req UpdateCodexProfileConfigSetRequest) (codex.CodexProfileDetail, error) {
+	result, err := s.application.Codex().UpdateProfileConfigSet(ctx, codex.UpdateCodexProfileConfigSetRequest{ProfileID: req.ProfileID, ConfigSetID: req.ConfigSetID})
 	s.notifyMutationResult(DesktopChangeCodexProfileChanged, "codex.setProfileConfig", codexconfig.ProviderID, strings.TrimSpace(req.ProfileID), "", err)
 	return result, err
 }
 
-func (s *CodexService) ListConfigSets(ctx context.Context) (app.CodexConfigSetListResult, error) {
-	return app.ListCodexConfigSets(ctx, app.ListCodexConfigSetsRequest{ConfigDir: s.env.ConfigDir})
+func (s *CodexService) ListConfigSets(ctx context.Context) (codex.CodexConfigSetListResult, error) {
+	return s.application.Codex().ListConfigSets(ctx)
 }
 
-func (s *CodexService) ShowConfigSet(ctx context.Context, configSetID string) (app.CodexConfigSet, error) {
-	return app.GetCodexConfigSet(ctx, app.GetCodexConfigSetRequest{ConfigDir: s.env.ConfigDir, ConfigSetID: configSetID})
+func (s *CodexService) ShowConfigSet(ctx context.Context, configSetID string) (codex.CodexConfigSet, error) {
+	return s.application.Codex().GetConfigSet(ctx, configSetID)
 }
 
-func (s *CodexService) CreateConfigSet(ctx context.Context, req CreateCodexConfigSetRequest) (app.CodexConfigSet, error) {
-	result, err := app.CreateCodexConfigSet(ctx, app.CreateCodexConfigSetRequest{ConfigDir: s.env.ConfigDir, CodexDir: s.env.CodexDir, ConfigSetID: req.ConfigSetID, Name: req.Name, Description: req.Description})
+func (s *CodexService) CreateConfigSet(ctx context.Context, req CreateCodexConfigSetRequest) (codex.CodexConfigSet, error) {
+	result, err := s.application.Codex().CreateConfigSet(ctx, codex.CreateCodexConfigSetRequest{ConfigSetID: req.ConfigSetID, Name: req.Name, Description: req.Description})
 	s.notifyMutationResult(DesktopChangeCodexConfigSetChanged, "codex.createConfigSet", codexconfig.ProviderID, "", "", err)
 	return result, err
 }
 
-func (s *CodexService) CopyConfigSet(ctx context.Context, req CopyCodexConfigSetRequest) (app.CodexConfigSet, error) {
-	result, err := app.CopyCodexConfigSet(ctx, app.CopyCodexConfigSetRequest{ConfigDir: s.env.ConfigDir, SourceConfigSetID: req.SourceConfigSetID, ConfigSetID: req.ConfigSetID, Name: req.Name, Description: req.Description})
+func (s *CodexService) CopyConfigSet(ctx context.Context, req CopyCodexConfigSetRequest) (codex.CodexConfigSet, error) {
+	result, err := s.application.Codex().CopyConfigSet(ctx, codex.CopyCodexConfigSetRequest{SourceConfigSetID: req.SourceConfigSetID, ConfigSetID: req.ConfigSetID, Name: req.Name, Description: req.Description})
 	s.notifyMutationResult(DesktopChangeCodexConfigSetChanged, "codex.copyConfigSet", codexconfig.ProviderID, "", "", err)
 	return result, err
 }
 
-func (s *CodexService) UpdateConfigSet(ctx context.Context, req UpdateCodexConfigSetRequest) (app.CodexConfigSet, error) {
-	result, err := app.UpdateCodexConfigSet(ctx, app.UpdateCodexConfigSetRequest{ConfigDir: s.env.ConfigDir, ConfigSetID: req.ConfigSetID, Name: req.Name, Description: req.Description})
+func (s *CodexService) UpdateConfigSet(ctx context.Context, req UpdateCodexConfigSetRequest) (codex.CodexConfigSet, error) {
+	result, err := s.application.Codex().UpdateConfigSet(ctx, codex.UpdateCodexConfigSetRequest{ConfigSetID: req.ConfigSetID, Name: req.Name, Description: req.Description})
 	s.notifyMutationResult(DesktopChangeCodexConfigSetChanged, "codex.updateConfigSet", codexconfig.ProviderID, "", "", err)
 	return result, err
 }
 
 func (s *CodexService) DeleteConfigSet(ctx context.Context, configSetID string) error {
-	err := app.DeleteCodexConfigSet(ctx, app.DeleteCodexConfigSetRequest{ConfigDir: s.env.ConfigDir, ConfigSetID: configSetID})
+	err := s.application.Codex().DeleteConfigSet(ctx, configSetID)
 	s.notifyMutationResult(DesktopChangeCodexConfigSetChanged, "codex.deleteConfigSet", codexconfig.ProviderID, "", "", err)
 	return err
 }
 
-func (s *CodexService) UpdateProfileMetadata(ctx context.Context, req UpdateCodexProfileMetadataRequest) (app.Profile, error) {
+func (s *CodexService) UpdateProfileMetadata(ctx context.Context, req UpdateCodexProfileMetadataRequest) (profile.Profile, error) {
 	profileID := strings.TrimSpace(req.ProfileID)
-	if _, err := app.GetCodexProfile(ctx, app.GetCodexProfileRequest{ConfigDir: s.env.ConfigDir, ProfileID: profileID}); err != nil {
+	if _, err := s.application.Codex().GetProfile(ctx, profileID); err != nil {
 		s.notifyMutationResult(DesktopChangeCodexProfileChanged, "codex.updateProfileMetadata", codexconfig.ProviderID, profileID, "", err)
-		return app.Profile{}, err
+		return profile.Profile{}, err
 	}
 
-	result, err := app.UpdateProfile(ctx, app.UpdateProfileRequest{
-		ConfigDir:   s.env.ConfigDir,
+	result, err := s.application.Profiles().Update(ctx, profile.UpdateRequest{
 		ID:          profileID,
 		Name:        req.Name,
 		Description: req.Description,
@@ -574,22 +628,22 @@ func (s *CodexService) UpdateProfileMetadata(ctx context.Context, req UpdateCode
 	return result, err
 }
 
-func (s *CodexService) ExportProfiles(ctx context.Context, req ExportCodexProfilesRequest) (app.CodexProfileExportResult, error) {
-	return app.ExportCodexProfiles(ctx, app.ExportCodexProfilesRequest{
-		ConfigDir: s.env.ConfigDir, ProfileIDs: req.ProfileIDs,
+func (s *CodexService) ExportProfiles(ctx context.Context, req ExportCodexProfilesRequest) (codex.CodexProfileExportResult, error) {
+	return s.application.Codex().ExportProfiles(ctx, codex.ExportCodexProfilesRequest{
+		ProfileIDs: req.ProfileIDs,
 		OutputPath: req.OutputPath, Overwrite: req.Overwrite,
 	})
 }
 
-func (s *CodexService) InspectProfileImport(ctx context.Context, inputPath string) (app.CodexProfileImportPlan, error) {
-	return app.InspectCodexProfileImport(ctx, app.InspectCodexProfileImportRequest{
-		ConfigDir: s.env.ConfigDir, CodexDir: s.env.CodexDir, InputPath: inputPath,
+func (s *CodexService) InspectProfileImport(ctx context.Context, inputPath string) (codex.CodexProfileImportPlan, error) {
+	return s.application.Codex().InspectProfileImport(ctx, codex.InspectCodexProfileImportRequest{
+		InputPath: inputPath,
 	})
 }
 
-func (s *CodexService) ApplyProfileImport(ctx context.Context, req ApplyCodexProfileImportRequest) (app.CodexProfileImportResult, error) {
-	result, err := app.ImportCodexProfiles(ctx, app.ImportCodexProfilesRequest{
-		ConfigDir: s.env.ConfigDir, CodexDir: s.env.CodexDir, InputPath: req.InputPath,
+func (s *CodexService) ApplyProfileImport(ctx context.Context, req ApplyCodexProfileImportRequest) (codex.CodexProfileImportResult, error) {
+	result, err := s.application.Codex().ImportProfiles(ctx, codex.ImportCodexProfilesRequest{
+		InputPath:               req.InputPath,
 		ExpectedPlanFingerprint: req.ExpectedPlanFingerprint, Confirm: req.Confirm,
 	})
 	if err == nil && result.Changed {
@@ -598,38 +652,35 @@ func (s *CodexService) ApplyProfileImport(ctx context.Context, req ApplyCodexPro
 	return result, err
 }
 
-func (s *ProfileService) ListProviders(ctx context.Context) ([]app.Provider, error) {
-	return app.ListProviders(ctx, app.ListProvidersRequest{ConfigDir: s.env.ConfigDir, IncludeDisabled: true})
+func (s *ProfileService) ListProviders(ctx context.Context) ([]provider.Provider, error) {
+	return s.application.Providers().List(ctx, provider.ListRequest{IncludeDisabled: true})
 }
 
-func (s *ProfileService) ListProfiles(ctx context.Context) ([]app.Profile, error) {
-	return app.ListProfiles(ctx, app.ListProfilesRequest{ConfigDir: s.env.ConfigDir})
+func (s *ProfileService) ListProfiles(ctx context.Context) ([]profile.Profile, error) {
+	return s.application.Profiles().List(ctx)
 }
 
-func (s *ProfileService) ListTargets(ctx context.Context, profileID, providerID string) ([]app.ProfileTarget, error) {
-	return app.ListProfileTargets(ctx, app.ListProfileTargetsRequest{
-		ConfigDir:       s.env.ConfigDir,
+func (s *ProfileService) ListTargets(ctx context.Context, profileID, providerID string) ([]profiletarget.ProfileTarget, error) {
+	return s.application.Targets().List(ctx, profiletarget.ListProfileTargetsRequest{
 		ProfileID:       profileID,
 		ProviderID:      providerID,
 		IncludeDisabled: true,
 	})
 }
 
-func (s *SwitchService) BuildPlan(ctx context.Context, providerID, profileID string) (app.SwitchPlan, error) {
-	return app.BuildPlan(ctx, app.BuildPlanRequest{
-		ConfigDir:  s.env.ConfigDir,
+func (s *SwitchService) BuildPlan(ctx context.Context, providerID, profileID string) (switching.SwitchPlan, error) {
+	return s.application.Switching().BuildPlan(ctx, switching.BuildPlanRequest{
 		ProviderID: providerID,
 		ProfileID:  profileID,
 	})
 }
 
-func (s *SwitchService) Apply(ctx context.Context, req SwitchApplyRequest) (app.ApplySwitchResult, error) {
+func (s *SwitchService) Apply(ctx context.Context, req SwitchApplyRequest) (switching.ApplySwitchResult, error) {
 	fingerprint := strings.TrimSpace(req.ExpectedPlanFingerprint)
 	if fingerprint == "" {
-		return app.ApplySwitchResult{}, app.NewError(app.ErrorConfirmationRequired, "desktop switch apply requires a confirmed plan fingerprint")
+		return switching.ApplySwitchResult{}, apperror.New(apperror.ConfirmationRequired, "desktop switch apply requires a confirmed plan fingerprint")
 	}
-	result, err := app.ApplySwitch(ctx, app.ApplySwitchRequest{
-		ConfigDir:               s.env.ConfigDir,
+	result, err := s.application.Switching().Apply(ctx, switching.ApplySwitchRequest{
 		ProviderID:              req.ProviderID,
 		ProfileID:               req.ProfileID,
 		Confirm:                 req.Confirm,
@@ -647,39 +698,37 @@ func (s *SwitchService) Apply(ctx context.Context, req SwitchApplyRequest) (app.
 	return result, err
 }
 
-func (s *DoctorService) Run(ctx context.Context) (app.DoctorResult, error) {
-	return app.Doctor(ctx, app.DoctorRequest{ConfigDir: s.env.ConfigDir})
+func (s *DoctorService) Run(ctx context.Context) (doctor.DoctorResult, error) {
+	return s.application.Doctor().Run(ctx)
 }
 
-func (s *DoctorService) RepairLock(ctx context.Context, confirm bool) (app.DoctorRepairLockResult, error) {
-	result, err := app.RepairDoctorLock(ctx, app.DoctorRepairLockRequest{ConfigDir: s.env.ConfigDir, Confirm: confirm})
+func (s *DoctorService) RepairLock(ctx context.Context, confirm bool) (doctor.DoctorRepairLockResult, error) {
+	result, err := s.application.Doctor().RepairLock(ctx, confirm)
 	if err != nil || result.Repaired {
 		s.notifyMutationResult(DesktopChangeLockRepaired, "doctor.repairLock", "", "", "", err)
 	}
 	return result, err
 }
 
-func (s *BackupService) ListBackups(ctx context.Context) (app.ListBackupsResult, error) {
-	return app.ListBackups(ctx, app.ListBackupsRequest{ConfigDir: s.env.ConfigDir})
+func (s *BackupService) ListBackups(ctx context.Context) (switching.ListBackupsResult, error) {
+	return s.application.Switching().ListBackups(ctx)
 }
 
-func (s *BackupService) ShowBackup(ctx context.Context, backupID string) (app.BackupDetail, error) {
-	return app.ShowBackup(ctx, app.ShowBackupRequest{ConfigDir: s.env.ConfigDir, BackupID: backupID})
+func (s *BackupService) ShowBackup(ctx context.Context, backupID string) (switching.BackupDetail, error) {
+	return s.application.Switching().ShowBackup(ctx, backupID)
 }
 
-func (s *BackupService) ApplyRollback(ctx context.Context, backupID string, confirm bool) (app.ApplyRollbackResult, error) {
-	result, err := app.ApplyRollback(ctx, app.ApplyRollbackRequest{
-		ConfigDir: s.env.ConfigDir,
-		BackupID:  backupID,
-		Confirm:   confirm,
+func (s *BackupService) ApplyRollback(ctx context.Context, backupID string, confirm bool) (switching.ApplyRollbackResult, error) {
+	result, err := s.application.Switching().Rollback(ctx, switching.ApplyRollbackRequest{
+		BackupID: backupID,
+		Confirm:  confirm,
 	})
 	s.notifyMutationResult(DesktopChangeRollbackApplied, "backup.applyRollback", result.ProviderID, result.ProfileID, result.OperationID, err)
 	return result, err
 }
 
-func (s *BackupService) RecoverFailedSwitch(ctx context.Context, operationID string, confirm bool) (app.RecoverFailedSwitchResult, error) {
-	result, err := app.RecoverFailedSwitch(ctx, app.RecoverFailedSwitchParams{
-		ConfigDir:   s.env.ConfigDir,
+func (s *BackupService) RecoverFailedSwitch(ctx context.Context, operationID string, confirm bool) (switching.RecoverFailedSwitchResult, error) {
+	result, err := s.application.Switching().RecoverFailedSwitch(ctx, switching.RecoverFailedSwitchParams{
 		OperationID: operationID,
 		Confirm:     confirm,
 	})
@@ -691,35 +740,36 @@ func (s *BackupService) RecoverFailedSwitch(ctx context.Context, operationID str
 	return result, err
 }
 
-func (s *UsageService) Summary(ctx context.Context, providerID string) (app.UsageSummaryResult, error) {
+func (s *UsageService) Summary(ctx context.Context, providerID string) (usage.UsageSummaryResult, error) {
 	if providerID == "" {
 		providerID = codexconfig.ProviderID
 	}
-	return app.UsageSummary(ctx, app.UsageSummaryRequest{ConfigDir: s.env.ConfigDir, ProviderID: providerID})
+	return s.application.Usage().Summary(ctx, usage.UsageSummaryRequest{ProviderID: providerID})
 }
 
-func (s *UsageService) AutoSyncStatus(_ context.Context) UsageAutoSyncStatus {
-	return s.autoSync.Status()
+func (s *UsageService) AutoSyncStatus(ctx context.Context) (UsageAutoSyncStatus, error) {
+	if err := s.application.Agents().RequireAgent(ctx, agent.Codex); err != nil {
+		return UsageAutoSyncStatus{}, err
+	}
+	return s.autoSync.Status(), nil
 }
 
-func (s *UsageService) Report(ctx context.Context, providerID, rangeValue string) (app.UsageReportResult, error) {
+func (s *UsageService) Report(ctx context.Context, providerID, rangeValue string) (usage.UsageReportResult, error) {
 	if providerID == "" {
 		providerID = codexconfig.ProviderID
 	}
-	return app.UsageReport(ctx, app.UsageReportRequest{
-		ConfigDir:  s.env.ConfigDir,
+	return s.application.Usage().Report(ctx, usage.UsageReportRequest{
 		ProviderID: providerID,
-		Range:      app.UsageRangePreset(rangeValue),
+		Range:      usage.UsageRangePreset(rangeValue),
 	})
 }
 
-func (s *SettingsService) Get(ctx context.Context) (app.DesktopSettings, error) {
-	return app.GetDesktopSettings(ctx, app.DesktopSettingsRequest{ConfigDir: s.env.ConfigDir})
+func (s *SettingsService) Get(ctx context.Context) (settings.Desktop, error) {
+	return s.application.Settings().Get(ctx)
 }
 
-func (s *SettingsService) Update(ctx context.Context, req app.UpdateDesktopSettingsRequest) (app.DesktopSettings, error) {
-	req.ConfigDir = s.env.ConfigDir
-	return app.UpdateDesktopSettings(ctx, req)
+func (s *SettingsService) Update(ctx context.Context, req settings.UpdateRequest) (settings.Desktop, error) {
+	return s.application.Settings().Update(ctx, req)
 }
 
 func (s *AppService) notifyMutationResult(kind, source, providerID, profileID, operationID string, err error) {
@@ -812,7 +862,7 @@ func FormatDesktopError(err error) DesktopError {
 	if errors.Is(err, context.Canceled) {
 		return DesktopError{Code: "CANCELED", Message: "operation canceled"}
 	}
-	var appErr *app.AppError
+	var appErr *apperror.Error
 	if errors.As(err, &appErr) {
 		return DesktopError{
 			Code:    string(appErr.Code),

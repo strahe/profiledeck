@@ -5,7 +5,7 @@
 
 	import { UsageService } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type { UsageAutoSyncStatus } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend/models";
-	import type { UsageReportResult } from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	import type { UsageReportResult } from "../../../bindings/github.com/strahe/profiledeck/internal/usage/models";
 
 	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
 	import PageHeader from "$lib/components/app/PageHeader.svelte";

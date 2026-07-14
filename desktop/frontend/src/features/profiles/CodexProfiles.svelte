@@ -34,8 +34,8 @@
 		CodexProfileImportPlan,
 		CodexProfileSaveResult,
 		CodexProfileSummary,
-		SwitchPlan,
-	} from "../../../bindings/github.com/strahe/profiledeck/internal/app/models";
+	} from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
+	import type { SwitchPlan } from "../../../bindings/github.com/strahe/profiledeck/internal/switching/models";
 
 	import * as Alert from "$lib/components/ui/alert";
 	import * as AlertDialog from "$lib/components/ui/alert-dialog";
@@ -179,6 +179,7 @@
 		if (next.kind === "list") {
 			detail = null;
 			resetForm();
+			await refreshDetect();
 			return;
 		}
 		if (next.kind === "config-sets") {

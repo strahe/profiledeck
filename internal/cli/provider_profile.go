@@ -10,7 +10,9 @@ import (
 
 	urfavecli "github.com/urfave/cli/v3"
 
-	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/profile"
+	"github.com/strahe/profiledeck/internal/provider"
 )
 
 const (
@@ -47,10 +49,11 @@ func newProviderListCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.ListProviders(ctx, app.ListProvidersRequest{
-				ConfigDir:       configDirValue(cmd),
-				IncludeDisabled: cmd.Bool(allFlagName),
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Providers().List(ctx, provider.ListRequest{IncludeDisabled: cmd.Bool(allFlagName)})
 			if err != nil {
 				return err
 			}
@@ -71,14 +74,15 @@ func newProviderShowCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			id, err := singleIDArg(cmd, app.ErrorProviderInvalid)
+			id, err := singleIDArg(cmd, apperror.ProviderInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.GetProvider(ctx, app.GetProviderRequest{
-				ConfigDir: configDirValue(cmd),
-				ID:        id,
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Providers().Get(ctx, id)
 			if err != nil {
 				return err
 			}
@@ -103,13 +107,16 @@ func newProviderCreateCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			id, err := singleIDArg(cmd, app.ErrorProviderInvalid)
+			id, err := singleIDArg(cmd, apperror.ProviderInvalid)
 			if err != nil {
 				return err
 			}
 			enabled := !cmd.Bool(disabledFlagName)
-			result, err := app.CreateProvider(ctx, app.CreateProviderRequest{
-				ConfigDir:    configDirValue(cmd),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Providers().Create(ctx, provider.CreateRequest{
 				ID:           id,
 				Name:         cmd.String(nameFlagName),
 				AdapterID:    cmd.String(adapterFlagName),
@@ -141,7 +148,7 @@ func newProviderUpdateCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			id, err := singleIDArg(cmd, app.ErrorProviderInvalid)
+			id, err := singleIDArg(cmd, apperror.ProviderInvalid)
 			if err != nil {
 				return err
 			}
@@ -149,8 +156,11 @@ func newProviderUpdateCommand() *urfavecli.Command {
 			if err != nil {
 				return err
 			}
-			result, err := app.UpdateProvider(ctx, app.UpdateProviderRequest{
-				ConfigDir:    configDirValue(cmd),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Providers().Update(ctx, provider.UpdateRequest{
 				ID:           id,
 				Name:         stringFlagPtr(cmd, nameFlagName),
 				AdapterID:    stringFlagPtr(cmd, adapterFlagName),
@@ -178,15 +188,15 @@ func newProviderDeleteCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			id, err := singleIDArg(cmd, app.ErrorProviderInvalid)
+			id, err := singleIDArg(cmd, apperror.ProviderInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.DeleteProvider(ctx, app.DeleteProviderRequest{
-				ConfigDir: configDirValue(cmd),
-				ID:        id,
-				Confirm:   cmd.Bool(yesFlagName),
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Providers().Delete(ctx, id, cmd.Bool(yesFlagName))
 			if err != nil {
 				return err
 			}
@@ -222,9 +232,11 @@ func newProfileListCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			result, err := app.ListProfiles(ctx, app.ListProfilesRequest{
-				ConfigDir: configDirValue(cmd),
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Profiles().List(ctx)
 			if err != nil {
 				return err
 			}
@@ -245,14 +257,15 @@ func newProfileShowCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			id, err := singleIDArg(cmd, app.ErrorProfileInvalid)
+			id, err := singleIDArg(cmd, apperror.ProfileInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.GetProfile(ctx, app.GetProfileRequest{
-				ConfigDir: configDirValue(cmd),
-				ID:        id,
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Profiles().Get(ctx, id)
 			if err != nil {
 				return err
 			}
@@ -276,12 +289,15 @@ func newProfileCreateCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			id, err := singleIDArg(cmd, app.ErrorProfileInvalid)
+			id, err := singleIDArg(cmd, apperror.ProfileInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.CreateProfile(ctx, app.CreateProfileRequest{
-				ConfigDir:    configDirValue(cmd),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Profiles().Create(ctx, profile.CreateRequest{
 				ID:           id,
 				Name:         cmd.String(nameFlagName),
 				Description:  cmd.String(descriptionFlagName),
@@ -310,12 +326,15 @@ func newProfileUpdateCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			id, err := singleIDArg(cmd, app.ErrorProfileInvalid)
+			id, err := singleIDArg(cmd, apperror.ProfileInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.UpdateProfile(ctx, app.UpdateProfileRequest{
-				ConfigDir:    configDirValue(cmd),
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Profiles().Update(ctx, profile.UpdateRequest{
 				ID:           id,
 				Name:         stringFlagPtr(cmd, nameFlagName),
 				Description:  stringFlagPtr(cmd, descriptionFlagName),
@@ -342,15 +361,15 @@ func newProfileDeleteCommand() *urfavecli.Command {
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			id, err := singleIDArg(cmd, app.ErrorProfileInvalid)
+			id, err := singleIDArg(cmd, apperror.ProfileInvalid)
 			if err != nil {
 				return err
 			}
-			result, err := app.DeleteProfile(ctx, app.DeleteProfileRequest{
-				ConfigDir: configDirValue(cmd),
-				ID:        id,
-				Confirm:   cmd.Bool(yesFlagName),
-			})
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Profiles().Delete(ctx, id, cmd.Bool(yesFlagName))
 			if err != nil {
 				return err
 			}
@@ -380,9 +399,9 @@ func stringFlag(name, usage string) urfavecli.Flag {
 	}
 }
 
-func singleIDArg(cmd *urfavecli.Command, code app.ErrorCode) (string, error) {
+func singleIDArg(cmd *urfavecli.Command, code apperror.Code) (string, error) {
 	if cmd.Args().Len() != 1 {
-		return "", app.NewError(code, "exactly one id argument is required")
+		return "", apperror.New(code, "exactly one id argument is required")
 	}
 	return cmd.Args().First(), nil
 }
@@ -396,12 +415,12 @@ func stringFlagPtr(cmd *urfavecli.Command, name string) *string {
 }
 
 func enabledFlagPtr(cmd *urfavecli.Command) (*bool, error) {
-	return enabledFlagPtrWithCode(cmd, app.ErrorProviderInvalid)
+	return enabledFlagPtrWithCode(cmd, apperror.ProviderInvalid)
 }
 
-func enabledFlagPtrWithCode(cmd *urfavecli.Command, code app.ErrorCode) (*bool, error) {
+func enabledFlagPtrWithCode(cmd *urfavecli.Command, code apperror.Code) (*bool, error) {
 	if cmd.IsSet(enabledFlagName) && cmd.IsSet(disabledFlagName) {
-		return nil, app.NewError(code, "cannot set both enabled and disabled")
+		return nil, apperror.New(code, "cannot set both enabled and disabled")
 	}
 	if cmd.IsSet(enabledFlagName) {
 		value := true
@@ -414,7 +433,7 @@ func enabledFlagPtrWithCode(cmd *urfavecli.Command, code app.ErrorCode) (*bool, 
 	return nil, nil
 }
 
-func writeProviderList(w io.Writer, providers []app.Provider) error {
+func writeProviderList(w io.Writer, providers []provider.Provider) error {
 	if len(providers) == 0 {
 		_, err := fmt.Fprintln(w, "No providers")
 		return err
@@ -428,7 +447,7 @@ func writeProviderList(w io.Writer, providers []app.Provider) error {
 	return tw.Flush()
 }
 
-func writeProvider(w io.Writer, provider app.Provider) error {
+func writeProvider(w io.Writer, provider provider.Provider) error {
 	metadata, err := compactJSON(provider.Metadata)
 	if err != nil {
 		return err
@@ -447,7 +466,7 @@ func writeProvider(w io.Writer, provider app.Provider) error {
 	return err
 }
 
-func writeProfileList(w io.Writer, profiles []app.Profile) error {
+func writeProfileList(w io.Writer, profiles []profile.Profile) error {
 	if len(profiles) == 0 {
 		_, err := fmt.Fprintln(w, "No profiles")
 		return err
@@ -461,7 +480,7 @@ func writeProfileList(w io.Writer, profiles []app.Profile) error {
 	return tw.Flush()
 }
 
-func writeProfile(w io.Writer, profile app.Profile) error {
+func writeProfile(w io.Writer, profile profile.Profile) error {
 	metadata, err := compactJSON(profile.Metadata)
 	if err != nil {
 		return err

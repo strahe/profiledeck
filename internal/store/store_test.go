@@ -182,6 +182,58 @@ func TestConcurrentMigrateIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestMigrateRetriesTransientSQLiteBusy(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+	if _, err := db.db.DB.ExecContext(ctx, "PRAGMA busy_timeout = 1"); err != nil {
+		t.Fatalf("set short migration busy timeout: %v", err)
+	}
+
+	blocker, err := sql.Open(sqliteDriverName, sqliteDSN(dbPath, false))
+	if err != nil {
+		t.Fatalf("open migration blocker: %v", err)
+	}
+	defer blocker.Close()
+	blocker.SetMaxOpenConns(1)
+	conn, err := blocker.Conn(ctx)
+	if err != nil {
+		t.Fatalf("open migration blocker connection: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "BEGIN EXCLUSIVE"); err != nil {
+		t.Fatalf("begin exclusive migration blocker: %v", err)
+	}
+
+	_, busyErr := db.migrateOnce(ctx)
+	if !isSQLiteBusyError(busyErr) {
+		t.Fatalf("migrateOnce() error while locked = %v, want SQLite busy", busyErr)
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		t.Fatalf("release migration blocker: %v", err)
+	}
+
+	attempts := 0
+	result, migrateErr := migrateWithRetry(ctx, func(ctx context.Context) (MigrationResult, error) {
+		attempts++
+		if attempts == 1 {
+			return MigrationResult{}, busyErr
+		}
+		return db.migrateOnce(ctx)
+	})
+	if migrateErr != nil {
+		t.Fatalf("Migrate() error after transient lock = %v", migrateErr)
+	}
+	if attempts != 2 {
+		t.Fatalf("Migrate() attempts = %d, want 2", attempts)
+	}
+	if result.Applied != 3 {
+		t.Fatalf("Migrate() applied = %d, want 3", result.Applied)
+	}
+}
+
 func TestProviderConfigSetCRUDAndReferences(t *testing.T) {
 	ctx := context.Background()
 	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)

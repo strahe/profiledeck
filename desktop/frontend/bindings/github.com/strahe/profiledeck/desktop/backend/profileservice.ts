@@ -7,16 +7,22 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as app$0 from "../../internal/app/models.js";
+import * as profile$0 from "../../internal/profile/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as profiletarget$0 from "../../internal/profiletarget/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as provider$0 from "../../internal/provider/models.js";
 
-export function ListProfiles(): $CancellablePromise<app$0.Profile[] | null> {
+export function ListProfiles(): $CancellablePromise<profile$0.Profile[] | null> {
     return $Call.ByID(2779719102);
 }
 
-export function ListProviders(): $CancellablePromise<app$0.Provider[] | null> {
+export function ListProviders(): $CancellablePromise<provider$0.Provider[] | null> {
     return $Call.ByID(2942677598);
 }
 
-export function ListTargets(profileID: string, providerID: string): $CancellablePromise<app$0.ProfileTarget[] | null> {
+export function ListTargets(profileID: string, providerID: string): $CancellablePromise<profiletarget$0.ProfileTarget[] | null> {
     return $Call.ByID(1610672050, profileID, providerID);
 }

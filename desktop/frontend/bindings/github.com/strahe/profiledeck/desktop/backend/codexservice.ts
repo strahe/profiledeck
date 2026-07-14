@@ -7,25 +7,28 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as app$0 from "../../internal/app/models.js";
+import * as codex$0 from "../../internal/codex/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as profile$0 from "../../internal/profile/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
-export function ApplyProfileImport(req: $models.ApplyCodexProfileImportRequest): $CancellablePromise<app$0.CodexProfileImportResult> {
+export function ApplyProfileImport(req: $models.ApplyCodexProfileImportRequest): $CancellablePromise<codex$0.CodexProfileImportResult> {
     return $Call.ByID(1095961474, req);
 }
 
-export function CopyConfigSet(req: $models.CopyCodexConfigSetRequest): $CancellablePromise<app$0.CodexConfigSet> {
+export function CopyConfigSet(req: $models.CopyCodexConfigSetRequest): $CancellablePromise<codex$0.CodexConfigSet> {
     return $Call.ByID(359109991, req);
 }
 
-export function CreateConfigSet(req: $models.CreateCodexConfigSetRequest): $CancellablePromise<app$0.CodexConfigSet> {
+export function CreateConfigSet(req: $models.CreateCodexConfigSetRequest): $CancellablePromise<codex$0.CodexConfigSet> {
     return $Call.ByID(2586023468, req);
 }
 
-export function CreateProfile(req: $models.CreateCodexProfileRequest): $CancellablePromise<app$0.CodexProfileSaveResult> {
+export function CreateProfile(req: $models.CreateCodexProfileRequest): $CancellablePromise<codex$0.CodexProfileSaveResult> {
     return $Call.ByID(2556578151, req);
 }
 
@@ -33,31 +36,31 @@ export function DeleteConfigSet(configSetID: string): $CancellablePromise<void> 
     return $Call.ByID(2847067097, configSetID);
 }
 
-export function Detect(): $CancellablePromise<app$0.CodexDetectResult> {
+export function Detect(): $CancellablePromise<codex$0.CodexDetectResult> {
     return $Call.ByID(1422541865);
 }
 
-export function ExportProfiles(req: $models.ExportCodexProfilesRequest): $CancellablePromise<app$0.CodexProfileExportResult> {
+export function ExportProfiles(req: $models.ExportCodexProfilesRequest): $CancellablePromise<codex$0.CodexProfileExportResult> {
     return $Call.ByID(2603279926, req);
 }
 
-export function ForkProfile(req: $models.ForkCodexProfileRequest): $CancellablePromise<app$0.CodexProfileSaveResult> {
+export function ForkProfile(req: $models.ForkCodexProfileRequest): $CancellablePromise<codex$0.CodexProfileSaveResult> {
     return $Call.ByID(2400690215, req);
 }
 
-export function GetSettings(): $CancellablePromise<app$0.CodexSettings> {
+export function GetSettings(): $CancellablePromise<codex$0.CodexSettings> {
     return $Call.ByID(2021969151);
 }
 
-export function InspectProfileImport(inputPath: string): $CancellablePromise<app$0.CodexProfileImportPlan> {
+export function InspectProfileImport(inputPath: string): $CancellablePromise<codex$0.CodexProfileImportPlan> {
     return $Call.ByID(3289700062, inputPath);
 }
 
-export function ListConfigSets(): $CancellablePromise<app$0.CodexConfigSetListResult> {
+export function ListConfigSets(): $CancellablePromise<codex$0.CodexConfigSetListResult> {
     return $Call.ByID(2706686941);
 }
 
-export function ListProfiles(): $CancellablePromise<app$0.CodexProfileListResult> {
+export function ListProfiles(): $CancellablePromise<codex$0.CodexProfileListResult> {
     return $Call.ByID(2936238732);
 }
 
@@ -65,34 +68,34 @@ export function QuotaRuntimeStatus(): $CancellablePromise<$models.CodexQuotaRunt
     return $Call.ByID(3480057456);
 }
 
-export function ReadProfileQuota(profileID: string): $CancellablePromise<app$0.CodexProfileQuota> {
+export function ReadProfileQuota(profileID: string): $CancellablePromise<codex$0.CodexProfileQuota> {
     return $Call.ByID(2588960257, profileID);
 }
 
-export function SaveActiveProfileState(): $CancellablePromise<app$0.CodexProfileStateSaveResult> {
+export function SaveActiveProfileState(): $CancellablePromise<codex$0.CodexProfileStateSaveResult> {
     return $Call.ByID(2732837523);
 }
 
-export function SetProfileConfig(req: $models.UpdateCodexProfileConfigSetRequest): $CancellablePromise<app$0.CodexProfileDetail> {
+export function SetProfileConfig(req: $models.UpdateCodexProfileConfigSetRequest): $CancellablePromise<codex$0.CodexProfileDetail> {
     return $Call.ByID(7103721, req);
 }
 
-export function ShowConfigSet(configSetID: string): $CancellablePromise<app$0.CodexConfigSet> {
+export function ShowConfigSet(configSetID: string): $CancellablePromise<codex$0.CodexConfigSet> {
     return $Call.ByID(4233188119, configSetID);
 }
 
-export function ShowProfile(profileID: string): $CancellablePromise<app$0.CodexProfileDetail> {
+export function ShowProfile(profileID: string): $CancellablePromise<codex$0.CodexProfileDetail> {
     return $Call.ByID(1381065948, profileID);
 }
 
-export function UpdateConfigSet(req: $models.UpdateCodexConfigSetRequest): $CancellablePromise<app$0.CodexConfigSet> {
+export function UpdateConfigSet(req: $models.UpdateCodexConfigSetRequest): $CancellablePromise<codex$0.CodexConfigSet> {
     return $Call.ByID(1065701395, req);
 }
 
-export function UpdateProfileMetadata(req: $models.UpdateCodexProfileMetadataRequest): $CancellablePromise<app$0.Profile> {
+export function UpdateProfileMetadata(req: $models.UpdateCodexProfileMetadataRequest): $CancellablePromise<profile$0.Profile> {
     return $Call.ByID(1493912893, req);
 }
 
-export function UpdateSettings(req: app$0.UpdateCodexSettingsRequest): $CancellablePromise<app$0.CodexSettings> {
+export function UpdateSettings(req: codex$0.UpdateCodexSettingsRequest): $CancellablePromise<codex$0.CodexSettings> {
     return $Call.ByID(2932380298, req);
 }
