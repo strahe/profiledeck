@@ -11,6 +11,7 @@ ProfileDeck 用于安全切换本地 AI 编程工具的 Profile。Codex Profile 
 - 切换前审核全部变更、保留当前工具状态中受支持的有效修改并创建备份；审核后外部目标发生变化时会停止切换。
 - 导入当前和归档 Codex session JSONL，并分析本地时间趋势、模型、会话、缓存用量和 API 等价估算成本。
 - 查看备份、找出阻止切换的问题、恢复失败切换，并撤销已完成的切换。
+- 让 macOS 应用保持最新、查看下载进度，并自行选择重启时间。
 - 管理通用 provider、profile 和 target file，用于高级本地流程。
 
 ## 快速开始
@@ -30,6 +31,7 @@ Codex profile 切换要求 Codex 使用文件凭据。如果 `$CODEX_HOME/auth.j
 ## 文档入口
 
 - [快速开始](/zh/guide/getting-started) 说明本地构建、首次设置和常用命令。
+- [桌面端更新](/zh/guide/updates) 说明如何检查和安装更新，以及首次打开 macOS 应用。
 - [Codex Profile](/zh/codex/profiles) 说明已保存登录、Config Set、切换、限额和备份。
 - [Claude Code Profile](/zh/claude-code/profiles) 说明官方订阅登录的捕获、切换和各平台凭据位置。
 - [Antigravity Profile](/zh/antigravity/profiles) 说明 agy v2 登录保存、切换和支持范围。

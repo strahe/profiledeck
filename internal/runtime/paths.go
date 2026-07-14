@@ -12,12 +12,13 @@ const runtimeDirName = "profiledeck"
 var ErrEmptyUserConfigDir = errors.New("user config directory is required")
 
 type Paths struct {
-	Root     string
-	Database string
-	Backups  string
-	Exports  string
-	Logs     string
-	Lock     string
+	Root          string
+	Database      string
+	Backups       string
+	UpdateBackups string
+	Exports       string
+	Logs          string
+	Lock          string
 }
 
 func DefaultUserConfigDir() (string, error) {
@@ -31,11 +32,12 @@ func ResolvePaths(userConfigDir string) (Paths, error) {
 
 	root := filepath.Join(userConfigDir, runtimeDirName)
 	return Paths{
-		Root:     root,
-		Database: filepath.Join(root, "profiledeck.db"),
-		Backups:  filepath.Join(root, "backups"),
-		Exports:  filepath.Join(root, "exports"),
-		Logs:     filepath.Join(root, "logs"),
-		Lock:     filepath.Join(root, "locks", "switch.lock"),
+		Root:          root,
+		Database:      filepath.Join(root, "profiledeck.db"),
+		Backups:       filepath.Join(root, "backups"),
+		UpdateBackups: filepath.Join(root, "updates", "backups"),
+		Exports:       filepath.Join(root, "exports"),
+		Logs:          filepath.Join(root, "logs"),
+		Lock:          filepath.Join(root, "locks", "switch.lock"),
 	}, nil
 }

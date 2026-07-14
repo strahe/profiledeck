@@ -130,7 +130,7 @@ func (service *Service) Status(ctx context.Context) (StatusResult, error) {
 }
 
 func createDirs(paths Paths) error {
-	for _, dir := range []string{paths.Root, paths.Backups, paths.Exports, paths.Logs, filepath.Dir(paths.Lock)} {
+	for _, dir := range []string{paths.Root, paths.Backups, paths.UpdateBackups, paths.Exports, paths.Logs, filepath.Dir(paths.Lock)} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}

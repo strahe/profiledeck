@@ -4,26 +4,87 @@
 	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
 	import SectionCard from "$lib/components/app/SectionCard.svelte";
 	import SettingsRow from "$lib/components/app/SettingsRow.svelte";
+	import { Button } from "$lib/components/ui/button";
 	import * as Field from "$lib/components/ui/field";
+	import { Progress } from "$lib/components/ui/progress";
 	import * as Select from "$lib/components/ui/select";
 	import { Spinner } from "$lib/components/ui/spinner";
-	import type { DesktopLanguage } from "$lib/i18n";
+	import * as Switch from "$lib/components/ui/switch";
+	import type { UpdateStatus } from "../../../bindings/github.com/strahe/profiledeck/desktop/update";
+	import { currentDesktopLocale, type DesktopLanguage } from "$lib/i18n";
 
 	let {
 		language,
 		appearance,
 		languageBusy,
 		appearanceBusy,
+		updateStatus,
+		updateBusy,
 		onLanguageChange,
 		onAppearanceChange,
+		onAutomaticChange,
+		onCheckForUpdates,
+		onRestart,
 	}: {
 		language: DesktopLanguage;
 		appearance: "system" | "light" | "dark";
 		languageBusy: boolean;
 		appearanceBusy: boolean;
+		updateStatus: UpdateStatus;
+		updateBusy: string;
 		onLanguageChange: (value: string) => void | Promise<void>;
 		onAppearanceChange: (value: string) => void | Promise<void>;
+		onAutomaticChange: (enabled: boolean) => void | Promise<void>;
+		onCheckForUpdates: () => void | Promise<void>;
+		onRestart: () => void | Promise<void>;
 	} = $props();
+
+	let updateActive = $derived(["checking", "downloading", "verifying", "preparing"].includes(updateStatus.state));
+	let downloadPercent = $derived(updateStatus.total_bytes > 0
+		? Math.min(100, Math.max(0, (updateStatus.downloaded_bytes / updateStatus.total_bytes) * 100))
+		: 0);
+
+	function updateStateDescription(): string {
+		switch (updateStatus.state) {
+			case "unavailable": return $_("settings.updates.state.unavailable");
+			case "checking": return $_("settings.updates.state.checking");
+			case "up_to_date": return $_("settings.updates.state.upToDate");
+			case "downloading": return $_("settings.updates.state.downloading", {
+				values: { downloaded: formatBytes(updateStatus.downloaded_bytes), total: formatBytes(updateStatus.total_bytes) },
+			});
+			case "verifying": return $_("settings.updates.state.verifying");
+			case "preparing": return $_("settings.updates.state.preparing");
+			case "ready": return $_("settings.updates.state.ready", { values: { version: updateStatus.available_version } });
+			case "error": return updateErrorDescription();
+			default: return $_("settings.updates.state.idle");
+		}
+	}
+
+	function updateErrorDescription(): string {
+		switch (updateStatus.error_code) {
+			case "feed_unavailable": return $_("settings.updates.error.unavailable");
+			case "feed_signature_missing":
+			case "feed_signature_invalid":
+			case "feed_invalid":
+			case "feed_rollback": return $_("settings.updates.error.feedRejected");
+			case "artifact_signature_missing":
+			case "artifact_verification_failed": return $_("settings.updates.error.artifactRejected");
+			case "restart_failed": return $_("settings.updates.error.restartFailed");
+			default: return $_("settings.updates.error.generic");
+		}
+	}
+
+	function formatBytes(value: number): string {
+		if (!Number.isFinite(value) || value <= 0) return "0 MB";
+		return `${(value / (1024 * 1024)).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+	}
+
+	function lastCheckedDescription(): string {
+		if (!updateStatus.last_checked_at_unix_ms) return $_("settings.updates.neverChecked");
+		return $_("settings.updates.lastChecked", {
+			values: { time: new Date(updateStatus.last_checked_at_unix_ms).toLocaleString(currentDesktopLocale()) },
+		});
+	}
 </script>
 
 <ContentContainer class="max-w-3xl">
@@ -62,4 +123,50 @@
 			</SettingsRow>
 		</Field.FieldGroup>
 	</SectionCard>
+
+	{#if updateStatus.configured}
+		<SectionCard title={$_("settings.updates.title")} description={$_("settings.updates.description")}>
+			<Field.FieldGroup>
+				<SettingsRow
+					label={$_("settings.updates.automatic.label")}
+					description={$_("settings.updates.automatic.description")}
+					forID="desktop-automatic-updates"
+				>
+					{#snippet control()}
+						{#if updateBusy === "automatic"}<Spinner />{/if}
+						<Switch.Root
+							id="desktop-automatic-updates"
+							checked={updateStatus.automatic}
+							disabled={!!updateBusy}
+							onCheckedChange={onAutomaticChange}
+						/>
+					{/snippet}
+				</SettingsRow>
+
+				<SettingsRow
+					label={$_("settings.updates.status")}
+					description={updateStateDescription()}
+					message={`${$_("settings.updates.currentVersion", { values: { version: updateStatus.current_version } })} · ${lastCheckedDescription()}`}
+				>
+					{#snippet control()}
+						{#if updateStatus.state === "ready"}
+							<Button size="sm" disabled={!!updateBusy} onclick={onRestart}>
+								{#if updateBusy === "restart"}<Spinner />{/if}
+								{$_("actions.restartNow")}
+							</Button>
+						{:else}
+							<Button size="sm" variant="outline" disabled={updateActive || !!updateBusy} onclick={onCheckForUpdates}>
+								{#if updateActive || updateBusy === "check"}<Spinner />{/if}
+								{$_("actions.checkForUpdates")}
+							</Button>
+						{/if}
+					{/snippet}
+				</SettingsRow>
+			</Field.FieldGroup>
+
+			{#if updateStatus.state === "downloading"}
+				<Progress class="mt-4" value={downloadPercent} aria-label={$_("settings.updates.downloadProgress", { values: { value: Math.round(downloadPercent) } })} />
+			{/if}
+		</SectionCard>
+	{/if}
 </ContentContainer>

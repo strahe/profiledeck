@@ -13,8 +13,10 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	"github.com/wailsapp/wails/v3/pkg/updater"
 
 	"github.com/strahe/profiledeck/desktop/backend"
+	desktopupdate "github.com/strahe/profiledeck/desktop/update"
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/app"
 )
@@ -23,6 +25,9 @@ var (
 	version   = app.DefaultVersion
 	commit    = app.UnknownBuildValue
 	buildDate = app.UnknownBuildValue
+
+	updateFeedURL         string
+	updatePublicKeyBase64 string
 )
 
 const (
@@ -36,6 +41,10 @@ const (
 var assets embed.FS
 
 func main() {
+	// The detached update helper must swap the application before runtime or
+	// database initialisation can fail or contend with the exiting process.
+	updater.HandleHelperMode()
+
 	info := app.NewInfo(version, commit, buildDate)
 	env := backend.NewEnvironmentFromEnv()
 	desktopCtx, cancelDesktop := context.WithCancel(context.Background())
@@ -51,6 +60,11 @@ func main() {
 	}
 	startupErr := backend.Bootstrap(desktopCtx, core)
 	services := backend.NewServices(core, info, env, startupErr)
+	updates := desktopupdate.NewService(core, desktopupdate.BuildConfig{
+		CurrentVersion:  version,
+		FeedURL:         updateFeedURL,
+		PublicKeyBase64: updatePublicKeyBase64,
+	})
 
 	wailsApp := application.New(application.Options{
 		Name:        app.ProductName,
@@ -67,6 +81,7 @@ func main() {
 			application.NewService(services.Backup),
 			application.NewService(services.Usage),
 			application.NewService(services.Settings),
+			application.NewService(updates),
 		},
 		Assets: application.AssetOptions{
 			Handler:        application.AssetFileServerFS(assets),
@@ -78,6 +93,9 @@ func main() {
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
 	})
+	if err := desktopupdate.Attach(updates, wailsApp); err != nil {
+		log.Printf("profiledeck: automatic updates are unavailable: %v", err)
+	}
 
 	mainWindow := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:             "main",
@@ -97,10 +115,23 @@ func main() {
 	setupTray(desktopCtx, wailsApp, mainWindow, services)
 	setupUsageAutoSync(desktopCtx, wailsApp, services)
 	setupCodexQuotaRuntime(desktopCtx, wailsApp, services)
+	setupUpdateRuntime(desktopCtx, wailsApp, updates)
 
 	if err := wailsApp.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func setupUpdateRuntime(ctx context.Context, wailsApp *application.App, updates *desktopupdate.Service) {
+	removeStartedHandler := wailsApp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		// Update checks are process-scoped so the six-hour schedule continues
+		// while the main window is hidden and the tray process remains active.
+		desktopupdate.Start(ctx, updates)
+	})
+	wailsApp.OnShutdown(func() {
+		removeStartedHandler()
+		desktopupdate.Stop(updates)
+	})
 }
 
 func setupCodexQuotaRuntime(ctx context.Context, wailsApp *application.App, services backend.Services) {

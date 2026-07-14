@@ -21,6 +21,7 @@ const (
 	desktopLanguageSettingKey         = "desktop.language"
 	desktopAppearanceSettingKey       = "desktop.appearance"
 	desktopSidebarCollapsedSettingKey = "desktop.sidebar_collapsed"
+	desktopAutomaticUpdatesSettingKey = "desktop.automatic_updates"
 )
 
 type UpdateRequest struct {
@@ -33,6 +34,7 @@ type Desktop struct {
 	Language         string `json:"language"`
 	Appearance       string `json:"appearance"`
 	SidebarCollapsed bool   `json:"sidebar_collapsed"`
+	AutomaticUpdates bool   `json:"automatic_updates"`
 }
 
 type Service struct {
@@ -100,6 +102,20 @@ func (service *Service) Update(ctx context.Context, req UpdateRequest) (Desktop,
 	return updated, err
 }
 
+// SetAutomaticUpdates is intentionally separate from UpdateRequest so only
+// the Desktop update runtime can persist this value and synchronise its timer.
+func (service *Service) SetAutomaticUpdates(ctx context.Context, enabled bool) (Desktop, error) {
+	db, err := service.stores.OpenHealthy(ctx, false)
+	if err != nil {
+		return Desktop{}, err
+	}
+	defer db.Close()
+	if err := upsert(ctx, db, desktopAutomaticUpdatesSettingKey, enabled); err != nil {
+		return Desktop{}, err
+	}
+	return get(ctx, db)
+}
+
 func get(ctx context.Context, db *store.Store) (Desktop, error) {
 	language, err := readString(ctx, db, desktopLanguageSettingKey, DesktopLanguageAuto, normalizeLanguage, "desktop language")
 	if err != nil {
@@ -113,7 +129,13 @@ func get(ctx context.Context, db *store.Store) (Desktop, error) {
 	if err != nil {
 		return Desktop{}, err
 	}
-	return Desktop{Language: language, Appearance: appearance, SidebarCollapsed: collapsed}, nil
+	automaticUpdates, err := readBool(ctx, db, desktopAutomaticUpdatesSettingKey, true, "automatic updates")
+	if err != nil {
+		return Desktop{}, err
+	}
+	return Desktop{
+		Language: language, Appearance: appearance, SidebarCollapsed: collapsed, AutomaticUpdates: automaticUpdates,
+	}, nil
 }
 
 func readString(ctx context.Context, db *store.Store, key, fallback string, normalize func(string) (string, error), label string) (string, error) {

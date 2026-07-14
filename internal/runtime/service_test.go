@@ -45,6 +45,7 @@ func TestInitCreatesRuntimeAndIsIdempotent(t *testing.T) {
 	for _, path := range []string{
 		first.RuntimeRoot,
 		filepath.Join(first.RuntimeRoot, "backups"),
+		filepath.Join(first.RuntimeRoot, "updates", "backups"),
 		filepath.Join(first.RuntimeRoot, "exports"),
 		filepath.Join(first.RuntimeRoot, "logs"),
 		filepath.Join(first.RuntimeRoot, "locks"),

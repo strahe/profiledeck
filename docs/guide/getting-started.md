@@ -1,6 +1,6 @@
 # Getting Started
 
-ProfileDeck is currently a Go CLI. Command examples assume the `profiledeck` executable is available on `PATH`.
+ProfileDeck provides a Go CLI and a macOS Desktop app. Command examples assume the `profiledeck` executable is available on `PATH`.
 
 ## Build from source
 
@@ -63,6 +63,8 @@ profiledeck --config-dir /tmp/profiledeck-dev init
 ```
 
 ProfileDeck restricts access to its local data and backup folders on POSIX systems when possible.
+
+Distributed macOS arm64 Alpha builds can check for updates while ProfileDeck is running. See [Desktop Updates](/guide/updates) to manage automatic checks and install a downloaded update.
 
 ## First Codex profile
 

@@ -30,6 +30,10 @@ Antigravity switch backups may contain the previous login in a private payload f
 
 Claude Code switch backups may contain the previous subscription login. On macOS, the private backup manifest also stores the persistent reference for the exact Keychain item. Public switch and backup DTOs, logs, errors, ordinary exports, and backup summaries omit that reference, the payload, and payload hashes.
 
+Before installing a Desktop update, ProfileDeck backs up its application data and keeps the three newest update backups. These backups may contain the same sensitive data as the application database, so keep the ProfileDeck data directory private.
+
+ProfileDeck verifies an update before installing it. If verification fails, the update is not installed and the current version remains in place.
+
 ## Sensitive Profile exports
 
 `profiledeck codex profile export` creates a sensitive local backup. The JSON file contains complete Codex sign-in data and settings. Anyone with the file may be able to access your account.

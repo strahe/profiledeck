@@ -9,6 +9,7 @@ require (
 	github.com/urfave/cli/v3 v3.10.1
 	github.com/wailsapp/wails/v3 v3.0.0-alpha2.115
 	github.com/zalando/go-keyring v0.2.8
+	golang.org/x/mod v0.36.0
 	golang.org/x/sys v0.44.0
 	modernc.org/sqlite v1.53.0
 )

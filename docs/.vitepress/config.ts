@@ -10,6 +10,7 @@ function normalizeBase(value: string | undefined): string {
 
 const enGuide = [
   { text: 'Getting Started', link: '/guide/getting-started' },
+  { text: 'Desktop Updates', link: '/guide/updates' },
   { text: 'Concepts', link: '/guide/concepts' },
   { text: 'Generic Targets', link: '/guide/generic-targets' }
 ]
@@ -39,6 +40,7 @@ const enReference = [
 
 const zhGuide = [
   { text: '快速开始', link: '/zh/guide/getting-started' },
+  { text: '桌面端更新', link: '/zh/guide/updates' },
   { text: '核心概念', link: '/zh/guide/concepts' },
   { text: '通用目标文件', link: '/zh/guide/generic-targets' }
 ]

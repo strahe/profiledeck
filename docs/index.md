@@ -11,6 +11,7 @@ ProfileDeck safely switches local AI coding tool Profiles. Codex Profiles save a
 - Preview every switch, preserve supported valid changes in the current tool state, create a backup first, and stop if a reviewed external target changed.
 - Import active and archived Codex session JSONL, then analyze local-time trends, models, sessions, cache usage, and API-equivalent estimated cost.
 - Inspect backups, find problems that block switching, recover failed switches, and undo an applied switch.
+- Keep the macOS app up to date, view download progress, and choose when to restart.
 - Manage generic providers, profiles, and target files for advanced local workflows.
 
 ## Quick start
@@ -30,6 +31,7 @@ Codex must use file credentials for profile switching. If `$CODEX_HOME/auth.json
 ## Documentation map
 
 - [Getting Started](/guide/getting-started) covers local build, initial setup, and command shortcuts.
+- [Desktop Updates](/guide/updates) explains how to check for updates, install one, and open the macOS app for the first time.
 - [Codex Profiles](/codex/profiles) covers saved logins, Config Sets, switching, limits, and backups.
 - [Claude Code Profiles](/claude-code/profiles) covers official subscription login capture, switching, and platform credential locations.
 - [Antigravity Profiles](/antigravity/profiles) covers agy v2 login capture, switching, and limitations.

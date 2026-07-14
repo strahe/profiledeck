@@ -1,6 +1,6 @@
 # 快速开始
 
-ProfileDeck 当前是 Go CLI。命令示例默认 `profiledeck` 可执行文件已经在 `PATH` 中。
+ProfileDeck 提供 Go CLI 和 macOS 桌面应用。命令示例默认 `profiledeck` 可执行文件已经在 `PATH` 中。
 
 ## 从源码编译
 
@@ -63,6 +63,8 @@ profiledeck --config-dir /tmp/profiledeck-dev init
 ```
 
 在 POSIX 系统上，ProfileDeck 会尽力限制本地数据和备份目录的访问权限。
+
+分发版 macOS arm64 Alpha 会在 ProfileDeck 运行期间检查更新。可在[桌面端更新](/zh/guide/updates)了解如何管理自动检查和安装已下载的更新。
 
 ## 第一个 Codex profile
 

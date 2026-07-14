@@ -18,13 +18,13 @@ func TestDesktopSettingsDefaultsAndPartialUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected default desktop settings, got %v", err)
 	}
-	if initial.Language != DesktopLanguageAuto || initial.Appearance != DesktopAppearanceSystem || initial.SidebarCollapsed {
+	if initial.Language != DesktopLanguageAuto || initial.Appearance != DesktopAppearanceSystem || initial.SidebarCollapsed || !initial.AutomaticUpdates {
 		t.Fatalf("expected default desktop settings, settings=%#v err=%v", initial, err)
 	}
 
 	language := DesktopLanguageZhCN
 	updated, err := service.Update(ctx, UpdateRequest{Language: &language})
-	if err != nil || updated.Language != DesktopLanguageZhCN || updated.Appearance != DesktopAppearanceSystem || updated.SidebarCollapsed {
+	if err != nil || updated.Language != DesktopLanguageZhCN || updated.Appearance != DesktopAppearanceSystem || updated.SidebarCollapsed || !updated.AutomaticUpdates {
 		t.Fatalf("expected language update, settings=%#v err=%v", updated, err)
 	}
 
@@ -62,9 +62,27 @@ func TestDesktopSettingsCombinedUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected combined update to succeed, got %v", err)
 	}
-	want := Desktop{Language: language, Appearance: appearance, SidebarCollapsed: collapsed}
+	want := Desktop{Language: language, Appearance: appearance, SidebarCollapsed: collapsed, AutomaticUpdates: true}
 	if updated != want {
 		t.Fatalf("unexpected combined settings: got %#v want %#v", updated, want)
+	}
+}
+
+func TestDesktopAutomaticUpdatesUsesDedicatedSetter(t *testing.T) {
+	ctx := context.Background()
+	service := newTestService(t, ctx, t.TempDir())
+
+	updated, err := service.SetAutomaticUpdates(ctx, false)
+	if err != nil {
+		t.Fatalf("disable automatic updates: %v", err)
+	}
+	if updated.AutomaticUpdates {
+		t.Fatalf("expected automatic updates to be disabled: %#v", updated)
+	}
+
+	reloaded, err := service.Get(ctx)
+	if err != nil || reloaded.AutomaticUpdates {
+		t.Fatalf("expected automatic updates setting to persist: settings=%#v err=%v", reloaded, err)
 	}
 }
 
@@ -100,7 +118,7 @@ func TestDesktopSettingsRejectsUnsupportedAppearanceWithoutPartialUpdate(t *test
 	if err != nil {
 		t.Fatalf("expected settings reload to succeed, got %v", err)
 	}
-	if settings.Language != DesktopLanguageAuto || settings.Appearance != DesktopAppearanceSystem || settings.SidebarCollapsed {
+	if settings.Language != DesktopLanguageAuto || settings.Appearance != DesktopAppearanceSystem || settings.SidebarCollapsed || !settings.AutomaticUpdates {
 		t.Fatalf("expected rejected update to leave settings unchanged, got %#v", settings)
 	}
 }

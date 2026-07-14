@@ -47,6 +47,25 @@ Full local validation requires macOS, compatible `golangci-lint` v2 and `wails3`
 
 macOS desktop builds target macOS 14.0 by default. Override it with `MACOS_MIN_VERSION=<version>` when running desktop Make targets.
 
+Create and verify an ad-hoc signed macOS package for local testing with a temporary update key:
+
+```bash
+make desktop-package-local
+```
+
+The first run installs the pinned Wails tool under `bin/tools`. The package uses version `0.1.0-alpha.0.local` and the Git commit count as its build number by default; override them with `LOCAL_DESKTOP_VERSION` and `LOCAL_DESKTOP_BUILD_NUMBER` when needed. Because its private key is discarded, this package is for local testing only.
+
+Create a package tied to a persistent update key by supplying an Alpha SemVer, numeric build number, and public key explicitly:
+
+```bash
+make desktop-package \
+  DESKTOP_VERSION=0.1.0-alpha.1 \
+  DESKTOP_BUILD_NUMBER=1 \
+  UPDATE_PUBLIC_KEY_BASE64='<base64-ed25519-public-key>'
+```
+
+`make verify-update-e2e` performs a local two-version replacement test with a temporary update key and HTTP server.
+
 Wails-native Desktop development is available through the root Taskfile:
 
 ```bash

@@ -5,6 +5,7 @@ export interface Desktop {
     "language": string;
     "appearance": string;
     "sidebar_collapsed": boolean;
+    "automatic_updates": boolean;
 }
 
 export interface UpdateRequest {

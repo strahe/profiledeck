@@ -4,6 +4,8 @@ TOOLS_DIR := $(BIN_DIR)/tools
 CMD := ./cmd/profiledeck
 DESKTOP_CMD := ./desktop
 DESKTOP_FRONTEND := desktop/frontend
+RELEASE_TOOL_PKGS := ./scripts/feedtool ./scripts/updatee2e/server
+UPDATE_E2E_PKG := ./scripts/updatee2e/client
 DOCS_DIR := docs
 CORE_PKGS := ./cmd/... ./internal/...
 DESKTOP_PKGS := ./desktop/...
@@ -23,6 +25,12 @@ CGO_CFLAGS ?= -O2 -g
 CGO_CXXFLAGS ?= -O2 -g
 CGO_LDFLAGS ?= -O2 -g
 DESKTOP_GO_ENV := GOOS=$(DESKTOP_GOOS) GOARCH=$(DESKTOP_GOARCH)
+DESKTOP_VERSION ?=
+DESKTOP_BUILD_NUMBER ?=
+UPDATE_PUBLIC_KEY_BASE64 ?=
+LOCAL_DESKTOP_VERSION ?= 0.1.0-alpha.0.local
+LOCAL_DESKTOP_BUILD_NUMBER ?= $(shell git rev-list --count HEAD)
+DIST_DIR ?= $(CURDIR)/dist
 ifeq ($(DESKTOP_GOOS),darwin)
 DESKTOP_GO_ENV += MACOSX_DEPLOYMENT_TARGET=$(MACOS_MIN_VERSION)
 DESKTOP_GO_ENV += CGO_CFLAGS="$(CGO_CFLAGS) -mmacosx-version-min=$(MACOS_MIN_VERSION)"
@@ -30,20 +38,25 @@ DESKTOP_GO_ENV += CGO_CXXFLAGS="$(CGO_CXXFLAGS) -mmacosx-version-min=$(MACOS_MIN
 DESKTOP_GO_ENV += CGO_LDFLAGS="$(CGO_LDFLAGS) -mmacosx-version-min=$(MACOS_MIN_VERSION)"
 endif
 
-.PHONY: fmt vet lint lint-core lint-desktop test build core-boundary core-check check clean wails-boundary desktop-go-fmt desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-frontend-build desktop-build desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-core-check ci-desktop-check
+.PHONY: fmt vet lint lint-core lint-desktop lint-release-tools test build core-boundary core-check check clean wails-boundary desktop-go-fmt desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-frontend-build desktop-build desktop-package desktop-package-local release-tools-check verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-core-check ci-desktop-check
 
 fmt:
 	$(GOLANGCI_LINT) fmt $(GO_PKGS)
+	$(GOLANGCI_LINT) fmt ./scripts/...
 
 vet: lint-core
 
-lint: lint-core lint-desktop
+lint: lint-core lint-desktop lint-release-tools
 
 lint-core:
 	$(GOLANGCI_LINT) run $(CORE_PKGS)
 
 lint-desktop:
 	$(DESKTOP_GO_ENV) $(GOLANGCI_LINT) run $(DESKTOP_PKGS)
+
+lint-release-tools:
+	$(DESKTOP_GO_ENV) $(GOLANGCI_LINT) run $(RELEASE_TOOL_PKGS)
+	$(DESKTOP_GO_ENV) $(GOLANGCI_LINT) run --build-tags updatee2e $(UPDATE_E2E_PKG)
 
 test:
 	go test $(CORE_PKGS)
@@ -94,7 +107,33 @@ desktop-build: desktop-frontend-build
 	mkdir -p $(BIN_DIR)
 	$(DESKTOP_GO_ENV) go build -tags production -o $(BIN_DIR)/profiledeck-desktop $(DESKTOP_CMD)
 
-desktop-check: wails-boundary lint-desktop desktop-bindings-check desktop-taskfile-check desktop-frontend-check desktop-build
+desktop-package: desktop-frontend-build
+	PROFILEDECK_VERSION="$(DESKTOP_VERSION)" \
+	PROFILEDECK_BUILD_NUMBER="$(DESKTOP_BUILD_NUMBER)" \
+	PROFILEDECK_UPDATE_PUBLIC_KEY_BASE64="$(UPDATE_PUBLIC_KEY_BASE64)" \
+	PROFILEDECK_DIST_DIR="$(DIST_DIR)" \
+	./scripts/package-macos.sh
+
+desktop-package-local: $(CI_WAILS3)
+	@temp_dir=$$(mktemp -d); \
+	trap 'rm -rf "$$temp_dir"' EXIT; \
+	key_path="$$temp_dir/update.key"; \
+	$(CI_WAILS3) updater genkey -out "$$key_path" >/dev/null; \
+	public_key=$$(go run ./scripts/feedtool public-key --private-key "$$key_path"); \
+	$(MAKE) desktop-package \
+		DESKTOP_VERSION="$(LOCAL_DESKTOP_VERSION)" \
+		DESKTOP_BUILD_NUMBER="$(LOCAL_DESKTOP_BUILD_NUMBER)" \
+		UPDATE_PUBLIC_KEY_BASE64="$$public_key"
+
+verify-update-e2e:
+	./scripts/test-update-restart.sh
+
+release-tools-check: lint-release-tools
+	$(DESKTOP_GO_ENV) go test $(RELEASE_TOOL_PKGS)
+	$(DESKTOP_GO_ENV) go test -tags updatee2e $(UPDATE_E2E_PKG)
+	bash -n scripts/package-macos.sh scripts/verify-macos-artifact.sh scripts/test-update-restart.sh
+
+desktop-check: wails-boundary lint-desktop release-tools-check desktop-bindings-check desktop-taskfile-check desktop-frontend-check desktop-build
 	$(DESKTOP_GO_ENV) go test ./desktop/...
 
 docs-install:

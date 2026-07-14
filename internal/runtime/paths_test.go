@@ -17,12 +17,13 @@ func TestResolvePaths(t *testing.T) {
 
 	root := filepath.Join(configDir, "profiledeck")
 	want := Paths{
-		Root:     root,
-		Database: filepath.Join(root, "profiledeck.db"),
-		Backups:  filepath.Join(root, "backups"),
-		Exports:  filepath.Join(root, "exports"),
-		Logs:     filepath.Join(root, "logs"),
-		Lock:     filepath.Join(root, "locks", "switch.lock"),
+		Root:          root,
+		Database:      filepath.Join(root, "profiledeck.db"),
+		Backups:       filepath.Join(root, "backups"),
+		UpdateBackups: filepath.Join(root, "updates", "backups"),
+		Exports:       filepath.Join(root, "exports"),
+		Logs:          filepath.Join(root, "logs"),
+		Lock:          filepath.Join(root, "locks", "switch.lock"),
 	}
 
 	if paths != want {

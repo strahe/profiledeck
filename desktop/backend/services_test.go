@@ -252,7 +252,7 @@ func TestSettingsServicePersistsDesktopPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected settings get to succeed, got %v", err)
 	}
-	if initial.Language != settings.DesktopLanguageAuto || initial.Appearance != settings.DesktopAppearanceSystem || initial.SidebarCollapsed {
+	if initial.Language != settings.DesktopLanguageAuto || initial.Appearance != settings.DesktopAppearanceSystem || initial.SidebarCollapsed || !initial.AutomaticUpdates {
 		t.Fatalf("unexpected default settings: %#v", initial)
 	}
 

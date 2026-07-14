@@ -55,6 +55,8 @@ const (
 	ImportInvalid         Code = "IMPORT_INVALID"
 	ImportConflict        Code = "IMPORT_CONFLICT"
 	ImportPlanChanged     Code = "IMPORT_PLAN_CHANGED"
+	UpdateNotReady        Code = "UPDATE_NOT_READY"
+	UpdateRestartFailed   Code = "UPDATE_RESTART_FAILED"
 )
 
 // Error carries a stable code, safe message, optional cause, and safe details.

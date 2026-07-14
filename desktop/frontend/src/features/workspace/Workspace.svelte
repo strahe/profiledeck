@@ -23,12 +23,14 @@
 		SettingsService,
 	} from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type { DashboardResult, DesktopError } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
+	import { Service as UpdateService, type UpdateStatus } from "../../../bindings/github.com/strahe/profiledeck/desktop/update";
 	import type { AntigravityDetectResult, AntigravityProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/antigravity/models";
 	import type { ClaudeCodeDetectResult, ClaudeCodeProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/claudecode/models";
 	import type { CodexConfigSet, CodexDetectResult, CodexProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
 	import type { DoctorResult } from "../../../bindings/github.com/strahe/profiledeck/internal/doctor/models";
 	import StatusBadge from "$lib/components/app/StatusBadge.svelte";
 	import * as Alert from "$lib/components/ui/alert";
+	import * as AlertDialog from "$lib/components/ui/alert-dialog";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
@@ -103,6 +105,7 @@
 	let actionBusy = $state("");
 	let languageBusy = $state(false);
 	let appearanceBusy = $state(false);
+	let updateBusy = $state("");
 	let sidebarBusy = $state(false);
 	let languagePreference = $state<DesktopLanguage>("auto");
 	let appearance = $state<Appearance>("system");
@@ -113,6 +116,19 @@
 	let lastToast = "";
 	let invalidRoute = "";
 	let currentPath = $state(router.location);
+	let updateStatus = $state<UpdateStatus>({
+		configured: false,
+		automatic: true,
+		state: "unavailable",
+		current_version: "dev",
+		available_version: "",
+		downloaded_bytes: 0,
+		total_bytes: 0,
+		last_checked_at_unix_ms: 0,
+		error_code: "",
+	});
+	let updateRestartPromptOpen = $state(false);
+	let promptedUpdateVersion = "";
 
 	let dashboard = $state<DashboardResult | null>(null);
 	let detectResult = $state<CodexDetectResult | null>(null);
@@ -180,6 +196,17 @@
 	});
 
 	$effect(() => {
+		const version = updateStatus.state === "ready" ? updateStatus.available_version : "";
+		const busy = actionBusy || updateBusy;
+		if (version && !busy && promptedUpdateVersion !== version) {
+			untrack(() => {
+				promptedUpdateVersion = version;
+				updateRestartPromptOpen = true;
+			});
+		}
+	});
+
+	$effect(() => {
 		const profileID = codexActiveProfileID;
 		if (!profileID || startupQuotaReadStarted) return;
 		startupQuotaReadStarted = true;
@@ -234,7 +261,13 @@
 			Events.On("profiledeck:operation-error", (event) => {
 				if (!isCancelError(event.data)) showError(event.data);
 			}),
+			Events.On("profiledeck:update-status", (event) => {
+				updateStatus = event.data as UpdateStatus;
+			}),
 		];
+		// Subscribe before the initial snapshot so a fast background download
+		// cannot become ready in the gap between the status read and listener.
+		void loadUpdateStatus();
 
 		return () => {
 			window.removeEventListener("hashchange", syncPath);
@@ -283,6 +316,70 @@
 			settingsLoaded = true;
 		} catch (error) {
 			if (!isCancelError(error)) showError(error);
+		}
+	}
+
+	async function loadUpdateStatus() {
+		try {
+			updateStatus = await track("update-status", UpdateService.Status());
+		} catch (error) {
+			if (!isCancelError(error)) showError(error);
+		}
+	}
+
+	async function changeAutomaticUpdates(enabled: boolean) {
+		if (updateBusy) return;
+		updateBusy = "automatic";
+		try {
+			updateStatus = await track("update-automatic", UpdateService.SetAutomatic(enabled));
+			if (updateStatus.error_code === "settings_unavailable") {
+				toast.error(translate("settings.updates.error.settingsUnavailable"));
+			}
+		} catch (error) {
+			if (!isCancelError(error)) showError(error);
+		} finally {
+			updateBusy = "";
+		}
+	}
+
+	async function checkForUpdates() {
+		if (updateBusy) return;
+		updateBusy = "check";
+		try {
+			updateStatus = await track("update-check", UpdateService.CheckAndDownload());
+			if (updateStatus.state === "error") {
+				toast.error(updateFailureMessage(updateStatus.error_code));
+			} else if (updateStatus.state === "up_to_date") {
+				showNotice(translate("settings.updates.upToDateTitle"), translate("settings.updates.state.upToDate"));
+			}
+		} catch (error) {
+			if (!isCancelError(error)) showError(error);
+		} finally {
+			updateBusy = "";
+		}
+	}
+
+	async function restartWithUpdate() {
+		if (updateBusy) return;
+		updateBusy = "restart";
+		try {
+			await track("update-restart", UpdateService.Restart());
+		} catch (error) {
+			if (!isCancelError(error)) showError(error);
+			updateBusy = "";
+		}
+	}
+
+	function updateFailureMessage(code: string): string {
+		switch (code) {
+			case "feed_unavailable": return translate("settings.updates.error.unavailable");
+			case "feed_signature_missing":
+			case "feed_signature_invalid":
+			case "feed_invalid":
+			case "feed_rollback": return translate("settings.updates.error.feedRejected");
+			case "artifact_signature_missing":
+			case "artifact_verification_failed": return translate("settings.updates.error.artifactRejected");
+			default: return translate("settings.updates.error.generic");
 		}
 	}
 
@@ -902,8 +999,13 @@
 						{appearance}
 						{languageBusy}
 						{appearanceBusy}
+						{updateStatus}
+						{updateBusy}
 						onLanguageChange={changeLanguage}
 						onAppearanceChange={changeAppearance}
+						onAutomaticChange={changeAutomaticUpdates}
+						onCheckForUpdates={checkForUpdates}
+						onRestart={restartWithUpdate}
 					/>
 				{:else}
 					<DiagnosticsPage
@@ -920,3 +1022,21 @@
 		</Sidebar.Inset>
 	</div>
 </Sidebar.Provider>
+
+<AlertDialog.Root bind:open={updateRestartPromptOpen}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>{$_("settings.updates.restartPrompt.title")}</AlertDialog.Title>
+			<AlertDialog.Description>
+				{$_("settings.updates.restartPrompt.description", { values: { version: updateStatus.available_version } })}
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel disabled={!!updateBusy}>{$_("actions.later")}</AlertDialog.Cancel>
+			<AlertDialog.Action disabled={!!updateBusy} onclick={restartWithUpdate}>
+				{#if updateBusy === "restart"}<Spinner />{/if}
+				{$_("actions.restartNow")}
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
