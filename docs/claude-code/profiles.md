@@ -1,75 +1,87 @@
 # Claude Code Profiles
 
-Claude Code Profiles let you save and switch official Claude Code subscription logins. Each Profile binds one hidden login; Claude Code settings, MCP servers, plugins, API keys, cloud providers, and usage attribution remain outside this integration.
+A Claude Code Profile saves one official subscription login. ProfileDeck does not change Claude Code settings, MCP servers, plugins, API keys, cloud-provider authentication, or Claude Desktop.
 
-Claude Code and Claude Desktop are separate products. This feature reads and changes only the official Claude Code credential target and does not inspect or modify Claude Desktop.
+## Before you start
 
-## Requirements
+- Desktop initializes ProfileDeck automatically. CLI users must run `profiledeck init` once.
+- Run `/login` in Claude Code before saving a Profile.
+- Use an official Pro, Max, Team, or Enterprise subscription login.
 
-- Initialize ProfileDeck with `profiledeck init`.
-- Sign in from Claude Code with `/login` before capturing the first Profile.
-- Use a subscription login whose credential contains the current `claudeAiOauth` subscription fields.
+Console/API-key logins and cloud-provider authentication are not saved. ProfileDeck does not perform the Claude Code login for you.
 
-Console/API-key logins and cloud-provider authentication are not captured. ProfileDeck does not perform the OAuth login itself.
+## Save Profiles in Desktop
 
-## Save two accounts
+1. Select **Claude Code → Profiles**.
+2. If macOS permission is required, choose **Authorize** and allow ProfileDeck to read the Claude Code login from Keychain.
+3. Choose **Save Current Login**, then enter a permanent Profile ID and a display name.
+4. Run `/login` in Claude Code for another account, return to ProfileDeck, and save another Profile.
 
-Sign in to the first account from Claude Code, then save it:
+The first saved Profile becomes current. Saving another Profile does not change Claude Code settings.
+
+## Save Profiles with the CLI
+
+Sign in to the first account, then run:
 
 ```bash
 profiledeck claude-code detect
 profiledeck claude-code profile create personal --name "Personal"
 ```
 
-Use Claude Code `/login` to sign in to the second account, then save it separately:
+Sign in to the second account with `/login`, then save it separately:
 
 ```bash
 profiledeck claude-code profile create work --name "Work"
 profiledeck claude-code profile list
 ```
 
-ProfileDeck assigns each saved login an opaque internal ID. User, organization, and subscription fields inside OAuth data are not used to identify, merge, or overwrite saved logins.
+List and show commands display login status and expiry information without printing token values.
 
 ## Switch accounts
 
-Preview and apply a switch with the dedicated Provider ID:
+In Desktop, choose **Use Profile**, review the login change, and confirm. ProfileDeck creates a private backup before continuing.
+
+With the CLI:
 
 ```bash
 profiledeck plan claude-code personal
 profiledeck switch claude-code personal --yes
 ```
 
-Start a new Claude Code session after switching, then use `/status` to confirm the account. ProfileDeck does not stop or change already running Claude Code processes.
+Start a new Claude Code session after switching and run `/status` to confirm the account. Already running Claude Code processes do not change.
 
-When the current working login is a new valid version of the active saved login, a switch saves that update before selecting the next Profile. A working login that matches another known Profile is not written over the active Profile. Expired working logins are not saved automatically, but an expired saved Profile can still be selected so Claude Code can renew it through `/login`.
+If Claude Code refreshed the current login, ProfileDeck saves a valid update before switching away. An expired saved Profile can still be selected so Claude Code can renew it through `/login`.
 
-Use this command to save the current Claude Code login explicitly into the active Profile:
+## Save a refreshed login
+
+Use **Save Current Claude Code Login** on the current Profile in Desktop, or run:
 
 ```bash
 profiledeck claude-code profile save-current
 ```
 
-If the hidden login is shared by multiple Profiles, review the affected Profile count and confirm with `--yes`.
+When the saved login is shared by multiple Profiles, ProfileDeck shows how many Profiles will change. Review that count before confirming with `--yes` in the CLI.
 
-## Credential location
+## Allow Keychain access on macOS
 
-ProfileDeck fixes the credential location when it first creates the `claude-code` Provider:
+Claude Code must create its Keychain login with `/login` before ProfileDeck can save it. Opening the Profiles page, running `detect`, or opening Diagnostics only checks whether the login is available.
 
-- macOS: the single generic-password Keychain item with service `Claude Code-credentials` and the current macOS short username;
-- Linux and Windows: `.credentials.json` below `CLAUDE_CONFIG_DIR`, or `~/.claude/.credentials.json` when that variable is unset.
+When access is required, Desktop shows **Authorize**. macOS may then ask for your macOS login password to grant ProfileDeck access to the existing Claude Code Keychain item. This is not a request for your Claude account password.
 
-Later commands continue using that saved location. A CLI process that observes a different `CLAUDE_CONFIG_DIR` reports a non-authoritative warning instead of silently switching targets.
+Keychain permissions are specific to each item. Another tool working without a prompt does not mean Claude Code should do the same.
 
-On macOS, Claude Code must create the Keychain item with `/login`; ProfileDeck only reads and updates the one exact existing item. On Linux, ProfileDeck writes the credential file with `0600` permissions and repairs that mode during a switch when needed. On Windows, it uses an atomic replacement in the target directory without changing directory access-control lists.
+## Login files on Linux and Windows
 
-Opening the Claude Code Profiles page, running `detect`, and running Diagnostics use a passive Keychain check and do not open a macOS authorization dialog. When macOS requires permission, Desktop shows an explicit **Authorize** action. Authorizing, capturing, or switching a login may then show a system dialog; enter the macOS login password to grant Keychain access to ProfileDeck. This is not a Claude account password check. Each tool's Keychain item has its own access policy, so another integration may be readable without the same prompt.
+ProfileDeck uses `.credentials.json` below `CLAUDE_CONFIG_DIR`, or `~/.claude/.credentials.json` when that variable is unset. It keeps using the location saved when Claude Code support was first set up.
 
-## Authentication override warnings
+If a later CLI process sees a different `CLAUDE_CONFIG_DIR`, ProfileDeck warns instead of silently switching to another file. On Linux, ProfileDeck keeps the login file readable only by your user account when it writes the file.
 
-ProfileDeck reports only the names of supported authentication override variables visible to its own process. It does not read their values and cannot determine the environment of another terminal or an already running Claude Code process.
+## If Claude Code uses the wrong account
 
-Claude Code settings, `apiKeyHelper`, API-key variables, and cloud-provider switches may take precedence over the selected subscription login. Review the [Claude Code authentication documentation](https://code.claude.com/docs/en/team) when a new session does not use the expected account.
+Claude Code settings, `apiKeyHelper`, API-key environment variables, and cloud-provider options can take precedence over the selected subscription login. ProfileDeck reports the names of supported authentication override variables visible to its own process, but it cannot inspect another terminal or an already running Claude Code process.
 
-## Current limits
+Start a new session, run `/status`, and review the [Claude Code authentication documentation](https://code.claude.com/docs/en/authentication) when the selected account is not active.
 
-The first release does not include Claude Desktop, credential deletion, sensitive export/import, quota checks, usage attribution, Console or API-key accounts, Claude Code settings switching, or parallel account sessions.
+## What is not included
+
+Claude Code Profile support does not include Claude Desktop, saved-login deletion, sensitive export/import, quota checks, usage attribution, Console or API-key accounts, Claude Code settings switching, or parallel account sessions.

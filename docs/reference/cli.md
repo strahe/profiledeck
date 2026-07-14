@@ -1,29 +1,37 @@
 # CLI Reference
 
-All commands accept the global option:
+Use this page for command names and common options. Run `profiledeck --help` or `profiledeck <command> --help` for the exact help included with your installed version; installed help takes precedence if it differs from this page.
+
+Angle brackets mark required values. Square brackets mark optional arguments.
+
+## Global option
+
+Every command accepts:
 
 ```text
 --config-dir string  Use a custom ProfileDeck config directory
 ```
 
-## Root commands
+This value is the parent config directory. ProfileDeck creates or uses its `profiledeck` folder below it.
 
-| Command | Purpose |
+## Commands
+
+| Command | Use it to |
 | --- | --- |
-| `antigravity` | Manage Antigravity agy v2 Profiles. |
-| `backup` | View ProfileDeck backups. |
-| `claude-code` | Manage official Claude Code subscription Profiles. |
-| `codex` | Manage Codex provider profiles. |
-| `doctor` | Check local data, file permissions, and interrupted changes. |
+| `antigravity` | Save and manage Antigravity agy v2 Profiles. |
+| `backup` | List or inspect switch backups. |
+| `claude-code` | Save and manage official Claude Code subscription Profiles. |
+| `codex` | Manage Codex Profiles and saved settings (Config Sets). |
+| `doctor` | Diagnose local-data, permission, and interrupted-operation problems. |
 | `init` | Create ProfileDeck's local data. |
-| `plan` | Preview a Profile switch without changing external targets. |
-| `provider` | Manage AI tool providers. |
-| `profile` | Manage ProfileDeck profiles and targets. |
-| `recover` | Restore external targets from the backup saved before a failed switch. |
-| `rollback` | Undo an applied switch with its backup. |
-| `status` | Show ProfileDeck setup status. |
-| `switch` | Apply a profile switch. |
-| `usage` | Import and analyze local token usage. |
+| `plan` | Preview a Profile switch without changing the selected tool. |
+| `provider` | Configure another AI tool for advanced file switching. |
+| `profile` | Manage Profiles and advanced file targets. |
+| `recover` | Recover an interrupted or failed switch from its backup. |
+| `rollback` | Undo a completed switch from its backup. |
+| `status` | Check whether ProfileDeck is initialized. |
+| `switch` | Apply a Profile switch. |
+| `usage` | Import and report local Codex usage. |
 | `version` | Print version information. |
 
 ## Setup and status
@@ -56,13 +64,17 @@ profiledeck codex config-set update <config-set-id> [--name NAME] [--description
 profiledeck codex config-set delete <config-set-id> --yes [--json]
 ```
 
-The first `profile create` saves the current Codex login and settings and creates the `shared` Config Set. Later creates reuse the current Config Set unless `--new-config-set` is supplied. `fork` requires both sharing choices and at least one `copy-new`; copying settings also requires `--new-config-set`. `save-current` saves the current Codex login and settings, and `set-config` accepts only an inactive Profile.
+The first `profile create` saves the current Codex login and settings and creates the `shared` Config Set. Later creates reuse the current Config Set unless you pass `--new-config-set`.
 
-`config-set create` saves the current `config.toml`. List and show commands return summaries only; they never expose complete sign-in data or TOML. Delete requires a Config Set that no Profile uses.
+`fork` requires choices for both the login and Config Set, and at least one choice must be `copy-new`. Copying settings also requires `--new-config-set`. `save-current` saves the login and settings currently used by Codex. `set-config` changes only a Profile that is not current.
 
-`profile export` creates a sensitive backup. With no Profile IDs it exports every Codex Profile and Config Set. With Profile IDs it exports only those Profiles and the logins and Config Sets they need. Run `save-current` first when the current Codex login or settings changed. `--output` is required so the backup can be kept outside a ProfileDeck data directory that will be deleted; `--force` is required to replace an existing file.
+`config-set create` saves the current `config.toml`. List and show commands return safe summaries. You can delete only a Config Set that no Profile uses.
 
-The backup contains complete Codex sign-in data and settings. ProfileDeck writes it with `0600` permissions on POSIX systems and never prints the sensitive contents to stdout. `import inspect` checks the backup and reports `create`, `unchanged`, and `conflict` actions. `import apply` requires the reviewed fingerprint and makes no changes when existing Codex data conflicts. An existing global Profile without Codex bindings receives the imported bindings without changing its name or description. Import does not make a Profile current or write Codex files.
+`profile export` creates a sensitive backup. Without Profile IDs, it exports every Codex Profile and Config Set. With IDs, it exports only the selected Profiles and the data they need. Use `--force` to replace an existing output file.
+
+Run `import inspect` first. Review what will be added, what already matches your saved data, and any conflicts, then pass the returned fingerprint to `import apply`. Import stops without changes when existing Codex data conflicts. It does not make a Profile current or change Codex files.
+
+See [Codex Profiles](../codex/profiles.md) for task-based examples and safety guidance.
 
 ## Claude Code
 
@@ -75,9 +87,11 @@ profiledeck claude-code profile update <profile-id> [--name NAME] [--description
 profiledeck claude-code profile save-current [--yes] [--json]
 ```
 
-Create saves the current official Claude Code subscription login and makes the new Profile current. `save-current` updates the login bound to the active Profile. When that hidden login is shared, the command reports the affected Profile count and requires `--yes`.
+`create` saves the current official Claude Code subscription login and makes the new Profile current. `save-current` updates the login used by the current Profile. If that saved login is shared, the command reports how many Profiles will change and requires `--yes`.
 
-Claude Code has no shorter `claude` alias. Switch it with `profiledeck plan claude-code <profile-id>` and `profiledeck switch claude-code <profile-id> --yes`. Commands expose login status and metadata only, never token values.
+There is no `claude` alias. Switch with `profiledeck plan claude-code <profile-id>` and `profiledeck switch claude-code <profile-id> --yes`. Commands show login status and safe metadata, never token values.
+
+See [Claude Code Profiles](../claude-code/profiles.md) for login requirements and verification.
 
 ## Antigravity agy v2
 
@@ -90,16 +104,18 @@ profiledeck antigravity profile update <profile-id> [--name NAME] [--description
 profiledeck antigravity profile save-current [--json]
 ```
 
-`agy` is an alias for `antigravity`. Create and save-current require a valid consumer OAuth login from Antigravity agy v2. Output contains metadata only and never prints login values.
+`agy` is an alias for `antigravity`. `create` and `save-current` require a valid consumer OAuth login from Antigravity agy v2. Output shows safe metadata and never prints login values.
 
-## Switching
+See [Antigravity Profiles](../antigravity/profiles.md) for compatibility and switching advice.
+
+## Preview and switch
 
 ```bash
 profiledeck plan [--json] <provider-id> <profile-id>
 profiledeck switch [--yes] [--plan-fingerprint FINGERPRINT] [--json] <provider-id> <profile-id>
 ```
 
-`switch` requires `--yes`.
+`plan` is read-only. `switch` requires `--yes`. Pass the fingerprint returned by `plan` when you want ProfileDeck to reject any state that changed after your review.
 
 ## Usage
 
@@ -109,9 +125,11 @@ profiledeck usage summary [--provider codex] [--json]
 profiledeck usage report [--provider codex] [--range today|7d|30d|all] [--json]
 ```
 
-Only local Codex usage is supported currently. `sync codex` is the manual entry point for CLI-only workflows; the Desktop app syncs automatically at its configured interval. `report` defaults to `7d`; human output prints the overall summary, time trend, and model statistics. JSON output also includes the resolved local-time range, import status, and pricing source. `summary` provides a shorter all-time view.
+Only local Codex usage is supported. `report` defaults to `7d`; `summary` gives a shorter all-time view. See [Codex Usage and Cost](../codex/usage-cost.md) for report fields and estimation limits.
 
-## Provider and profile CRUD
+## Other tools and configuration files
+
+The following commands are advanced CLI features for tools other than the built-in Codex, Claude Code, and Antigravity workflows. Use each built-in tool's dedicated commands above; generic target commands cannot manage their saved logins or settings.
 
 ```bash
 profiledeck provider list [--all] [--json]
@@ -127,8 +145,6 @@ profiledeck profile update <id> [--name NAME] [--description TEXT] [--metadata-j
 profiledeck profile delete <id> --yes [--json]
 ```
 
-For the managed `codex`, `claude-code`, and `antigravity` Providers, generic Provider updates may change only the display name or enabled state. Their adapter and metadata are owned by the dedicated Profile workflows.
-
 Target commands:
 
 ```bash
@@ -139,15 +155,17 @@ profiledeck profile target update <profile-id> <provider-id> <target-id> [--path
 profiledeck profile target delete <profile-id> <provider-id> <target-id> --yes [--json]
 ```
 
-Generic target commands cannot create, update, or delete bindings managed by Codex, Claude Code, or Antigravity Profiles. Use the Provider-specific commands above.
+See [Other Configuration Files](../guide/generic-targets.md) before adding a target.
 
-## Backup and recovery
+## Backups, diagnostics, and recovery
 
 ```bash
 profiledeck backup list [--json]
 profiledeck backup show <backup-id> [--json]
 profiledeck doctor [--json]
 profiledeck doctor repair-lock --yes [--json]
-profiledeck recover <switch-operation-id> --yes [--json]
+profiledeck recover <failed-switch-id> --yes [--json]
 profiledeck rollback <backup-id> --yes [--json]
 ```
+
+Use [Diagnostics and Recovery](../operations/recovery.md) to choose between repairing blocked switching, recovering a failed switch, and undoing a successful switch.

@@ -1,94 +1,78 @@
 # Getting Started
 
-ProfileDeck provides a Go CLI and a macOS Desktop app. Command examples assume the `profiledeck` executable is available on `PATH`.
+Use the macOS Desktop app for a visual workflow, or build the CLI for terminal use. Both use the same Profiles, backups, and switching rules.
 
-## Build from source
+## Before you start
+
+- The Desktop Alpha requires macOS 14 or later on Apple silicon.
+- Building the CLI requires Git, Go 1.26, Make, and a POSIX shell.
+- Install the AI coding tool you want to manage and sign in before saving its first Profile.
+
+## Use the Desktop app
+
+1. Download the latest macOS arm64 ZIP from [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases).
+2. Expand the ZIP and move `ProfileDeck.app` to Applications.
+3. Open ProfileDeck. The app creates its local data automatically. If you already have a current Codex Profile, startup also checks its limits; Codex may refresh the saved login during that check.
+4. Select Codex, Claude Code, or Antigravity in the sidebar, then open **Profiles**.
+
+Current Alpha builds are not notarized. If macOS blocks the first launch, open **System Settings → Privacy & Security** and choose **Open Anyway** for ProfileDeck. Only do this for a file you downloaded from the official Releases page.
+
+## Build and use the CLI
+
+Clone the public repository and build the command:
 
 ```bash
+git clone https://github.com/strahe/profiledeck.git
+cd profiledeck
 make build
-```
-
-The binary is written to `bin/profiledeck`.
-
-Command examples use `profiledeck` as the executable name. Install the binary or add `bin/` to your shell path before following the examples from a source checkout.
-
-## Development shortcuts
-
-| Command | Purpose |
-| --- | --- |
-| `make fmt` | Format all Go packages with gofumpt and gci. |
-| `make lint` | Run read-only Go formatting and static-analysis checks. |
-| `make test` | Run `go test ./...`. |
-| `make build` | Build `bin/profiledeck` from `cmd/profiledeck`. |
-| `make core-check` | Run the CLI/core lint, tests, and build. |
-| `make desktop-check` | Run the Wails boundary, bindings, frontend, build, and Desktop tests. |
-| `make docs-check` | Install documentation dependencies and build the documentation site. |
-| `make check` | Run the complete core, Desktop, and documentation gate. |
-| `make clean` | Remove local build output. |
-
-`make check` is read-only for tracked source and generated bindings. Run `make fmt` or `make desktop-bindings` explicitly when those files need updating. Full validation requires macOS and compatible `golangci-lint` v2 and `wails3` executables on `PATH`; use `make core-check` for the portable CLI/core gate on other platforms.
-
-Documentation tasks also use Make targets:
-
-```bash
-make docs-install
-make docs-dev
-make docs-build
-make docs-preview
-```
-
-## Initialize ProfileDeck
-
-```bash
+export PATH="$PWD/bin:$PATH"
+profiledeck version
 profiledeck init
-profiledeck status
 ```
 
-`init` creates ProfileDeck's local data and backup folders. By default, the data directory is:
-
-```text
-<os-user-config-dir>/profiledeck
-```
-
-The application database is stored at:
-
-```text
-<os-user-config-dir>/profiledeck/profiledeck.db
-```
-
-Use `--config-dir` to place ProfileDeck data under a different user config directory:
+`profiledeck init` creates ProfileDeck's local data and backup folders. To use a different location, pass the parent config directory:
 
 ```bash
-profiledeck --config-dir /tmp/profiledeck-dev init
+profiledeck --config-dir /path/to/config-root init
 ```
 
-ProfileDeck restricts access to its local data and backup folders on POSIX systems when possible.
+ProfileDeck creates a `profiledeck` folder below that directory.
 
-Distributed macOS arm64 Alpha builds can check for updates while ProfileDeck is running. See [Desktop Updates](/guide/updates) to manage automatic checks and install a downloaded update.
+The shell command `export PATH=...` updates `PATH` for the current shell. For future terminals, add this repository's `bin` directory to your shell profile.
 
-## First Codex profile
+## Save your first Profile
+
+Prepare the selected tool first:
+
+- **Codex:** confirm that `config.toml` and `auth.json` exist in `CODEX_HOME` or `~/.codex`. If `auth.json` is missing, follow the [Codex prerequisite](../codex/profiles.md#before-you-start).
+- **Claude Code:** run `/login` in Claude Code with an official subscription account.
+- **Antigravity:** sign in through Antigravity agy v2.
+
+In Desktop, select the tool and use the save action on its Profiles page. Enter a permanent Profile ID and a display name. To save another account, sign in to that account in the tool, return to ProfileDeck, and save another Profile.
+
+Use these minimal CLI flows instead:
+
+### Codex
 
 ```bash
 profiledeck codex detect
 profiledeck codex profile create work
-profiledeck codex profile list
 profiledeck plan codex work
 profiledeck switch codex work --yes
 ```
 
-`codex profile create` reads the current Codex home and requires both `config.toml` and `auth.json`. Resolution order is:
+### Claude Code
 
-1. `--codex-dir`
-2. `CODEX_HOME`
-3. `~/.codex`
+```bash
+profiledeck claude-code detect
+profiledeck claude-code profile create personal
+profiledeck plan claude-code personal
+profiledeck switch claude-code personal --yes
+```
 
-For Codex profile switching, Codex must have `$CODEX_HOME/auth.json`.
+Start a new Claude Code session after switching and run `/status` to confirm the account.
 
-The first Profile creates and activates a Config Set named `shared`. Later Profiles reuse the active Config Set by default, so creating another login usually requires only logging in with that account and running `codex profile create` again. Use `--new-config-set <id>` when the current `config.toml` should become an independent Config Set.
-
-## First Antigravity Profile
-
-Sign in through Antigravity agy v2, then run:
+### Antigravity
 
 ```bash
 profiledeck antigravity detect
@@ -97,4 +81,30 @@ profiledeck plan antigravity work
 profiledeck switch antigravity work --yes
 ```
 
-ProfileDeck supports only the agy v2 consumer OAuth login. It does not start OAuth login or import Antigravity Manager data.
+Close Antigravity before switching when practical, then restart it afterward.
+
+## Confirm the result
+
+Desktop marks the selected Profile as **Current** after a successful switch. In the CLI, list the Profiles for the selected tool:
+
+```bash
+profiledeck codex profile list
+profiledeck claude-code profile list
+profiledeck antigravity profile list
+```
+
+If ProfileDeck reports an incomplete change or blocks another switch, open **Diagnostics** or run:
+
+```bash
+profiledeck doctor
+```
+
+Follow only the recovery action that Diagnostics recommends. See [Recovery](../operations/recovery.md) for the difference between recovering a failed change and undoing a successful switch.
+
+## Next steps
+
+- [Codex Profiles](../codex/profiles.md)
+- [Claude Code Profiles](../claude-code/profiles.md)
+- [Antigravity Profiles](../antigravity/profiles.md)
+- [Switching safely](../operations/switching.md)
+- [Data and security](../reference/data-security.md)

@@ -1,15 +1,23 @@
-# 通用目标文件
+# 切换其他配置文件
 
-通用目标适合需要为尚无专用支持的工具切换本地配置文件的高级用户。Codex 和 Antigravity 用户应使用各自的 Profile 命令；generic target CRUD 不能修改这些托管绑定。
+通用目标是高级 CLI 功能，用于切换用户明确选择的本地配置文件。Codex、Claude Code 和 Antigravity 必须使用各自的 Profile 命令；通用目标命令不能修改这些工具管理的登录或设置。
 
-专用流程也负责管理 `codex` 和 `antigravity` Provider 的 adapter 与 metadata。通用 Provider 更新只能更改它们的显示名称或启用状态。
+## 开始前准备
 
-## 创建 provider 和 profile
+- 运行 `profiledeck init` 初始化 ProfileDeck。
+- 使用普通本地文件的绝对路径。
+- 确定要替换整个文件，还是只合并指定值。
+
+ProfileDeck 不会修改通过符号链接访问的文件。如果目标文件包含敏感值，请仔细审核预览。
+
+## 创建工具和 Profile
 
 ```bash
 profiledeck provider create my-tool --adapter generic --name "My Tool"
 profiledeck profile create work --name "Work"
 ```
+
+Provider ID 用于在后续命令中标识工具；Profile ID 用于标识要切换到的已保存设置。
 
 ## 添加配置文件
 
@@ -19,32 +27,30 @@ profiledeck profile target add work settings \
   --path /absolute/path/to/settings.json \
   --format json \
   --strategy json-merge \
-  --value-json '{"model":"gpt-5.3-codex"}'
+  --value-json '{"model":"example-model"}'
 ```
 
-目标路径必须是绝对路径。
+## 选择文件修改方式
 
-## 支持的格式和策略
-
-| 策略 | 格式 | `value-json` 结构 |
+| 策略 | 格式 | `--value-json` 提供的内容 |
 | --- | --- | --- |
-| `replace-file` | `text`, `json`, `toml`, `env` | `{"content":"..."}` |
-| `json-merge` | `json` | 合并到目标文件的 JSON object。 |
-| `toml-merge` | `toml` | 转换为 TOML 后合并的 JSON object。 |
-| `env-merge` | `env` | string value 的 JSON object，会转换为 env assignment。 |
+| `replace-file` | `text`、`json`、`toml`、`env` | `{"content":"..."}`，替换整个文件。 |
+| `json-merge` | `json` | 合并到当前 JSON 文件的 JSON 对象。 |
+| `toml-merge` | `toml` | 转换为 TOML 后合并的 JSON 对象。 |
+| `env-merge` | `env` | 转换为环境变量赋值的字符串 JSON 对象。 |
 
-合并策略会在准备预览时读取现有文件。如果文件不是有效的 JSON、TOML 或 env 内容，ProfileDeck 会停止切换并提示你先修复文件。
+使用合并策略时，当前文件必须是有效的 JSON、TOML 或 env 内容。内容无效时，请先修复文件，再执行切换。
 
-## 预览和应用
+## 审核并切换
 
 ```bash
 profiledeck plan my-tool work
 profiledeck switch my-tool work --yes
 ```
 
-预览中的敏感值会被隐藏。出于安全考虑，ProfileDeck 不会修改通过符号链接访问的文件。
+预览会显示所选文件，并隐藏疑似敏感值。应用前，ProfileDeck 会再次检查文件并创建备份。
 
-## 更新和查看
+## 查看或恢复
 
 ```bash
 profiledeck provider list
@@ -53,4 +59,6 @@ profiledeck profile target list work
 profiledeck profile target show work my-tool settings
 ```
 
-这些命令只在 ProfileDeck 中保存文件规则，不会立即修改工具文件。只有运行 `profiledeck switch` 后，文件才会改变。
+添加或编辑目标时，只会修改已保存规则。只有 `profiledeck switch` 成功后，外部文件才会改变。
+
+如果切换没有完成，请先运行 `profiledeck doctor`。需要恢复失败或不再需要的更改时，请参阅[恢复或撤销](../operations/recovery.md)。

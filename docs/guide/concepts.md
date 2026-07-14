@@ -1,57 +1,49 @@
-# Concepts
+# Profiles, Logins, and Settings
 
-ProfileDeck saves the parts of an AI coding tool setup that you want to switch together.
+A Profile names the login and settings you want to use for one supported tool. Saving a Profile does not immediately change that tool; files and system logins change only when you confirm a switch, recovery, or rollback.
 
-## Provider
+## What a Profile saves
 
-A provider is an AI tool integration. ProfileDeck currently supports:
+| Tool | Saved login | Saved settings |
+| --- | --- | --- |
+| Codex | One Codex login | Saved Codex settings, called a Config Set |
+| Claude Code | One official subscription login | Not included |
+| Antigravity | One consumer OAuth login used by agy v2 | Not included |
 
-- `codex` for the guided Codex workflow;
-- `antigravity` for Antigravity agy v2 login Profiles;
-- `generic` for advanced workflows that manage explicitly selected local files.
-
-The Desktop sidebar calls Codex and Antigravity Agents. Provider is the underlying data and switching namespace; Agent is the supported tool workspace shown in the UI.
-
-## Profile
-
-A Profile is a global named composition that can participate in more than one Provider workflow. A Codex Profile contains:
-
-- a saved Codex login;
-- a Config Set with the Codex settings that should be used with that login.
-
-The login and Config Set can be shared independently. For example, two Profiles can use the same settings with different logins, or the same login with different settings.
-
-An Antigravity Profile contains one saved agy v2 login. The Antigravity workspace shows only Profiles that have that managed binding.
+Each Profile has a permanent ID used by CLI commands and links. Profile IDs share one namespace across tools, and one Profile can contain saved data for more than one tool.
 
 ## Current Profile
 
-Current Profile state is tracked per Provider. Codex working copies remain normal `auth.json` and `config.toml` files. Antigravity keeps its working login in the system credential store.
+ProfileDeck records one current Profile for each supported tool. The current Profile is the one represented by that tool's working login or files:
 
-Before switching, ProfileDeck preserves valid changes made to the current Codex files. If a required file is missing or invalid, ProfileDeck shows a warning and does not silently save it.
+- Codex uses `auth.json` and `config.toml` in the active Codex home.
+- Claude Code uses its official subscription login in Keychain on macOS or its credential file on Linux and Windows.
+- Antigravity uses its agy v2 login in the system credential store.
 
-## Saved login
+Before leaving the current Profile, ProfileDeck preserves a valid refreshed login or valid Codex settings when it can do so safely. Missing, invalid, or unsupported content is reported instead of being saved silently.
 
-A saved login contains tool sign-in data used by one or more Profiles. It is a hidden lifecycle resource, not a separate account managed inside ProfileDeck.
+## Saved logins
 
-ProfileDeck may show the final characters of the Codex Account ID to help distinguish logins. This value is informational only and is never used to decide which saved login should be updated or shared.
+A saved login can be shared by more than one Profile. Updating a shared login changes every Profile that uses it, so Desktop shows the affected Profile count before saving.
 
-## Config Set
+ProfileDeck may show the final characters of a Codex Account ID to help distinguish logins. This value is display information only; it does not decide which login is updated or shared.
 
-A Config Set contains one complete user-level Codex configuration. The first Profile creates a Config Set named `shared`; you can rename it, copy it, or create separate Config Sets for Profiles that need different settings.
+## Codex Config Sets
 
-A Config Set can be deleted only when no Profile uses it.
+A Config Set is a reusable copy of the Codex settings in the user-level `config.toml`. The first Codex Profile creates one named `shared`. Later Profiles can reuse it or save a separate copy.
 
-## Codex files
+When Profiles share a Config Set, saving changed Codex settings updates all of them. Copy the Config Set when one Profile needs settings that can change independently. A Config Set can be deleted only when no Profile uses it.
 
-ProfileDeck works with:
+Config Sets do not include sessions, logs, skills, plugin caches, project `.codex/config.toml` files, or system policy.
 
-- `$CODEX_HOME/config.toml` for the current Codex settings;
-- `$CODEX_HOME/auth.json` for the current Codex login.
+## What ProfileDeck changes
 
-Skills, plugin caches, project `.codex/config.toml` files, sessions, logs, and system policy are not part of a Config Set.
+Creating, editing, forking, or importing a Profile changes only saved ProfileDeck data. Confirming a switch, recovery, or rollback may change the selected tool's working login or files.
 
-ProfileDeck changes these files only after you review and apply a switch, rollback, or recovery action. Creating, editing, forking, or importing a Profile changes saved ProfileDeck data only.
+Every such change is reviewed against the current tool state and backed up first. See [Review and Switch](../operations/switching.md) for the normal flow and [Recover or Undo](../operations/recovery.md) when a change does not finish or needs to be reversed.
 
-## Local ProfileDeck data
+## Local data
 
-Profiles, Config Sets, saved logins, settings, usage reports, and operation history are stored locally in `profiledeck.db`. Target tools continue to own their files and system credential-store entries.
+Profiles, Config Sets, saved logins, preferences, usage reports, and operation history are stored in ProfileDeck's local data directory. Supported tools continue to own their working files and system credential entries.
+
+Saved data and backups may contain complete sign-in data. Read [Data and Security](../reference/data-security.md) before copying, exporting, or deleting ProfileDeck data.

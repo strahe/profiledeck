@@ -1,21 +1,35 @@
 # Antigravity Profile
 
-ProfileDeck 支持 Antigravity agy v2 使用的 consumer OAuth 登录。Legacy Antigravity 存储和其他 Antigravity 版本不受支持。
+ProfileDeck 可以保存和切换 Antigravity agy v2 使用的个人 OAuth 登录，但不会代替你登录 Antigravity。
 
-## 保存当前登录
+## 开始前准备
 
-先通过 Antigravity agy v2 登录，然后运行：
+1. 使用 Antigravity agy v2。
+2. 在 Antigravity 中完成登录，并确认登录可用。
+3. 启动 ProfileDeck；如果使用 CLI，请运行 `profiledeck init`。
+
+ProfileDeck 不支持旧版 Antigravity 存储方式或其他 Antigravity 版本。
+
+## 在桌面端保存 Profile
+
+1. 在 ProfileDeck 侧边栏中打开 **Antigravity**。
+2. 选择**保存当前登录**。
+3. 输入创建后不会改变的 Profile ID 和用于显示的名称，然后选择**保存 Profile**。
+
+新 Profile 会成为 Antigravity 的当前 Profile。ProfileDeck 不会显示其中的访问令牌或刷新令牌。
+
+## 使用 CLI 保存 Profile
+
+先检查当前登录，再保存它：
 
 ```bash
 profiledeck antigravity detect
 profiledeck antigravity profile create work --name Work
 ```
 
-`detect` 只报告 `valid`、`missing`、`invalid` 或 `unavailable`，不会打印登录内容。`profile create` 要求当前登录有效，将其保存为隐藏凭据，并把新 Profile 设为当前 Profile。
+`detect` 只报告登录是否就绪，不会输出登录内容。创建命令要求当前登录有效。
 
-Desktop 侧栏中的 Antigravity Agent 提供相同流程。
-
-## 查看和编辑 Profile
+查看或重命名已保存的 Profile：
 
 ```bash
 profiledeck antigravity profile list
@@ -23,27 +37,31 @@ profiledeck antigravity profile show work
 profiledeck antigravity profile update work --name "Work account"
 ```
 
-List 和 show 只显示 Profile 详情、登录过期时间、引用数和警告，不会包含 access token 或 refresh token。
-
 ## 切换 Profile
+
+条件允许时，请先关闭 Antigravity 再切换，避免它在变更期间刷新登录；切换后重新打开即可。
+
+在桌面端打开目标 Profile，选择**使用 Profile**，检查变更并确认。
+
+使用 CLI 时，先预览再应用同一变更：
 
 ```bash
 profiledeck plan antigravity work
 profiledeck switch antigravity work --yes
 ```
 
-Antigravity plan 只显示安全目标标签和 `create`、`update` 或 `noop`。系统凭据位置、登录 payload、预览和登录哈希始终隐藏。
+ProfileDeck 会再次检查当前登录，并在变更前创建私有备份。如果切换中断，请使用[诊断与恢复](../operations/recovery.md)。
 
-ProfileDeck 会先创建私有备份，再更新系统凭据存储；写入前还会立即重新检查当前值。系统凭据存储不提供跨进程 compare-and-swap，因此 Antigravity 仍可能在写入前的最后窗口刷新登录。条件允许时，请先关闭 Antigravity，切换后再重启。
+## 保存刷新的登录
 
-## 保存刷新后的登录
-
-Antigravity 运行时可能刷新当前登录。切换时，ProfileDeck 会把有效的刷新结果保存到之前的当前 Profile。也可以显式运行：
+Antigravity 运行时可能刷新登录。切离当前 Profile 时，ProfileDeck 会保存有效的刷新后登录。你也可以主动保存：
 
 ```bash
 profiledeck antigravity profile save-current
 ```
 
-## 支持范围
+在桌面端打开当前 Profile，然后选择**从当前 Antigravity 更新**。
 
-Antigravity 支持不包括 OAuth 登录、legacy storage、Manager 导入、配额读取、用量归属或其他 Antigravity 版本。
+## 不支持的范围
+
+ProfileDeck 不提供 Antigravity 登录、旧版存储迁移、Manager 导入、限额查询、用量归属，也不支持 agy v2 以外的 Antigravity 版本。

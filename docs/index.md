@@ -1,40 +1,40 @@
 # ProfileDeck
 
-ProfileDeck safely switches local AI coding tool Profiles. Codex Profiles save a login and reusable Config Set. Claude Code Profiles save official subscription logins. Antigravity Profiles save the consumer OAuth login used by Antigravity agy v2.
+ProfileDeck saves local AI coding tool logins and settings as Profiles, then lets you review and apply a switch when you need a different setup.
 
-## Current capabilities
+## Choose how to use ProfileDeck
 
-- Create a Codex Profile from `$CODEX_HOME/config.toml` and `$CODEX_HOME/auth.json`.
-- Save and switch multiple official Claude Code subscription logins without changing Claude Code settings.
-- Save and switch Antigravity agy v2 logins through the system credential store.
-- Share saved logins and Config Sets independently across Profiles.
-- Preview every switch, preserve supported valid changes in the current tool state, create a backup first, and stop if a reviewed external target changed.
-- Import active and archived Codex session JSONL, then analyze local-time trends, models, sessions, cache usage, and API-equivalent estimated cost.
-- Inspect backups, find problems that block switching, recover failed switches, and undo an applied switch.
-- Keep the macOS app up to date, view download progress, and choose when to restart.
-- Manage generic providers, profiles, and target files for advanced local workflows.
+| Option | Best for | Start here |
+| --- | --- | --- |
+| macOS Desktop | Managing Profiles, usage, updates, and recovery in one app | [Download and open the Desktop app](./guide/getting-started.md#use-the-desktop-app) |
+| CLI | Terminal workflows and automation from a source build | [Build and initialize the CLI](./guide/getting-started.md#build-and-use-the-cli) |
 
-## Quick start
+The Desktop Alpha requires macOS 14 or later on Apple silicon. The CLI requires Go 1.26 and Make when building from source.
 
-```bash
-make build
+## Supported tools
 
-profiledeck init
-profiledeck codex detect
-profiledeck codex profile create work
-profiledeck plan codex work
-profiledeck switch codex work --yes
-```
+| Tool | What ProfileDeck switches | What stays unchanged |
+| --- | --- | --- |
+| Codex | A saved login and reusable user-level settings | Sessions, logs, skills, project settings, and system policy |
+| Claude Code | An official subscription login | Claude Code settings, plugins, API keys, cloud providers, and Claude Desktop |
+| Antigravity | The consumer OAuth login used by Antigravity agy v2 | Login flow, quotas, Manager data, and other Antigravity versions |
 
-Codex must use file credentials for profile switching. If `$CODEX_HOME/auth.json` is missing, set `cli_auth_credentials_store = "file"` in Codex config and run `codex login` again.
+Codex usage reports are separate from Profile switching. They summarize local session data without assigning activity to a Profile or account.
 
-## Documentation map
+## What happens when you switch
 
-- [Getting Started](/guide/getting-started) covers local build, initial setup, and command shortcuts.
-- [Desktop Updates](/guide/updates) explains how to check for updates, install one, and open the macOS app for the first time.
-- [Codex Profiles](/codex/profiles) covers saved logins, Config Sets, switching, limits, and backups.
-- [Claude Code Profiles](/claude-code/profiles) covers official subscription login capture, switching, and platform credential locations.
-- [Antigravity Profiles](/antigravity/profiles) covers agy v2 login capture, switching, and limitations.
-- [Codex Usage and Cost](/codex/usage-cost) covers offline imports, reports, and estimation limits.
-- [Switching](/operations/switching) explains plan, apply, backups, and safety checks.
-- [Data and Security](/reference/data-security) describes stored secrets, backups, and redaction boundaries.
+1. Review what will change. Login values remain hidden.
+2. Confirm the switch. ProfileDeck checks the current files or login again.
+3. ProfileDeck creates a backup before changing anything.
+4. The selected Profile becomes current only after the change succeeds.
+
+If a change does not finish, open Diagnostics or run `profiledeck doctor` before switching again.
+
+## Continue
+
+- [Get started](./guide/getting-started.md)
+- [Understand Profiles, logins, and settings](./guide/concepts.md)
+- [Manage Codex Profiles](./codex/profiles.md)
+- [Manage Claude Code Profiles](./claude-code/profiles.md)
+- [Manage Antigravity Profiles](./antigravity/profiles.md)
+- [Review data and security](./reference/data-security.md)

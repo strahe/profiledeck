@@ -1,91 +1,68 @@
-# Data and Security
+# Local Data and Security
 
-ProfileDeck manages local files and hidden sign-in data for supported tools. Treat its data directory and backups as sensitive.
+ProfileDeck keeps Profiles, saved logins, settings, usage reports, backups, and operation history on your device. Treat its data directory as sensitive.
 
-## Local data
+## Find the data directory
 
-The default data directory is:
+The default location is:
 
 ```text
-<os-user-config-dir>/profiledeck
+<user-config-directory>/profiledeck
 ```
 
-It contains the application database, backups, exports, and operational files. `--config-dir` changes the user config directory used for this location.
+Common examples are:
 
-`profiledeck.db` stores Profiles, Config Sets, saved Codex, Claude Code, and Antigravity logins, settings, usage reports, and operation history. Complete Codex `auth.json` and `config.toml` contents, Claude Code subscription login payloads, and Antigravity agy v2 login payloads may be stored because they are required to restore and switch Profiles.
+| System | Default location |
+| --- | --- |
+| macOS | `~/Library/Application Support/profiledeck` |
+| Linux | `$XDG_CONFIG_HOME/profiledeck` or `~/.config/profiledeck` |
+| Windows | `%AppData%\profiledeck` |
 
-Claude Code and Claude Desktop have separate product and credential boundaries. The Claude Code integration does not inspect, store, or change Claude Desktop credentials, configuration, or processes.
+If you pass `--config-dir <directory>`, ProfileDeck uses `<directory>/profiledeck` instead.
 
-The database is not encrypted at rest. ProfileDeck restricts file permissions on POSIX systems when possible, but anyone who can read your local files may be able to read saved sign-in data.
+The directory contains ProfileDeck's saved data, switch and update backups, and files needed to complete or recover changes. Codex, Claude Code, and Antigravity logins may be stored there because ProfileDeck needs them to switch and restore Profiles.
 
-Current account-limit information is temporary and is not stored in the database.
+## Protect local data
 
-## Backups
+ProfileDeck does not add its own encryption to saved data or backups. It restricts their file permissions where the operating system allows it, but anyone who can read your local files may be able to read saved logins.
 
-Switch and rollback backups may contain previous tool files. Codex backups can include complete `auth.json` and `config.toml` contents.
+- Use your operating system's full-disk encryption and screen lock.
+- Do not sync, commit, upload, or share the ProfileDeck data directory.
+- Back up the entire directory before moving or reinstalling ProfileDeck.
+- Keep backups until you have confirmed that your Profiles switch correctly.
 
-For file targets, backup commands show file names, actions, hashes, and permissions without printing sensitive file contents. Keep the backup directory private.
+Claude Code support is separate from Claude Desktop. ProfileDeck does not read or change Claude Desktop logins, settings, or processes.
 
-Antigravity switch backups may contain the previous login in a private payload file. Public plan and backup summaries omit the system credential location, payload, and payload hashes.
+## Understand switch and update backups
 
-Claude Code switch backups may contain the previous subscription login. On macOS, the private backup manifest also stores the persistent reference for the exact Keychain item. Public switch and backup DTOs, logs, errors, ordinary exports, and backup summaries omit that reference, the payload, and payload hashes.
+Every switch and rollback creates a private backup before changing the selected tool. A backup may contain complete Codex files, a Claude Code subscription login, or an Antigravity login.
 
-Before installing a Desktop update, ProfileDeck backs up its application data and keeps the three newest update backups. These backups may contain the same sensitive data as the application database, so keep the ProfileDeck data directory private.
+Before installing a Desktop update, ProfileDeck also backs up its local data and keeps the three newest update backups. If update verification or installation fails, the current version remains available.
 
-ProfileDeck verifies an update before installing it. If verification fails, the update is not installed and the current version remains in place.
+Backup lists and previews hide sensitive contents, but the backup files themselves must remain private.
 
-## Sensitive Profile exports
+## Export a Codex Profile safely
 
-`profiledeck codex profile export` creates a sensitive local backup. The JSON file contains complete Codex sign-in data and settings. Anyone with the file may be able to access your account.
+`profiledeck codex profile export` creates an explicitly sensitive backup containing the selected Profile's complete Codex login and saved settings. Anyone with that file may be able to use the account.
 
-ProfileDeck requires an explicit output path, refuses symbolic-link destinations, and writes the file with `0600` permissions on POSIX systems. It does not create or change the selected parent directory.
+Choose a private destination outside a repository or shared folder. Do not commit or share the export. Keep it outside any ProfileDeck data directory you plan to delete.
 
-Import checks the backup and reports conflicts before making changes. When it attaches Codex bindings to an existing global Profile, it preserves that Profile's name and description. It does not make a Profile current, restore automatic-update settings, or write Codex files. Imported Profiles start with automatic limit refresh and sign-in renewal disabled.
+Import checks the file and reports conflicts before saving anything. It does not make the imported Profile current, change Codex files, or enable automatic limit refresh and sign-in renewal.
 
-Keep exported backups outside any ProfileDeck data directory you plan to delete. Do not commit or share them.
+See [Codex Profiles](../codex/profiles.md#back-up-and-restore-profiles) for the export and import commands.
 
-## Redaction
+## Know when ProfileDeck connects to the internet
 
-ProfileDeck hides sensitive-looking values in previews, normal command output, logs, errors, and result summaries. Codex sign-in previews are always fully hidden.
+Most ProfileDeck actions use local data only.
 
-These commands show summaries only and do not print complete saved sign-in payloads or Config Set contents:
+- Usage sync and reports read local Codex session files and do not contact a billing service.
+- Codex limit checks contact Codex or OpenAI with the selected saved login. That login is never sent to a custom model-service URL from the saved Codex settings. Limit results are temporary and are not added to usage reports.
+- Desktop update checks and downloads contact the public ProfileDeck release on GitHub.
 
-```bash
-profiledeck codex profile list
-profiledeck codex profile show <profile-id>
-profiledeck codex config-set list
-profiledeck codex config-set show <config-set-id>
-profiledeck plan codex <profile-id>
-profiledeck claude-code profile list
-profiledeck claude-code profile show <profile-id>
-profiledeck plan claude-code <profile-id>
-profiledeck antigravity profile list
-profiledeck antigravity profile show <profile-id>
-profiledeck plan antigravity <profile-id>
-profiledeck backup show <backup-id>
-profiledeck doctor
-```
+ProfileDeck does not provide cloud sync and does not send telemetry or analytics data. Automatic Codex limit refresh and sign-in renewal are off by default and run only while the Desktop app is open or in the menu bar.
 
-Export and import command output also remains summary-only. Only the explicitly selected backup file contains the complete sign-in data and settings.
+## What output and usage reports omit
 
-## Limit checks and sign-in renewal
+Normal previews, commands, logs, errors, and backup summaries hide saved login values and other sensitive-looking settings. Only a sensitive Codex export that you explicitly create contains complete exported login and settings data.
 
-Checking a Profile's limits contacts Codex or OpenAI using that Profile's saved sign-in. Profile-controlled model-provider URLs never receive the saved ChatGPT sign-in token.
-
-Automatic limit refresh and sign-in renewal are off by default and run only while ProfileDeck is open or hidden in the tray. Desktop also checks the current Profile once at startup and does not repeat that check when you navigate between pages.
-
-Supported managed logins may be renewed during a limit check. Some external sign-in methods can provide limits but cannot be renewed automatically. If automatic Codex updates are unavailable, a manual check may still work without changing the saved login.
-
-Limit information is kept only while ProfileDeck is running. Limit checks do not display or record raw sign-in tokens or temporary file locations.
-
-## Usage data ProfileDeck does not store
-
-Usage reports store token counts, cost estimates, model names, and time information. ProfileDeck does not store raw Codex session records, prompts, completions, API keys, or full source paths as Usage data.
-
-Usage reports contain aggregate results only. Local Codex activity cannot reliably identify which Profile or ChatGPT account served a request, so ProfileDeck does not guess or publish account-level usage.
-
-Config Sets do not include skills, plugin caches, project `.codex/config.toml` files, or system policy.
-
-ProfileDeck supports only Antigravity agy v2 consumer OAuth payloads. It does not perform Antigravity OAuth login, import Manager data, or expose account identity fields for matching.
-
-ProfileDeck supports only the confirmed official Claude Code `claudeAiOauth` subscription shape. It does not perform Claude Code login and does not use OAuth user, organization, or subscription fields for identity, deduplication, merging, or overwrite decisions.
+Usage reports store token counts, model names, time information, and cost estimates. They do not store raw prompts, raw completions, API keys, complete session records, or full source-file paths. Local Codex activity cannot reliably identify the Profile or ChatGPT account that served a request, so ProfileDeck does not guess that attribution.

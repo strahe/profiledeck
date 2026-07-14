@@ -1,54 +1,46 @@
 # Codex Usage and Cost
 
-ProfileDeck imports local Codex activity and provides offline analysis by time, model, and session count. It does not query account limits or guess which Profile or ChatGPT account produced a session. Limit checks on Desktop Profile pages are a separate feature and never change Usage reports.
+ProfileDeck reads local Codex session data to show token usage, activity, and estimated API-equivalent cost. Reports stay offline and do not assign sessions to a Profile or ChatGPT account.
 
-## Automatic Desktop sync
+## Sync in the Desktop app
 
-The Desktop app syncs once after startup, then continues in the background while ProfileDeck is open or hidden in the tray. Set the interval to 5, 15, 30, or 60 seconds under **Codex > Settings > Local usage sync interval**. The default is 15 seconds.
+The Desktop app syncs after startup and continues while ProfileDeck is open or in the menu bar.
 
-Syncs never overlap. If one scan is still running when the next interval arrives, that interval is skipped. A failed scan is retried at the next interval. The Usage page shows the latest status without repeating notifications.
+To change the interval, open **Codex → Settings → Usage reports → Update frequency** and choose 5, 15, 30, or 60 seconds. The default is 15 seconds. The Usage page shows the latest sync result and reports files it could not read.
 
-## Manual CLI sync
+## Sync from the CLI
+
+Run:
 
 ```bash
 profiledeck usage sync codex
 ```
 
-By default, ProfileDeck scans:
+By default, ProfileDeck reads:
 
 ```text
 $CODEX_HOME/sessions/**/*.jsonl
 $CODEX_HOME/archived_sessions/*.jsonl
 ```
 
-If `CODEX_HOME` is not set, it falls back to `~/.codex`. Use `--codex-dir` for a specific Codex home:
+If `CODEX_HOME` is not set, it uses `~/.codex`. To read another Codex home:
 
 ```bash
 profiledeck usage sync codex --codex-dir /path/to/codex-home
 ```
 
-Repeated syncs do not count the same usage twice, including sessions moved or copied into `archived_sessions`. When a forked session contains earlier usage from its parent, ProfileDeck counts that earlier usage once and keeps new post-fork usage separate. Invalid, oversized, and unsupported records are skipped and reported without storing their contents.
+You can repeat a sync safely; previously imported usage is not counted again. Invalid, oversized, or unsupported records are skipped and reported without storing their contents.
 
-## Summary
+## View a summary
 
 ```bash
 profiledeck usage summary
 profiledeck usage summary --json
 ```
 
-The summary includes:
+The summary includes event count, input and output tokens, cached input, total tokens, estimated cost when available, and the number of events with unknown cost.
 
-- event count
-- input tokens
-- cached input tokens
-- output tokens
-- total tokens
-- estimated cost in USD when all events can be fully priced
-- unknown cost event count
-
-If any record has unknown or partial cost, `estimated_cost_usd` is null in JSON output and the cost status is `unknown`. Use the report for partial-cost details and the known subtotal.
-
-## Report
+## View a report
 
 ```bash
 profiledeck usage report
@@ -59,21 +51,25 @@ profiledeck usage report --range all
 
 The default range is `7d`. Available ranges are:
 
-- `today`: the current local calendar day in hourly buckets;
+- `today`: the current local calendar day, grouped by hour;
 - `7d`: today and the previous six local calendar days;
 - `30d`: today and the previous 29 local calendar days;
-- `all`: monthly buckets for spans up to 36 months, otherwise yearly buckets.
+- `all`: monthly groups for spans up to 36 months, then yearly groups.
 
-Calendar boundaries use the machine's local time zone, including daylight-saving transitions. Empty buckets are included. Records without a timestamp are included in all-time totals and model statistics, reported separately, and excluded from trends.
+Reports use your computer's local time zone. They include token totals, session count, cache hit rate, known cost, pricing coverage, model details, and sync status. Records without a timestamp are included in all-time totals and model details, reported separately, and excluded from the timeline.
 
-Reports include records, unique session count, fresh and cached input, output, total tokens, cache hit rate, known cost subtotal, token-weighted pricing coverage, model statistics, and import status. The Desktop Usage page defaults to the known API-equivalent cost trend and can switch to token usage. Hovering or focusing a time period shows its exact values.
+## Understand cost estimates
 
-## Estimation limits
+ProfileDeck estimates each event from its exact model name and the [OpenAI Standard API prices](https://developers.openai.com/api/docs/pricing) included with the installed version when that event first receives a cost estimate. Installing a later version does not recalculate existing estimates.
 
-Costs are local estimates based on exact model names and a static table of [OpenAI Standard API prices](https://developers.openai.com/api/docs/pricing) embedded in the app version that imports or backfills an event. Provider prefixes, dated variants, and other unlisted aliases are not mapped to a priced model. If the model or price is unavailable, ProfileDeck keeps the token counts and marks cost as `unknown`.
+- `estimated`: all selected usage has a price;
+- `partial`: ProfileDeck can estimate only part of the selected usage;
+- `unknown`: at least one selected record has no usable price.
 
-GPT-5.6 Sol, Terra, and Luna have separate [cache-write pricing](https://developers.openai.com/api/docs/guides/prompt-caching#requirements), but Codex session logs do not expose cache-write token counts. ProfileDeck therefore calculates their Standard input, cached-input, and output base cost, leaves any cache-write-specific portion unpriced, and marks affected events as `partial`.
+The report always keeps token totals and shows the known subtotal. Pricing coverage shows how much of the selected token usage could be priced.
 
-The report always shows the known subtotal. If any selected record has unknown pricing, the overall status is `unknown`; otherwise, any missing cost component makes it `partial`. Pricing coverage is the share of tokens with a known price.
+These estimates are not subscription billing, account limits, invoices, or ChatGPT balances. ProfileDeck does not contact a billing API when producing a usage report. [Codex limit checks](./profiles.md#check-limits-and-keep-a-login-active) are separate and never change or attribute usage reports.
 
-These values are API-equivalent estimates, not subscription billing, account limits, or actual ChatGPT balances. Usage reports do not query provider billing APIs, balances, or relay services. Profile limit checks are separate and are never used for billing or session attribution.
+## Privacy limits
+
+Usage storage excludes raw prompts, raw completions, API keys, and full source-file paths. ProfileDeck does not upload usage data or use it for telemetry. See [Local data and security](../reference/data-security.md) for storage and backup guidance.

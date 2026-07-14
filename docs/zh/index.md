@@ -1,40 +1,40 @@
 # ProfileDeck
 
-ProfileDeck 用于安全切换本地 AI 编程工具的 Profile。Codex Profile 保存登录和可复用的 Config Set；Claude Code Profile 保存官方订阅登录；Antigravity Profile 保存 Antigravity agy v2 使用的 consumer OAuth 登录。
+ProfileDeck 把本地 AI 编程工具的登录和设置保存为 Profile。需要使用另一套环境时，可以先审核变更，再确认切换。
 
-## 当前能力
+## 选择使用方式
 
-- 从 `$CODEX_HOME/config.toml` 和 `$CODEX_HOME/auth.json` 创建 Codex Profile。
-- 保存和切换多个 Claude Code 官方订阅登录，不修改 Claude Code settings。
-- 通过系统凭据存储保存和切换 Antigravity agy v2 登录。
-- 在 Profile 之间独立共享已保存登录和 Config Set。
-- 切换前审核全部变更、保留当前工具状态中受支持的有效修改并创建备份；审核后外部目标发生变化时会停止切换。
-- 导入当前和归档 Codex session JSONL，并分析本地时间趋势、模型、会话、缓存用量和 API 等价估算成本。
-- 查看备份、找出阻止切换的问题、恢复失败切换，并撤销已完成的切换。
-- 让 macOS 应用保持最新、查看下载进度，并自行选择重启时间。
-- 管理通用 provider、profile 和 target file，用于高级本地流程。
+| 方式 | 适合场景 | 开始使用 |
+| --- | --- | --- |
+| macOS 桌面端 | 在一个应用中管理 Profile、用量、更新和恢复操作 | [下载并打开桌面端](./guide/getting-started.md#使用桌面端) |
+| CLI | 在终端中使用，或从源码构建后接入自动化流程 | [构建并初始化 CLI](./guide/getting-started.md#构建并使用-cli) |
 
-## 快速开始
+桌面端 Alpha 要求配备 Apple 芯片的 macOS 14 或更高版本。从源码构建 CLI 需要 Go 1.26 和 Make。
 
-```bash
-make build
+## 支持的工具
 
-profiledeck init
-profiledeck codex detect
-profiledeck codex profile create work
-profiledeck plan codex work
-profiledeck switch codex work --yes
-```
+| 工具 | ProfileDeck 切换的内容 | 不受影响的内容 |
+| --- | --- | --- |
+| Codex | 已保存登录和可复用的用户级设置 | 会话、日志、Skills、项目设置和系统策略 |
+| Claude Code | 官方订阅登录 | Claude Code 设置、插件、API Key、云服务和 Claude Desktop |
+| Antigravity | Antigravity agy v2 使用的个人 OAuth 登录 | 登录流程、配额、Manager 数据和其他 Antigravity 版本 |
 
-Codex profile 切换要求 Codex 使用文件凭据。如果 `$CODEX_HOME/auth.json` 不存在，在 Codex config 中设置 `cli_auth_credentials_store = "file"`，然后重新执行 `codex login`。
+Codex 用量报告与 Profile 切换相互独立。报告汇总本地会话数据，不会把用量归属到某个 Profile 或账号。
 
-## 文档入口
+## 切换时会发生什么
 
-- [快速开始](/zh/guide/getting-started) 说明本地构建、首次设置和常用命令。
-- [桌面端更新](/zh/guide/updates) 说明如何检查和安装更新，以及首次打开 macOS 应用。
-- [Codex Profile](/zh/codex/profiles) 说明已保存登录、Config Set、切换、限额和备份。
-- [Claude Code Profile](/zh/claude-code/profiles) 说明官方订阅登录的捕获、切换和各平台凭据位置。
-- [Antigravity Profile](/zh/antigravity/profiles) 说明 agy v2 登录保存、切换和支持范围。
-- [Codex 用量与成本](/zh/codex/usage-cost) 说明离线导入、分析报告和估算限制。
-- [切换流程](/zh/operations/switching) 说明 plan、apply、备份和安全检查。
-- [数据与安全](/zh/reference/data-security) 说明 secret 存储、备份和脱敏边界。
+1. 先审核将要发生的变化。登录内容始终隐藏。
+2. 确认切换后，ProfileDeck 会重新检查当前文件或登录。
+3. ProfileDeck 会在修改前创建备份。
+4. 只有变更成功后，所选 Profile 才会成为当前 Profile。
+
+如果操作没有完成，请先打开“诊断”，或运行 `profiledeck doctor`，再继续切换。
+
+## 继续阅读
+
+- [快速开始](./guide/getting-started.md)
+- [了解 Profile、登录与设置](./guide/concepts.md)
+- [管理 Codex Profile](./codex/profiles.md)
+- [管理 Claude Code Profile](./claude-code/profiles.md)
+- [管理 Antigravity Profile](./antigravity/profiles.md)
+- [了解数据与安全](./reference/data-security.md)

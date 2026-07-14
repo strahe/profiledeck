@@ -8,11 +8,10 @@ function normalizeBase(value: string | undefined): string {
   return `/${trimmed.replace(/^\/+|\/+$/g, '')}/`
 }
 
-const enGuide = [
+const enStart = [
   { text: 'Getting Started', link: '/guide/getting-started' },
-  { text: 'Desktop Updates', link: '/guide/updates' },
-  { text: 'Concepts', link: '/guide/concepts' },
-  { text: 'Generic Targets', link: '/guide/generic-targets' }
+  { text: 'Profiles, Logins, and Settings', link: '/guide/concepts' },
+  { text: 'Desktop Updates', link: '/guide/updates' }
 ]
 
 const enCodex = [
@@ -28,21 +27,21 @@ const enAntigravity = [
   { text: 'Profiles', link: '/antigravity/profiles' }
 ]
 
-const enOperations = [
-  { text: 'Switching', link: '/operations/switching' },
-  { text: 'Recovery', link: '/operations/recovery' }
-]
-
-const enReference = [
-  { text: 'CLI Reference', link: '/reference/cli' },
+const enSafety = [
+  { text: 'Review and Switch', link: '/operations/switching' },
+  { text: 'Recover or Undo', link: '/operations/recovery' },
   { text: 'Data and Security', link: '/reference/data-security' }
 ]
 
-const zhGuide = [
+const enCLI = [
+  { text: 'CLI Reference', link: '/reference/cli' },
+  { text: 'Other Configuration Files', link: '/guide/generic-targets' }
+]
+
+const zhStart = [
   { text: '快速开始', link: '/zh/guide/getting-started' },
-  { text: '桌面端更新', link: '/zh/guide/updates' },
-  { text: '核心概念', link: '/zh/guide/concepts' },
-  { text: '通用目标文件', link: '/zh/guide/generic-targets' }
+  { text: 'Profile、登录与设置', link: '/zh/guide/concepts' },
+  { text: '桌面端更新', link: '/zh/guide/updates' }
 ]
 
 const zhCodex = [
@@ -58,20 +57,21 @@ const zhAntigravity = [
   { text: 'Profile', link: '/zh/antigravity/profiles' }
 ]
 
-const zhOperations = [
-  { text: '切换流程', link: '/zh/operations/switching' },
-  { text: '恢复操作', link: '/zh/operations/recovery' }
+const zhSafety = [
+  { text: '审核并切换', link: '/zh/operations/switching' },
+  { text: '恢复或撤销', link: '/zh/operations/recovery' },
+  { text: '数据与安全', link: '/zh/reference/data-security' }
 ]
 
-const zhReference = [
+const zhCLI = [
   { text: 'CLI 参考', link: '/zh/reference/cli' },
-  { text: '数据与安全', link: '/zh/reference/data-security' }
+  { text: '切换其他配置文件', link: '/zh/guide/generic-targets' }
 ]
 
 export default defineConfig({
   base: normalizeBase(process.env.VITEPRESS_BASE),
   title: 'ProfileDeck',
-  description: 'Safe profile switching for AI coding tools.',
+  description: 'Review and switch local AI coding tool Profiles.',
   cleanUrls: true,
   lastUpdated: true,
   themeConfig: {
@@ -100,23 +100,23 @@ export default defineConfig({
       }
     },
     nav: [
-      { text: 'Guide', link: '/guide/getting-started' },
+      { text: 'Get Started', link: '/guide/getting-started' },
       { text: 'Codex', link: '/codex/profiles' },
       { text: 'Claude Code', link: '/claude-code/profiles' },
       { text: 'Antigravity', link: '/antigravity/profiles' },
-      { text: 'Operations', link: '/operations/switching' },
-      { text: 'Reference', link: '/reference/cli' }
+      { text: 'Safety & Recovery', link: '/operations/switching' },
+      { text: 'CLI & Advanced', link: '/reference/cli' }
     ],
     sidebar: [
-      { text: 'Guide', items: enGuide },
+      { text: 'Get Started', items: enStart },
       { text: 'Codex', items: enCodex },
       { text: 'Claude Code', items: enClaudeCode },
       { text: 'Antigravity', items: enAntigravity },
-      { text: 'Operations', items: enOperations },
-      { text: 'Reference', items: enReference }
+      { text: 'Safety & Recovery', items: enSafety },
+      { text: 'CLI & Advanced', items: enCLI }
     ],
     footer: {
-      message: 'Released under the MIT License.'
+      message: 'Released under the Apache License 2.0.'
     }
   },
   locales: {
@@ -128,23 +128,23 @@ export default defineConfig({
       label: '简体中文',
       lang: 'zh-CN',
       link: '/zh/',
-      description: '安全切换本地 AI 编程工具配置。',
+      description: '审核并切换本地 AI 编程工具 Profile。',
       themeConfig: {
         nav: [
-          { text: '指南', link: '/zh/guide/getting-started' },
+          { text: '开始使用', link: '/zh/guide/getting-started' },
           { text: 'Codex', link: '/zh/codex/profiles' },
           { text: 'Claude Code', link: '/zh/claude-code/profiles' },
           { text: 'Antigravity', link: '/zh/antigravity/profiles' },
-          { text: '操作', link: '/zh/operations/switching' },
-          { text: '参考', link: '/zh/reference/cli' }
+          { text: '安全与恢复', link: '/zh/operations/switching' },
+          { text: 'CLI 与高级用法', link: '/zh/reference/cli' }
         ],
         sidebar: [
-          { text: '指南', items: zhGuide },
+          { text: '开始使用', items: zhStart },
           { text: 'Codex', items: zhCodex },
           { text: 'Claude Code', items: zhClaudeCode },
           { text: 'Antigravity', items: zhAntigravity },
-          { text: '操作', items: zhOperations },
-          { text: '参考', items: zhReference }
+          { text: '安全与恢复', items: zhSafety },
+          { text: 'CLI 与高级用法', items: zhCLI }
         ],
         outline: {
           label: '页面导航'
@@ -155,6 +155,9 @@ export default defineConfig({
         },
         lastUpdated: {
           text: '最后更新'
+        },
+        footer: {
+          message: '基于 Apache License 2.0 发布。'
         }
       }
     }

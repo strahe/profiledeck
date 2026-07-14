@@ -1,21 +1,35 @@
 # Antigravity Profiles
 
-ProfileDeck supports the consumer OAuth login used by Antigravity agy v2. Legacy Antigravity storage and other Antigravity versions are not supported.
+ProfileDeck can save and switch the consumer OAuth login used by Antigravity agy v2. It does not sign you in to Antigravity.
 
-## Save the current login
+## Before you start
 
-Sign in through Antigravity agy v2 first, then run:
+1. Use Antigravity agy v2.
+2. Sign in through Antigravity and confirm that it works.
+3. Start ProfileDeck, or run `profiledeck init` if you use the CLI.
+
+Legacy Antigravity storage and other Antigravity versions are not supported.
+
+## Save a Profile in the Desktop app
+
+1. Open **Antigravity** in the ProfileDeck sidebar.
+2. Select **Save Current Login**.
+3. Enter a permanent Profile ID and a display name, then select **Save Profile**.
+
+The new Profile becomes the current Antigravity Profile. ProfileDeck never displays its access or refresh tokens.
+
+## Save a Profile from the CLI
+
+Check the current login, then save it:
 
 ```bash
 profiledeck antigravity detect
 profiledeck antigravity profile create work --name Work
 ```
 
-`detect` reports `valid`, `missing`, `invalid`, or `unavailable` without printing login values. `profile create` requires a valid current login, saves it as a hidden credential, and makes the new Profile current.
+`detect` reports whether the login is ready without printing it. The create command requires a valid current login.
 
-The Desktop app provides the same workflow under the Antigravity Agent in the sidebar.
-
-## List and inspect Profiles
+Review or rename saved Profiles with:
 
 ```bash
 profiledeck antigravity profile list
@@ -23,27 +37,31 @@ profiledeck antigravity profile show work
 profiledeck antigravity profile update work --name "Work account"
 ```
 
-List and show output contains Profile details, login expiry, reference count, and warnings. It never contains access or refresh tokens.
-
 ## Switch Profiles
+
+When practical, close Antigravity before switching so it cannot refresh its login during the change. Reopen it after the switch.
+
+In the Desktop app, open the Profile you want, select **Use Profile**, review the change, and confirm it.
+
+From the CLI, preview and apply the same change:
 
 ```bash
 profiledeck plan antigravity work
 profiledeck switch antigravity work --yes
 ```
 
-Antigravity plans show only the safe target label and `create`, `update`, or `noop`. Credential-store location, login payload, previews, and login hashes remain hidden.
-
-ProfileDeck creates a private backup before updating the system credential store. It verifies the current value again immediately before writing. System credential stores do not provide cross-process compare-and-swap, so Antigravity can still refresh its login in the final interval before a write. Close Antigravity before switching when practical, then restart it after the switch.
+ProfileDeck checks the current login again and creates a private backup before changing it. If the switch is interrupted, use [Diagnostics and recovery](../operations/recovery.md).
 
 ## Save a refreshed login
 
-Antigravity may refresh the current login while it runs. A switch captures a valid refreshed login into the previously current Profile. You can save it explicitly with:
+Antigravity may refresh its login while it runs. ProfileDeck saves a valid refreshed login when you switch away from the current Profile. You can also save it explicitly:
 
 ```bash
 profiledeck antigravity profile save-current
 ```
 
-## Scope
+In the Desktop app, open the current Profile and select **Update from Current Antigravity**.
 
-Antigravity support does not include OAuth login, legacy storage, Manager import, quota reads, usage attribution, or other Antigravity versions.
+## What is not supported
+
+ProfileDeck does not provide Antigravity sign-in, legacy-storage migration, Manager import, quota checks, usage attribution, or support for Antigravity versions other than agy v2.

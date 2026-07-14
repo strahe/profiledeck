@@ -1,91 +1,68 @@
-# 数据与安全
+# 本地数据与安全
 
-ProfileDeck 管理本地文件和受支持工具的隐藏登录数据。请把数据目录和备份按敏感数据保护。
+ProfileDeck 会在你的设备上保存 Profile、登录、设置、用量报告、备份和操作历史。请将其数据目录视为敏感内容。
 
-## 本地数据
+## 查找数据目录
 
-默认数据目录是：
+默认位置是：
 
 ```text
-<os-user-config-dir>/profiledeck
+<用户配置目录>/profiledeck
 ```
 
-其中包含应用数据库、备份、导出文件和运行所需文件。`--config-dir` 会改变此位置使用的用户配置目录。
+常见位置如下：
 
-`profiledeck.db` 保存 Profiles、Config Sets、Codex、Claude Code 与 Antigravity 登录、设置、用量报告和操作历史。为了恢复和切换 Profile，数据库可能保存完整的 Codex `auth.json`、`config.toml`、Claude Code 订阅登录 payload 和 Antigravity agy v2 登录 payload。
+| 系统 | 默认位置 |
+| --- | --- |
+| macOS | `~/Library/Application Support/profiledeck` |
+| Linux | `$XDG_CONFIG_HOME/profiledeck` 或 `~/.config/profiledeck` |
+| Windows | `%AppData%\profiledeck` |
 
-Claude Code 与 Claude Desktop 具有独立的产品和凭据边界。Claude Code 集成不会探测、保存或修改 Claude Desktop 的凭据、配置和进程。
+如果传入 `--config-dir <directory>`，ProfileDeck 会改用 `<directory>/profiledeck`。
 
-数据库不会做静态加密。ProfileDeck 会在 POSIX 系统上尽力限制文件权限，但能够读取本地文件的人也可能读取已保存的登录数据。
+该目录包含 ProfileDeck 保存的数据、切换与更新备份，以及完成或恢复更改所需的文件。ProfileDeck 可能在其中保存 Codex、Claude Code 和 Antigravity 登录，以便切换和恢复 Profile。
 
-当前账号限额信息只是临时显示，不会写入数据库。
+## 保护本地数据
 
-## 备份
+ProfileDeck 不会为已保存数据和备份另行加密。操作系统允许时，ProfileDeck 会限制文件权限，但能读取你本地文件的人仍可能读取已保存的登录。
 
-切换和回滚备份可能包含之前的工具文件。Codex 备份可能包含完整的 `auth.json` 和 `config.toml` 内容。
+- 启用操作系统的全盘加密和屏幕锁定。
+- 不要同步、提交、上传或分享 ProfileDeck 数据目录。
+- 移动或重新安装 ProfileDeck 前，备份整个目录。
+- 确认 Profile 可以正常切换后，再清理旧备份。
 
-对于文件目标，备份命令会显示文件名、操作、哈希和权限，但不会打印敏感文件内容。请保护好备份目录。
+Claude Code 支持与 Claude Desktop 相互独立。ProfileDeck 不会读取或更改 Claude Desktop 的登录、设置或进程。
 
-Antigravity 切换备份可能在私有 payload 文件中包含之前的登录。公共 plan 和备份摘要不会显示系统凭据位置、payload 或 payload 哈希。
+## 了解切换与更新备份
 
-Claude Code 切换备份可能包含之前的订阅登录。在 macOS 上，私有备份 manifest 还会保存精确 Keychain 条目的 persistent reference。公共切换与备份 DTO、日志、错误、普通导出和备份摘要不会显示该引用、payload 或 payload 哈希。
+每次切换和回滚都会在更改所选工具前创建私有备份。备份可能包含完整 Codex 文件、Claude Code 订阅登录或 Antigravity 登录。
 
-安装桌面端更新前，ProfileDeck 会备份应用数据，并保留最新 3 份更新备份。这些备份可能包含与应用数据库相同的敏感数据，请保护好 ProfileDeck 数据目录。
+安装桌面端更新前，ProfileDeck 也会备份本地数据，并保留最近三个更新备份。如果更新验证或安装失败，当前版本仍可继续使用。
 
-ProfileDeck 会在安装前检查更新。检查失败时，ProfileDeck 不会安装更新，当前版本也会保持不变。
+备份列表和预览会隐藏敏感内容，但备份文件本身仍须保持私有。
 
-## 敏感 Profile 导出
+## 安全导出 Codex Profile
 
-`profiledeck codex profile export` 会创建敏感本地备份。JSON 文件包含完整的 Codex 登录数据和设置。获得文件的人可能可以访问你的账号。
+`profiledeck codex profile export` 会创建明确标记为敏感的备份，其中包含所选 Profile 的完整 Codex 登录和已保存设置。获得该文件的人可能可以使用对应账号。
 
-ProfileDeck 要求显式指定输出路径，拒绝符号链接目标，并在 POSIX 系统上以 `0600` 权限写入文件。它不会创建或修改用户选择的父目录。
+请选择仓库和共享文件夹之外的私有位置。不要提交或分享该导出文件，也不要把它放在准备删除的 ProfileDeck 数据目录中。
 
-导入会先检查备份并报告冲突，再执行更改。向已有全局 Profile 附加 Codex 绑定时，它会保留该 Profile 的名称和描述。它不会把 Profile 设为当前、恢复自动更新设置，也不会写入 Codex 文件。导入后的 Profile 默认关闭自动刷新限额和登录续期。
+导入会先检查文件并报告冲突，再保存任何内容。导入不会把 Profile 设为当前 Profile，不会更改 Codex 文件，也不会启用自动限额刷新和登录续期。
 
-请把导出备份放在准备删除的 ProfileDeck 数据目录之外。不要提交或分享这些文件。
+导出与导入命令见 [Codex Profile](../codex/profiles.md#备份与恢复-profile)。
 
-## 脱敏
+## 了解何时联网
 
-ProfileDeck 会在预览、常规命令输出、日志、错误和结果摘要中隐藏敏感值。Codex 登录预览始终完全隐藏。
+ProfileDeck 的大部分操作只使用本地数据。
 
-以下命令只显示摘要，不会打印完整的已保存登录 payload 或 Config Set 内容：
+- 用量同步和报告读取本地 Codex 会话文件，不会请求计费服务。
+- Codex 限额查询会使用所选的已保存登录连接 Codex 或 OpenAI。该登录绝不会发送到已保存 Codex 设置中的自定义模型服务地址。限额结果是临时数据，不会写入用量报告。
+- 桌面端更新检查和下载会连接 GitHub 上公开的 ProfileDeck Release。
 
-```bash
-profiledeck codex profile list
-profiledeck codex profile show <profile-id>
-profiledeck codex config-set list
-profiledeck codex config-set show <config-set-id>
-profiledeck plan codex <profile-id>
-profiledeck claude-code profile list
-profiledeck claude-code profile show <profile-id>
-profiledeck plan claude-code <profile-id>
-profiledeck antigravity profile list
-profiledeck antigravity profile show <profile-id>
-profiledeck plan antigravity <profile-id>
-profiledeck backup show <backup-id>
-profiledeck doctor
-```
+ProfileDeck 不提供云同步，也不会发送遥测或分析数据。Codex 自动限额刷新和登录续期默认关闭，而且只会在桌面端打开或驻留菜单栏时运行。
 
-导出和导入命令的输出也只有摘要。只有用户明确选择的备份文件包含完整登录数据和设置。
+## 输出和用量报告不会包含什么
 
-## 限额检查与登录续期
+普通预览、命令、日志、错误和备份摘要会隐藏已保存登录及其他敏感设置。只有你主动创建的敏感 Codex 导出文件包含完整的已导出登录和设置。
 
-检查 Profile 限额时，ProfileDeck 会使用该 Profile 已保存的登录连接 Codex 或 OpenAI。Profile 自定义的 model-provider URL 不会收到已保存的 ChatGPT 登录 Token。
-
-自动刷新限额和登录续期默认关闭，并且只在 ProfileDeck 打开或隐藏到托盘时运行。Desktop 还会在启动时检查一次当前 Profile；页面导航不会重复检查。
-
-受支持的托管登录可能会在检查限额时续期。部分外部登录方式可以提供限额，但无法自动续期。如果 Codex 自动更新不可用，手动检查仍可能以不修改已保存登录的方式工作。
-
-限额信息只在 ProfileDeck 运行期间保留。限额检查不会显示或记录原始登录 Token 或临时文件位置。
-
-## 用量功能不会保存的数据
-
-用量报告会保存 Token 数、成本估算、模型名称和时间信息。ProfileDeck 不会把原始 Codex session 记录、prompt、completion、API key 或完整来源路径保存为用量数据。
-
-用量报告只包含聚合结果。本地 Codex 活动无法可靠识别实际请求来自哪个 Profile 或 ChatGPT 账号，因此 ProfileDeck 不会猜测或发布账号级用量。
-
-Config Set 不包含 skills、plugin 缓存、项目 `.codex/config.toml` 或系统策略。
-
-ProfileDeck 只接受 Antigravity agy v2 consumer OAuth payload，不会执行 Antigravity OAuth 登录、导入 Manager 数据，也不会使用外部账号字段做匹配。
-
-ProfileDeck 只接受已确认的 Claude Code 官方 `claudeAiOauth` 订阅形态。它不会执行 Claude Code 登录，也不会使用 OAuth 中的用户、组织或订阅字段做身份识别、去重、合并或覆盖判断。
+用量报告会保存令牌数、模型名称、时间信息和成本估算，但不会保存原始提示词、原始回复、API 密钥、完整会话记录或完整源文件路径。本地 Codex 活动无法可靠判断请求由哪个 Profile 或 ChatGPT 账号处理，因此 ProfileDeck 不会猜测此类归属。

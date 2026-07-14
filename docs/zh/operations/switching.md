@@ -1,31 +1,38 @@
-# 切换流程
+# 审核并切换 Profile
 
-切换是修改已配置工具所用外部登录或设置的正常方式。
+切换会改变 Codex、Claude Code 或 Antigravity 使用的登录或设置。ProfileDeck 会让你先检查变更，并在应用前创建备份。
 
-## 预览
+## 在桌面端切换
+
+1. 打开 **Codex**、**Claude Code** 或 **Antigravity**。
+2. 选择要使用的 Profile。
+3. 选择**使用 Profile**。
+4. 检查将要变更的文件或登录，以及所有警告。
+5. 确认切换。
+
+只有变更成功后，ProfileDeck 才会把该 Profile 标记为当前 Profile。如果所选工具没有立即使用新登录，请重启工具或新建会话。
+
+## 使用 CLI 预览
+
+切换前先运行 `plan`：
 
 ```bash
 profiledeck plan codex work
+profiledeck plan claude-code personal
+profiledeck plan antigravity work
+```
+
+如需结构化输出，可添加 `--json`：
+
+```bash
 profiledeck plan codex work --json
 ```
 
-预览是只读操作。文件目标会显示：
+对于文件，预览会显示路径将被创建、更新还是保持不变。对于已保存的登录，预览只显示安全的目标名称和操作。所有预览都会隐藏敏感登录内容。
 
-- 可能发生变化的每个文件；
-- 文件将被创建、更新、保持不变，还是无法修改；
-- 选择该操作的原因；
-- 变更前后的 SHA-256 哈希；
-- 隐藏敏感值的预览；
-- 需要审核的警告；
-- 用于精确应用已审核内容的 plan fingerprint。
+警告会说明文件或登录是否缺失、无效、不受支持或无法安全变更。请先处理阻止切换的警告。
 
-Codex 登录内容始终隐藏。完整的已保存登录和 Config Set 数据不会出现在预览中。
-
-Antigravity 和 macOS Claude Code 系统凭据等敏感目标只显示安全标签、`create`、`update` 或 `noop` 以及操作原因。系统凭据位置、payload、预览和内容哈希始终隐藏。
-
-Fingerprint 代表已审核的 Profile 和当前目标状态。如果相关目标或已保存的 Profile 在预览后发生变化，ProfileDeck 会在写入前拒绝该 fingerprint。
-
-## 应用
+## 使用 CLI 应用
 
 ```bash
 profiledeck switch codex work --yes
@@ -33,7 +40,7 @@ profiledeck switch claude-code personal --yes
 profiledeck switch antigravity work --yes
 ```
 
-要确保应用内容与之前的预览完全一致，请传入 fingerprint：
+如需确保应用的状态与之前检查的内容完全一致，请复制 `plan` 返回的指纹：
 
 ```bash
 profiledeck switch codex work \
@@ -41,29 +48,23 @@ profiledeck switch codex work \
   --yes
 ```
 
-## ProfileDeck 如何保护切换
+如果预览后 Profile 或所选工具发生变化，ProfileDeck 会拒绝该指纹，不写入任何内容。请重新运行 `plan` 并检查新结果。
 
-修改外部目标前，ProfileDeck 会：
+## 切换期间会发生什么
 
-1. 检查是否还有其他 ProfileDeck 更改正在进行；
-2. 重新检查当前外部目标和已审核的切换内容；
-3. 保留当前 Codex 登录和设置中的有效更改，或 active Claude Code 登录中的有效更改；
-4. 创建备份；
-5. 只修改需要更新的目标；
-6. 外部更新成功后，才把所选 Profile 记录为当前 Profile。
+更改所选工具前，ProfileDeck 会：
 
-ProfileDeck 无法安全确认目标、备份或已审核状态时，会停止且不应用切换。缺失、无效、符号链接或不支持的目标会显示警告或阻止操作，不会被静默保存。
+1. 检查是否还有其他 ProfileDeck 变更正在运行；
+2. 再次检查当前文件或登录；
+3. 在支持时保存即将切离的 Profile 中的有效更新；
+4. 创建私有备份；
+5. 只更改必要的文件或登录；
+6. 所有变更成功后，再把新 Profile 标记为当前 Profile。
 
-切换开始后被中断或失败时，诊断页面会保留记录；只有存在可用备份时才会提供恢复操作。
+如果无法确认当前状态或创建可用备份，ProfileDeck 会停止且不应用切换。中断或失败的操作会保留在“诊断”中，以便安全恢复。
 
-## 备份
+## 妥善保护备份
 
-每次成功切换都会在 ProfileDeck 数据目录中保存备份。文件目标条目会显示路径、操作、哈希和权限，但不会打印敏感内容。
+切换备份可能包含之前的 Codex 文件、Claude Code 订阅登录或 Antigravity 登录。请保持 ProfileDeck 数据目录私有，不要提交、上传或分享其中的备份文件。
 
-Codex 备份可能包含之前的 `auth.json` 和 `config.toml` 内容，请按敏感数据保护备份目录。
-
-Antigravity 备份可能在私有 payload 文件中包含之前的登录；ProfileDeck 会在 POSIX 系统上以 `0600` 权限写入该文件。公共备份摘要不会显示其位置或哈希。
-
-Claude Code 备份可能包含之前的订阅登录。在 macOS 上，恢复数据还会私下保存原操作所用精确 Keychain 条目的引用。公共 plan、操作结果、备份摘要、日志和错误不会显示该引用或登录哈希。
-
-回滚和恢复会还原外部目标以及之前选择的 Profile。已经保存到 Profile 登录或 Config Set 中的更改仍会保留。
+恢复和回滚会还原所选工具与之前的当前 Profile。已经保存到 Profile 中的更新仍会保留。命令和处理方式见[诊断与恢复](./recovery.md)。

@@ -1,30 +1,38 @@
 # CLI 参考
 
-所有命令都支持全局选项：
+本页用于查找命令名称和常用选项。请运行 `profiledeck --help` 或 `profiledeck <command> --help`，查看当前安装版本包含的准确帮助；如果与本页不同，以安装版本的帮助为准。
+
+尖括号表示必填值，方括号表示可选参数。
+
+## 全局选项
+
+所有命令都支持：
 
 ```text
---config-dir string  使用自定义的 ProfileDeck 配置目录
+--config-dir string  Use a custom ProfileDeck config directory
 ```
 
-## 根命令
+该值是用户配置根目录。ProfileDeck 会在其下创建或使用 `profiledeck` 文件夹。
+
+## 命令
 
 | 命令 | 用途 |
 | --- | --- |
-| `antigravity` | 管理 Antigravity agy v2 Profile。 |
-| `backup` | 查看 ProfileDeck 备份。 |
-| `claude-code` | 管理 Claude Code 官方订阅 Profile。 |
-| `codex` | 管理 Codex provider 的 profile。 |
-| `doctor` | 检查本地数据、文件权限和未完成的更改。 |
+| `antigravity` | 保存和管理 Antigravity agy v2 Profile。 |
+| `backup` | 列出或检查切换备份。 |
+| `claude-code` | 保存和管理 Claude Code 官方订阅 Profile。 |
+| `codex` | 管理 Codex Profile 和已保存设置（配置集）。 |
+| `doctor` | 诊断本地数据、权限和中断操作的问题。 |
 | `init` | 创建 ProfileDeck 本地数据。 |
-| `plan` | 预览 Profile 切换，不修改外部目标。 |
-| `provider` | 管理 AI 工具 provider。 |
-| `profile` | 管理 ProfileDeck profile 和 target。 |
-| `recover` | 使用失败切换前保存的备份恢复外部目标。 |
+| `plan` | 预览 Profile 切换，不更改所选工具。 |
+| `provider` | 为其他 AI 工具配置高级文件切换。 |
+| `profile` | 管理 Profile 和高级文件目标。 |
+| `recover` | 使用备份恢复中断或失败的切换。 |
 | `rollback` | 使用备份撤销已完成的切换。 |
-| `status` | 查看 ProfileDeck 初始化状态。 |
-| `switch` | 应用 profile 切换。 |
-| `usage` | 导入并分析本地 token 用量。 |
-| `version` | 打印版本信息。 |
+| `status` | 检查 ProfileDeck 是否已初始化。 |
+| `switch` | 应用 Profile 切换。 |
+| `usage` | 导入和报告本地 Codex 用量。 |
+| `version` | 输出版本信息。 |
 
 ## 初始化与状态
 
@@ -56,13 +64,17 @@ profiledeck codex config-set update <config-set-id> [--name NAME] [--description
 profiledeck codex config-set delete <config-set-id> --yes [--json]
 ```
 
-第一次 `profile create` 会保存当前 Codex 登录和设置，并创建 `shared` Config Set。后续创建默认复用当前 Config Set，除非传入 `--new-config-set`。`fork` 必须指定两个共享选项，且至少一项为 `copy-new`；复制设置时还必须提供 `--new-config-set`。`save-current` 保存当前 Codex 登录和设置；`set-config` 只接受非当前 Profile。
+第一次运行 `profile create` 会保存当前 Codex 登录和设置，并创建 `shared` 配置集。后续创建默认复用当前配置集，除非传入 `--new-config-set`。
 
-`config-set create` 保存当前 `config.toml`。List 和 show 只返回摘要，不暴露完整登录数据或 TOML。只有未被任何 Profile 使用的 Config Set 才能删除。
+`fork` 要求同时选择登录和配置集的处理方式，且至少一项必须是 `copy-new`。复制设置时还必须提供 `--new-config-set`。`save-current` 保存 Codex 当前使用的登录和设置；`set-config` 只能更改非当前 Profile。
 
-`profile export` 会创建敏感备份。不指定 Profile ID 时，它会导出全部 Codex Profiles 和 Config Sets。指定 Profile ID 时，只导出这些 Profiles 及其需要的登录和 Config Sets。当前 Codex 登录或设置有变化时，请先运行 `save-current`。`--output` 必填，便于把备份放到即将删除的 ProfileDeck 数据目录之外；覆盖已有文件必须传入 `--force`。
+`config-set create` 保存当前 `config.toml`。列表和详情命令只返回安全摘要。只有未被任何 Profile 使用的配置集才能删除。
 
-备份包含完整的 Codex 登录数据和设置。ProfileDeck 会在 POSIX 系统上以 `0600` 权限写入文件；stdout 不会打印敏感内容。`import inspect` 会检查备份并报告 `create`、`unchanged` 和 `conflict`。`import apply` 必须提供审核过的 fingerprint；已有 Codex 数据冲突时，不会写入任何更改。已有全局 Profile 尚无 Codex 绑定时，导入会附加绑定，但不会更改其名称或描述。导入不会把 Profile 设为当前，也不会写入 Codex 文件。
+`profile export` 会创建敏感备份。不指定 Profile ID 时，它会导出全部 Codex Profile 和配置集；指定 ID 时，只导出所选 Profile 及其所需数据。覆盖已有输出文件时需要 `--force`。
+
+请先运行 `import inspect`，检查哪些内容会新增、哪些与已保存数据一致，以及是否有冲突，再把返回的指纹传给 `import apply`。已有 Codex 数据冲突时，导入会停止且不做更改。导入不会把 Profile 设为当前 Profile，也不会更改 Codex 文件。
+
+任务示例与安全说明见 [Codex Profile](../codex/profiles.md)。
 
 ## Claude Code
 
@@ -75,9 +87,11 @@ profiledeck claude-code profile update <profile-id> [--name NAME] [--description
 profiledeck claude-code profile save-current [--yes] [--json]
 ```
 
-Create 保存当前 Claude Code 官方订阅登录，并把新 Profile 设为当前。`save-current` 更新 active Profile 绑定的登录；隐藏登录被多个 Profile 共用时，命令会报告受影响 Profile 数量，并要求传入 `--yes`。
+`create` 保存当前 Claude Code 官方订阅登录，并把新 Profile 设为当前 Profile。`save-current` 更新当前 Profile 使用的登录。如果该登录被共享，命令会报告受影响的 Profile 数量，并要求传入 `--yes`。
 
-Claude Code 不提供更短的 `claude` alias。请使用 `profiledeck plan claude-code <profile-id>` 和 `profiledeck switch claude-code <profile-id> --yes` 切换。命令只显示登录状态和元数据，不显示 Token 值。
+Claude Code 没有 `claude` 别名。请使用 `profiledeck plan claude-code <profile-id>` 和 `profiledeck switch claude-code <profile-id> --yes` 切换。命令只显示登录状态和安全元数据，不会显示令牌值。
+
+登录要求与验证方式见 [Claude Code Profile](../claude-code/profiles.md)。
 
 ## Antigravity agy v2
 
@@ -90,16 +104,18 @@ profiledeck antigravity profile update <profile-id> [--name NAME] [--description
 profiledeck antigravity profile save-current [--json]
 ```
 
-`agy` 是 `antigravity` 的别名。Create 和 save-current 要求 Antigravity agy v2 当前存在有效的 consumer OAuth 登录。输出只有元数据，不会打印登录内容。
+`agy` 是 `antigravity` 的别名。`create` 和 `save-current` 要求 Antigravity agy v2 当前存在有效的个人 OAuth 登录。输出只显示安全元数据，不会打印登录内容。
 
-## 切换
+兼容性和切换建议见 [Antigravity Profile](../antigravity/profiles.md)。
+
+## 预览与切换
 
 ```bash
 profiledeck plan [--json] <provider-id> <profile-id>
 profiledeck switch [--yes] [--plan-fingerprint FINGERPRINT] [--json] <provider-id> <profile-id>
 ```
 
-`switch` 必须传入 `--yes`。
+`plan` 是只读操作。`switch` 必须传入 `--yes`。如果希望 ProfileDeck 在检查后状态发生变化时拒绝切换，请传入 `plan` 返回的指纹。
 
 ## 用量
 
@@ -109,9 +125,11 @@ profiledeck usage summary [--provider codex] [--json]
 profiledeck usage report [--provider codex] [--range today|7d|30d|all] [--json]
 ```
 
-当前只支持本地 Codex 用量。`sync codex` 是纯 CLI 场景的手动入口；Desktop 会按设置的间隔自动同步。`report` 默认使用 `7d`；人类可读输出显示总体摘要、时间趋势和模型统计。JSON 输出还包含本地时间范围、导入状态和定价来源。`summary` 提供更精简的全量视图。
+目前只支持本地 Codex 用量。`report` 默认范围为 `7d`；`summary` 提供更简短的全量视图。报告字段和估算限制见 [Codex 用量与成本](../codex/usage-cost.md)。
 
-## Provider 与 profile CRUD
+## 其他工具与配置文件
+
+以下命令是面向其他工具的高级 CLI 功能。Codex、Claude Code 和 Antigravity 必须使用上方各自的专用命令；通用文件目标命令不能管理它们保存的登录或设置。
 
 ```bash
 profiledeck provider list [--all] [--json]
@@ -127,9 +145,7 @@ profiledeck profile update <id> [--name NAME] [--description TEXT] [--metadata-j
 profiledeck profile delete <id> --yes [--json]
 ```
 
-对于受管的 `codex`、`claude-code` 和 `antigravity` Provider，通用 Provider 更新只能更改显示名称或启用状态；adapter 和 metadata 由各自的专用 Profile 流程管理。
-
-target 命令：
+文件目标命令：
 
 ```bash
 profiledeck profile target add <profile-id> <target-id> --provider ID --path PATH --format FORMAT --strategy STRATEGY --value-json JSON [--disabled] [--metadata-json JSON] [--json]
@@ -139,15 +155,17 @@ profiledeck profile target update <profile-id> <provider-id> <target-id> [--path
 profiledeck profile target delete <profile-id> <provider-id> <target-id> --yes [--json]
 ```
 
-Generic target 命令不能创建、修改或删除 Codex、Claude Code 或 Antigravity Profile 管理的绑定。请使用上面的 Provider 专用命令。
+添加文件目标前，请先阅读[其他配置文件](../guide/generic-targets.md)。
 
-## 备份与恢复
+## 备份、诊断与恢复
 
 ```bash
 profiledeck backup list [--json]
 profiledeck backup show <backup-id> [--json]
 profiledeck doctor [--json]
 profiledeck doctor repair-lock --yes [--json]
-profiledeck recover <switch-operation-id> --yes [--json]
+profiledeck recover <failed-switch-id> --yes [--json]
 profiledeck rollback <backup-id> --yes [--json]
 ```
+
+请根据[诊断与恢复](../operations/recovery.md)选择恢复被阻止的切换、恢复失败切换或撤销成功切换。

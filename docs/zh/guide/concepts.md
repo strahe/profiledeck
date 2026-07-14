@@ -1,57 +1,49 @@
-# 核心概念
+# Profile、登录与设置
 
-ProfileDeck 保存需要一起切换的 AI 编程工具登录与设置。
+Profile 用来标记某个受支持工具应使用的登录和设置。保存 Profile 不会立即修改对应工具；只有确认切换、恢复或回滚后，ProfileDeck 才会修改工具文件或系统登录。
 
-## Provider
+## Profile 保存什么
 
-Provider 表示一种 AI 工具集成。ProfileDeck 当前支持：
+| 工具 | 保存的登录 | 保存的设置 |
+| --- | --- | --- |
+| Codex | 一份 Codex 登录 | 一组已保存的 Codex 设置（配置集） |
+| Claude Code | 一份官方订阅登录 | 不包含设置 |
+| Antigravity | 一份 agy v2 使用的个人 OAuth 登录 | 不包含设置 |
 
-- `codex`：引导式 Codex 工作流；
-- `antigravity`：Antigravity agy v2 登录 Profile；
-- `generic`：管理用户明确选择的本地文件，适合高级工作流。
-
-Desktop 侧栏把 Codex 和 Antigravity 称为 Agent。Provider 是底层数据与切换命名空间；Agent 是 UI 中明确支持的工具工作区。
-
-## Profile
-
-Profile 是全局的命名组合对象，可以参与多个 Provider 工作流。一个 Codex Profile 包含：
-
-- 一份已保存的 Codex 登录；
-- 一个 Config Set，保存与该登录一起使用的 Codex 设置。
-
-登录和 Config Set 可以分别共享。例如，两个 Profile 可以使用相同设置和不同登录，也可以使用相同登录和不同设置。
-
-一个 Antigravity Profile 包含一份已保存的 agy v2 登录。Antigravity 工作区只显示具有该托管绑定的 Profile。
+每个 Profile 都有用于 CLI 命令和链接的永久 ID。不同工具共用同一个 Profile ID 命名空间，一个 Profile 也可以包含多个工具的已保存数据。
 
 ## 当前 Profile
 
-当前 Profile 按 Provider 分别记录。Codex working copy 仍是普通 `auth.json` 和 `config.toml` 文件；Antigravity working login 位于系统凭据存储中。
+ProfileDeck 会分别记录每个受支持工具的当前 Profile。当前 Profile 对应该工具正在使用的登录或文件：
 
-切换前，ProfileDeck 会保留当前 Codex 文件中的有效更改。必需文件缺失或无效时，ProfileDeck 会显示警告，不会静默保存这些内容。
+- Codex 使用当前 Codex 目录中的 `auth.json` 和 `config.toml`。
+- Claude Code 在 macOS 上使用 Keychain 中的官方订阅登录，在 Linux 和 Windows 上使用凭据文件。
+- Antigravity 使用系统凭据存储中的 agy v2 登录。
+
+离开当前 Profile 前，ProfileDeck 会在可以安全保存时保留有效的刷新登录或 Codex 设置。内容缺失、无效或不受支持时，ProfileDeck 会报告问题，不会静默保存。
 
 ## 已保存登录
 
-已保存登录包含一个或多个 Profile 使用的工具登录数据。它是隐藏的生命周期资源，不是 ProfileDeck 中单独管理的账号。
+一份登录可以由多个 Profile 共享。更新共享登录会影响所有使用它的 Profile，因此桌面端会在保存前显示受影响的 Profile 数量。
 
-ProfileDeck 可能显示 Codex Account ID 的末尾字符，帮助区分不同登录。这个值仅用于展示，不会决定更新或共享哪一份登录。
+ProfileDeck 可能显示 Codex Account ID 的末尾字符，帮助区分不同登录。这个值只用于显示，不会决定更新或共享哪份登录。
 
-## Config Set
+## Codex 配置集
 
-Config Set 包含一份完整的用户级 Codex 配置。第一个 Profile 会创建名为 `shared` 的 Config Set；可以重命名、复制，或为需要不同设置的 Profile 新建独立 Config Set。
+配置集是一组可复用的 Codex 设置，内容来自用户级 `config.toml`。第一个 Codex Profile 会创建名为 `shared` 的配置集；后续 Profile 可以复用它，也可以保存独立副本。
 
-只有未被任何 Profile 使用的 Config Set 才能删除。
+多个 Profile 共享配置集时，保存更改后的 Codex 设置会同时更新这些 Profile。如果某个 Profile 的设置需要独立变化，请复制配置集。只有未被任何 Profile 使用的配置集才能删除。
 
-## Codex 文件
+配置集不包含会话、日志、Skills、插件缓存、项目 `.codex/config.toml` 或系统策略。
 
-ProfileDeck 使用：
+## ProfileDeck 会修改什么
 
-- `$CODEX_HOME/config.toml`：当前 Codex 设置；
-- `$CODEX_HOME/auth.json`：当前 Codex 登录。
+创建、编辑、Fork 或导入 Profile 时，只会更改 ProfileDeck 保存的数据。确认切换、恢复或回滚后，ProfileDeck 才可能修改所选工具正在使用的登录或文件。
 
-Skills、plugin 缓存、项目 `.codex/config.toml`、sessions、logs 和系统策略不属于 Config Set。
+每次修改前，ProfileDeck 都会根据工具当前状态重新检查并创建备份。正常流程请参阅[审核并切换](../operations/switching.md)；操作未完成或需要撤销时，请参阅[恢复或撤销](../operations/recovery.md)。
 
-只有在用户审核并应用切换、回滚或恢复操作后，ProfileDeck 才会修改这些文件。创建、编辑、Fork 或导入 Profile 只会改变 ProfileDeck 中已保存的数据。
+## 本地数据
 
-## ProfileDeck 本地数据
+Profile、配置集、已保存登录、偏好设置、用量报告和操作历史都保存在 ProfileDeck 本地数据目录中。受支持工具仍然拥有自己正在使用的文件和系统凭据条目。
 
-Profiles、Config Sets、已保存登录、设置、用量报告和操作历史都保存在本地 `profiledeck.db` 中。目标工具仍然拥有自己的文件和系统凭据存储条目。
+已保存数据和备份可能包含完整登录数据。复制、导出或删除 ProfileDeck 数据前，请阅读[数据与安全](../reference/data-security.md)。

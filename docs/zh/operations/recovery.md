@@ -1,45 +1,65 @@
-# 恢复操作
+# 诊断与恢复
 
-切换或回滚没有完成、Profile 切换被阻止，或本地数据需要处理时，请使用诊断功能。
+如果切换或回滚没有完成、Profile 切换被阻止，或 ProfileDeck 报告本地数据问题，请打开“诊断”。
 
-## 检查诊断信息
+## 先检查问题
+
+在桌面端打开**诊断**，查看建议的处理方式。
+
+使用 CLI 时运行：
 
 ```bash
 profiledeck doctor
 profiledeck doctor --json
 ```
 
-诊断会检查：
+诊断会检查 ProfileDeck 能否读取本地数据、是否有失败或未完成的操作、是否可能仍有其他变更正在运行，以及敏感本地文件是否保持私有。
 
-- ProfileDeck 是否可以读取本地数据；
-- 未完成或失败的更改；
-- 是否可能还有其他 ProfileDeck 更改正在运行；
-- 敏感本地文件是否仅当前用户可访问。
+## 恢复 Profile 切换
 
-Desktop 会用面向用户的语言显示相同问题，并且只在可以安全继续时提供操作。
-
-## 恢复 Profile 切换功能
+如果诊断确认没有变更仍在运行，并提示可以恢复切换，请使用桌面端提供的操作，或运行：
 
 ```bash
 profiledeck doctor repair-lock --yes
 ```
 
-只有诊断明确表示可以安全恢复时才使用此命令。其他更改可能仍在进行，或当前情况无法确认时，ProfileDeck 会拒绝执行。
+不要仅因为切换耗时较长就运行此命令。如果无法安全确认当前情况，ProfileDeck 会拒绝操作。
 
 ## 恢复失败的切换
 
+桌面端诊断显示失败切换存在可用备份时，请选择**恢复**并确认。
+
+使用 CLI 时，请先运行 `profiledeck doctor`。对于显示为可恢复的失败切换，把该切换对应的标识符代入：
+
 ```bash
-profiledeck recover <switch-operation-id> --yes
+profiledeck recover <failed-switch-id> --yes
 ```
 
-恢复会使用失败切换前保存的备份。它适用于被中断或失败的切换，不是常规撤销操作。
+恢复会使用该次切换前创建的备份，还原文件或登录以及之前的当前 Profile。Codex、Claude Code 和 Antigravity 都支持此操作。如果切换已经成功，请使用回滚，而不是恢复。
 
-## 回滚成功的切换
+## 撤销成功的切换
+
+列出并检查备份：
 
 ```bash
 profiledeck backup list
 profiledeck backup show <backup-id>
+```
+
+然后恢复所需备份：
+
+```bash
 profiledeck rollback <backup-id> --yes
 ```
 
-回滚会从备份中还原外部目标和所选 Profile。恢复旧状态前，ProfileDeck 也会先备份当前目标状态。该流程同时适用于 Codex 文件和 Antigravity 系统凭据。
+Codex、Claude Code 和 Antigravity 都支持回滚。恢复旧状态前，ProfileDeck 会先为当前状态再创建一个备份。回滚成功后，所选工具和创建该备份时的当前 Profile 都会恢复。
+
+## 选择正确的操作
+
+| 当前情况 | 应采取的操作 |
+| --- | --- |
+| 诊断提示切换被阻止，但没有变更正在运行 | 恢复 Profile 切换 |
+| 失败切换存在可用备份 | 在诊断中选择**恢复**，或运行 CLI 恢复命令 |
+| 切换已完成，但希望回到之前状态 | 回滚对应备份 |
+
+如果诊断没有提供安全操作，或不存在可用备份，请勿手动删除 ProfileDeck 数据或备份。保留 ProfileDeck 数据目录，并先检查报告的错误再重试。
