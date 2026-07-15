@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   core:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
 
     steps:
       - name: Checkout
@@ -35,7 +35,7 @@ jobs:
 
   core-windows:
     if: ${{ vars.DISABLE_WINDOWS_CI != 'true' }}
-    runs-on: windows-latest
+    runs-on: ${{ vars.WINDOWS_RUNS_ON || 'windows-latest' }}
 
     steps:
       - name: Checkout
@@ -51,7 +51,7 @@ jobs:
         run: go test ./cmd/... ./internal/...
 
   desktop:
-    runs-on: macos-26
+    runs-on: ${{ vars.MACOS_RUNS_ON || 'macos-26' }}
 
     steps:
       - name: Checkout
@@ -77,12 +77,12 @@ jobs:
         run: make ci-desktop-check
 
   desktop-native-build:
-    name: Desktop build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Desktop build (${{ matrix.platform }})
+    runs-on: ${{ matrix.platform == 'linux' && (vars.RUNS_ON || 'ubuntu-latest') || (vars.WINDOWS_RUNS_ON || 'windows-latest') }}
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(vars.DISABLE_WINDOWS_CI == 'true' && '["ubuntu-latest"]' || '["ubuntu-latest","windows-latest"]') }}
+        platform: ${{ fromJSON(vars.DISABLE_WINDOWS_CI == 'true' && '["linux"]' || '["linux","windows"]') }}
 
     steps:
       - name: Checkout
