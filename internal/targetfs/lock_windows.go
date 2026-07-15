@@ -39,6 +39,25 @@ func tryLockFile(file *os.File) error {
 	return err
 }
 
+func trySharedLockFile(file *os.File) error {
+	overlapped := windows.Overlapped{Offset: lockOffsetLow, OffsetHigh: lockOffsetHigh}
+	err := windows.LockFileEx(
+		windows.Handle(file.Fd()),
+		windows.LOCKFILE_FAIL_IMMEDIATELY,
+		0,
+		lockRangeLow,
+		lockRangeHigh,
+		&overlapped,
+	)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, windows.ERROR_LOCK_VIOLATION) || errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+		return errSystemLockHeld
+	}
+	return err
+}
+
 func unlockFileHandle(file *os.File) error {
 	overlapped := windows.Overlapped{Offset: lockOffsetLow, OffsetHigh: lockOffsetHigh}
 	return windows.UnlockFileEx(

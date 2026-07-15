@@ -53,9 +53,9 @@ func newDoctorTestApplication(t *testing.T, configDir, codexDir string) *doctorT
 		runtimeService,
 		agentService,
 		[]doctor.ProviderCheck{{AgentID: agent.Codex, Check: codexService.HealthCheck}},
-		func(ctx context.Context, db *store.Store, paths profilesruntime.Paths, operation store.Operation) (string, string) {
-			inspection := switchingService.InspectFailedSwitchRecovery(ctx, db, paths, operation)
-			return inspection.Status, inspection.Reason
+		func(ctx context.Context, db *store.Store, paths profilesruntime.Paths, operation store.Operation) (string, string, string) {
+			inspection := switchingService.InspectRecoveryFromOperation(ctx, db, paths, operation)
+			return inspection.Status, inspection.Action, inspection.Reason
 		},
 		codexService.SensitivePaths,
 	)

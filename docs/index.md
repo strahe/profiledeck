@@ -27,7 +27,7 @@ The Desktop app can also show temporary usage-limit snapshots for the current Co
 
 1. Review what will change. Login values remain hidden.
 2. Confirm the switch. ProfileDeck checks the current files or login again.
-3. ProfileDeck creates a backup before changing anything.
+3. ProfileDeck creates a temporary recovery point before changing the selected tool.
 4. The selected Profile becomes current only after the change succeeds.
 
 If a change does not finish, open Diagnostics or run `profiledeck doctor` before switching again.

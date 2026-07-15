@@ -19,7 +19,7 @@ This value is the parent config directory. ProfileDeck creates or uses its `prof
 | Command | Use it to |
 | --- | --- |
 | `antigravity` | Save and manage Antigravity Profiles. |
-| `backup` | List or inspect switch backups. |
+| `backup` | Create, export, restore, and manage encrypted application backups. |
 | `claude-code` | Save and manage official Claude Code subscription Profiles. |
 | `codex` | Manage Codex Profiles and saved settings (Config Sets). |
 | `doctor` | Diagnose local-data, permission, and interrupted-operation problems. |
@@ -27,8 +27,7 @@ This value is the parent config directory. ProfileDeck creates or uses its `prof
 | `plan` | Preview a Profile switch without changing the selected tool. |
 | `provider` | Configure another AI tool for advanced file switching. |
 | `profile` | Manage Profiles and advanced file targets. |
-| `recover` | Recover an interrupted or failed switch from its backup. |
-| `rollback` | Undo a completed switch from its backup. |
+| `recover` | Resolve an interrupted or failed switch. |
 | `status` | Check whether ProfileDeck is initialized. |
 | `switch` | Apply a Profile switch. |
 | `usage` | Import and report local Codex usage. |
@@ -160,12 +159,20 @@ See [Other Configuration Files](../guide/generic-targets.md) before adding a tar
 ## Backups, diagnostics, and recovery
 
 ```bash
+profiledeck backup create [--json]
 profiledeck backup list [--json]
 profiledeck backup show <backup-id> [--json]
+profiledeck backup export <backup-id> --output <file> [--json]
+profiledeck backup restore [<backup-id> | --file <file>] --yes [--json]
+profiledeck backup delete <backup-id> --yes
+profiledeck backup key status [--json]
+profiledeck backup key export --output <file> --yes [--json]
+profiledeck backup key import --file <file> [--replace] --yes [--json]
 profiledeck doctor [--json]
 profiledeck doctor repair-lock --yes [--json]
-profiledeck recover <failed-switch-id> --yes [--json]
-profiledeck rollback <backup-id> --yes [--json]
+profiledeck recover <operation-id> --yes [--json]
 ```
 
-Use [Diagnostics and Recovery](../operations/recovery.md) to choose between repairing blocked switching, recovering a failed switch, and undoing a successful switch.
+Application backups contain the complete ProfileDeck database but do not contain tool-owned working files or system credential-store entries. Export the recovery key separately before moving backups to another system. Replacing a different key requires both `--replace` and `--yes`, and backups encrypted to the old key will no longer open with the current key.
+
+`recover` is only for an unfinished switch reported by Diagnostics. A successful switch cannot be undone. See [Diagnostics and Recovery](../operations/recovery.md) for the safe action in each state.

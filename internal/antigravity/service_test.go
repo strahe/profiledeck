@@ -5,9 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -73,7 +70,7 @@ func (client *fakeKeyringClient) Delete(_, _ string) error {
 	return nil
 }
 
-func TestAntigravityCreateSwitchCaptureAndRollback(t *testing.T) {
+func TestAntigravityCreateSwitchAndCapture(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	if _, err := initAntigravityTestRuntime(ctx, configDir); err != nil {
@@ -135,23 +132,8 @@ func TestAntigravityCreateSwitchCaptureAndRollback(t *testing.T) {
 	if client.value != normalizedA {
 		t.Fatalf("expected first login in keyring")
 	}
-	manifestRaw, err := os.ReadFile(filepath.Join(switchResult.BackupPath, "manifest.json"))
-	if err != nil {
-		t.Fatalf("read Keyring backup manifest: %v", err)
-	}
-	for _, hidden := range []string{"gemini", "access-b", "refresh-b", "access_token", "refresh_token"} {
-		if strings.Contains(string(manifestRaw), hidden) {
-			t.Fatalf("Keyring backup manifest exposed %q: %s", hidden, manifestRaw)
-		}
-	}
-	if runtime.GOOS != "windows" {
-		info, err := os.Stat(filepath.Join(switchResult.BackupPath, "secrets", agyconfig.TargetID+".bak"))
-		if err != nil {
-			t.Fatalf("inspect Keyring backup mode: %v", err)
-		}
-		if info.Mode().Perm() != 0o600 {
-			t.Fatalf("expected private Keyring backup mode 0600, got %v", info.Mode().Perm())
-		}
+	if !switchResult.RecoveryCleanupCompleted {
+		t.Fatalf("successful switch did not remove its recovery point: %#v", switchResult)
 	}
 	client.value = testAgyPayload("access-a-refreshed", "refresh-a-refreshed")
 	toSecond, err := environment.switching.BuildPlan(ctx, switching.BuildPlanRequest{ProviderID: agyconfig.ProviderID, ProfileID: "second"})
@@ -168,19 +150,12 @@ func TestAntigravityCreateSwitchCaptureAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Switch second: %v", err)
 	}
-	if _, err := environment.switching.Rollback(ctx, switching.ApplyRollbackRequest{BackupID: secondSwitch.OperationID, Confirm: true}); err != nil {
-		t.Fatalf("ApplyRollback: %v", err)
+	if !secondSwitch.RecoveryCleanupCompleted {
+		t.Fatalf("successful switch did not remove its recovery point: %#v", secondSwitch)
 	}
-	normalizedRefresh, _, _ := agyauth.Normalize([]byte(testAgyPayload("access-a-refreshed", "refresh-a-refreshed")))
-	if client.value != normalizedRefresh {
-		t.Fatalf("expected rollback to restore refreshed first login")
-	}
-	backup, err := environment.switching.ShowBackup(ctx, switchResult.OperationID)
-	if err != nil {
-		t.Fatalf("ShowBackup: %v", err)
-	}
-	if len(backup.Entries) != 1 || backup.Entries[0].Path != "" || backup.Entries[0].BeforeSHA256 != "" {
-		t.Fatalf("backup summary exposed keyring details: %#v", backup.Entries)
+	normalizedB, _, _ := agyauth.Normalize([]byte(testAgyPayload("access-b", "refresh-b")))
+	if client.value != normalizedB {
+		t.Fatalf("expected second login in keyring")
 	}
 }
 
@@ -283,7 +258,7 @@ func TestAntigravityPlanDoesNotCaptureTargetLoginIntoOutgoingProfile(t *testing.
 	}
 }
 
-func TestAntigravityNoopPreservesRawKeyringFingerprintForRollback(t *testing.T) {
+func TestAntigravityNoopPreservesRawKeyringState(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	if _, err := initAntigravityTestRuntime(ctx, configDir); err != nil {
@@ -298,7 +273,7 @@ func TestAntigravityNoopPreservesRawKeyringFingerprintForRollback(t *testing.T) 
 
 	// agy and other compatible writers may serialize the same payload with
 	// different whitespace or field order. A no-op switch must fingerprint the
-	// exact value that remains in Keyring so its active-state rollback is valid.
+	// exact value that remains in Keyring so later safety checks use the same state.
 	client.value = "{\n  \"auth_method\": \"consumer\",\n  \"token\": {\n    \"expiry\": \"2026-07-12T04:00:00.000000Z\",\n    \"refresh_token\": \"refresh\",\n    \"token_type\": \"Bearer\",\n    \"access_token\": \"access\"\n  }\n}"
 	plan, err := environment.switching.BuildPlan(ctx, switching.BuildPlanRequest{ProviderID: agyconfig.ProviderID, ProfileID: "work"})
 	if err != nil {
@@ -314,8 +289,8 @@ func TestAntigravityNoopPreservesRawKeyringFingerprintForRollback(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ApplySwitch: %v", err)
 	}
-	if _, err := environment.switching.Rollback(ctx, switching.ApplyRollbackRequest{BackupID: result.OperationID, Confirm: true}); err != nil {
-		t.Fatalf("ApplyRollback: %v", err)
+	if !result.RecoveryCleanupCompleted {
+		t.Fatalf("successful no-op switch did not clean recovery state: %#v", result)
 	}
 }
 
@@ -617,8 +592,8 @@ func TestAntigravityFailedWriteCanRecoverKeyring(t *testing.T) {
 	if listErr != nil || len(incomplete) != 1 {
 		t.Fatalf("expected one failed operation, got %#v err=%v", incomplete, listErr)
 	}
-	if _, err := environment.switching.RecoverFailedSwitch(ctx, switching.RecoverFailedSwitchParams{OperationID: incomplete[0].ID, Confirm: true}); err != nil {
-		t.Fatalf("RecoverFailedSwitch: %v", err)
+	if _, err := environment.switching.RecoverOperation(ctx, switching.RecoverOperationParams{OperationID: incomplete[0].ID, Confirm: true}); err != nil {
+		t.Fatalf("RecoverOperation: %v", err)
 	}
 	normalizedB, _, _ := agyauth.Normalize([]byte(testAgyPayload("b", "rb")))
 	if client.value != normalizedB {
@@ -761,8 +736,8 @@ func TestAntigravityDatabaseCommitFailureCanRecoverKeyring(t *testing.T) {
 	if listErr != nil || len(incomplete) != 1 {
 		t.Fatalf("expected failed switch operation, got %#v err=%v", incomplete, listErr)
 	}
-	if _, err := environment.switching.RecoverFailedSwitch(ctx, switching.RecoverFailedSwitchParams{OperationID: incomplete[0].ID, Confirm: true}); err != nil {
-		t.Fatalf("RecoverFailedSwitch: %v", err)
+	if _, err := environment.switching.RecoverOperation(ctx, switching.RecoverOperationParams{OperationID: incomplete[0].ID, Confirm: true}); err != nil {
+		t.Fatalf("RecoverOperation: %v", err)
 	}
 	normalizedSecond, _, _ := agyauth.Normalize([]byte(testAgyPayload("second", "second-refresh")))
 	if client.value != normalizedSecond {

@@ -199,11 +199,11 @@ func TestDoctorReportsIncompleteOperationsAndRedactsMalformedMetadata(t *testing
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
 		ID:           "switch-failed",
 		ProfileID:    "profile-a",
-		MetadataJSON: `{"checkpoint":"backed_up","provider_id":"provider-a","profile_id":"profile-a","backup_path":"/tmp/profiledeck-backup"}`,
+		MetadataJSON: `{"checkpoint":"recovery_created","provider_id":"provider-a","profile_id":"profile-a","recovery_path":"/private/recovery-data"}`,
 	}); err != nil {
 		t.Fatalf("expected failed switch setup to succeed, got %v", err)
 	}
-	failedMetadata := `{"checkpoint":"backed_up","provider_id":"provider-a","profile_id":"profile-a","backup_path":"/tmp/profiledeck-backup"}`
+	failedMetadata := `{"checkpoint":"recovery_created","provider_id":"provider-a","profile_id":"profile-a","recovery_path":"/private/recovery-data"}`
 	if err := db.MarkOperationFailed(ctx, store.MarkOperationFailedParams{
 		ID:           "switch-failed",
 		ErrorCode:    string(apperror.TargetWriteFailed),
@@ -212,70 +212,50 @@ func TestDoctorReportsIncompleteOperationsAndRedactsMalformedMetadata(t *testing
 	}); err != nil {
 		t.Fatalf("expected switch failure setup to succeed, got %v", err)
 	}
-	if _, err := db.CreatePendingRollbackOperation(ctx, store.CreateRollbackOperationParams{
-		ID:           "rollback-failed",
+	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
+		ID:           "switch-malformed",
 		ProfileID:    "profile-a",
 		MetadataJSON: `{"api_key":"raw-secret"`,
 	}); err != nil {
-		t.Fatalf("expected rollback setup to succeed, got %v", err)
+		t.Fatalf("expected malformed switch setup to succeed, got %v", err)
 	}
 	malformedMetadata := `{"api_key":"raw-secret"`
 	if err := db.MarkOperationFailed(ctx, store.MarkOperationFailedParams{
-		ID:           "rollback-failed",
+		ID:           "switch-malformed",
 		ErrorCode:    string(apperror.BackupInvalid),
-		ErrorMessage: "backup invalid",
+		ErrorMessage: "recovery data invalid",
 		MetadataJSON: &malformedMetadata,
 	}); err != nil {
-		t.Fatalf("expected rollback failure setup to succeed, got %v", err)
-	}
-	if _, err := db.CreatePendingRollbackOperation(ctx, store.CreateRollbackOperationParams{
-		ID:           "rollback-created-failed",
-		ProfileID:    "profile-a",
-		MetadataJSON: `{"checkpoint":"created","backup_id":"backup-a","source_operation_id":"switch-origin"}`,
-	}); err != nil {
-		t.Fatalf("expected created rollback setup to succeed, got %v", err)
-	}
-	createdRollbackMetadata := `{"checkpoint":"created","backup_id":"backup-a","source_operation_id":"switch-origin"}`
-	if err := db.MarkOperationFailed(ctx, store.MarkOperationFailedParams{
-		ID:           "rollback-created-failed",
-		ErrorCode:    string(apperror.BackupInvalid),
-		ErrorMessage: "backup invalid",
-		MetadataJSON: &createdRollbackMetadata,
-	}); err != nil {
-		t.Fatalf("expected created rollback failure setup to succeed, got %v", err)
+		t.Fatalf("expected malformed switch failure setup to succeed, got %v", err)
 	}
 
 	result, err := newDoctorTestApplication(t, configDir, "").Doctor().Run(ctx)
 	if err != nil {
 		t.Fatalf("expected doctor to succeed, got %v", err)
 	}
-	if result.OverallLevel != doctor.LevelError || len(result.Operations) != 4 {
-		t.Fatalf("expected four incomplete operations and error overall, got %#v", result)
+	if result.OverallLevel != doctor.LevelError || len(result.Operations) != 3 {
+		t.Fatalf("expected three unresolved root operations and error overall, got %#v", result)
 	}
 	pending := doctorTestOperationByID(t, result.Operations, "switch-pending")
 	if pending.Level != doctor.LevelError {
 		t.Fatalf("expected pending operation error, got %#v", pending)
 	}
 	failedSwitch := doctorTestOperationByID(t, result.Operations, "switch-failed")
-	if failedSwitch.Checkpoint != "backed_up" || failedSwitch.BackupPath == "" {
-		t.Fatalf("expected failed switch metadata summary, got %#v", failedSwitch)
+	if failedSwitch.Checkpoint != "recovery_created" || failedSwitch.RecoveryStatus != switching.RecoveryStatusUnrecoverable {
+		t.Fatalf("expected failed switch recovery summary, got %#v", failedSwitch)
 	}
 	if strings.Contains(failedSwitch.ErrorMessage, "raw-error-secret") || !strings.Contains(failedSwitch.ErrorMessage, profiletarget.RedactedValue) {
 		t.Fatalf("expected failed switch error message to be redacted, got %#v", failedSwitch)
 	}
-	failedRollback := doctorTestOperationByID(t, result.Operations, "rollback-failed")
-	if !strings.Contains(failedRollback.Reason, "metadata_invalid") {
-		t.Fatalf("expected malformed metadata reason, got %#v", failedRollback)
-	}
-	createdRollback := doctorTestOperationByID(t, result.Operations, "rollback-created-failed")
-	if createdRollback.BackupID != "backup-a" || createdRollback.SourceOperationID != "switch-origin" {
-		t.Fatalf("expected failed rollback backup summary, got %#v", createdRollback)
+	malformed := doctorTestOperationByID(t, result.Operations, "switch-malformed")
+	if !strings.Contains(malformed.Reason, "metadata_invalid") {
+		t.Fatalf("expected malformed metadata reason, got %#v", malformed)
 	}
 	raw, err := json.Marshal(result)
 	if err != nil {
 		t.Fatalf("expected doctor result marshal to succeed, got %v", err)
 	}
-	if strings.Contains(string(raw), "raw-secret") || strings.Contains(string(raw), "raw-error-secret") || strings.Contains(string(raw), "api_key") {
+	if strings.Contains(string(raw), "raw-secret") || strings.Contains(string(raw), "raw-error-secret") || strings.Contains(string(raw), "api_key") || strings.Contains(string(raw), "/private/recovery-data") {
 		t.Fatalf("expected doctor result to exclude raw metadata, got %s", raw)
 	}
 }
@@ -411,7 +391,7 @@ func TestDoctorReportsFailedSwitchRecoveryStatus(t *testing.T) {
 		}
 	})
 
-	t.Run("unrecoverable before backup", func(t *testing.T) {
+	t.Run("closable before target writes", func(t *testing.T) {
 		configDir := t.TempDir()
 		initResult, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx)
 		if err != nil {
@@ -441,8 +421,8 @@ func TestDoctorReportsFailedSwitchRecoveryStatus(t *testing.T) {
 			t.Fatalf("expected doctor to succeed, got %v", err)
 		}
 		operation := doctorTestOperationByID(t, result.Operations, "switch-before-backup")
-		if operation.RecoveryStatus != switching.RecoveryStatusUnrecoverable {
-			t.Fatalf("expected unrecoverable failed switch, got %#v", operation)
+		if operation.RecoveryStatus != switching.RecoveryStatusClosable || operation.RecoveryAction != switching.RecoveryActionClose {
+			t.Fatalf("expected closable failed switch, got %#v", operation)
 		}
 	})
 

@@ -16,6 +16,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/updater"
 
 	coreapp "github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/appbackup"
 	"github.com/strahe/profiledeck/internal/apperror"
 )
 
@@ -33,7 +34,6 @@ const (
 	StateError       = "error"
 
 	defaultCheckInterval = 6 * time.Hour
-	updateBackupLimit    = 3
 )
 
 type UpdateStatus struct {
@@ -264,16 +264,11 @@ func (service *Service) Restart(ctx context.Context) error {
 		if err := verifyParentWritable(filepath.Dir(bundle)); err != nil {
 			return err
 		}
-		backupPath := filepath.Join(
-			service.application.Runtime().Paths().UpdateBackups,
-			"ProfileDeck_"+status.AvailableVersion+"_"+time.Now().UTC().Format("20060102T150405.000000000Z")+".db",
-		)
-		// A database snapshot is a restart gate: never swap the application
-		// unless ProfileDeck data has a consistent, private recovery point.
-		if err := service.application.Runtime().StoreFactory().CreateSnapshot(lockContext, backupPath); err != nil {
-			return err
-		}
-		if err := retainNewestUpdateBackups(service.application.Runtime().Paths().UpdateBackups, updateBackupLimit); err != nil {
+		// A verified encrypted application backup is a restart gate: never swap
+		// the app without a recoverable copy of ProfileDeck data.
+		if _, err := service.application.Backups().Create(lockContext, appbackup.CreateRequest{
+			Kind: appbackup.KindAutomatic, Reason: appbackup.ReasonBeforeUpdate,
+		}); err != nil {
 			return err
 		}
 		service.mu.Lock()
@@ -285,7 +280,12 @@ func (service *Service) Restart(ctx context.Context) error {
 		service.mu.Lock()
 		service.restarting = false
 		service.mu.Unlock()
-		log.Printf("profiledeck: update restart failed: %v", err)
+		var appErr *apperror.Error
+		if errors.As(err, &appErr) {
+			log.Printf("profiledeck: update restart failed: %s", appErr.Code)
+		} else {
+			log.Printf("profiledeck: update restart failed")
+		}
 		service.setStatus(func(status *UpdateStatus) {
 			status.State = StateReady
 			status.ErrorCode = "restart_failed"

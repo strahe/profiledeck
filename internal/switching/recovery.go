@@ -2,9 +2,14 @@ package switching
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/strahe/profiledeck/internal/apperror"
@@ -15,325 +20,392 @@ import (
 	"github.com/strahe/profiledeck/internal/validate"
 )
 
-const rollbackKindFailedSwitchRecovery = "failed_switch_recovery"
+const recoveryOperationRandomBytes = 6
 
 const (
+	RecoveryStatusRunning       = "running"
+	RecoveryStatusClosable      = "closable"
 	RecoveryStatusRecoverable   = "recoverable"
 	RecoveryStatusUnrecoverable = "unrecoverable"
 	RecoveryStatusUnknown       = "unknown"
+
+	RecoveryActionClose   = "close"
+	RecoveryActionRestore = "restore"
 )
 
-type RecoverFailedSwitchParams struct {
+type RecoverOperationParams struct {
 	OperationID string `json:"operation_id"`
 	Confirm     bool   `json:"confirm"`
 }
 
-type RecoverFailedSwitchResult struct {
-	OperationID       string         `json:"operation_id"`
-	OperationType     string         `json:"operation_type"`
-	RollbackKind      string         `json:"rollback_kind"`
-	Status            string         `json:"status"`
-	SourceOperationID string         `json:"source_operation_id"`
-	ProviderID        string         `json:"provider_id"`
-	ProfileID         string         `json:"profile_id"`
-	RestoredProfileID string         `json:"restored_profile_id"`
-	Counts            RollbackCounts `json:"counts"`
-	BackupPath        string         `json:"backup_path"`
-	Warnings          []string       `json:"warnings"`
+type RecoverOperationResult struct {
+	SourceOperationID        string         `json:"source_operation_id"`
+	RecoveryOperationID      string         `json:"recovery_operation_id,omitempty"`
+	Action                   string         `json:"action"`
+	Status                   string         `json:"status"`
+	ProviderID               string         `json:"provider_id,omitempty"`
+	ProfileID                string         `json:"profile_id,omitempty"`
+	RestoredProfileID        string         `json:"restored_profile_id,omitempty"`
+	Counts                   RecoveryCounts `json:"counts"`
+	RecoveryCleanupCompleted bool           `json:"recovery_cleanup_completed"`
 }
 
-// RecoveryInspection describes whether a failed switch can be recovered.
 type RecoveryInspection struct {
-	Status string
-	Reason string
+	OperationID string `json:"operation_id"`
+	Status      string `json:"status"`
+	Action      string `json:"action,omitempty"`
+	Reason      string `json:"reason"`
 }
 
-func (service *Service) RecoverFailedSwitch(ctx context.Context, req RecoverFailedSwitchParams) (RecoverFailedSwitchResult, error) {
+type recoveryAssessment struct {
+	Inspection     RecoveryInspection
+	Source         recoverySource
+	ResolutionKind string
+}
+
+func (service *Service) InspectRecovery(ctx context.Context, rawOperationID string) (RecoveryInspection, error) {
+	operationID, appErr := validate.ID(rawOperationID, apperror.RecoveryUnsupported)
+	if appErr != nil {
+		return RecoveryInspection{}, appErr
+	}
+	db, err := service.stores.OpenHealthy(ctx, true)
+	if err != nil {
+		return RecoveryInspection{}, err
+	}
+	defer db.Close()
+	operation, err := db.GetOperation(ctx, operationID)
+	if errors.Is(err, store.ErrNotFound) {
+		return RecoveryInspection{}, apperror.New(apperror.RecoveryUnsupported, "switch operation not found").WithDetail("operation_id", operationID)
+	}
+	if err != nil {
+		return RecoveryInspection{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to read switch operation", err)
+	}
+	return service.inspectRecoveryFromOperation(ctx, db, service.paths, operation, true).Inspection, nil
+}
+
+func (service *Service) RecoverOperation(ctx context.Context, req RecoverOperationParams) (RecoverOperationResult, error) {
 	operationID, appErr := validate.ID(req.OperationID, apperror.RecoveryUnsupported)
 	if appErr != nil {
-		return RecoverFailedSwitchResult{}, appErr
+		return RecoverOperationResult{}, appErr
 	}
 	if !req.Confirm {
-		return RecoverFailedSwitchResult{}, apperror.New(apperror.ConfirmationRequired, "failed switch recovery requires confirmation")
+		return RecoverOperationResult{}, apperror.New(apperror.ConfirmationRequired, "operation recovery requires confirmation")
 	}
-
 	db, err := service.stores.OpenHealthy(ctx, false)
 	if err != nil {
-		return RecoverFailedSwitchResult{}, err
+		return RecoverOperationResult{}, err
 	}
 	defer db.Close()
 
-	// Unknown target state must fail before a recovery operation or backup
-	// side effect is created.
-	source, err := service.loadFailedSwitchRecoverySource(ctx, db, service.paths, operationID)
+	// Acquiring the shared switch lock before any recovery mutation proves the
+	// original switch is no longer running and excludes new switch writes.
+	lock, err := acquireSwitchLock(service.paths.Lock, "recover-"+operationID)
 	if err != nil {
-		return RecoverFailedSwitchResult{}, err
-	}
-	if err := validateRecoveryActiveState(ctx, db, source); err != nil {
-		return RecoverFailedSwitchResult{}, err
-	}
-	if err := service.verifyRollbackTargets(ctx, source.Targets); err != nil {
-		return RecoverFailedSwitchResult{}, err
-	}
-
-	recoveryOperationID, err := newRollbackOperationID(time.Now())
-	if err != nil {
-		return RecoverFailedSwitchResult{}, apperror.Wrap(apperror.OperationCreateFailed, "failed to create recovery operation id", err)
-	}
-	metadataBase := recoveryRollbackMetadata(source)
-	initialMetadata, err := marshalRollbackOperationMetadata("created", metadataBase)
-	if err != nil {
-		return RecoverFailedSwitchResult{}, apperror.Wrap(apperror.OperationCreateFailed, "failed to encode recovery operation metadata", err)
-	}
-	if _, err := db.CreatePendingRollbackOperation(ctx, store.CreateRollbackOperationParams{
-		ID:           recoveryOperationID,
-		ProfileID:    source.Metadata.ProfileID,
-		MetadataJSON: initialMetadata,
-	}); err != nil {
-		return RecoverFailedSwitchResult{}, apperror.Wrap(apperror.OperationCreateFailed, "failed to create recovery operation", err)
-	}
-
-	lock, err := acquireSwitchLock(service.paths.Lock, recoveryOperationID)
-	if err != nil {
-		return RecoverFailedSwitchResult{}, failRollbackOperation(ctx, db, recoveryOperationID, initialMetadata, err)
+		return RecoverOperationResult{}, err
 	}
 	defer lock.Release()
-
-	// The lock closes the cross-process window; source, active state, and
-	// target hashes are rechecked before creating the current-state backup.
-	source, err = service.loadFailedSwitchRecoverySource(ctx, db, service.paths, operationID)
+	operation, err := db.GetOperation(ctx, operationID)
+	if errors.Is(err, store.ErrNotFound) {
+		return RecoverOperationResult{}, apperror.New(apperror.RecoveryUnsupported, "switch operation not found").WithDetail("operation_id", operationID)
+	}
 	if err != nil {
-		return RecoverFailedSwitchResult{}, failRollbackOperation(ctx, db, recoveryOperationID, initialMetadata, err)
+		return RecoverOperationResult{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to read switch operation", err)
 	}
-	if err := validateRecoveryActiveState(ctx, db, source); err != nil {
-		return RecoverFailedSwitchResult{}, failRollbackOperation(ctx, db, recoveryOperationID, initialMetadata, err)
+	assessment := service.inspectRecoveryFromOperation(ctx, db, service.paths, operation, false)
+	if assessment.Inspection.Status == RecoveryStatusClosable {
+		if err := db.ResolveOperation(ctx, operationID, assessment.ResolutionKind); err != nil {
+			return RecoverOperationResult{}, apperror.Wrap(apperror.OperationUpdateFailed, "failed to close incomplete switch operation", err)
+		}
+		cleanupCompleted, _ := removeOperationRecoveryPoint(service.paths, operationID)
+		return RecoverOperationResult{
+			SourceOperationID:        operationID,
+			Action:                   RecoveryActionClose,
+			Status:                   "resolved",
+			ProviderID:               assessment.Source.Metadata.ProviderID,
+			ProfileID:                assessment.Source.Metadata.ProfileID,
+			RestoredProfileID:        restoredProfileID(assessment.Source.Metadata.PreviousActive),
+			RecoveryCleanupCompleted: cleanupCompleted,
+		}, nil
 	}
+	if assessment.Inspection.Status != RecoveryStatusRecoverable {
+		return RecoverOperationResult{}, recoveryInspectionError(assessment.Inspection)
+	}
+	source := assessment.Source
 
-	metadataBase = recoveryRollbackMetadata(source)
-	validatedMetadata, err := marshalRollbackOperationMetadata("validated", metadataBase)
+	recoveryOperationID, err := newRecoveryOperationID(time.Now())
 	if err != nil {
-		return RecoverFailedSwitchResult{}, failRollbackOperation(ctx, db, recoveryOperationID, initialMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode recovery operation metadata", err))
+		return RecoverOperationResult{}, apperror.Wrap(apperror.OperationCreateFailed, "failed to create recovery operation id", err)
 	}
-	if err := db.UpdateOperationMetadata(ctx, recoveryOperationID, validatedMetadata); err != nil {
-		return RecoverFailedSwitchResult{}, failRollbackOperation(ctx, db, recoveryOperationID, initialMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to update recovery operation metadata", err))
-	}
-
-	if err := service.verifyRollbackTargets(ctx, source.Targets); err != nil {
-		return RecoverFailedSwitchResult{}, failRollbackOperation(ctx, db, recoveryOperationID, validatedMetadata, err)
-	}
-
-	// The current-state backup protects the partial failed-switch state; the
-	// target hashes are checked again before the restore/remove writes begin.
-	currentBackup, err := service.createRollbackCurrentBackup(ctx, service.paths, recoveryOperationID, source)
+	metadataBase := recoveryMetadata(source)
+	initialMetadata, err := marshalRecoveryOperationMetadata("created", metadataBase)
 	if err != nil {
-		return RecoverFailedSwitchResult{}, failRollbackOperation(ctx, db, recoveryOperationID, validatedMetadata, err)
+		return RecoverOperationResult{}, apperror.Wrap(apperror.OperationCreateFailed, "failed to encode recovery operation metadata", err)
 	}
-	metadataBase.CurrentBackupPath = currentBackup.Path
-	backedUpMetadata, err := marshalRollbackOperationMetadata("backed_up", metadataBase)
-	if err != nil {
-		return RecoverFailedSwitchResult{}, failRollbackOperation(ctx, db, recoveryOperationID, validatedMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode recovery operation metadata", err))
-	}
-	if err := db.UpdateOperationMetadata(ctx, recoveryOperationID, backedUpMetadata); err != nil {
-		return RecoverFailedSwitchResult{}, failRollbackOperation(ctx, db, recoveryOperationID, validatedMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to update recovery operation metadata", err))
+	if _, err := db.CreatePendingRecoveryOperation(ctx, store.CreateRecoveryOperationParams{
+		ID: recoveryOperationID, ProfileID: source.Metadata.ProfileID, MetadataJSON: initialMetadata,
+	}); err != nil {
+		return RecoverOperationResult{}, apperror.Wrap(apperror.OperationCreateFailed, "failed to create recovery operation", err)
 	}
 
-	if err := service.verifyRollbackTargets(ctx, source.Targets); err != nil {
-		return RecoverFailedSwitchResult{}, failRollbackOperation(ctx, db, recoveryOperationID, backedUpMetadata, err)
-	}
-
-	counts, processed, err := service.applyRollbackTargets(ctx, db, recoveryOperationID, backedUpMetadata, metadataBase, source)
+	counts, processed, err := service.applyRecoveryTargets(ctx, db, recoveryOperationID, initialMetadata, metadataBase, source)
 	if err != nil {
-		return RecoverFailedSwitchResult{}, err
+		return RecoverOperationResult{}, err
 	}
-	if err := service.verifyRestoredRollbackTargets(ctx, source.Targets); err != nil {
-		return RecoverFailedSwitchResult{}, failRollbackWithProcessed(ctx, db, recoveryOperationID, backedUpMetadata, metadataBase, counts, processed, err)
+	if err := service.verifyRestoredRecoveryTargets(ctx, source.Targets); err != nil {
+		return RecoverOperationResult{}, failRecoveryWithProcessed(ctx, db, recoveryOperationID, initialMetadata, metadataBase, counts, processed, err)
 	}
 	metadataBase.Counts = counts
 	metadataBase.ProcessedTargets = processed
-	appliedMetadata, err := marshalRollbackOperationMetadata("applied", metadataBase)
+	appliedMetadata, err := marshalRecoveryOperationMetadata("applied", metadataBase)
 	if err != nil {
-		return RecoverFailedSwitchResult{}, failRollbackOperation(ctx, db, recoveryOperationID, backedUpMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode recovery operation metadata", err))
+		return RecoverOperationResult{}, failRecoveryOperation(ctx, db, recoveryOperationID, initialMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode recovery operation metadata", err))
 	}
-
-	restoredActive := restoredStoreActiveState(source.Metadata.PreviousActive)
-	if err := db.CompleteRollbackOperation(ctx, store.CompleteRollbackOperationParams{
+	if err := db.CompleteRecoveryOperation(ctx, store.CompleteRecoveryOperationParams{
 		ID:                  recoveryOperationID,
+		SourceOperationID:   source.Operation.ID,
+		ResolutionKind:      "recovered_pre_switch",
 		ProfileID:           restoredProfileID(source.Metadata.PreviousActive),
 		ProviderID:          source.Metadata.ProviderID,
-		RestoredActiveState: restoredActive,
+		RestoredActiveState: restoredStoreActiveState(source.Metadata.PreviousActive),
 		MetadataJSON:        appliedMetadata,
 	}); err != nil {
-		failedMetadata, metadataErr := marshalRollbackOperationMetadata("db_update_failed", metadataBase)
-		if metadataErr != nil {
-			failedMetadata = backedUpMetadata
-		}
-		return RecoverFailedSwitchResult{}, failRollbackOperation(ctx, db, recoveryOperationID, failedMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to complete recovery operation", err))
+		return RecoverOperationResult{}, failRecoveryOperation(ctx, db, recoveryOperationID, appliedMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to complete recovery operation", err))
 	}
-
-	return RecoverFailedSwitchResult{
-		OperationID:       recoveryOperationID,
-		OperationType:     store.OperationTypeRollback,
-		RollbackKind:      rollbackKindFailedSwitchRecovery,
-		Status:            store.OperationStatusApplied,
-		SourceOperationID: source.Operation.ID,
-		ProviderID:        source.Metadata.ProviderID,
-		ProfileID:         source.Metadata.ProfileID,
-		RestoredProfileID: restoredProfileID(source.Metadata.PreviousActive),
-		Counts:            counts,
-		BackupPath:        currentBackup.Path,
+	cleanupCompleted, _ := removeOperationRecoveryPoint(service.paths, source.Operation.ID)
+	return RecoverOperationResult{
+		SourceOperationID:        source.Operation.ID,
+		RecoveryOperationID:      recoveryOperationID,
+		Action:                   RecoveryActionRestore,
+		Status:                   "resolved",
+		ProviderID:               source.Metadata.ProviderID,
+		ProfileID:                source.Metadata.ProfileID,
+		RestoredProfileID:        restoredProfileID(source.Metadata.PreviousActive),
+		Counts:                   counts,
+		RecoveryCleanupCompleted: cleanupCompleted,
 	}, nil
 }
 
-func (service *Service) loadFailedSwitchRecoverySource(ctx context.Context, db *store.Store, paths runtime.Paths, operationID string) (rollbackSource, error) {
-	operation, err := db.GetOperation(ctx, operationID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return rollbackSource{}, apperror.New(apperror.RecoveryUnsupported, "failed switch operation not found").WithDetail("operation_id", operationID)
+func (service *Service) inspectRecoveryFromOperation(
+	ctx context.Context,
+	db *store.Store,
+	paths runtime.Paths,
+	operation store.Operation,
+	probeLock bool,
+) recoveryAssessment {
+	inspection := RecoveryInspection{OperationID: operation.ID}
+	if operation.OperationType != store.OperationTypeSwitch ||
+		(operation.Status != store.OperationStatusPending && operation.Status != store.OperationStatusFailed) ||
+		operation.ResolvedAtUnixMS != 0 {
+		inspection.Status = RecoveryStatusUnrecoverable
+		inspection.Reason = "operation_not_unresolved_switch"
+		return recoveryAssessment{Inspection: inspection}
+	}
+	if probeLock {
+		probe, err := targetfs.ProbeLock(paths.Lock)
+		if err != nil {
+			inspection.Status = RecoveryStatusUnknown
+			inspection.Reason = "switch_lock_check_failed"
+			return recoveryAssessment{Inspection: inspection}
 		}
-		return rollbackSource{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to read failed switch operation", err)
-	}
-	return service.loadFailedSwitchRecoverySourceFromOperation(ctx, db, paths, operation)
-}
-
-func (service *Service) loadFailedSwitchRecoverySourceFromOperation(ctx context.Context, db *store.Store, paths runtime.Paths, operation store.Operation) (rollbackSource, error) {
-	if _, appErr := validateBackupID(operation.ID); appErr != nil {
-		return rollbackSource{}, appErr
-	}
-	if operation.OperationType != store.OperationTypeSwitch {
-		return rollbackSource{}, apperror.New(apperror.RecoveryUnsupported, "operation is not a switch operation").WithDetail("operation_id", operation.ID)
-	}
-	if operation.Status != store.OperationStatusFailed {
-		return rollbackSource{}, apperror.New(apperror.RecoveryUnsupported, "switch operation is not failed").WithDetail("operation_id", operation.ID)
+		if probe.Held {
+			inspection.Status = RecoveryStatusRunning
+			inspection.Reason = "switch_operation_in_progress"
+			return recoveryAssessment{Inspection: inspection}
+		}
 	}
 
 	var metadata switchOperationMetadata
-	if err := json.Unmarshal([]byte(operation.MetadataJSON), &metadata); err != nil {
-		return rollbackSource{}, apperror.Wrap(apperror.RecoveryUnsupported, "failed switch metadata is invalid", err).WithDetail("operation_id", operation.ID)
+	if err := decodeSwitchOperationMetadata(operation.MetadataJSON, &metadata); err != nil {
+		inspection.Status = RecoveryStatusUnrecoverable
+		inspection.Reason = "operation_metadata_invalid"
+		return recoveryAssessment{Inspection: inspection}
 	}
-	if metadata.Checkpoint != "backed_up" {
-		return rollbackSource{}, apperror.New(apperror.RecoveryUnsupported, "failed switch has no recoverable backup checkpoint").WithDetail("operation_id", operation.ID)
+	source := recoverySource{Operation: operation, Metadata: metadata}
+	switch metadata.Checkpoint {
+	case "created", "planned":
+		inspection.Status = RecoveryStatusClosable
+		inspection.Action = RecoveryActionClose
+		inspection.Reason = "targets_not_written"
+		return recoveryAssessment{
+			Inspection:     inspection,
+			Source:         source,
+			ResolutionKind: "closed_before_target_writes",
+		}
+	case "recovery_created":
+	default:
+		inspection.Status = RecoveryStatusUnrecoverable
+		inspection.Reason = "recovery_checkpoint_invalid"
+		return recoveryAssessment{Inspection: inspection, Source: source}
 	}
-	if metadata.PreviousActive == nil {
-		return rollbackSource{}, apperror.New(apperror.RecoveryUnsupported, "failed switch metadata does not include previous active state").WithDetail("operation_id", operation.ID)
+	loaded, err := service.loadOperationRecoverySourceFromOperation(ctx, db, paths, operation)
+	if err != nil {
+		return recoveryAssessment{Inspection: recoveryInspectionFromError(operation.ID, err), Source: source}
 	}
-	if metadata.ProviderID == "" || metadata.ProfileID == "" || metadata.PlanFingerprint == "" || metadata.BackupPath == "" {
-		return rollbackSource{}, apperror.New(apperror.RecoveryUnsupported, "failed switch metadata is incomplete").WithDetail("operation_id", operation.ID)
+	if err := validateRecoveryActiveState(ctx, db, loaded); err != nil {
+		return recoveryAssessment{Inspection: recoveryInspectionFromError(operation.ID, err), Source: loaded}
 	}
+	allBefore, err := service.inspectRecoveryTargetStates(ctx, loaded.Targets)
+	if err != nil {
+		return recoveryAssessment{Inspection: recoveryInspectionFromError(operation.ID, err), Source: loaded}
+	}
+	if allBefore {
+		inspection.Status = RecoveryStatusClosable
+		inspection.Action = RecoveryActionClose
+		inspection.Reason = "targets_already_before_switch"
+		return recoveryAssessment{
+			Inspection:     inspection,
+			Source:         loaded,
+			ResolutionKind: "closed_targets_unchanged",
+		}
+	}
+	inspection.Status = RecoveryStatusRecoverable
+	inspection.Action = RecoveryActionRestore
+	inspection.Reason = "recognized_partial_switch_state"
+	return recoveryAssessment{Inspection: inspection, Source: loaded}
+}
 
-	backupPath := filepath.Join(paths.Backups, operation.ID)
-	if filepath.Clean(metadata.BackupPath) != filepath.Clean(backupPath) {
-		return rollbackSource{}, apperror.New(apperror.BackupInvalid, "failed switch backup path does not match runtime backup path").WithDetail("operation_id", operation.ID)
+func (service *Service) loadOperationRecoverySourceFromOperation(
+	ctx context.Context,
+	db *store.Store,
+	paths runtime.Paths,
+	operation store.Operation,
+) (recoverySource, error) {
+	var metadata switchOperationMetadata
+	if err := decodeSwitchOperationMetadata(operation.MetadataJSON, &metadata); err != nil {
+		return recoverySource{}, apperror.New(apperror.RecoveryUnsupported, "switch operation metadata is invalid").WithDetail("operation_id", operation.ID)
 	}
-	manifest, err := transaction.LoadManifest(backupPath)
+	if metadata.Checkpoint != "recovery_created" || metadata.PreviousActive == nil ||
+		metadata.ProviderID == "" || metadata.ProfileID == "" || metadata.PlanFingerprint == "" || metadata.RecoveryPath == "" {
+		return recoverySource{}, apperror.New(apperror.RecoveryUnsupported, "switch operation has no valid recovery checkpoint").WithDetail("operation_id", operation.ID)
+	}
+	recoveryPath := filepath.Join(paths.Recovery, operation.ID)
+	if filepath.Clean(metadata.RecoveryPath) != filepath.Clean(recoveryPath) {
+		return recoverySource{}, apperror.New(apperror.BackupInvalid, "operation recovery location does not match the switch operation").WithDetail("operation_id", operation.ID)
+	}
+	manifest, err := transaction.LoadRecoveryManifest(recoveryPath)
 	if err != nil {
-		return rollbackSource{}, err
+		return recoverySource{}, err
 	}
-	if err := validateRollbackManifest(manifest, metadata, operation.ID, operation.ID, backupPath); err != nil {
-		return rollbackSource{}, err
+	if err := validateRecoveryManifest(manifest, metadata, operation.ID, recoveryPath); err != nil {
+		return recoverySource{}, err
 	}
-	adapter, err := service.rollbackAdapter(ctx, db, metadata)
+	adapter, err := service.recoveryAdapter(ctx, db, metadata)
 	if err != nil {
-		return rollbackSource{}, err
+		return recoverySource{}, err
 	}
-	targets, err := rollbackTargetsFromMetadataWithAdapter(metadata, manifest, backupPath, adapter)
+	targets, err := recoveryTargetsFromMetadataWithAdapter(metadata, manifest, recoveryPath, adapter)
 	if err != nil {
-		return rollbackSource{}, err
+		return recoverySource{}, err
 	}
-	if err := validateSourceBackupFiles(ctx, backupPath, targets); err != nil {
-		return rollbackSource{}, err
+	if err := validateRecoveryFiles(ctx, recoveryPath, targets); err != nil {
+		return recoverySource{}, err
 	}
-
-	return rollbackSource{
-		Operation:  operation,
-		Manifest:   manifest,
-		Metadata:   metadata,
-		Targets:    targets,
-		BackupPath: backupPath,
+	return recoverySource{
+		Operation: operation, Manifest: manifest, Metadata: metadata, Targets: targets, RecoveryPath: recoveryPath,
 	}, nil
 }
 
-func validateRecoveryActiveState(ctx context.Context, db *store.Store, source rollbackSource) error {
+func validateRecoveryActiveState(ctx context.Context, db *store.Store, source recoverySource) error {
 	previous := source.Metadata.PreviousActive
 	if previous == nil {
-		return apperror.New(apperror.RecoveryUnsupported, "failed switch metadata does not include previous active state").WithDetail("operation_id", source.Operation.ID)
+		return apperror.New(apperror.RecoveryUnsupported, "switch operation does not include its previous active state").WithDetail("operation_id", source.Operation.ID)
 	}
-
 	activeState, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, source.Metadata.ProviderID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			if !previous.Exists {
-				return nil
-			}
-			return apperror.New(apperror.TargetChanged, "active state no longer matches failed switch previous state").
-				WithDetail("operation_id", source.Operation.ID).
-				WithDetail("provider_id", source.Metadata.ProviderID)
+	if errors.Is(err, store.ErrNotFound) {
+		if !previous.Exists {
+			return nil
 		}
+		return apperror.New(apperror.TargetChanged, "active state no longer matches the incomplete switch").WithDetail("operation_id", source.Operation.ID)
+	}
+	if err != nil {
 		return apperror.Wrap(apperror.StoreStatusFailed, "failed to read active state", err)
 	}
-	if !previous.Exists {
-		return apperror.New(apperror.TargetChanged, "active state no longer matches failed switch previous state").
-			WithDetail("operation_id", source.Operation.ID).
-			WithDetail("provider_id", source.Metadata.ProviderID)
-	}
-	if activeState.ProfileID != previous.ProfileID || activeState.OperationID != previous.OperationID {
-		return apperror.New(apperror.TargetChanged, "active state no longer matches failed switch previous state").
-			WithDetail("operation_id", source.Operation.ID).
-			WithDetail("provider_id", source.Metadata.ProviderID)
+	if !previous.Exists || activeState.ProfileID != previous.ProfileID || activeState.OperationID != previous.OperationID {
+		return apperror.New(apperror.TargetChanged, "active state no longer matches the incomplete switch").WithDetail("operation_id", source.Operation.ID)
 	}
 	return nil
 }
 
-func recoveryRollbackMetadata(source rollbackSource) rollbackOperationMetadata {
-	return rollbackOperationMetadata{
-		RollbackKind:      rollbackKindFailedSwitchRecovery,
-		SourceOperationID: source.Operation.ID,
-		BackupID:          source.Operation.ID,
-		ProviderID:        source.Metadata.ProviderID,
-		ProfileID:         source.Metadata.ProfileID,
-		RestoredProfileID: restoredProfileID(source.Metadata.PreviousActive),
-		Targets:           rollbackTargetMetadataList(source.Targets),
-	}
+// InspectRecoveryFromOperation is the read-only Doctor integration point.
+func (service *Service) InspectRecoveryFromOperation(
+	ctx context.Context,
+	db *store.Store,
+	paths runtime.Paths,
+	operation store.Operation,
+) RecoveryInspection {
+	return service.inspectRecoveryFromOperation(ctx, db, paths, operation, true).Inspection
 }
 
-// InspectFailedSwitchRecovery validates recovery preconditions without writing.
-func (service *Service) InspectFailedSwitchRecovery(ctx context.Context, db *store.Store, paths runtime.Paths, operation store.Operation) RecoveryInspection {
-	// Doctor must stay read-only, so it reuses recovery validation and maps
-	// failures to diagnostic statuses instead of creating recovery records.
-	source, err := service.loadFailedSwitchRecoverySourceFromOperation(ctx, db, paths, operation)
-	if err != nil {
-		return recoveryInspectionFromError(err)
+func newRecoveryOperationID(now time.Time) (string, error) {
+	randomBytes := make([]byte, recoveryOperationRandomBytes)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", err
 	}
-	if err := validateRecoveryActiveState(ctx, db, source); err != nil {
-		return recoveryInspectionFromError(err)
-	}
-	if err := service.verifyRollbackTargets(ctx, source.Targets); err != nil {
-		return recoveryInspectionFromError(err)
-	}
-	return RecoveryInspection{
-		Status: RecoveryStatusRecoverable,
-		Reason: "valid_backup_checkpoint",
-	}
+	return fmt.Sprintf("recovery-%d-%s", now.UnixMilli(), hex.EncodeToString(randomBytes)), nil
 }
 
-func recoveryInspectionFromError(err error) RecoveryInspection {
+func removeOperationRecoveryPoint(paths runtime.Paths, operationID string) (bool, error) {
+	if err := transaction.RemoveRecoveryPoint(paths.Recovery, operationID); err != nil {
+		return false, apperror.New(apperror.BackupFailed, "operation recovery files could not be removed").WithDetail("operation_id", operationID)
+	}
+	return true, nil
+}
+
+func decodeSwitchOperationMetadata(raw string, metadata *switchOperationMetadata) error {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(metadata); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("switch operation metadata contains extra data")
+	}
+	return nil
+}
+
+func recoveryInspectionFromError(operationID string, err error) RecoveryInspection {
+	inspection := RecoveryInspection{OperationID: operationID}
 	if recoveryTargetStateUnknown(err) {
-		return RecoveryInspection{Status: RecoveryStatusUnknown, Reason: "target_state_unknown"}
+		inspection.Status = RecoveryStatusUnknown
+		inspection.Reason = "target_state_unknown"
+		return inspection
 	}
-
 	var appErr *apperror.Error
 	if errors.As(err, &appErr) {
 		switch appErr.Code {
-		case apperror.RecoveryUnsupported, apperror.RollbackUnsupported:
-			return RecoveryInspection{Status: RecoveryStatusUnrecoverable, Reason: "recovery_unsupported"}
+		case apperror.RecoveryUnsupported:
+			inspection.Status = RecoveryStatusUnrecoverable
+			inspection.Reason = "recovery_unsupported"
 		case apperror.BackupInvalid, apperror.BackupNotFound:
-			return RecoveryInspection{Status: RecoveryStatusUnrecoverable, Reason: "backup_invalid"}
+			inspection.Status = RecoveryStatusUnrecoverable
+			inspection.Reason = "recovery_files_invalid"
 		case apperror.TargetChanged:
-			return RecoveryInspection{Status: RecoveryStatusUnrecoverable, Reason: "target_state_unrecognized"}
+			inspection.Status = RecoveryStatusUnrecoverable
+			inspection.Reason = "target_state_unrecognized"
 		case apperror.BackupFailed, apperror.StoreStatusFailed, apperror.TargetReadFailed:
-			return RecoveryInspection{Status: RecoveryStatusUnknown, Reason: "recovery_check_failed"}
+			inspection.Status = RecoveryStatusUnknown
+			inspection.Reason = "recovery_check_failed"
+		default:
+			inspection.Status = RecoveryStatusUnknown
+			inspection.Reason = "recovery_check_failed"
 		}
+		return inspection
 	}
-	return RecoveryInspection{Status: RecoveryStatusUnknown, Reason: "recovery_check_failed"}
+	inspection.Status = RecoveryStatusUnknown
+	inspection.Reason = "recovery_check_failed"
+	return inspection
+}
+
+func recoveryInspectionError(inspection RecoveryInspection) error {
+	switch inspection.Status {
+	case RecoveryStatusRunning:
+		return apperror.New(apperror.LockAcquireFailed, "a switch operation is still running")
+	case RecoveryStatusUnknown:
+		return apperror.New(apperror.RecoveryUnsupported, "operation recovery could not safely inspect every target").WithDetail("reason", inspection.Reason)
+	default:
+		return apperror.New(apperror.RecoveryUnsupported, "operation cannot be recovered safely").WithDetail("reason", inspection.Reason)
+	}
 }
 
 func recoveryTargetStateUnknown(err error) bool {

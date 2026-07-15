@@ -362,6 +362,38 @@ func TestClientRejectsOversizedSummaryResponse(t *testing.T) {
 	}
 }
 
+func TestClientDrainsAndClosesFallbackResponseBody(t *testing.T) {
+	body := &trackedBody{Reader: strings.NewReader("private response")}
+	client := newTestClient(httpDoerFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: body, Request: request}, nil
+	}))
+	raw, status, transportFailed, err := client.postJSON(
+		context.Background(), client.summaryEndpoints[0], testAccessToken, testUserAgent, []byte(`{"project":"test"}`),
+	)
+	if err != nil || transportFailed || status != http.StatusServiceUnavailable || raw != nil {
+		t.Fatalf("unexpected fallback response raw=%q status=%d transportFailed=%t err=%v", raw, status, transportFailed, err)
+	}
+	if !body.closed || body.Len() != 0 {
+		t.Fatalf("fallback body closed=%t remaining=%d, want closed and drained", body.closed, body.Len())
+	}
+}
+
+func TestNewClientAcceptsCustomDefaultTransport(t *testing.T) {
+	original := http.DefaultTransport
+	custom := &unavailableRoundTripper{}
+	http.DefaultTransport = custom
+	t.Cleanup(func() { http.DefaultTransport = original })
+
+	client := NewClient()
+	httpClient, ok := client.http.(*http.Client)
+	if !ok {
+		t.Fatalf("client HTTP implementation = %T, want *http.Client", client.http)
+	}
+	if httpClient.Transport != custom {
+		t.Fatalf("client transport = %#v, want custom transport", httpClient.Transport)
+	}
+}
+
 func TestProductionClientRefusesRedirects(t *testing.T) {
 	redirected := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -389,4 +421,20 @@ type httpDoerFunc func(*http.Request) (*http.Response, error)
 
 func (function httpDoerFunc) Do(request *http.Request) (*http.Response, error) {
 	return function(request)
+}
+
+type trackedBody struct {
+	*strings.Reader
+	closed bool
+}
+
+func (body *trackedBody) Close() error {
+	body.closed = true
+	return nil
+}
+
+type unavailableRoundTripper struct{}
+
+func (*unavailableRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("unavailable")
 }

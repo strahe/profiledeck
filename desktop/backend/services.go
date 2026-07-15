@@ -11,6 +11,7 @@ import (
 	"github.com/strahe/profiledeck/internal/antigravity"
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/appbackup"
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/claudecode"
 	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
@@ -66,12 +67,15 @@ type SwitchService struct {
 type DoctorService struct {
 	application *app.Application
 	changes     *ChangeNotifier
+	quota       *codexQuotaRuntime
 }
 
 type BackupService struct {
 	application *app.Application
 	changes     *ChangeNotifier
-	quota       *codexQuotaRuntime
+	runtime     *applicationBackupRuntime
+	restartMu   sync.RWMutex
+	restart     func() error
 }
 
 type UsageService struct {
@@ -104,6 +108,7 @@ type Services struct {
 	autoSync    *usageAutoSyncRuntime
 	quota       *codexQuotaRuntime
 	runtimes    *agentRuntimeManager
+	backups     *applicationBackupRuntime
 }
 
 type DashboardResult struct {
@@ -227,6 +232,13 @@ func NewServices(application *app.Application, info app.Info, env Environment, s
 	changes := NewChangeNotifier()
 	autoSync := newUsageAutoSyncRuntime(application.Codex().GetSettings, application.Usage().SyncCodex)
 	quota := newCodexQuotaRuntime(application.Codex().ListAutomationTargets, application.Codex().RunCredentialJob)
+	backups := newApplicationBackupRuntime(
+		application.Settings().Get,
+		application.Backups().CreateAutomaticIfDue,
+		func(_ *appbackup.BackupDetail, err error) {
+			notifyMutationResult(changes, DesktopChangeApplicationBackupChanged, "backup.createAutomatic", "", "", "", err)
+		},
+	)
 	runtimes := newAgentRuntimeManager(application.Agents())
 	services := Services{
 		App:         &AppService{application: application, info: info, env: env, startupErr: startupErr, changes: changes},
@@ -236,14 +248,15 @@ func NewServices(application *app.Application, info app.Info, env Environment, s
 		Codex:       &CodexService{application: application, changes: changes, autoSync: autoSync, quota: quota},
 		Profile:     &ProfileService{application: application},
 		Switch:      &SwitchService{application: application, changes: changes, quota: quota},
-		Doctor:      &DoctorService{application: application, changes: changes},
-		Backup:      &BackupService{application: application, changes: changes, quota: quota},
+		Doctor:      &DoctorService{application: application, changes: changes, quota: quota},
+		Backup:      &BackupService{application: application, changes: changes, runtime: backups},
 		Usage:       &UsageService{application: application, autoSync: autoSync},
 		Settings:    &SettingsService{application: application},
 		changes:     changes,
 		autoSync:    autoSync,
 		quota:       quota,
 		runtimes:    runtimes,
+		backups:     backups,
 	}
 	runtimes.Register(agent.Codex, autoSync)
 	runtimes.Register(agent.Codex, quota)
@@ -272,9 +285,17 @@ func (s Services) StopCodexQuotaRuntime() {
 	s.runtimes.Deactivate(agent.Codex, s.quota)
 }
 
+func (s Services) StartApplicationBackups(ctx context.Context) {
+	s.backups.Start(ctx)
+}
+
+func (s Services) StopApplicationBackups() {
+	s.backups.Stop()
+}
+
 func Bootstrap(ctx context.Context, application *app.Application) error {
 	// Desktop startup may create ProfileDeck runtime state, but it must not touch
-	// Codex or any other target tool files; target writes stay in switch/rollback.
+	// Codex or any other target tool files; target writes stay in switch/recovery.
 	_, err := application.Runtime().Init(ctx)
 	return err
 }
@@ -316,6 +337,11 @@ func (s *AppService) Dashboard(ctx context.Context) (DashboardResult, error) {
 
 	status, err := s.application.Runtime().Status(ctx)
 	if err != nil {
+		if startupErr != nil {
+			// Startup recovery must remain reachable even when the database is too
+			// damaged for the normal status and dashboard queries.
+			return result, nil
+		}
 		return result, err
 	}
 	result.Status = status
@@ -714,33 +740,106 @@ func (s *DoctorService) RepairLock(ctx context.Context, confirm bool) (doctor.Do
 	return result, err
 }
 
-func (s *BackupService) ListBackups(ctx context.Context) (switching.ListBackupsResult, error) {
-	return s.application.Switching().ListBackups(ctx)
-}
-
-func (s *BackupService) ShowBackup(ctx context.Context, backupID string) (switching.BackupDetail, error) {
-	return s.application.Switching().ShowBackup(ctx, backupID)
-}
-
-func (s *BackupService) ApplyRollback(ctx context.Context, backupID string, confirm bool) (switching.ApplyRollbackResult, error) {
-	result, err := s.application.Switching().Rollback(ctx, switching.ApplyRollbackRequest{
-		BackupID: backupID,
-		Confirm:  confirm,
-	})
-	s.notifyMutationResult(DesktopChangeRollbackApplied, "backup.applyRollback", result.ProviderID, result.ProfileID, result.OperationID, err)
+func (s *BackupService) Create(ctx context.Context) (appbackup.BackupDetail, error) {
+	result, err := s.application.Backups().Create(ctx, appbackup.CreateRequest{Kind: appbackup.KindManual, Reason: appbackup.ReasonManual})
+	s.notifyMutationResult("backup.create", err)
 	return result, err
 }
 
-func (s *BackupService) RecoverFailedSwitch(ctx context.Context, operationID string, confirm bool) (switching.RecoverFailedSwitchResult, error) {
-	result, err := s.application.Switching().RecoverFailedSwitch(ctx, switching.RecoverFailedSwitchParams{
-		OperationID: operationID,
-		Confirm:     confirm,
+func (s *BackupService) List(ctx context.Context) (appbackup.ListResult, error) {
+	return s.application.Backups().List(ctx)
+}
+
+func (s *BackupService) Show(ctx context.Context, backupID string) (appbackup.BackupDetail, error) {
+	return s.application.Backups().Show(ctx, backupID)
+}
+
+func (s *BackupService) Export(ctx context.Context, req appbackup.ExportRequest) (appbackup.ExportResult, error) {
+	return s.application.Backups().Export(ctx, req)
+}
+
+func (s *BackupService) PreviewRestore(ctx context.Context, source appbackup.RestoreSource) (appbackup.RestorePreview, error) {
+	return s.application.Backups().PreviewRestore(ctx, source)
+}
+
+func (s *BackupService) Restore(ctx context.Context, req appbackup.RestoreRequest) (appbackup.RestoreResult, error) {
+	result, err := s.application.Backups().Restore(ctx, req)
+	if err != nil {
+		s.notifyMutationResult("backup.restore", err)
+		return appbackup.RestoreResult{}, err
+	}
+	s.notifyMutationResult("backup.restore", nil)
+	s.restartMu.RLock()
+	restart := s.restart
+	s.restartMu.RUnlock()
+	if restart == nil {
+		return result, apperror.New(apperror.ApplicationRestartFailed, "application data was restored, but ProfileDeck could not restart automatically")
+	}
+	if err := restart(); err != nil {
+		return result, apperror.New(apperror.ApplicationRestartFailed, "application data was restored, but ProfileDeck could not restart automatically")
+	}
+	return result, nil
+}
+
+func (s *BackupService) Delete(ctx context.Context, req appbackup.DeleteRequest) error {
+	err := s.application.Backups().Delete(ctx, req)
+	s.notifyMutationResult("backup.delete", err)
+	return err
+}
+
+func (s *BackupService) KeyStatus(ctx context.Context) (appbackup.KeyStatus, error) {
+	return s.application.Backups().KeyStatus(ctx)
+}
+
+func (s *BackupService) ExportKey(ctx context.Context, req appbackup.ExportKeyRequest) (appbackup.ExportKeyResult, error) {
+	return s.application.Backups().ExportKey(ctx, req)
+}
+
+func (s *BackupService) ImportKey(ctx context.Context, req appbackup.ImportKeyRequest) (appbackup.ImportKeyResult, error) {
+	result, err := s.application.Backups().ImportKey(ctx, req)
+	s.notifyMutationResult("backup.key.import", err)
+	return result, err
+}
+
+func (s *BackupService) SetAutomatic(ctx context.Context, enabled bool) (settings.Desktop, error) {
+	result, err := s.application.Settings().SetAutomaticBackups(ctx, enabled)
+	if err == nil && enabled {
+		s.runtime.Wake()
+	}
+	s.notifyMutationResult("backup.setAutomatic", err)
+	return result, err
+}
+
+func (s *BackupService) setRestarter(restart func() error) {
+	s.restartMu.Lock()
+	s.restart = restart
+	s.restartMu.Unlock()
+}
+
+// ConfigureBackupRestarter keeps the process callback out of generated Wails
+// bindings while allowing the Desktop composition root to provide it.
+func ConfigureBackupRestarter(service *BackupService, restart func() error) {
+	if service != nil {
+		service.setRestarter(restart)
+	}
+}
+
+func (s *DoctorService) InspectRecovery(ctx context.Context, operationID string) (switching.RecoveryInspection, error) {
+	return s.application.Switching().InspectRecovery(ctx, operationID)
+}
+
+func (s *DoctorService) RecoverOperation(ctx context.Context, operationID string, confirm bool) (switching.RecoverOperationResult, error) {
+	result, err := s.application.Switching().RecoverOperation(ctx, switching.RecoverOperationParams{
+		OperationID: operationID, Confirm: confirm,
 	})
-	resultOperationID := result.OperationID
+	resultOperationID := result.RecoveryOperationID
 	if resultOperationID == "" {
 		resultOperationID = strings.TrimSpace(operationID)
 	}
-	s.notifyMutationResult(DesktopChangeSwitchRecovered, "backup.recoverFailedSwitch", result.ProviderID, result.ProfileID, resultOperationID, err)
+	s.notifyMutationResult(DesktopChangeSwitchRecovered, "doctor.recoverOperation", result.ProviderID, result.ProfileID, resultOperationID, err)
+	if err == nil && result.ProviderID == codexconfig.ProviderID {
+		reloadCodexQuotaRuntime(s.quota)
+	}
 	return result, err
 }
 
@@ -806,11 +905,8 @@ func (s *DoctorService) notifyMutationResult(kind, source, providerID, profileID
 	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
 }
 
-func (s *BackupService) notifyMutationResult(kind, source, providerID, profileID, operationID string, err error) {
-	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
-	if err == nil && providerID == codexconfig.ProviderID {
-		reloadCodexQuotaRuntime(s.quota)
-	}
+func (s *BackupService) notifyMutationResult(source string, err error) {
+	notifyMutationResult(s.changes, DesktopChangeApplicationBackupChanged, source, "", "", "", err)
 }
 
 func reloadCodexQuotaRuntime(runtime *codexQuotaRuntime) {
@@ -843,7 +939,7 @@ func notifyMutationResult(changes *ChangeNotifier, kind, source, providerID, pro
 	case DesktopChangeAntigravityProfileChanged:
 		event.ProfileChanged = true
 		event.ActiveStateChanged = strings.Contains(source, "createProfile")
-	case DesktopChangeSwitchApplied, DesktopChangeRollbackApplied, DesktopChangeSwitchRecovered:
+	case DesktopChangeSwitchApplied, DesktopChangeSwitchRecovered:
 		event.ProfileChanged = providerID == codexconfig.ProviderID || providerID == agyconfig.ProviderID
 		event.ConfigSetsChanged = providerID == codexconfig.ProviderID
 		event.ActiveStateChanged = true

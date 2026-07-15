@@ -210,7 +210,7 @@ func (backend Backend) Restore(ctx context.Context, raw switchtarget.Spec, curre
 }
 
 func (Backend) Remove(context.Context, switchtarget.Spec, switchtarget.Snapshot, bool) (bool, error) {
-	return false, apperror.New(apperror.RollbackUnsupported, "Claude Code Keychain items cannot be created or deleted by ProfileDeck")
+	return false, apperror.New(apperror.RecoveryUnsupported, "Claude Code Keychain items cannot be created or deleted by ProfileDeck")
 }
 
 func DecodePersistentRef(value string) ([]byte, error) {

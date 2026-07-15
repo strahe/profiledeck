@@ -22,6 +22,7 @@ const (
 	desktopAppearanceSettingKey       = "desktop.appearance"
 	desktopSidebarCollapsedSettingKey = "desktop.sidebar_collapsed"
 	desktopAutomaticUpdatesSettingKey = "desktop.automatic_updates"
+	desktopAutomaticBackupsSettingKey = "desktop.automatic_backups"
 )
 
 type UpdateRequest struct {
@@ -35,6 +36,7 @@ type Desktop struct {
 	Appearance       string `json:"appearance"`
 	SidebarCollapsed bool   `json:"sidebar_collapsed"`
 	AutomaticUpdates bool   `json:"automatic_updates"`
+	AutomaticBackups bool   `json:"automatic_backups"`
 }
 
 type Service struct {
@@ -116,6 +118,20 @@ func (service *Service) SetAutomaticUpdates(ctx context.Context, enabled bool) (
 	return get(ctx, db)
 }
 
+// SetAutomaticBackups is separate from UpdateRequest so the Desktop backup
+// runtime can synchronize the persisted preference with its scheduler.
+func (service *Service) SetAutomaticBackups(ctx context.Context, enabled bool) (Desktop, error) {
+	db, err := service.stores.OpenHealthy(ctx, false)
+	if err != nil {
+		return Desktop{}, err
+	}
+	defer db.Close()
+	if err := upsert(ctx, db, desktopAutomaticBackupsSettingKey, enabled); err != nil {
+		return Desktop{}, err
+	}
+	return get(ctx, db)
+}
+
 func get(ctx context.Context, db *store.Store) (Desktop, error) {
 	language, err := readString(ctx, db, desktopLanguageSettingKey, DesktopLanguageAuto, normalizeLanguage, "desktop language")
 	if err != nil {
@@ -133,8 +149,13 @@ func get(ctx context.Context, db *store.Store) (Desktop, error) {
 	if err != nil {
 		return Desktop{}, err
 	}
+	automaticBackups, err := readBool(ctx, db, desktopAutomaticBackupsSettingKey, true, "automatic backups")
+	if err != nil {
+		return Desktop{}, err
+	}
 	return Desktop{
-		Language: language, Appearance: appearance, SidebarCollapsed: collapsed, AutomaticUpdates: automaticUpdates,
+		Language: language, Appearance: appearance, SidebarCollapsed: collapsed,
+		AutomaticUpdates: automaticUpdates, AutomaticBackups: automaticBackups,
 	}, nil
 }
 

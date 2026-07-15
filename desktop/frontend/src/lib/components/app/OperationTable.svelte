@@ -43,11 +43,18 @@
 
 	function operationMessage(operation: DoctorOperation): string {
 		if (operation.recovery_status === "recoverable") return translate("diagnosticsPage.operationMessage.recoverable");
-		if (operation.reason.startsWith("operation_may_be_in_progress")) return translate("diagnosticsPage.operationMessage.mayBeRunning");
+		if (operation.recovery_status === "closable") return translate("diagnosticsPage.operationMessage.closable");
+		if (operation.recovery_status === "running" || operation.reason.startsWith("operation_may_be_in_progress")) return translate("diagnosticsPage.operationMessage.mayBeRunning");
 		if (operation.recovery_status === "unrecoverable") return translate("diagnosticsPage.operationMessage.unrecoverable");
 		if (operation.recovery_status === "unknown") return translate("diagnosticsPage.operationMessage.unknownRecovery");
 		if (operation.status === "failed") return translate("diagnosticsPage.operationMessage.failed");
 		return translate("diagnosticsPage.operationMessage.incomplete");
+	}
+
+	function recoveryActionLabel(operation: DoctorOperation): string {
+		return operation.recovery_action === "close"
+			? translate("actions.closeIncomplete")
+			: translate("actions.restoreBeforeSwitch");
 	}
 </script>
 
@@ -74,19 +81,19 @@
 				<Table.Cell class="font-mono text-xs">{operation.profile_id ? shortID(operation.profile_id) : "—"}</Table.Cell>
 				<Table.Cell class="max-w-sm text-sm text-muted-foreground">{operationMessage(operation)}</Table.Cell>
 				<Table.Cell class="text-right">
-					{#if operation.recovery_status === "recoverable"}
+					{#if operation.recovery_status === "recoverable" || operation.recovery_status === "closable"}
 						<AlertDialog.Root>
 							<AlertDialog.Trigger disabled={!!actionBusy} class={buttonVariants({ variant: "outline", size: "sm" })}>
-								{$_("actions.recover")}
+								{recoveryActionLabel(operation)}
 							</AlertDialog.Trigger>
 							<AlertDialog.Content>
 								<AlertDialog.Header>
-									<AlertDialog.Title>{$_("diagnosticsPage.recover.title")}</AlertDialog.Title>
-									<AlertDialog.Description>{$_("diagnosticsPage.recover.description")}</AlertDialog.Description>
+									<AlertDialog.Title>{$_(operation.recovery_action === "close" ? "diagnosticsPage.recover.closeTitle" : "diagnosticsPage.recover.title")}</AlertDialog.Title>
+									<AlertDialog.Description>{$_(operation.recovery_action === "close" ? "diagnosticsPage.recover.closeDescription" : "diagnosticsPage.recover.description")}</AlertDialog.Description>
 								</AlertDialog.Header>
 								<AlertDialog.Footer>
 									<AlertDialog.Cancel>{$_("actions.cancel")}</AlertDialog.Cancel>
-									<AlertDialog.Action onclick={() => onRecover(operation.id)}>{$_("actions.recover")}</AlertDialog.Action>
+									<AlertDialog.Action onclick={() => onRecover(operation.id)}>{recoveryActionLabel(operation)}</AlertDialog.Action>
 								</AlertDialog.Footer>
 							</AlertDialog.Content>
 						</AlertDialog.Root>

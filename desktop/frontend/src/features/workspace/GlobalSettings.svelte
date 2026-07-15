@@ -12,6 +12,7 @@
 	import * as Switch from "$lib/components/ui/switch";
 	import type { UpdateStatus } from "../../../bindings/github.com/strahe/profiledeck/desktop/update";
 	import { currentDesktopLocale, type DesktopLanguage } from "$lib/i18n";
+	import AppBackupSettings from "./AppBackupSettings.svelte";
 
 	let {
 		language,
@@ -25,6 +26,9 @@
 		onAutomaticChange,
 		onCheckForUpdates,
 		onRestart,
+		automaticBackups,
+		databaseHealthy,
+		onAutomaticBackupsChange,
 	}: {
 		language: DesktopLanguage;
 		appearance: "system" | "light" | "dark";
@@ -37,6 +41,9 @@
 		onAutomaticChange: (enabled: boolean) => void | Promise<void>;
 		onCheckForUpdates: () => void | Promise<void>;
 		onRestart: () => void | Promise<void>;
+		automaticBackups: boolean;
+		databaseHealthy: boolean;
+		onAutomaticBackupsChange: (enabled: boolean) => void;
 	} = $props();
 
 	let updateActive = $derived(["checking", "downloading", "verifying", "preparing"].includes(updateStatus.state));
@@ -123,6 +130,8 @@
 			</SettingsRow>
 		</Field.FieldGroup>
 	</SectionCard>
+
+	<AppBackupSettings {automaticBackups} {databaseHealthy} {onAutomaticBackupsChange} />
 
 	{#if updateStatus.configured}
 		<SectionCard title={$_("settings.updates.title")} description={$_("settings.updates.description")}>

@@ -1490,7 +1490,7 @@ func TestSwitchOperationLifecycle(t *testing.T) {
 	}
 }
 
-func TestRollbackOperationLifecycle(t *testing.T) {
+func TestRecoveryOperationAtomicallyResolvesSourceAndRestoresActiveState(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
 
@@ -1501,36 +1501,53 @@ func TestRollbackOperationLifecycle(t *testing.T) {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
 
-	operation, err := db.CreatePendingRollbackOperation(ctx, CreateRollbackOperationParams{
-		ID:           "rollback-1",
+	if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
+		ID:           "switch-source",
+		ProfileID:    "profile-next",
+		MetadataJSON: `{"checkpoint":"recovery_created"}`,
+	}); err != nil {
+		t.Fatalf("create source switch operation: %v", err)
+	}
+	failedMetadata := `{"checkpoint":"recovery_created"}`
+	if err := db.MarkOperationFailed(ctx, MarkOperationFailedParams{
+		ID: "switch-source", ErrorCode: "TARGET_WRITE_FAILED", ErrorMessage: "write failed", MetadataJSON: &failedMetadata,
+	}); err != nil {
+		t.Fatalf("mark source switch failed: %v", err)
+	}
+
+	operation, err := db.CreatePendingRecoveryOperation(ctx, CreateRecoveryOperationParams{
+		ID:           "recovery-1",
 		ProfileID:    "profile-a",
 		MetadataJSON: `{"checkpoint":"created"}`,
 	})
 	if err != nil {
-		t.Fatalf("expected pending rollback operation create to succeed, got %v", err)
+		t.Fatalf("create pending recovery operation: %v", err)
 	}
-	if operation.OperationType != OperationTypeRollback || operation.Status != OperationStatusPending || operation.ProfileID != "profile-a" {
-		t.Fatalf("unexpected pending rollback operation: %#v", operation)
+	if operation.OperationType != OperationTypeRecovery || operation.Status != OperationStatusPending || operation.ProfileID != "profile-a" {
+		t.Fatalf("unexpected pending recovery operation: %#v", operation)
 	}
 
-	if err := db.CompleteRollbackOperation(ctx, CompleteRollbackOperationParams{
-		ID:         "rollback-1",
-		ProfileID:  "profile-a",
-		ProviderID: "provider-a",
-		RestoredActiveState: &RollbackActiveStateParams{
+	if err := db.CompleteRecoveryOperation(ctx, CompleteRecoveryOperationParams{
+		ID: "recovery-1", SourceOperationID: "switch-source", ResolutionKind: "recovered_pre_switch",
+		ProfileID: "profile-a", ProviderID: "provider-a",
+		RestoredActiveState: &RecoveryActiveStateParams{
 			ProfileID:   "profile-a",
 			OperationID: "switch-previous",
 		},
 		MetadataJSON: `{"checkpoint":"applied"}`,
 	}); err != nil {
-		t.Fatalf("expected rollback completion to succeed, got %v", err)
+		t.Fatalf("complete recovery operation: %v", err)
 	}
-	operation, err = db.GetOperation(ctx, "rollback-1")
+	operation, err = db.GetOperation(ctx, "recovery-1")
 	if err != nil {
-		t.Fatalf("expected rollback operation read to succeed, got %v", err)
+		t.Fatalf("read recovery operation: %v", err)
 	}
 	if operation.Status != OperationStatusApplied || operation.ProfileID != "profile-a" || operation.MetadataJSON != `{"checkpoint":"applied"}` {
-		t.Fatalf("unexpected completed rollback operation: %#v", operation)
+		t.Fatalf("unexpected completed recovery operation: %#v", operation)
+	}
+	source, err := db.GetOperation(ctx, "switch-source")
+	if err != nil || source.Status != OperationStatusFailed || source.ResolutionKind != "recovered_pre_switch" || source.ResolvedAtUnixMS == 0 {
+		t.Fatalf("source failure and resolution were not retained: %#v error=%v", source, err)
 	}
 	activeState, err := db.GetActiveState(ctx, ActiveStateScopeProvider, "provider-a")
 	if err != nil {
@@ -1539,45 +1556,9 @@ func TestRollbackOperationLifecycle(t *testing.T) {
 	if activeState.ProfileID != "profile-a" || activeState.OperationID != "switch-previous" {
 		t.Fatalf("unexpected restored active state: %#v", activeState)
 	}
-
-	if _, err := db.CreatePendingRollbackOperation(ctx, CreateRollbackOperationParams{
-		ID:           "rollback-2",
-		MetadataJSON: `{"checkpoint":"created"}`,
-	}); err != nil {
-		t.Fatalf("expected second rollback create to succeed, got %v", err)
-	}
-	if err := db.CompleteRollbackOperation(ctx, CompleteRollbackOperationParams{
-		ID:           "rollback-2",
-		ProviderID:   "provider-a",
-		MetadataJSON: `{"checkpoint":"applied"}`,
-	}); err != nil {
-		t.Fatalf("expected rollback completion with active delete to succeed, got %v", err)
-	}
-	if _, err := db.GetActiveState(ctx, ActiveStateScopeProvider, "provider-a"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected active state delete after rollback, got %v", err)
-	}
-
-	if _, err := db.CreatePendingRollbackOperation(ctx, CreateRollbackOperationParams{
-		ID:           "rollback-3",
-		MetadataJSON: `{}`,
-	}); err != nil {
-		t.Fatalf("expected third rollback create to succeed, got %v", err)
-	}
-	failedMetadata := `{"checkpoint":"failed"}`
-	if err := db.MarkOperationFailed(ctx, MarkOperationFailedParams{
-		ID:           "rollback-3",
-		ErrorCode:    "TARGET_CHANGED",
-		ErrorMessage: "changed",
-		MetadataJSON: &failedMetadata,
-	}); err != nil {
-		t.Fatalf("expected rollback failure mark to succeed, got %v", err)
-	}
-	operation, err = db.GetOperation(ctx, "rollback-3")
-	if err != nil {
-		t.Fatalf("expected failed rollback read to succeed, got %v", err)
-	}
-	if operation.Status != OperationStatusFailed || operation.ErrorCode != "TARGET_CHANGED" || operation.MetadataJSON != failedMetadata {
-		t.Fatalf("unexpected failed rollback operation: %#v", operation)
+	incomplete, err := db.ListIncompleteOperations(ctx)
+	if err != nil || len(incomplete) != 0 {
+		t.Fatalf("resolved source remained incomplete: %#v error=%v", incomplete, err)
 	}
 }
 
@@ -2264,7 +2245,7 @@ func TestDriftedSchemaIsUnhealthy(t *testing.T) {
 		)`,
 		`CREATE TABLE operations (
 			id TEXT PRIMARY KEY,
-			operation_type TEXT NOT NULL CHECK (operation_type IN ('switch', 'rollback', 'import', 'maintenance')),
+			operation_type TEXT NOT NULL CHECK (operation_type IN ('switch', 'recovery', 'import', 'maintenance')),
 			status TEXT NOT NULL CHECK (status IN ('pending', 'failed', 'applied')),
 			profile_id TEXT NOT NULL DEFAULT '',
 			metadata_json TEXT NOT NULL DEFAULT '{}',

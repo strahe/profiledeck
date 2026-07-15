@@ -49,7 +49,7 @@ func (service *Service) RunMaintenance(ctx context.Context, req maintenance.Requ
 	}
 	defer lock.Release()
 	if req.ProviderID != "" {
-		if err := service.RequireProvider(ctx, req.ProviderID); err != nil {
+		if err := service.requireProviderWithStore(ctx, db, req.ProviderID); err != nil {
 			return err
 		}
 	}
@@ -93,6 +93,16 @@ func (service *Service) RunWithSharedLock(ctx context.Context, operation string,
 func (service *Service) RequireProvider(ctx context.Context, providerID string) error {
 	if service.policy == nil {
 		return nil
+	}
+	return service.policy.RequireProvider(ctx, providerID)
+}
+
+func (service *Service) requireProviderWithStore(ctx context.Context, db *store.Store, providerID string) error {
+	if service.policy == nil {
+		return nil
+	}
+	if policy, ok := service.policy.(agent.StorePolicy); ok {
+		return policy.RequireProviderWithStore(ctx, db, providerID)
 	}
 	return service.policy.RequireProvider(ctx, providerID)
 }

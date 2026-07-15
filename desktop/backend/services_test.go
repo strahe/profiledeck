@@ -15,6 +15,7 @@ import (
 	"github.com/strahe/profiledeck/internal/agent"
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/appbackup"
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/codex"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
@@ -33,6 +34,7 @@ func newBackendTestApplication(t *testing.T, env Environment) *app.Application {
 	if err != nil {
 		t.Fatalf("create test Application: %v", err)
 	}
+	t.Cleanup(application.Close)
 	return application
 }
 
@@ -67,6 +69,35 @@ func TestDashboardReportsStartupError(t *testing.T) {
 	}
 	if result.StartupError == nil || result.StartupError.Code != string(apperror.RuntimeInitFailed) {
 		t.Fatalf("expected structured startup error, got %#v", result.StartupError)
+	}
+}
+
+func TestDashboardKeepsRecoveryAvailableWhenDatabaseIsDamaged(t *testing.T) {
+	ctx := context.Background()
+	env := Environment{ConfigDir: t.TempDir()}
+	application := newBackendTestApplication(t, env)
+	if err := Bootstrap(ctx, application); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		if err := os.Remove(application.Runtime().Paths().Database + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(application.Runtime().Paths().Database, []byte("damaged database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	services := NewServices(application, app.DefaultInfo(), env, apperror.New(apperror.StoreSchemaInvalid, "application database is damaged"))
+
+	result, err := services.App.Dashboard(ctx)
+	if err != nil {
+		t.Fatalf("dashboard blocked startup recovery: %v", err)
+	}
+	if result.StartupError == nil || result.StartupError.Code != string(apperror.StoreSchemaInvalid) {
+		t.Fatalf("startup recovery error is unavailable: %#v", result.StartupError)
+	}
+	if result.Status.SchemaHealthy {
+		t.Fatalf("damaged database was reported healthy: %#v", result.Status)
 	}
 }
 
@@ -163,13 +194,13 @@ func TestDisabledAgentsRejectStaticServiceCallsButKeepSafetyServices(t *testing.
 		dashboard.CodexProfiles != nil || dashboard.AntigravityProfiles != nil || dashboard.ClaudeCodeProfiles != nil {
 		t.Fatalf("all-disabled Dashboard exposed managed Agent data: %#v", dashboard)
 	}
-	if _, err := services.Backup.ListBackups(ctx); err != nil {
+	if _, err := services.Backup.List(ctx); err != nil {
 		t.Fatalf("Agent gate blocked backup inspection: %v", err)
 	}
 	if _, err := services.Doctor.Run(ctx); err != nil {
 		t.Fatalf("Agent gate blocked Doctor: %v", err)
 	}
-	_, recoveryErr := services.Backup.RecoverFailedSwitch(ctx, "missing-operation", true)
+	_, recoveryErr := services.Doctor.RecoverOperation(ctx, "missing-operation", true)
 	var recoveryAppErr *apperror.Error
 	if !errors.As(recoveryErr, &recoveryAppErr) || recoveryAppErr.Code == apperror.AgentDisabled {
 		t.Fatalf("recovery was blocked by Agent gate: %v", recoveryErr)
@@ -340,6 +371,77 @@ func TestServicesNotifyDesktopChanges(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected canceled listener not to receive events, got %#v", events)
 	}
+}
+
+func TestApplicationBackupMutationsNotifyDesktopChanges(t *testing.T) {
+	keyring.MockInit()
+	t.Cleanup(keyring.MockInit)
+	ctx := context.Background()
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil)
+	if _, err := services.App.Initialize(ctx); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	events := []DesktopChangeEvent{}
+	services.SubscribeChanges(func(event DesktopChangeEvent) { events = append(events, event) })
+
+	backup, err := services.Backup.Create(ctx)
+	if err != nil {
+		t.Fatalf("create application backup: %v", err)
+	}
+	if len(events) != 1 || events[0].Kind != DesktopChangeApplicationBackupChanged ||
+		events[0].Source != "backup.create" || events[0].Status != DesktopChangeStatusSuccess {
+		t.Fatalf("unexpected backup creation event: %#v", events)
+	}
+	if err := services.Backup.Delete(ctx, appbackup.DeleteRequest{BackupID: backup.ID, Confirm: true}); err != nil {
+		t.Fatalf("delete application backup: %v", err)
+	}
+	if len(events) != 2 || events[1].Kind != DesktopChangeApplicationBackupChanged ||
+		events[1].Source != "backup.delete" || events[1].Status != DesktopChangeStatusSuccess {
+		t.Fatalf("unexpected backup deletion event: %#v", events)
+	}
+}
+
+func TestApplicationBackupRestoreRequestsDesktopRestart(t *testing.T) {
+	keyring.MockInit()
+	t.Cleanup(keyring.MockInit)
+	ctx := context.Background()
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil)
+	if _, err := services.App.Initialize(ctx); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	backup, err := services.Backup.Create(ctx)
+	if err != nil {
+		t.Fatalf("create application backup: %v", err)
+	}
+	preview, err := services.Backup.PreviewRestore(ctx, appbackup.RestoreSource{BackupID: backup.ID})
+	if err != nil {
+		t.Fatalf("preview application restore: %v", err)
+	}
+	restarted := false
+	ConfigureBackupRestarter(services.Backup, func() error {
+		restarted = true
+		return nil
+	})
+
+	result, err := services.Backup.Restore(ctx, appbackup.RestoreRequest{
+		Source: appbackup.RestoreSource{BackupID: backup.ID}, ExpectedFingerprint: preview.Fingerprint, Confirm: true,
+	})
+	if err != nil {
+		t.Fatalf("restore application backup: %v", err)
+	}
+	if !result.RestartRequired || !restarted {
+		t.Fatalf("desktop restart was not requested: result=%#v restarted=%t", result, restarted)
+	}
+
+	preview, err = services.Backup.PreviewRestore(ctx, appbackup.RestoreSource{BackupID: backup.ID})
+	if err != nil {
+		t.Fatalf("preview second application restore: %v", err)
+	}
+	ConfigureBackupRestarter(services.Backup, func() error { return errors.New("restart unavailable") })
+	_, err = services.Backup.Restore(ctx, appbackup.RestoreRequest{
+		Source: appbackup.RestoreSource{BackupID: backup.ID}, ExpectedFingerprint: preview.Fingerprint, Confirm: true,
+	})
+	assertDesktopServiceErrorCode(t, err, apperror.ApplicationRestartFailed)
 }
 
 func TestSwitchApplyMissingFingerprintDoesNotNotify(t *testing.T) {

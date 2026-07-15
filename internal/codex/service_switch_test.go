@@ -345,35 +345,6 @@ func TestCodexSwitchDoesNotCaptureInvalidOrMissingWorkingCopies(t *testing.T) {
 	}
 }
 
-func TestCodexRollbackRestoresActiveFilesWithoutUndoingCapturedState(t *testing.T) {
-	ctx, configDir, codexDir := setupCodexSwitchProfiles(t, true)
-	refreshed := `{"tokens":{"account_id":"second","access_token":"captured-before-switch"}}`
-	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.AuthFileName), []byte(refreshed), 0o600); err != nil {
-		t.Fatalf("expected auth refresh setup, got %v", err)
-	}
-	switchResult, err := newCodexTestEnvironment(t, configDir, "").switching.Apply(ctx, switching.ApplySwitchRequest{ProviderID: codexconfig.ProviderID, ProfileID: "first", Confirm: true})
-	if err != nil {
-		t.Fatalf("expected switch, got %v", err)
-	}
-	if _, err := newCodexTestEnvironment(t, configDir, "").switching.Rollback(ctx, switching.ApplyRollbackRequest{BackupID: switchResult.OperationID, Confirm: true}); err != nil {
-		t.Fatalf("expected rollback, got %v", err)
-	}
-	assertJSONFile(t, filepath.Join(codexDir, codexconfig.AuthFileName), "captured-before-switch")
-	second, err := newCodexTestEnvironment(t, configDir, "").codex.GetProfile(ctx, "second")
-	if err != nil || !second.Summary.Active {
-		t.Fatalf("expected second profile active after rollback, got %#v err=%v", second, err)
-	}
-	db, err := openHealthyStore(ctx, configDir, true)
-	if err != nil {
-		t.Fatalf("expected store open, got %v", err)
-	}
-	defer db.Close()
-	credential, err := db.GetProviderCredential(ctx, second.Summary.CredentialID)
-	if err != nil || credential.PayloadJSON != refreshed {
-		t.Fatalf("expected captured credential to remain committed, got %#v err=%v", credential, err)
-	}
-}
-
 func setupCodexSwitchProfiles(t *testing.T, independentConfig bool) (context.Context, string, string) {
 	t.Helper()
 	ctx := context.Background()

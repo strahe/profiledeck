@@ -10,12 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 
 	"github.com/wailsapp/wails/v3/pkg/updater"
 
 	desktopupdate "github.com/strahe/profiledeck/desktop/update"
 	coreapp "github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/appbackup"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -45,6 +45,7 @@ func runUpdate() error {
 	if err != nil {
 		return err
 	}
+	defer application.Close()
 	if _, err := application.Runtime().Init(ctx); err != nil {
 		return err
 	}
@@ -102,6 +103,7 @@ func finishUpdatedLaunch() {
 		writeResult(err)
 		return
 	}
+	defer application.Close()
 	if _, err := application.Runtime().Init(ctx); err != nil {
 		writeResult(err)
 		return
@@ -111,19 +113,25 @@ func finishUpdatedLaunch() {
 		writeResult(fmt.Errorf("application data was not preserved: value=%q err=%v", setting, err))
 		return
 	}
-	backups, err := filepath.Glob(filepath.Join(application.Runtime().Paths().UpdateBackups, "*.db"))
-	if err != nil || len(backups) == 0 {
-		writeResult(fmt.Errorf("update snapshot missing: %v", err))
+	backups, err := application.Backups().List(ctx)
+	if err != nil || len(backups.Backups) == 0 {
+		writeResult(fmt.Errorf("update application backup missing: %v", err))
 		return
 	}
-	sort.Strings(backups)
-	snapshotSetting, err := readE2ESetting(ctx, store.NewFactory(backups[len(backups)-1]))
-	if err != nil || snapshotSetting != `"preserve"` {
-		writeResult(fmt.Errorf("update snapshot is invalid: value=%q err=%v", snapshotSetting, err))
+	backup := backups.Backups[0]
+	detail, err := application.Backups().Show(ctx, backup.ID)
+	if err != nil || detail.Reason != appbackup.ReasonBeforeUpdate {
+		writeResult(fmt.Errorf("update application backup is invalid: detail=%#v err=%v", detail, err))
 		return
 	}
-	if info, err := os.Stat(backups[len(backups)-1]); err != nil || info.Mode().Perm() != 0o600 {
-		writeResult(fmt.Errorf("update snapshot is not private: info=%v err=%v", info, err))
+	preview, err := application.Backups().PreviewRestore(ctx, appbackup.RestoreSource{BackupID: backup.ID})
+	if err != nil || preview.Fingerprint == "" {
+		writeResult(fmt.Errorf("update application backup could not be verified: err=%v", err))
+		return
+	}
+	backupPath := filepath.Join(application.Runtime().Paths().Backups, backup.ID+appbackup.Extension)
+	if info, err := os.Stat(backupPath); err != nil || info.Mode().Perm() != 0o600 {
+		writeResult(fmt.Errorf("update application backup is not private: info=%v err=%v", info, err))
 		return
 	}
 	writeResult(nil)

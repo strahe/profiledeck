@@ -19,6 +19,7 @@ const lockAcquireMaxAttempts = 8
 type Lock struct {
 	file     *os.File
 	localKey string
+	shared   bool
 }
 
 type LockProbe struct {
@@ -30,21 +31,26 @@ type LockProbe struct {
 
 var localLockRegistry = struct {
 	mu    sync.Mutex
-	locks map[string]struct{}
+	locks map[string]localLockState
 }{
-	locks: map[string]struct{}{},
+	locks: map[string]localLockState{},
+}
+
+type localLockState struct {
+	readers int
+	writer  bool
 }
 
 func AcquireLock(path, owner string) (Lock, error) {
 	token := fmt.Sprintf("%s\npid=%d\ncreated_at_unix_ms=%d\n", owner, os.Getpid(), time.Now().UnixMilli())
 	localKey := localLockKey(path)
-	if !acquireLocalLock(localKey) {
+	if !acquireLocalLock(localKey, false) {
 		return Lock{}, NewError(KindLockHeld, "lock is already held").WithDetail("path", path)
 	}
 	releaseLocal := true
 	defer func() {
 		if releaseLocal {
-			releaseLocalLock(localKey)
+			releaseLocalLock(localKey, false)
 		}
 	}()
 
@@ -103,6 +109,46 @@ func acquireLockAttempt(path, token, localKey string) (Lock, bool, error) {
 	closeFile = false
 	unlockFile = false
 	return Lock{file: file, localKey: localKey}, false, nil
+}
+
+// AcquireSharedLock holds a process-lifetime data lease. Shared holders may
+// coexist, while database replacement requires the exclusive lock above.
+func AcquireSharedLock(path string) (Lock, error) {
+	localKey := localLockKey(path)
+	if !acquireLocalLock(localKey, true) {
+		return Lock{}, NewError(KindLockHeld, "lock is already held").WithDetail("path", path)
+	}
+	releaseLocal := true
+	defer func() {
+		if releaseLocal {
+			releaseLocalLock(localKey, true)
+		}
+	}()
+
+	for attempt := 0; attempt < lockAcquireMaxAttempts; attempt++ {
+		file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+		if err != nil {
+			return Lock{}, WrapError(KindLockFailed, "failed to open lock file", err).WithDetail("path", path)
+		}
+		if err := trySharedLockFile(file); err != nil {
+			_ = file.Close()
+			if errors.Is(err, errSystemLockHeld) {
+				return Lock{}, NewError(KindLockHeld, "lock is already held").WithDetail("path", path)
+			}
+			return Lock{}, WrapError(KindLockFailed, "failed to acquire shared system lock", err).WithDetail("path", path)
+		}
+		if _, err := verifyOpenedLockFileCurrent(path, file); err != nil {
+			_ = unlockFileHandle(file)
+			_ = file.Close()
+			if isTargetChangedError(err) {
+				continue
+			}
+			return Lock{}, err
+		}
+		releaseLocal = false
+		return Lock{file: file, localKey: localKey, shared: true}, nil
+	}
+	return Lock{}, NewError(KindTargetChanged, "lock file changed during acquire").WithDetail("path", path)
 }
 
 func ProbeLock(path string) (LockProbe, error) {
@@ -192,10 +238,10 @@ func RemoveStaleLockFile(path, expectedSHA256 string) error {
 	}
 
 	localKey := localLockKey(path)
-	if !acquireLocalLock(localKey) {
+	if !acquireLocalLock(localKey, false) {
 		return NewError(KindLockHeld, "lock is already held").WithDetail("path", path)
 	}
-	defer releaseLocalLock(localKey)
+	defer releaseLocalLock(localKey, false)
 
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
@@ -298,7 +344,7 @@ func (l Lock) Release() {
 	}
 	_ = unlockFileHandle(l.file)
 	_ = l.file.Close()
-	releaseLocalLock(l.localKey)
+	releaseLocalLock(l.localKey, l.shared)
 }
 
 func localLockKey(path string) string {
@@ -309,28 +355,50 @@ func localLockKey(path string) string {
 	return normalizeLocalLockKey(filepath.Clean(abs))
 }
 
-func acquireLocalLock(key string) bool {
+func acquireLocalLock(key string, shared bool) bool {
 	localLockRegistry.mu.Lock()
 	defer localLockRegistry.mu.Unlock()
-	if _, exists := localLockRegistry.locks[key]; exists {
+	state := localLockRegistry.locks[key]
+	if shared {
+		if state.writer {
+			return false
+		}
+		state.readers++
+		localLockRegistry.locks[key] = state
+		return true
+	}
+	if state.writer || state.readers != 0 {
 		return false
 	}
-	localLockRegistry.locks[key] = struct{}{}
+	state.writer = true
+	localLockRegistry.locks[key] = state
 	return true
 }
 
 func isLocalLockHeld(key string) bool {
 	localLockRegistry.mu.Lock()
 	defer localLockRegistry.mu.Unlock()
-	_, exists := localLockRegistry.locks[key]
-	return exists
+	state := localLockRegistry.locks[key]
+	return state.writer || state.readers != 0
 }
 
-func releaseLocalLock(key string) {
+func releaseLocalLock(key string, shared bool) {
 	if key == "" {
 		return
 	}
 	localLockRegistry.mu.Lock()
 	defer localLockRegistry.mu.Unlock()
-	delete(localLockRegistry.locks, key)
+	state := localLockRegistry.locks[key]
+	if shared {
+		if state.readers > 0 {
+			state.readers--
+		}
+	} else {
+		state.writer = false
+	}
+	if state.readers == 0 && !state.writer {
+		delete(localLockRegistry.locks, key)
+		return
+	}
+	localLockRegistry.locks[key] = state
 }

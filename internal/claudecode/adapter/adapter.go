@@ -43,11 +43,11 @@ func (Adapter) LoadTargets(_ context.Context, input switchplan.Input) ([]switchp
 
 func (Adapter) ResolveTargetSpec(providerID, targetID, backendID, path, label string) (switchtarget.Spec, error) {
 	if providerID != claudecodeconfig.ProviderID || targetID != claudecodeconfig.TargetID {
-		return nil, apperror.New(apperror.RollbackUnsupported, "Claude Code recovery target is unsupported").WithDetail("target_id", targetID)
+		return nil, apperror.New(apperror.RecoveryUnsupported, "Claude Code recovery target is unsupported").WithDetail("target_id", targetID)
 	}
 	if backendID == switchtarget.BackendFile {
 		if !filepathIsSupportedCredential(path) {
-			return nil, apperror.New(apperror.RollbackUnsupported, "Claude Code recovery file is outside the supported credential target")
+			return nil, apperror.New(apperror.RecoveryUnsupported, "Claude Code recovery file is outside the supported credential target")
 		}
 		return switchtarget.FileSpec{
 			ID: targetID, Path: path, NeedsContent: true, Secret: true, Label: label,
@@ -60,7 +60,7 @@ func (Adapter) ResolveTargetSpec(providerID, targetID, backendID, path, label st
 			return claudetarget.KeychainSpec{ID: targetID, Service: claudecodeconfig.KeychainService, Account: account, Label: label}, nil
 		}
 	}
-	return nil, apperror.New(apperror.RollbackUnsupported, "Claude Code recovery backend is unsupported").WithDetail("backend_id", backendID)
+	return nil, apperror.New(apperror.RecoveryUnsupported, "Claude Code recovery backend is unsupported").WithDetail("backend_id", backendID)
 }
 
 func (Adapter) Prepare(ctx context.Context, input switchplan.Input) (switchplan.Prepared, error) {

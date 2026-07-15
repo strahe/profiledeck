@@ -12,7 +12,7 @@ Open **Settings → App updates** to turn automatic checks on or off, check now,
 
 When the update is ready, choose **Restart now** to install it. Choose **Later** to keep working; ProfileDeck never restarts without confirmation.
 
-Before restarting, ProfileDeck verifies the update and backs up its local data. If verification, backup, or preparation fails, the update is not installed and the current version remains in place. Return to **Settings → App updates** and try again later.
+Before restarting, ProfileDeck verifies the update and creates an encrypted automatic application backup. If verification, backup, or preparation fails, the update is not installed and the current version remains in place. Update backups share the latest-ten automatic retention pool. Return to **Settings → App updates** and try again later.
 
 ## Open an Alpha for the first time
 

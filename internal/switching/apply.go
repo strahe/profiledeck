@@ -28,14 +28,14 @@ type ApplySwitchRequest struct {
 }
 
 type ApplySwitchResult struct {
-	OperationID     string       `json:"operation_id"`
-	Status          string       `json:"status"`
-	Provider        PlanProvider `json:"provider"`
-	Profile         PlanProfile  `json:"profile"`
-	PlanFingerprint string       `json:"plan_fingerprint"`
-	Counts          SwitchCounts `json:"counts"`
-	BackupPath      string       `json:"backup_path"`
-	Warnings        []string     `json:"warnings"`
+	OperationID              string       `json:"operation_id"`
+	Status                   string       `json:"status"`
+	Provider                 PlanProvider `json:"provider"`
+	Profile                  PlanProfile  `json:"profile"`
+	PlanFingerprint          string       `json:"plan_fingerprint"`
+	Counts                   SwitchCounts `json:"counts"`
+	RecoveryCleanupCompleted bool         `json:"recovery_cleanup_completed"`
+	Warnings                 []string     `json:"warnings"`
 }
 
 type SwitchCounts struct {
@@ -44,7 +44,7 @@ type SwitchCounts struct {
 	Noop   int `json:"noop"`
 }
 
-type switchBackup struct {
+type switchRecoveryPoint struct {
 	Path    string
 	Entries []transaction.Entry
 }
@@ -54,7 +54,7 @@ type switchOperationMetadata struct {
 	ProviderID      string                          `json:"provider_id"`
 	ProfileID       string                          `json:"profile_id"`
 	PlanFingerprint string                          `json:"plan_fingerprint,omitempty"`
-	BackupPath      string                          `json:"backup_path,omitempty"`
+	RecoveryPath    string                          `json:"recovery_path,omitempty"`
 	Counts          SwitchCounts                    `json:"counts"`
 	PreviousActive  *switchPreviousActiveState      `json:"previous_active_state,omitempty"`
 	StateCaptures   []StateCapture                  `json:"state_captures,omitempty"`
@@ -111,7 +111,7 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 	if err != nil {
 		return ApplySwitchResult{}, apperror.Wrap(apperror.OperationCreateFailed, "failed to create switch operation id", err)
 	}
-	initialMetadata, err := marshalSwitchOperationMetadata("created", providerID, profileID, applyPlan{}, switchBackup{}, SwitchCounts{}, nil)
+	initialMetadata, err := marshalSwitchOperationMetadata("created", providerID, profileID, applyPlan{}, switchRecoveryPoint{}, SwitchCounts{}, nil)
 	if err != nil {
 		return ApplySwitchResult{}, apperror.Wrap(apperror.OperationCreateFailed, "failed to encode switch operation metadata", err)
 	}
@@ -130,7 +130,7 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 	defer lock.Release()
 	// A Desktop Agent may be disabled while this operation waits for the lock.
 	// Once the lock is owned, later preference changes must not interrupt it.
-	if err := service.RequireProvider(ctx, providerID); err != nil {
+	if err := service.requireProviderWithStore(ctx, db, providerID); err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, initialMetadata, err)
 	}
 
@@ -144,7 +144,7 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, initialMetadata, err)
 	}
 	counts := countSwitchOperations(plan.Operations)
-	plannedMetadata, err := marshalSwitchOperationMetadata("planned", providerID, profileID, plan, switchBackup{}, counts, previousActive)
+	plannedMetadata, err := marshalSwitchOperationMetadata("planned", providerID, profileID, plan, switchRecoveryPoint{}, counts, previousActive)
 	if err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, initialMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode switch operation metadata", err))
 	}
@@ -167,19 +167,19 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, plannedMetadata, err)
 	}
 
-	backup, err := createSwitchBackupWithExecutor(ctx, executor, service.paths, operationID, plan)
+	recoveryPoint, err := createSwitchRecoveryPointWithExecutor(ctx, executor, service.paths, operationID, plan)
 	if err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, plannedMetadata, err)
 	}
-	backupMetadata, err := marshalSwitchOperationMetadata("backed_up", providerID, profileID, plan, backup, counts, previousActive)
+	recoveryMetadata, err := marshalSwitchOperationMetadata("recovery_created", providerID, profileID, plan, recoveryPoint, counts, previousActive)
 	if err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, plannedMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode switch operation metadata", err))
 	}
-	if err := db.UpdateOperationMetadata(ctx, operationID, backupMetadata); err != nil {
+	if err := db.UpdateOperationMetadata(ctx, operationID, recoveryMetadata); err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, plannedMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to update switch operation metadata", err))
 	}
 	if err := verifySwitchPlanHashesWithExecutor(ctx, executor, plan.Operations); err != nil {
-		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, backupMetadata, err)
+		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, recoveryMetadata, err)
 	}
 
 	for _, op := range plan.Operations {
@@ -187,7 +187,7 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 			continue
 		}
 		if err := writeTargetAtomicWithExecutor(ctx, executor, op); err != nil {
-			return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, backupMetadata, err)
+			return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, recoveryMetadata, err)
 		}
 	}
 	// External writes and active-state commit are not one storage transaction.
@@ -195,12 +195,12 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 	// working copy does not advance active state; external writers can still race
 	// after this final read.
 	if err := verifyAppliedSwitchTargetsWithExecutor(ctx, executor, plan.Operations); err != nil {
-		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, backupMetadata, err)
+		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, recoveryMetadata, err)
 	}
 
-	appliedMetadata, err := marshalSwitchOperationMetadata("applied", providerID, profileID, plan, backup, counts, previousActive)
+	appliedMetadata, err := marshalSwitchOperationMetadata("applied", providerID, profileID, plan, switchRecoveryPoint{}, counts, previousActive)
 	if err != nil {
-		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, backupMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode switch operation metadata", err))
+		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, recoveryMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode switch operation metadata", err))
 	}
 	if err := db.CompleteSwitchOperation(ctx, store.CompleteSwitchOperationParams{
 		ID:                operationID,
@@ -210,18 +210,19 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 		CredentialUpdates: plan.CredentialUpdates,
 		ConfigSetUpdates:  plan.ConfigSetUpdates,
 	}); err != nil {
-		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, backupMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to complete switch operation", err))
+		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, recoveryMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to complete switch operation", err))
 	}
+	recoveryCleanupCompleted := transaction.RemoveRecoveryPoint(service.paths.Recovery, operationID) == nil
 
 	return ApplySwitchResult{
-		OperationID:     operationID,
-		Status:          store.OperationStatusApplied,
-		Provider:        plan.SwitchPlan.Provider,
-		Profile:         plan.SwitchPlan.Profile,
-		PlanFingerprint: plan.SwitchPlan.PlanFingerprint,
-		Counts:          counts,
-		BackupPath:      backup.Path,
-		Warnings:        plan.SwitchPlan.Warnings,
+		OperationID:              operationID,
+		Status:                   store.OperationStatusApplied,
+		Provider:                 plan.SwitchPlan.Provider,
+		Profile:                  plan.SwitchPlan.Profile,
+		PlanFingerprint:          plan.SwitchPlan.PlanFingerprint,
+		Counts:                   counts,
+		RecoveryCleanupCompleted: recoveryCleanupCompleted,
+		Warnings:                 plan.SwitchPlan.Warnings,
 	}, nil
 }
 
@@ -282,16 +283,16 @@ func verifyAppliedSwitchTargetsWithExecutor(ctx context.Context, executor transa
 	return executor.VerifyApplied(ctx, transactionOperations(operations))
 }
 
-func createSwitchBackupWithExecutor(ctx context.Context, executor transaction.Executor, paths runtime.Paths, operationID string, plan applyPlan) (switchBackup, error) {
-	backup, err := executor.CreateBackup(ctx, transaction.BackupRequest{
-		BackupsDir: paths.Backups, OperationID: operationID, ProviderID: plan.SwitchPlan.Provider.ID,
+func createSwitchRecoveryPointWithExecutor(ctx context.Context, executor transaction.Executor, paths runtime.Paths, operationID string, plan applyPlan) (switchRecoveryPoint, error) {
+	recovery, err := executor.CreateRecoveryPoint(ctx, transaction.RecoveryPointRequest{
+		RecoveryRoot: paths.Recovery, OperationID: operationID, ProviderID: plan.SwitchPlan.Provider.ID,
 		ProfileID: plan.SwitchPlan.Profile.ID, PlanFingerprint: plan.SwitchPlan.PlanFingerprint,
 		Operations: transactionOperations(plan.Operations),
 	})
 	if err != nil {
-		return switchBackup{}, err
+		return switchRecoveryPoint{}, err
 	}
-	return switchBackup{Path: backup.Path, Entries: backup.Entries}, nil
+	return switchRecoveryPoint{Path: recovery.Path, Entries: recovery.Entries}, nil
 }
 
 func writeTargetAtomicWithExecutor(ctx context.Context, executor transaction.Executor, op applyPlanOperation) error {
@@ -417,7 +418,7 @@ func countSwitchOperations(operations []applyPlanOperation) SwitchCounts {
 	return counts
 }
 
-func marshalSwitchOperationMetadata(checkpoint, providerID, profileID string, plan applyPlan, backup switchBackup, counts SwitchCounts, previousActive *switchPreviousActiveState) (string, error) {
+func marshalSwitchOperationMetadata(checkpoint, providerID, profileID string, plan applyPlan, recovery switchRecoveryPoint, counts SwitchCounts, previousActive *switchPreviousActiveState) (string, error) {
 	targets := []switchOperationTargetMetadata{}
 	for _, op := range plan.Operations {
 		targets = append(targets, switchOperationTargetMetadata{
@@ -441,7 +442,7 @@ func marshalSwitchOperationMetadata(checkpoint, providerID, profileID string, pl
 		ProviderID:      providerID,
 		ProfileID:       profileID,
 		PlanFingerprint: plan.SwitchPlan.PlanFingerprint,
-		BackupPath:      backup.Path,
+		RecoveryPath:    recovery.Path,
 		Counts:          counts,
 		PreviousActive:  previousActive,
 		StateCaptures:   plan.SwitchPlan.StateCaptures,

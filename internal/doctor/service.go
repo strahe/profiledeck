@@ -43,23 +43,20 @@ type DoctorResult struct {
 }
 
 type DoctorOperation struct {
-	ID                string `json:"id"`
-	OperationType     string `json:"operation_type"`
-	Status            string `json:"status"`
-	Checkpoint        string `json:"checkpoint,omitempty"`
-	ProviderID        string `json:"provider_id,omitempty"`
-	ProfileID         string `json:"profile_id,omitempty"`
-	BackupPath        string `json:"backup_path,omitempty"`
-	BackupID          string `json:"backup_id,omitempty"`
-	SourceOperationID string `json:"source_operation_id,omitempty"`
-	RollbackKind      string `json:"rollback_kind,omitempty"`
-	RecoveryStatus    string `json:"recovery_status,omitempty"`
-	RecoveryReason    string `json:"recovery_reason,omitempty"`
-	ErrorCode         string `json:"error_code,omitempty"`
-	ErrorMessage      string `json:"error_message,omitempty"`
-	UpdatedAtUnixMS   int64  `json:"updated_at_unix_ms"`
-	Level             string `json:"level"`
-	Reason            string `json:"reason"`
+	ID              string `json:"id"`
+	OperationType   string `json:"operation_type"`
+	Status          string `json:"status"`
+	Checkpoint      string `json:"checkpoint,omitempty"`
+	ProviderID      string `json:"provider_id,omitempty"`
+	ProfileID       string `json:"profile_id,omitempty"`
+	RecoveryStatus  string `json:"recovery_status,omitempty"`
+	RecoveryAction  string `json:"recovery_action,omitempty"`
+	RecoveryReason  string `json:"recovery_reason,omitempty"`
+	ErrorCode       string `json:"error_code,omitempty"`
+	ErrorMessage    string `json:"error_message,omitempty"`
+	UpdatedAtUnixMS int64  `json:"updated_at_unix_ms"`
+	Level           string `json:"level"`
+	Reason          string `json:"reason"`
 }
 
 type DoctorLock struct {
@@ -93,8 +90,8 @@ type ProviderCheck struct {
 	Check   func(context.Context, *store.Store) ([]Finding, error)
 }
 
-// RecoveryInspector evaluates a failed switch without mutating state.
-type RecoveryInspector func(context.Context, *store.Store, runtime.Paths, store.Operation) (status, reason string)
+// RecoveryInspector evaluates an unresolved switch without mutating state.
+type RecoveryInspector func(context.Context, *store.Store, runtime.Paths, store.Operation) (status, action, reason string)
 
 // SensitivePathLister returns compiled-in Provider working paths that remain
 // safety-relevant even when their Desktop Agent is disabled.
@@ -132,7 +129,12 @@ func (service *Service) runProviderChecks(ctx context.Context, dbState doctorDat
 			continue
 		}
 		if service.policy != nil {
-			err := service.policy.RequireAgent(ctx, check.AgentID)
+			var err error
+			if policy, ok := service.policy.(agent.StorePolicy); ok {
+				err = policy.RequireAgentWithStore(ctx, dbState.db, check.AgentID)
+			} else {
+				err = service.policy.RequireAgent(ctx, check.AgentID)
+			}
 			if err != nil {
 				var appErr *apperror.Error
 				if errors.As(err, &appErr) && appErr.Code == apperror.AgentDisabled {
@@ -156,14 +158,9 @@ type doctorDatabaseState struct {
 }
 
 type doctorOperationMetadata struct {
-	Checkpoint         string `json:"checkpoint"`
-	ProviderID         string `json:"provider_id"`
-	ProfileID          string `json:"profile_id"`
-	BackupPath         string `json:"backup_path"`
-	CurrentBackupPath  string `json:"current_backup_path"`
-	SourceOperationID  string `json:"source_operation_id"`
-	BackupID           string `json:"backup_id"`
-	RollbackKind       string `json:"rollback_kind"`
+	Checkpoint         string
+	ProviderID         string
+	ProfileID          string
 	metadataDecodeFail bool
 }
 
@@ -178,7 +175,7 @@ func (service *Service) Run(ctx context.Context) (DoctorResult, error) {
 		Operations:   []DoctorOperation{},
 	}
 
-	dbState, operations, dbFindings := inspectDoctorDatabase(ctx, paths.Database)
+	dbState, operations, dbFindings := inspectDoctorDatabase(ctx, service.runtime.StoreFactory())
 	result.Findings = append(result.Findings, dbFindings...)
 	if dbState.db != nil {
 		defer dbState.db.Close()
@@ -223,7 +220,8 @@ func (service *Service) RepairLock(ctx context.Context, confirm bool) (DoctorRep
 	}, nil
 }
 
-func inspectDoctorDatabase(ctx context.Context, databasePath string) (doctorDatabaseState, []store.Operation, []Finding) {
+func inspectDoctorDatabase(ctx context.Context, stores store.Factory) (doctorDatabaseState, []store.Operation, []Finding) {
+	databasePath := stores.DatabasePath()
 	if _, err := os.Stat(databasePath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return doctorDatabaseState{}, nil, []Finding{{
@@ -240,7 +238,7 @@ func inspectDoctorDatabase(ctx context.Context, databasePath string) (doctorData
 		}}
 	}
 
-	db, err := store.Open(ctx, databasePath, true)
+	db, err := stores.Open(ctx, true)
 	if err != nil {
 		return doctorDatabaseState{}, nil, []Finding{{
 			ID:      "database_open_failed",
@@ -528,6 +526,9 @@ func classifyDoctorLock(lock *DoctorLock, parseErr, probeErr error, dbHealthy bo
 func (service *Service) doctorOperations(ctx context.Context, dbState doctorDatabaseState, paths runtime.Paths, operations []store.Operation, lock DoctorLock) []DoctorOperation {
 	result := make([]DoctorOperation, 0, len(operations))
 	for _, operation := range operations {
+		if operation.OperationType != store.OperationTypeSwitch {
+			continue
+		}
 		result = append(result, service.doctorOperation(ctx, dbState, paths, operation, lock))
 	}
 	return result
@@ -539,25 +540,11 @@ func (service *Service) doctorOperation(ctx context.Context, dbState doctorDatab
 	if profileID == "" {
 		profileID = operation.ProfileID
 	}
-	backupPath := metadata.BackupPath
-	if backupPath == "" {
-		backupPath = metadata.CurrentBackupPath
-	}
-
 	result := DoctorOperation{
-		ID:                operation.ID,
-		OperationType:     operation.OperationType,
-		Status:            operation.Status,
-		Checkpoint:        metadata.Checkpoint,
-		ProviderID:        metadata.ProviderID,
-		ProfileID:         profileID,
-		BackupPath:        backupPath,
-		BackupID:          metadata.BackupID,
-		SourceOperationID: metadata.SourceOperationID,
-		RollbackKind:      metadata.RollbackKind,
-		ErrorCode:         operation.ErrorCode,
-		ErrorMessage:      profiletarget.RedactSensitiveText(operation.ErrorMessage),
-		UpdatedAtUnixMS:   operation.UpdatedAtUnixMS,
+		ID: operation.ID, OperationType: operation.OperationType, Status: operation.Status,
+		Checkpoint: metadata.Checkpoint, ProviderID: metadata.ProviderID, ProfileID: profileID,
+		ErrorCode: operation.ErrorCode, ErrorMessage: profiletarget.RedactSensitiveText(operation.ErrorMessage),
+		UpdatedAtUnixMS: operation.UpdatedAtUnixMS,
 	}
 
 	switch operation.Status {
@@ -579,14 +566,10 @@ func (service *Service) doctorOperation(ctx context.Context, dbState doctorDatab
 	if metadata.metadataDecodeFail {
 		result.Checkpoint = ""
 		result.ProviderID = ""
-		result.BackupPath = ""
-		result.BackupID = ""
-		result.SourceOperationID = ""
-		result.RollbackKind = ""
 		result.Reason = result.Reason + "_metadata_invalid"
 	}
-	if operation.OperationType == store.OperationTypeSwitch && operation.Status == store.OperationStatusFailed && !metadata.metadataDecodeFail && dbState.healthy && dbState.db != nil && service.recoveryInspector != nil {
-		result.RecoveryStatus, result.RecoveryReason = service.recoveryInspector(ctx, dbState.db, paths, operation)
+	if operation.OperationType == store.OperationTypeSwitch && !metadata.metadataDecodeFail && dbState.healthy && dbState.db != nil && service.recoveryInspector != nil {
+		result.RecoveryStatus, result.RecoveryAction, result.RecoveryReason = service.recoveryInspector(ctx, dbState.db, paths, operation)
 	}
 	return result
 }
@@ -607,14 +590,9 @@ func parseDoctorOperationMetadata(raw string) doctorOperationMetadata {
 		return doctorOperationMetadata{metadataDecodeFail: true}
 	}
 	return doctorOperationMetadata{
-		Checkpoint:        stringMapValue(decoded, "checkpoint"),
-		ProviderID:        stringMapValue(decoded, "provider_id"),
-		ProfileID:         stringMapValue(decoded, "profile_id"),
-		BackupPath:        stringMapValue(decoded, "backup_path"),
-		CurrentBackupPath: stringMapValue(decoded, "current_backup_path"),
-		SourceOperationID: stringMapValue(decoded, "source_operation_id"),
-		BackupID:          stringMapValue(decoded, "backup_id"),
-		RollbackKind:      stringMapValue(decoded, "rollback_kind"),
+		Checkpoint: stringMapValue(decoded, "checkpoint"),
+		ProviderID: stringMapValue(decoded, "provider_id"),
+		ProfileID:  stringMapValue(decoded, "profile_id"),
 	}
 }
 
@@ -631,11 +609,11 @@ func stringMapValue(value map[string]any, key string) string {
 }
 
 func isProfileDeckOperationID(value string) bool {
-	return strings.HasPrefix(value, "switch-") || strings.HasPrefix(value, "rollback-") || isGeneratedOperationID(value)
+	return strings.HasPrefix(value, "switch-") || strings.HasPrefix(value, "recovery-") || isGeneratedOperationID(value)
 }
 
 func isMaintenanceLockOwner(value string) bool {
-	if strings.HasPrefix(value, "switch-") || strings.HasPrefix(value, "rollback-") {
+	if strings.HasPrefix(value, "switch-") || strings.HasPrefix(value, "recovery-") {
 		return false
 	}
 	return isGeneratedOperationID(value)

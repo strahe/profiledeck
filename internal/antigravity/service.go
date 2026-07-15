@@ -51,11 +51,13 @@ type AntigravityProfileSummary struct {
 	ProviderID               string              `json:"provider_id"`
 	CredentialID             string              `json:"credential_id"`
 	CredentialReferenceCount int                 `json:"credential_reference_count"`
-	ExpiresAtUnixMS          int64               `json:"expires_at_unix_ms,omitempty"`
-	Active                   bool                `json:"active"`
-	ActiveOperationID        string              `json:"active_operation_id,omitempty"`
-	UpdatedAtUnixMS          int64               `json:"updated_at_unix_ms"`
-	Warnings                 []string            `json:"warnings,omitempty"`
+	// ExpiresAtUnixMS remains available to machine-readable clients; human
+	// surfaces avoid presenting a short-lived access-token expiry as login health.
+	ExpiresAtUnixMS   int64    `json:"expires_at_unix_ms,omitempty"`
+	Active            bool     `json:"active"`
+	ActiveOperationID string   `json:"active_operation_id,omitempty"`
+	UpdatedAtUnixMS   int64    `json:"updated_at_unix_ms"`
+	Warnings          []string `json:"warnings,omitempty"`
 }
 
 type AntigravityProfileListResult struct {

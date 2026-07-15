@@ -1,6 +1,6 @@
 # Review and Switch Profiles
 
-Switching changes the login or settings used by Codex, Claude Code, or Antigravity. ProfileDeck lets you review the change and creates a backup before applying it.
+Switching changes the login or settings used by Codex, Claude Code, or Antigravity. ProfileDeck lets you review the change and creates a temporary recovery point before applying it.
 
 ## Switch in the Desktop app
 
@@ -57,14 +57,14 @@ Before changing the selected tool, ProfileDeck:
 1. checks that another ProfileDeck change is not still running;
 2. checks the current files or login again;
 3. saves valid updates from the Profile you are leaving when supported;
-4. creates a private backup;
+4. creates a private operation recovery point;
 5. changes only the required files or login;
 6. marks the new Profile as current after every change succeeds.
 
-ProfileDeck stops without applying the switch if it cannot verify the current state or create a usable backup. An interrupted or failed operation stays visible in Diagnostics so it can be recovered safely.
+ProfileDeck stops without applying the switch if it cannot verify the current state or create a usable recovery point. An interrupted or failed operation stays visible in Diagnostics so it can be recovered safely. After a successful switch, ProfileDeck deletes the recovery point.
 
-## Keep backups private
+## Keep recovery data private
 
-Switch backups may contain previous Codex files, Claude Code subscription logins, or Antigravity logins. Keep the ProfileDeck data directory private and do not commit, upload, or share its backup files.
+An unfinished switch recovery point may contain previous Codex files, a Claude Code subscription login, or an Antigravity login. Keep the ProfileDeck data directory private and do not commit, upload, or share recovery files.
 
-Recovery and rollback restore the selected tool and the previously current Profile. Updates that were already saved into a Profile remain saved. See [Diagnostics and recovery](./recovery.md) for the commands and recovery choices.
+Recovery restores an unfinished switch to its pre-switch target and active-Profile state. Updates that were already saved into a Profile remain saved. A successful switch cannot be undone; switch to the intended Profile instead. See [Diagnostics, backups, and recovery](./recovery.md) for the available actions.

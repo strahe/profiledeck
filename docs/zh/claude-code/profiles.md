@@ -39,7 +39,7 @@ profiledeck claude-code profile list
 
 ## 切换账号
 
-在桌面端选择**使用 Profile**，审核登录变化，然后确认。继续前，ProfileDeck 会创建私有备份。
+在桌面端选择**使用 Profile**，审核登录变化，然后确认。继续前，ProfileDeck 会创建私有操作恢复点。
 
 使用 CLI 时运行：
 

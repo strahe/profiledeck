@@ -3,7 +3,6 @@ package target_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -15,7 +14,6 @@ import (
 	"github.com/strahe/profiledeck/internal/apperror"
 	claudekeychain "github.com/strahe/profiledeck/internal/claudecode/keychain"
 	claudetarget "github.com/strahe/profiledeck/internal/claudecode/target"
-	"github.com/strahe/profiledeck/internal/switching"
 	switchtarget "github.com/strahe/profiledeck/internal/switching/target"
 )
 
@@ -216,7 +214,7 @@ func TestClaudeCodeKeychainBackendRejectsDeletedReferenceAndPostVerifyFailure(t 
 	}
 }
 
-func TestClaudeCodeKeychainBackupKeepsReferenceOutOfPublicSummary(t *testing.T) {
+func TestClaudeCodeKeychainBackupIsPrivateAndExclusive(t *testing.T) {
 	reference := []byte("private-reference")
 	driver := &fakeClaudeCodeKeychainDriver{
 		references: []claudekeychain.Reference{{Persistent: reference, Service: "Claude Code-credentials", Account: "tester"}},
@@ -240,10 +238,6 @@ func TestClaudeCodeKeychainBackupKeepsReferenceOutOfPublicSummary(t *testing.T) 
 	if _, err := backend.Backup(context.Background(), spec, snapshot, destination); !isErrorCode(err, apperror.BackupFailed) {
 		t.Fatalf("Backup() overwrote an existing destination: %v", err)
 	}
-	public := switching.BackupEntrySummary{TargetID: "auth", BackendID: switchtarget.BackendClaudeCodeKeychain}
-	if encoded := mustJSON(t, public); stringContains(encoded, "private-reference") || stringContains(encoded, "private_locator") {
-		t.Fatalf("public backup summary leaked private reference: %s", encoded)
-	}
 }
 
 func TestClaudeCodeKeychainDriverHasNoCreateOrDeleteAPI(t *testing.T) {
@@ -256,17 +250,6 @@ func TestClaudeCodeKeychainDriverHasNoCreateOrDeleteAPI(t *testing.T) {
 		t.Fatalf("unexpected Keychain driver API: %#v", methods)
 	}
 }
-
-func mustJSON(t *testing.T, value any) []byte {
-	t.Helper()
-	raw, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw
-}
-
-func stringContains(value []byte, text string) bool { return bytes.Contains(value, []byte(text)) }
 
 func isErrorCode(err error, code apperror.Code) bool {
 	var appErr *apperror.Error

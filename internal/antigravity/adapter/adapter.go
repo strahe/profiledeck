@@ -37,7 +37,7 @@ func (Adapter) ResolveTargetSpec(providerID, targetID, backendID, _, _ string) (
 	if providerID == agyconfig.ProviderID && targetID == agyconfig.TargetID && backendID == switchtarget.BackendKeyring {
 		return agyprofile.TargetSpec(), nil
 	}
-	return nil, apperror.New(apperror.RollbackUnsupported, "Antigravity recovery target is unsupported").
+	return nil, apperror.New(apperror.RecoveryUnsupported, "Antigravity recovery target is unsupported").
 		WithDetail("backend_id", backendID).WithDetail("target_id", targetID)
 }
 

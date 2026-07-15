@@ -1,6 +1,6 @@
 # 审核并切换 Profile
 
-切换会改变 Codex、Claude Code 或 Antigravity 使用的登录或设置。ProfileDeck 会让你先检查变更，并在应用前创建备份。
+切换会改变 Codex、Claude Code 或 Antigravity 使用的登录或设置。ProfileDeck 会让你先检查变更，并在应用前创建临时恢复点。
 
 ## 在桌面端切换
 
@@ -57,14 +57,14 @@ profiledeck switch codex work \
 1. 检查是否还有其他 ProfileDeck 变更正在运行；
 2. 再次检查当前文件或登录；
 3. 在支持时保存即将切离的 Profile 中的有效更新；
-4. 创建私有备份；
+4. 创建私有操作恢复点；
 5. 只更改必要的文件或登录；
 6. 所有变更成功后，再把新 Profile 标记为当前 Profile。
 
-如果无法确认当前状态或创建可用备份，ProfileDeck 会停止且不应用切换。中断或失败的操作会保留在“诊断”中，以便安全恢复。
+如果无法确认当前状态或创建可用恢复点，ProfileDeck 会停止且不应用切换。中断或失败的操作会保留在“诊断”中，以便安全恢复。切换成功后，ProfileDeck 会删除恢复点。
 
-## 妥善保护备份
+## 妥善保护恢复数据
 
-切换备份可能包含之前的 Codex 文件、Claude Code 订阅登录或 Antigravity 登录。请保持 ProfileDeck 数据目录私有，不要提交、上传或分享其中的备份文件。
+未完成切换的恢复点可能包含之前的 Codex 文件、Claude Code 订阅登录或 Antigravity 登录。请保持 ProfileDeck 数据目录私有，不要提交、上传或分享其中的恢复文件。
 
-恢复和回滚会还原所选工具与之前的当前 Profile。已经保存到 Profile 中的更新仍会保留。命令和处理方式见[诊断与恢复](./recovery.md)。
+恢复会把未完成切换还原到切换前的目标和当前 Profile 状态。已经保存到 Profile 中的更新仍会保留。成功切换不能撤销；如需更换配置，请切换到目标 Profile。可用操作见[诊断、备份与恢复](./recovery.md)。

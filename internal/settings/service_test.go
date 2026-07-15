@@ -18,7 +18,7 @@ func TestDesktopSettingsDefaultsAndPartialUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected default desktop settings, got %v", err)
 	}
-	if initial.Language != DesktopLanguageAuto || initial.Appearance != DesktopAppearanceSystem || initial.SidebarCollapsed || !initial.AutomaticUpdates {
+	if initial.Language != DesktopLanguageAuto || initial.Appearance != DesktopAppearanceSystem || initial.SidebarCollapsed || !initial.AutomaticUpdates || !initial.AutomaticBackups {
 		t.Fatalf("expected default desktop settings, settings=%#v err=%v", initial, err)
 	}
 
@@ -62,7 +62,7 @@ func TestDesktopSettingsCombinedUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected combined update to succeed, got %v", err)
 	}
-	want := Desktop{Language: language, Appearance: appearance, SidebarCollapsed: collapsed, AutomaticUpdates: true}
+	want := Desktop{Language: language, Appearance: appearance, SidebarCollapsed: collapsed, AutomaticUpdates: true, AutomaticBackups: true}
 	if updated != want {
 		t.Fatalf("unexpected combined settings: got %#v want %#v", updated, want)
 	}

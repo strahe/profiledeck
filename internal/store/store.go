@@ -28,9 +28,10 @@ const (
 	sqliteBusyTimeout            = 5 * time.Second
 	sqliteMigrationMaxAttempts   = 3
 	sqliteMigrationRetryBaseWait = 25 * time.Millisecond
+	currentMigrationID           = int64(202607060001)
 
 	OperationTypeSwitch      = "switch"
-	OperationTypeRollback    = "rollback"
+	OperationTypeRecovery    = "recovery"
 	OperationTypeImport      = "import"
 	OperationTypeMaintenance = "maintenance"
 
@@ -48,6 +49,8 @@ const (
 	maxProviderConfigSetPayloadBytes  = 16 * 1024 * 1024
 )
 
+var ErrFutureSchema = errors.New("application database schema is newer than this ProfileDeck version")
+
 var (
 	ErrAlreadyExists = errors.New("already exists")
 	ErrInUse         = errors.New("in use")
@@ -61,6 +64,7 @@ type Store struct {
 	db            *bun.DB
 	exec          dbExecutor
 	transactional bool
+	accessLease   *accessLease
 }
 
 type dbExecutor interface {
@@ -121,15 +125,17 @@ type ProfileTarget struct {
 }
 
 type Operation struct {
-	ID              string
-	OperationType   string
-	Status          string
-	ProfileID       string
-	MetadataJSON    string
-	ErrorCode       string
-	ErrorMessage    string
-	CreatedAtUnixMS int64
-	UpdatedAtUnixMS int64
+	ID               string
+	OperationType    string
+	Status           string
+	ProfileID        string
+	MetadataJSON     string
+	ErrorCode        string
+	ErrorMessage     string
+	ResolutionKind   string
+	ResolvedAtUnixMS int64
+	CreatedAtUnixMS  int64
+	UpdatedAtUnixMS  int64
 }
 
 type ActiveState struct {
@@ -275,7 +281,7 @@ type CreateSwitchOperationParams struct {
 	MetadataJSON string
 }
 
-type CreateRollbackOperationParams struct {
+type CreateRecoveryOperationParams struct {
 	ID           string
 	ProfileID    string
 	MetadataJSON string
@@ -310,17 +316,19 @@ type CompleteSwitchOperationParams struct {
 	ConfigSetUpdates  []UpsertProviderConfigSetParams
 }
 
-type RollbackActiveStateParams struct {
+type RecoveryActiveStateParams struct {
 	ProfileID   string
 	OperationID string
 }
 
-type CompleteRollbackOperationParams struct {
+type CompleteRecoveryOperationParams struct {
 	ID                  string
+	SourceOperationID   string
 	ProfileID           string
 	ProviderID          string
-	RestoredActiveState *RollbackActiveStateParams
+	RestoredActiveState *RecoveryActiveStateParams
 	MetadataJSON        string
+	ResolutionKind      string
 }
 
 type CreateUsageEventParams struct {
@@ -611,11 +619,13 @@ var initialTableSpecs = []tableSpec{
 			{name: "metadata_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
 			{name: "error_code", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
 			{name: "error_message", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
+			{name: "resolution_kind", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
+			{name: "resolved_at_unix_ms", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
 			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
 			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
 		},
 		checks: []string{
-			"CHECK (operation_type IN ('switch', 'rollback', 'import', 'maintenance'))",
+			"CHECK (operation_type IN ('switch', 'recovery', 'import', 'maintenance'))",
 			"CHECK (status IN ('pending', 'failed', 'applied'))",
 		},
 	},
@@ -839,7 +849,9 @@ func (s *Store) Close() error {
 	if s.transactional {
 		return nil
 	}
-	return s.db.Close()
+	err := s.db.Close()
+	s.accessLease.close()
+	return err
 }
 
 func (s *Store) WithTransaction(ctx context.Context, fn func(txStore *Store) error) error {
@@ -954,6 +966,72 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 		PendingOperations: pending,
 		FailedOperations:  failed,
 	}, nil
+}
+
+// QuickCheck verifies SQLite page and index consistency without exposing
+// database content in the returned error.
+func (s *Store) QuickCheck(ctx context.Context) error {
+	rows, err := s.executor().QueryContext(ctx, "PRAGMA quick_check")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	results := 0
+	healthy := true
+	for rows.Next() {
+		var result string
+		if err := rows.Scan(&result); err != nil {
+			return err
+		}
+		results++
+		if result != "ok" {
+			healthy = false
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if results != 1 || !healthy {
+		return errors.New("sqlite quick check failed")
+	}
+	return nil
+}
+
+// CheckMigrationCompatibility rejects databases created by a newer
+// ProfileDeck before any migration is attempted.
+func (s *Store) CheckMigrationCompatibility(ctx context.Context) error {
+	exists, err := s.objectExists(ctx, "table", "bun_migrations")
+	if err != nil || !exists {
+		return err
+	}
+	var latest int64
+	if err := s.executor().QueryRowContext(
+		ctx,
+		`SELECT COALESCE(MAX(id), 0) FROM bun_migrations`,
+	).Scan(&latest); err != nil {
+		return err
+	}
+	if latest > currentMigrationID {
+		return ErrFutureSchema
+	}
+	return nil
+}
+
+// Checkpoint folds committed WAL pages into the database before a database
+// file set is moved or published.
+func (s *Store) Checkpoint(ctx context.Context) error {
+	var busy, logPages, checkpointedPages int
+	if err := s.executor().QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(
+		&busy,
+		&logPages,
+		&checkpointedPages,
+	); err != nil {
+		return err
+	}
+	if busy != 0 {
+		return errors.New("sqlite checkpoint is busy")
+	}
+	return nil
 }
 
 func (s *Store) ListProviders(ctx context.Context, includeDisabled bool) ([]Provider, error) {
@@ -2282,7 +2360,7 @@ func (s *Store) CreatePendingSwitchOperation(ctx context.Context, params CreateS
 	return s.GetOperation(ctx, params.ID)
 }
 
-func (s *Store) CreatePendingRollbackOperation(ctx context.Context, params CreateRollbackOperationParams) (Operation, error) {
+func (s *Store) CreatePendingRecoveryOperation(ctx context.Context, params CreateRecoveryOperationParams) (Operation, error) {
 	now := time.Now().UnixMilli()
 	_, err := s.executor().ExecContext(
 		ctx,
@@ -2290,7 +2368,7 @@ func (s *Store) CreatePendingRollbackOperation(ctx context.Context, params Creat
 			(id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		params.ID,
-		OperationTypeRollback,
+		OperationTypeRecovery,
 		OperationStatusPending,
 		params.ProfileID,
 		params.MetadataJSON,
@@ -2377,7 +2455,8 @@ func (s *Store) CreateAppliedImportOperation(ctx context.Context, params CreateA
 func (s *Store) GetOperation(ctx context.Context, id string) (Operation, error) {
 	row := s.executor().QueryRowContext(
 		ctx,
-		`SELECT id, operation_type, status, profile_id, metadata_json, error_code, error_message, created_at_unix_ms, updated_at_unix_ms
+		`SELECT id, operation_type, status, profile_id, metadata_json, error_code, error_message,
+			resolution_kind, resolved_at_unix_ms, created_at_unix_ms, updated_at_unix_ms
 		FROM operations
 		WHERE id = ?`,
 		id,
@@ -2392,9 +2471,10 @@ func (s *Store) GetOperation(ctx context.Context, id string) (Operation, error) 
 func (s *Store) ListIncompleteOperations(ctx context.Context) ([]Operation, error) {
 	rows, err := s.executor().QueryContext(
 		ctx,
-		`SELECT id, operation_type, status, profile_id, metadata_json, error_code, error_message, created_at_unix_ms, updated_at_unix_ms
+		`SELECT id, operation_type, status, profile_id, metadata_json, error_code, error_message,
+			resolution_kind, resolved_at_unix_ms, created_at_unix_ms, updated_at_unix_ms
 		FROM operations
-		WHERE status IN (?, ?)
+		WHERE status IN (?, ?) AND resolved_at_unix_ms = 0
 		ORDER BY updated_at_unix_ms ASC, id ASC`,
 		OperationStatusPending,
 		OperationStatusFailed,
@@ -2544,7 +2624,7 @@ func (s *Store) CompleteSwitchOperation(ctx context.Context, params CompleteSwit
 	return nil
 }
 
-func (s *Store) CompleteRollbackOperation(ctx context.Context, params CompleteRollbackOperationParams) error {
+func (s *Store) CompleteRecoveryOperation(ctx context.Context, params CompleteRecoveryOperationParams) error {
 	tx, err := s.db.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -2567,7 +2647,7 @@ func (s *Store) CompleteRollbackOperation(ctx context.Context, params CompleteRo
 		params.MetadataJSON,
 		now,
 		params.ID,
-		OperationTypeRollback,
+		OperationTypeRecovery,
 	)
 	if err != nil {
 		return err
@@ -2576,8 +2656,29 @@ func (s *Store) CompleteRollbackOperation(ctx context.Context, params CompleteRo
 		return ErrNotFound
 	}
 
-	// Completing rollback is atomic with active-state restoration so callers
-	// never observe a successful rollback operation with stale active state.
+	if params.ResolutionKind == "" {
+		return errors.New("recovery resolution kind is required")
+	}
+	result, err = tx.ExecContext(
+		ctx,
+		`UPDATE operations
+		SET resolution_kind = ?, resolved_at_unix_ms = ?, updated_at_unix_ms = ?
+		WHERE id = ? AND operation_type = ? AND resolved_at_unix_ms = 0`,
+		params.ResolutionKind,
+		now,
+		now,
+		params.SourceOperationID,
+		OperationTypeSwitch,
+	)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return ErrNotFound
+	}
+
+	// Completing recovery is atomic with source resolution and active-state
+	// restoration so callers never observe a resolved source with stale state.
 	if params.RestoredActiveState == nil {
 		if _, err := tx.ExecContext(
 			ctx,
@@ -2613,6 +2714,54 @@ func (s *Store) CompleteRollbackOperation(ctx context.Context, params CompleteRo
 	}
 	committed = true
 	return nil
+}
+
+func (s *Store) ResolveOperation(ctx context.Context, id, resolutionKind string) error {
+	if strings.TrimSpace(resolutionKind) == "" {
+		return errors.New("operation resolution kind is required")
+	}
+	now := time.Now().UnixMilli()
+	result, err := s.executor().ExecContext(
+		ctx,
+		`UPDATE operations
+		SET resolution_kind = ?, resolved_at_unix_ms = ?, updated_at_unix_ms = ?
+		WHERE id = ? AND status IN (?, ?) AND resolved_at_unix_ms = 0`,
+		resolutionKind,
+		now,
+		now,
+		id,
+		OperationStatusPending,
+		OperationStatusFailed,
+	)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// PrepareForApplicationRestore severs runtime state that cannot be restored
+// without also mutating tool-owned targets.
+func (s *Store) PrepareForApplicationRestore(ctx context.Context) error {
+	return s.WithTransaction(ctx, func(tx *Store) error {
+		if _, err := tx.executor().ExecContext(ctx, `DELETE FROM active_states`); err != nil {
+			return err
+		}
+		now := time.Now().UnixMilli()
+		_, err := tx.executor().ExecContext(
+			ctx,
+			`UPDATE operations
+			SET resolution_kind = 'application_restore', resolved_at_unix_ms = ?, updated_at_unix_ms = ?
+			WHERE status IN (?, ?) AND resolved_at_unix_ms = 0`,
+			now,
+			now,
+			OperationStatusPending,
+			OperationStatusFailed,
+		)
+		return err
+	})
 }
 
 func (s *Store) GetActiveState(ctx context.Context, scopeType, scopeID string) (ActiveState, error) {
@@ -3569,7 +3718,7 @@ func (s *Store) countOperations(ctx context.Context, status string) (int, error)
 	var count int
 	err := s.executor().QueryRowContext(
 		ctx,
-		"SELECT COUNT(1) FROM operations WHERE status = ?",
+		"SELECT COUNT(1) FROM operations WHERE status = ? AND resolved_at_unix_ms = 0",
 		status,
 	).Scan(&count)
 	if err != nil {
@@ -3823,6 +3972,8 @@ func scanOperation(row rowScanner) (Operation, error) {
 		&operation.MetadataJSON,
 		&operation.ErrorCode,
 		&operation.ErrorMessage,
+		&operation.ResolutionKind,
+		&operation.ResolvedAtUnixMS,
 		&operation.CreatedAtUnixMS,
 		&operation.UpdatedAtUnixMS,
 	); err != nil {

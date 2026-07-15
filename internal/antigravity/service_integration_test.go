@@ -58,9 +58,9 @@ func newAntigravityTestEnvironment(t *testing.T, configDir string, client switch
 		runtimeService,
 		agentService,
 		[]doctor.ProviderCheck{{AgentID: agent.Antigravity, Check: antigravityService.HealthCheck}},
-		func(ctx context.Context, db *store.Store, paths profilesruntime.Paths, operation store.Operation) (string, string) {
-			inspection := switchingService.InspectFailedSwitchRecovery(ctx, db, paths, operation)
-			return inspection.Status, inspection.Reason
+		func(ctx context.Context, db *store.Store, paths profilesruntime.Paths, operation store.Operation) (string, string, string) {
+			inspection := switchingService.InspectRecoveryFromOperation(ctx, db, paths, operation)
+			return inspection.Status, inspection.Action, inspection.Reason
 		},
 		nil,
 	)

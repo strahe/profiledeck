@@ -19,7 +19,7 @@
 | 命令 | 用途 |
 | --- | --- |
 | `antigravity` | 保存和管理 Antigravity Profile。 |
-| `backup` | 列出或检查切换备份。 |
+| `backup` | 创建、导出、恢复和管理加密应用备份。 |
 | `claude-code` | 保存和管理 Claude Code 官方订阅 Profile。 |
 | `codex` | 管理 Codex Profile 和已保存设置（配置集）。 |
 | `doctor` | 诊断本地数据、权限和中断操作的问题。 |
@@ -27,8 +27,7 @@
 | `plan` | 预览 Profile 切换，不更改所选工具。 |
 | `provider` | 为其他 AI 工具配置高级文件切换。 |
 | `profile` | 管理 Profile 和高级文件目标。 |
-| `recover` | 使用备份恢复中断或失败的切换。 |
-| `rollback` | 使用备份撤销已完成的切换。 |
+| `recover` | 处理被中断或失败的切换。 |
 | `status` | 检查 ProfileDeck 是否已初始化。 |
 | `switch` | 应用 Profile 切换。 |
 | `usage` | 导入和报告本地 Codex 用量。 |
@@ -160,12 +159,20 @@ profiledeck profile target delete <profile-id> <provider-id> <target-id> --yes [
 ## 备份、诊断与恢复
 
 ```bash
+profiledeck backup create [--json]
 profiledeck backup list [--json]
 profiledeck backup show <backup-id> [--json]
+profiledeck backup export <backup-id> --output <file> [--json]
+profiledeck backup restore [<backup-id> | --file <file>] --yes [--json]
+profiledeck backup delete <backup-id> --yes
+profiledeck backup key status [--json]
+profiledeck backup key export --output <file> --yes [--json]
+profiledeck backup key import --file <file> [--replace] --yes [--json]
 profiledeck doctor [--json]
 profiledeck doctor repair-lock --yes [--json]
-profiledeck recover <failed-switch-id> --yes [--json]
-profiledeck rollback <backup-id> --yes [--json]
+profiledeck recover <operation-id> --yes [--json]
 ```
 
-请根据[诊断与恢复](../operations/recovery.md)选择恢复被阻止的切换、恢复失败切换或撤销成功切换。
+应用备份包含完整的 ProfileDeck 数据库，但不包含工具自己的工作文件或系统凭据存储条目。把备份移到其他系统前，请单独导出恢复密钥。替换不同密钥时必须同时传入 `--replace` 和 `--yes`；当前密钥将无法打开旧密钥加密的备份。
+
+`recover` 只处理“诊断”报告的未完成切换。成功切换不能撤销。不同状态下的安全操作见[诊断与恢复](../operations/recovery.md)。

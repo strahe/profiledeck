@@ -7,20 +7,51 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as switching$0 from "../../internal/switching/models.js";
+import * as appbackup$0 from "../../internal/appbackup/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as settings$0 from "../../internal/settings/models.js";
 
-export function ApplyRollback(backupID: string, confirm: boolean): $CancellablePromise<switching$0.ApplyRollbackResult> {
-    return $Call.ByID(3461217397, backupID, confirm);
+export function Create(): $CancellablePromise<appbackup$0.BackupDetail> {
+    return $Call.ByID(1431869259);
 }
 
-export function ListBackups(): $CancellablePromise<switching$0.ListBackupsResult> {
-    return $Call.ByID(3400155686);
+export function Delete(req: appbackup$0.DeleteRequest): $CancellablePromise<void> {
+    return $Call.ByID(3147389576, req);
 }
 
-export function RecoverFailedSwitch(operationID: string, confirm: boolean): $CancellablePromise<switching$0.RecoverFailedSwitchResult> {
-    return $Call.ByID(4165928292, operationID, confirm);
+export function Export(req: appbackup$0.ExportRequest): $CancellablePromise<appbackup$0.ExportResult> {
+    return $Call.ByID(254880049, req);
 }
 
-export function ShowBackup(backupID: string): $CancellablePromise<switching$0.BackupDetail> {
-    return $Call.ByID(2296310760, backupID);
+export function ExportKey(req: appbackup$0.ExportKeyRequest): $CancellablePromise<appbackup$0.ExportKeyResult> {
+    return $Call.ByID(149505944, req);
+}
+
+export function ImportKey(req: appbackup$0.ImportKeyRequest): $CancellablePromise<appbackup$0.ImportKeyResult> {
+    return $Call.ByID(2292850313, req);
+}
+
+export function KeyStatus(): $CancellablePromise<appbackup$0.KeyStatus> {
+    return $Call.ByID(930451084);
+}
+
+export function List(): $CancellablePromise<appbackup$0.ListResult> {
+    return $Call.ByID(3687121795);
+}
+
+export function PreviewRestore(source: appbackup$0.RestoreSource): $CancellablePromise<appbackup$0.RestorePreview> {
+    return $Call.ByID(3790909753, source);
+}
+
+export function Restore(req: appbackup$0.RestoreRequest): $CancellablePromise<appbackup$0.RestoreResult> {
+    return $Call.ByID(710991883, req);
+}
+
+export function SetAutomatic(enabled: boolean): $CancellablePromise<settings$0.Desktop> {
+    return $Call.ByID(249244440, enabled);
+}
+
+export function Show(backupID: string): $CancellablePromise<appbackup$0.BackupDetail> {
+    return $Call.ByID(3701096046, backupID);
 }

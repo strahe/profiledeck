@@ -17,7 +17,6 @@ import (
 	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/store"
 	switchtarget "github.com/strahe/profiledeck/internal/switching/target"
-	"github.com/strahe/profiledeck/internal/switching/transaction"
 	"github.com/strahe/profiledeck/internal/targetfs"
 )
 
@@ -37,7 +36,7 @@ func (policy *failSecondProviderPolicy) RequireProvider(context.Context, string)
 	return nil
 }
 
-func TestApplySwitchCreateWritesBackupAndActiveState(t *testing.T) {
+func TestApplySwitchCreateCleansRecoveryPointAndSetsActiveState(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	initResult, err := initSwitchingTestRuntime(ctx, configDir)
@@ -112,14 +111,7 @@ func TestApplySwitchCreateWritesBackupAndActiveState(t *testing.T) {
 		t.Fatalf("unexpected active state: %#v", activeState)
 	}
 
-	manifest := readBackupManifest(t, result.BackupPath)
-	if manifest.OperationID != result.OperationID || len(manifest.Entries) != 1 || manifest.Entries[0].Existed {
-		t.Fatalf("unexpected backup manifest: %#v", manifest)
-	}
-	rawManifest := readFileString(t, filepath.Join(result.BackupPath, "manifest.json"))
-	if strings.Contains(rawManifest, "raw-create-secret") {
-		t.Fatalf("expected backup manifest to exclude raw target content, got %s", rawManifest)
-	}
+	assertSuccessfulSwitchRecoveryRemoved(t, configDir, result)
 }
 
 func TestApplySwitchRechecksAgentPolicyAfterAcquiringLock(t *testing.T) {
@@ -176,7 +168,7 @@ func TestMaintenanceRechecksAgentPolicyAfterAcquiringLock(t *testing.T) {
 	}
 }
 
-func TestApplySwitchUpdateBacksUpOriginalAndPreservesPOSIXMode(t *testing.T) {
+func TestApplySwitchUpdatePreservesPOSIXModeAndCleansRecoveryPoint(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX mode preservation is not a Windows ACL guarantee")
 	}
@@ -228,11 +220,7 @@ func TestApplySwitchUpdateBacksUpOriginalAndPreservesPOSIXMode(t *testing.T) {
 		}
 	}
 
-	manifest := readBackupManifest(t, result.BackupPath)
-	if len(manifest.Entries) != 1 || !manifest.Entries[0].Existed || manifest.Entries[0].BackupRelPath == "" {
-		t.Fatalf("unexpected update backup manifest: %#v", manifest)
-	}
-	assertFileContent(t, filepath.Join(result.BackupPath, filepath.FromSlash(manifest.Entries[0].BackupRelPath)), oldContent)
+	assertSuccessfulSwitchRecoveryRemoved(t, configDir, result)
 }
 
 func TestApplySwitchNoopRecordsOperationAndActiveState(t *testing.T) {
@@ -272,10 +260,7 @@ func TestApplySwitchNoopRecordsOperationAndActiveState(t *testing.T) {
 	if result.Counts.Noop != 1 || result.Counts.Create != 0 || result.Counts.Update != 0 {
 		t.Fatalf("unexpected noop counts: %#v", result.Counts)
 	}
-	manifest := readBackupManifest(t, result.BackupPath)
-	if len(manifest.Entries) != 0 {
-		t.Fatalf("expected noop backup manifest to have no entries, got %#v", manifest)
-	}
+	assertSuccessfulSwitchRecoveryRemoved(t, configDir, result)
 
 	db := openAppTestStore(t, ctx, initResult.DatabasePath)
 	defer db.Close()
@@ -367,8 +352,8 @@ func TestApplySwitchRejectsUnsupportedSymlinkBeforeBackup(t *testing.T) {
 	})
 	assertErrorCode(t, err, apperror.SwitchPlanUnsupported)
 	assertFileContent(t, realPath, "raw\n")
-	if backupCount := countBackupDirs(t, configDir); backupCount != 0 {
-		t.Fatalf("expected no backup directory for unsupported switch, got %d", backupCount)
+	if recoveryCount := countRecoveryDirs(t, configDir); recoveryCount != 0 {
+		t.Fatalf("expected no recovery directory for unsupported switch, got %d", recoveryCount)
 	}
 	if failed := countOperationsByStatus(t, initResult.DatabasePath, store.OperationStatusFailed); failed != 1 {
 		t.Fatalf("expected one failed operation, got %d", failed)
@@ -603,17 +588,6 @@ func openAppTestStore(t *testing.T, ctx context.Context, databasePath string) *s
 	return db
 }
 
-func readBackupManifest(t *testing.T, backupPath string) transaction.Manifest {
-	t.Helper()
-
-	raw := readFileString(t, filepath.Join(backupPath, "manifest.json"))
-	var manifest transaction.Manifest
-	if err := json.Unmarshal([]byte(raw), &manifest); err != nil {
-		t.Fatalf("expected backup manifest JSON to decode, got %v", err)
-	}
-	return manifest
-}
-
 func assertFileContent(t *testing.T, path, expected string) {
 	t.Helper()
 
@@ -648,16 +622,30 @@ func countOperationsByStatus(t *testing.T, databasePath, status string) int {
 	return count
 }
 
-func countBackupDirs(t *testing.T, configDir string) int {
+func countRecoveryDirs(t *testing.T, configDir string) int {
 	t.Helper()
 
 	_, paths, err := resolveTestRuntime(configDir)
 	if err != nil {
 		t.Fatalf("expected runtime resolve to succeed, got %v", err)
 	}
-	entries, err := os.ReadDir(paths.Backups)
+	entries, err := os.ReadDir(paths.Recovery)
 	if err != nil {
-		t.Fatalf("expected backups read to succeed, got %v", err)
+		t.Fatalf("expected recovery directory read to succeed, got %v", err)
 	}
 	return len(entries)
+}
+
+func assertSuccessfulSwitchRecoveryRemoved(t *testing.T, configDir string, result ApplySwitchResult) {
+	t.Helper()
+	if !result.RecoveryCleanupCompleted {
+		t.Fatalf("successful switch did not clean its recovery point: %#v", result)
+	}
+	_, paths, err := resolveTestRuntime(configDir)
+	if err != nil {
+		t.Fatalf("resolve runtime: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(paths.Recovery, result.OperationID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("successful switch recovery point still exists: %v", err)
+	}
 }

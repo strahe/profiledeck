@@ -14,8 +14,10 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/updater"
+	keyring "github.com/zalando/go-keyring"
 
 	coreapp "github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/appbackup"
 	"github.com/strahe/profiledeck/internal/apperror"
 )
 
@@ -135,7 +137,7 @@ func TestServiceSchedulerStartsImmediatelyRunsPeriodicallyAndStopsWhenDisabled(t
 	}
 }
 
-func TestRestartCreatesSnapshotRetainsThreeAndDoesNotPolluteSwitchBackups(t *testing.T) {
+func TestRestartCreatesEncryptedApplicationBackup(t *testing.T) {
 	service, engine := newUpdateTestService(t, time.Hour)
 	root := t.TempDir()
 	bundle := filepath.Join(root, "Applications", "ProfileDeck.app")
@@ -151,50 +153,29 @@ func TestRestartCreatesSnapshotRetainsThreeAndDoesNotPolluteSwitchBackups(t *tes
 	service.status.State = StateReady
 	service.status.AvailableVersion = "0.1.0-alpha.2"
 
-	backupDir := service.application.Runtime().Paths().UpdateBackups
-	for index := range 3 {
-		path := filepath.Join(backupDir, "old-"+string(rune('a'+index))+".db")
-		if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		stamp := time.Unix(int64(index+1), 0)
-		if err := os.Chtimes(path, stamp, stamp); err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	if err := service.Restart(context.Background()); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	if engine.restarts.Load() != 1 {
 		t.Fatalf("expected one updater restart, got %d", engine.restarts.Load())
 	}
-	entries, err := os.ReadDir(backupDir)
+	list, err := service.application.Backups().List(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != updateBackupLimit {
-		t.Fatalf("update backup count = %d, want %d", len(entries), updateBackupLimit)
+	if len(list.Backups) != 1 || list.Backups[0].Kind != appbackup.KindAutomatic {
+		t.Fatalf("unexpected application backups after update restart: %#v", list.Backups)
 	}
-	var snapshotPath string
-	for _, entry := range entries {
-		if len(entry.Name()) > len("ProfileDeck_") && entry.Name()[:len("ProfileDeck_")] == "ProfileDeck_" {
-			snapshotPath = filepath.Join(backupDir, entry.Name())
-		}
+	detail, err := service.application.Backups().Show(context.Background(), list.Backups[0].ID)
+	if err != nil || detail.Reason != appbackup.ReasonBeforeUpdate {
+		t.Fatalf("unexpected update backup detail: %#v error=%v", detail, err)
 	}
-	if snapshotPath == "" {
-		t.Fatalf("new update snapshot not found in %#v", entries)
-	}
-	info, err := os.Stat(snapshotPath)
+	info, err := os.Stat(filepath.Join(service.application.Runtime().Paths().Backups, detail.ID+appbackup.Extension))
 	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("snapshot is not private: info=%#v err=%v", info, err)
+		t.Fatalf("application backup is not private: info=%#v err=%v", info, err)
 	}
-	backupList, err := service.application.Switching().ListBackups(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(backupList.Backups) != 0 {
-		t.Fatalf("update snapshots appeared as switch backups: %#v", backupList.Backups)
+	if _, err := os.Stat(filepath.Join(service.application.Runtime().Paths().Root, "updates")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy update backup directory exists: %v", err)
 	}
 }
 
@@ -263,20 +244,6 @@ func TestRestartRejectsConcurrentAndRepeatedAttempts(t *testing.T) {
 	}
 }
 
-func TestUpdateBackupRetentionAllowsFewerThanLimit(t *testing.T) {
-	directory := t.TempDir()
-	path := filepath.Join(directory, "only.db")
-	if err := os.WriteFile(path, []byte("snapshot"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := retainNewestUpdateBackups(directory, updateBackupLimit); err != nil {
-		t.Fatalf("retain first update snapshot: %v", err)
-	}
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("first update snapshot was removed: %v", err)
-	}
-}
-
 type fakeUpdateEngine struct {
 	checks         atomic.Int64
 	restarts       atomic.Int64
@@ -337,6 +304,8 @@ func newUpdateTestService(t *testing.T, interval time.Duration) (*Service, *fake
 
 func newUpdateTestApplication(t *testing.T) *coreapp.Application {
 	t.Helper()
+	keyring.MockInit()
+	t.Cleanup(keyring.MockInit)
 	application, err := coreapp.New(coreapp.Config{ConfigDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -344,6 +313,7 @@ func newUpdateTestApplication(t *testing.T) *coreapp.Application {
 	if _, err := application.Runtime().Init(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(application.Close)
 	return application
 }
 

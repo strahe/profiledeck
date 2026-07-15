@@ -49,7 +49,7 @@ profiledeck plan antigravity work
 profiledeck switch antigravity work --yes
 ```
 
-ProfileDeck 会再次检查当前登录，并在变更前创建私有备份。如果切换中断，请使用[诊断与恢复](../operations/recovery.md)。
+ProfileDeck 会再次检查当前登录，并在变更前创建私有操作恢复点。如果切换中断，请使用[诊断与恢复](../operations/recovery.md)。
 
 ## 保存刷新的登录
 

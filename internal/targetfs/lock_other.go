@@ -11,6 +11,10 @@ func tryLockFile(file *os.File) error {
 	return NewError(KindUnsupported, "system file locks are not supported on "+runtime.GOOS)
 }
 
+func trySharedLockFile(file *os.File) error {
+	return NewError(KindUnsupported, "shared system file locks are not supported on "+runtime.GOOS)
+}
+
 func unlockFileHandle(file *os.File) error {
 	return nil
 }

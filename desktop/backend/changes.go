@@ -14,8 +14,8 @@ const (
 	DesktopChangeClaudeCodeProfileChanged  = "claude-code-profile-changed"
 	DesktopChangeSwitchApplied             = "switch-applied"
 	DesktopChangeLockRepaired              = "lock-repaired"
-	DesktopChangeRollbackApplied           = "rollback-applied"
 	DesktopChangeSwitchRecovered           = "switch-recovered"
+	DesktopChangeApplicationBackupChanged  = "application-backup-changed"
 	DesktopChangeAgentStateChanged         = "agent-state-changed"
 
 	DesktopChangeStatusSuccess  = "success"

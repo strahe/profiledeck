@@ -8,6 +8,7 @@ import (
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/antigravity"
 	agyadapter "github.com/strahe/profiledeck/internal/antigravity/adapter"
+	"github.com/strahe/profiledeck/internal/appbackup"
 	"github.com/strahe/profiledeck/internal/claudecode"
 	claudeadapter "github.com/strahe/profiledeck/internal/claudecode/adapter"
 	claudetarget "github.com/strahe/profiledeck/internal/claudecode/target"
@@ -46,6 +47,8 @@ func NewDependencies(agents agent.Registry, switchingDependencies switching.Depe
 
 type Application struct {
 	runtime     *runtimeservice.Service
+	dataLease   *runtimeservice.DataLease
+	backups     *appbackup.Service
 	agents      *agent.Service
 	providers   *provider.Service
 	profiles    *profile.Service
@@ -91,6 +94,14 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 	if err != nil {
 		return nil, err
 	}
+	dataLease, err := runtimeservice.AcquireDataLease(
+		runtimeService.Paths().DataLock,
+		runtimeService.StoreFactory().AccessGate(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	runtimeService.AttachDataLease(dataLease)
 	stores := runtimeService.StoreFactory()
 	agentService := agent.NewService(dependencies.agents, stores, accessMode)
 	switchingService := switching.NewService(runtimeService.Paths(), stores, agentService, dependencies.switching)
@@ -114,15 +125,16 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 			{AgentID: agent.Antigravity, Check: antigravityService.HealthCheck},
 			{AgentID: agent.ClaudeCode, Check: claudeCodeService.HealthCheck},
 		},
-		func(ctx context.Context, db *store.Store, paths runtimeservice.Paths, operation store.Operation) (string, string) {
-			inspection := switchingService.InspectFailedSwitchRecovery(ctx, db, paths, operation)
-			return inspection.Status, inspection.Reason
+		func(ctx context.Context, db *store.Store, paths runtimeservice.Paths, operation store.Operation) (string, string, string) {
+			inspection := switchingService.InspectRecoveryFromOperation(ctx, db, paths, operation)
+			return inspection.Status, inspection.Action, inspection.Reason
 		},
 		codexService.SensitivePaths,
 	)
 
 	return &Application{
-		runtime: runtimeService, agents: agentService,
+		runtime: runtimeService, dataLease: dataLease, backups: appbackup.NewService(runtimeService.Paths(), stores, dataLease),
+		agents:    agentService,
 		providers: provider.NewService(stores, switchingService, agentService, dependencies.agents),
 		profiles:  profile.NewService(stores, switchingService),
 		targets:   profileTargetService,
@@ -148,6 +160,7 @@ func defaultDependencies() Dependencies {
 }
 
 func (application *Application) Runtime() *runtimeservice.Service  { return application.runtime }
+func (application *Application) Backups() *appbackup.Service       { return application.backups }
 func (application *Application) Agents() *agent.Service            { return application.agents }
 func (application *Application) Providers() *provider.Service      { return application.providers }
 func (application *Application) Profiles() *profile.Service        { return application.profiles }
@@ -159,3 +172,10 @@ func (application *Application) Settings() *settings.Service       { return appl
 func (application *Application) Codex() *codex.Service             { return application.codex }
 func (application *Application) Antigravity() *antigravity.Service { return application.antigravity }
 func (application *Application) ClaudeCode() *claudecode.Service   { return application.claudeCode }
+
+func (application *Application) Close() {
+	if application == nil || application.dataLease == nil {
+		return
+	}
+	application.dataLease.Close()
+}

@@ -90,7 +90,7 @@ if [[ "$result" != "ok: 0.1.0-alpha.2" ]]; then
 	echo "$result" >&2
 	exit 1
 fi
-if [[ ! -d "$config_dir/profiledeck/updates/backups" ]]; then
+if [[ ! -d "$config_dir/profiledeck/backups" ]]; then
 	echo "update backup directory is missing" >&2
 	exit 1
 fi

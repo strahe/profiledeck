@@ -24,11 +24,8 @@ export interface DoctorOperation {
     "checkpoint"?: string;
     "provider_id"?: string;
     "profile_id"?: string;
-    "backup_path"?: string;
-    "backup_id"?: string;
-    "source_operation_id"?: string;
-    "rollback_kind"?: string;
     "recovery_status"?: string;
+    "recovery_action"?: string;
     "recovery_reason"?: string;
     "error_code"?: string;
     "error_message"?: string;

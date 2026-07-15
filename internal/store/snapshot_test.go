@@ -55,7 +55,7 @@ func TestCreateSnapshotIsConsistentAndPrivateDuringWrites(t *testing.T) {
 	}()
 	<-started
 
-	destination := filepath.Join(dir, "updates", "backups", "snapshot.db")
+	destination := filepath.Join(dir, "snapshots", "snapshot.db")
 	if err := factory.CreateSnapshot(ctx, destination); err != nil {
 		t.Fatalf("create online snapshot: %v", err)
 	}

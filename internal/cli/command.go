@@ -17,6 +17,7 @@ const (
 	configDirFlagName = "config-dir"
 	jsonFlagName      = "json"
 	providerFlagName  = "provider"
+	applicationKey    = "profiledeck.application"
 )
 
 func NewCommand(info app.Info) *urfavecli.Command {
@@ -33,6 +34,18 @@ func NewCommand(info app.Info) *urfavecli.Command {
 				},
 			},
 		},
+		Metadata: map[string]any{},
+		After: func(_ context.Context, cmd *urfavecli.Command) error {
+			root := cmd.Root()
+			if root == nil {
+				root = cmd
+			}
+			if application, ok := root.Metadata[applicationKey].(*app.Application); ok {
+				application.Close()
+				delete(root.Metadata, applicationKey)
+			}
+			return nil
+		},
 		Commands: []*urfavecli.Command{
 			newAntigravityCommand(),
 			newBackupCommand(),
@@ -44,7 +57,6 @@ func NewCommand(info app.Info) *urfavecli.Command {
 			newProviderCommand(),
 			newProfileCommand(),
 			newRecoverCommand(),
-			newRollbackCommand(),
 			newStatusCommand(),
 			newSwitchCommand(),
 			newUsageCommand(),
@@ -161,13 +173,32 @@ func configDirValue(cmd *urfavecli.Command) string {
 }
 
 func applicationFor(cmd *urfavecli.Command) (*app.Application, error) {
+	root := cmd
+	if cmd != nil && cmd.Root() != nil {
+		root = cmd.Root()
+	}
+	if root != nil {
+		if application, ok := root.Metadata[applicationKey].(*app.Application); ok {
+			return application, nil
+		}
+	}
 	codexDir := ""
 	if cmd != nil {
 		codexDir = cmd.String(codexDirFlagName)
 	}
-	return app.New(app.Config{
+	application, err := app.New(app.Config{
 		ConfigDir: configDirValue(cmd), CodexDir: codexDir, AgentAccess: agent.AccessUnrestricted,
 	})
+	if err != nil {
+		return nil, err
+	}
+	if root != nil {
+		if root.Metadata == nil {
+			root.Metadata = map[string]any{}
+		}
+		root.Metadata[applicationKey] = application
+	}
+	return application, nil
 }
 
 func writeJSON(w io.Writer, value any) error {

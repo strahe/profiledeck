@@ -1,6 +1,6 @@
 # 快速开始
 
-使用 macOS 桌面端可以获得可视化操作流程；从源码构建 CLI 后，可以在终端中使用。两种入口共用相同的 Profile、备份和切换规则。
+使用 macOS 桌面端可以获得可视化操作流程；从源码构建 CLI 后，可以在终端中使用。两种入口共用相同的 Profile、应用备份、操作恢复和切换规则。
 
 ## 开始前准备
 
@@ -30,7 +30,7 @@ profiledeck version
 profiledeck init
 ```
 
-`profiledeck init` 会创建本地数据和备份目录。要使用其他位置，请传入用户配置根目录：
+`profiledeck init` 会创建本地数据库、加密应用备份目录和操作恢复目录。要使用其他位置，请传入用户配置根目录：
 
 ```bash
 profiledeck --config-dir /path/to/config-root init
@@ -99,7 +99,7 @@ profiledeck antigravity profile list
 profiledeck doctor
 ```
 
-只执行诊断功能明确建议的恢复操作。请参阅[恢复操作](../operations/recovery.md)，了解恢复失败操作和撤销成功切换之间的区别。
+只执行诊断功能明确建议的恢复操作。未完成切换恢复和应用备份恢复见[诊断与恢复](../operations/recovery.md)。成功切换不能撤销。
 
 ## 后续步骤
 

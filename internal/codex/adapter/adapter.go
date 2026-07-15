@@ -96,7 +96,7 @@ func (Adapter) LoadTargets(ctx context.Context, input switchplan.Input) ([]switc
 
 func (Adapter) ResolveTargetSpec(providerID, targetID, backendID, path, label string) (switchtarget.Spec, error) {
 	if providerID != codexconfig.ProviderID {
-		return nil, apperror.New(apperror.RollbackUnsupported, "Codex recovery target has an incompatible Provider").WithDetail("provider_id", providerID)
+		return nil, apperror.New(apperror.RecoveryUnsupported, "Codex recovery target has an incompatible Provider").WithDetail("provider_id", providerID)
 	}
 	if backendID != "" && backendID != switchtarget.BackendFile {
 		return switchtarget.ResolveFileSpec(targetID, backendID, path, label)

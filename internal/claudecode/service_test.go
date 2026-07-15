@@ -54,7 +54,7 @@ func (backend *failClaudeCodePostVerifyBackend) Verify(ctx context.Context, spec
 	return backend.Backend.Verify(ctx, spec, snapshot)
 }
 
-func TestClaudeCodeCreateSwitchCaptureKnownMatchAndRollback(t *testing.T) {
+func TestClaudeCodeCreateSwitchCaptureAndKnownMatch(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	credentialDir := t.TempDir()
@@ -97,10 +97,6 @@ func TestClaudeCodeCreateSwitchCaptureKnownMatchAndRollback(t *testing.T) {
 	if !strings.HasPrefix(result.OperationID, "switch-") {
 		t.Fatalf("operation id = %q", result.OperationID)
 	}
-	manifestRaw, err := os.ReadFile(filepath.Join(result.BackupPath, "manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	db, err := openHealthyStore(ctx, configDir, true)
 	if err != nil {
 		t.Fatal(err)
@@ -112,26 +108,21 @@ func TestClaudeCodeCreateSwitchCaptureKnownMatchAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for boundary, raw := range map[string][]byte{"operation metadata": []byte(operation.MetadataJSON), "backup manifest": manifestRaw, "switch result": mustJSON(t, result)} {
+	for boundary, raw := range map[string][]byte{"operation metadata": []byte(operation.MetadataJSON), "switch result": mustJSON(t, result)} {
 		for _, secret := range []string{"access-a", "refresh-a", "access-b", "refresh-b", "accessToken", "refreshToken"} {
 			if bytes.Contains(raw, []byte(secret)) {
 				t.Fatalf("Claude Code %s leaked %q: %s", boundary, secret, raw)
 			}
 		}
 	}
-	backupDetail, err := newClaudeCodeTestEnvironment(t, configDir).switching.ShowBackup(ctx, result.OperationID)
-	if err != nil || len(backupDetail.Entries) != 1 || backupDetail.Entries[0].BeforeSHA256 != "" {
-		t.Fatalf("public Claude Code file backup exposed a login hash: detail=%#v error=%v", backupDetail, err)
-	}
-	backupDetailJSON := mustJSON(t, backupDetail)
-	for _, secret := range []string{"access-a", "refresh-a", "access-b", "refresh-b", "accessToken", "refreshToken"} {
-		if bytes.Contains(backupDetailJSON, []byte(secret)) {
-			t.Fatalf("public Claude Code backup detail leaked %q: %s", secret, backupDetailJSON)
-		}
+	if !result.RecoveryCleanupCompleted {
+		t.Fatalf("successful switch did not remove its recovery point: %#v", result)
 	}
 	assertClaudeCodeWorkingPayload(t, credentialPath, "access-a")
-	if _, err := newClaudeCodeTestEnvironment(t, configDir).switching.Rollback(ctx, switching.ApplyRollbackRequest{BackupID: result.OperationID, Confirm: true}); err != nil {
-		t.Fatalf("ApplyRollback() error = %v", err)
+	if _, err := newClaudeCodeTestEnvironment(t, configDir).switching.Apply(ctx, switching.ApplySwitchRequest{
+		ProviderID: claudecodeconfig.ProviderID, ProfileID: "second", Confirm: true,
+	}); err != nil {
+		t.Fatalf("switch to second Profile: %v", err)
 	}
 	assertClaudeCodeWorkingPayload(t, credentialPath, "access-b")
 
@@ -202,41 +193,6 @@ func TestClaudeCodeFilePostVerifyFailureDoesNotCommitActiveState(t *testing.T) {
 	failedSwitchID := singleOperationIDByTypeStatus(t, initResult.DatabasePath, store.OperationTypeSwitch, store.OperationStatusFailed)
 	if !strings.HasPrefix(failedSwitchID, "switch-") {
 		t.Fatalf("failed switch operation id = %q", failedSwitchID)
-	}
-}
-
-func TestClaudeCodeRollbackPostVerifyFailureDoesNotCommitActiveState(t *testing.T) {
-	ctx := context.Background()
-	configDir := t.TempDir()
-	credentialPath := filepath.Join(t.TempDir(), claudecodeconfig.CredentialsFile)
-	if _, err := initClaudeCodeTestRuntime(ctx, configDir); err != nil {
-		t.Fatal(err)
-	}
-	seedClaudeCodeFileProvider(t, ctx, configDir, credentialPath)
-	writeClaudeCodeCredential(t, credentialPath, testClaudeCodePayload("first", "first-refresh", 4102444800000))
-	if _, err := newClaudeCodeTestEnvironment(t, configDir).claudeCode.CreateProfile(ctx, CreateClaudeCodeProfileRequest{ProfileID: "first"}); err != nil {
-		t.Fatal(err)
-	}
-	writeClaudeCodeCredential(t, credentialPath, testClaudeCodePayload("second", "second-refresh", 4102444800000))
-	if _, err := newClaudeCodeTestEnvironment(t, configDir).claudeCode.CreateProfile(ctx, CreateClaudeCodeProfileRequest{ProfileID: "second"}); err != nil {
-		t.Fatal(err)
-	}
-	switched, err := newClaudeCodeTestEnvironment(t, configDir).switching.Apply(ctx, switching.ApplySwitchRequest{ProviderID: claudecodeconfig.ProviderID, ProfileID: "first", Confirm: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	failing := &failClaudeCodePostVerifyBackend{Backend: switchtarget.FileBackend{}}
-	_, err = newClaudeCodeTestEnvironment(t, configDir, failing).switching.Rollback(ctx, switching.ApplyRollbackRequest{BackupID: switched.OperationID, Confirm: true})
-	assertErrorCode(t, err, apperror.TargetChanged)
-	db, err := openHealthyStore(ctx, configDir, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	active, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, claudecodeconfig.ProviderID)
-	if err != nil || active.ProfileID != "first" {
-		t.Fatalf("active state changed after failed rollback post-verify: active=%#v error=%v", active, err)
 	}
 }
 
@@ -801,7 +757,7 @@ func TestClaudeCodeDoctorDoesNotRequestKeychainAuthorizationUI(t *testing.T) {
 	}
 }
 
-func TestClaudeCodeKeychainRollbackUsesOriginalPersistentReference(t *testing.T) {
+func TestClaudeCodeKeychainSwitchRejectsReplacedPersistentReference(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	if _, err := initClaudeCodeTestRuntime(ctx, configDir); err != nil {
@@ -852,47 +808,8 @@ func TestClaudeCodeKeychainRollbackUsesOriginalPersistentReference(t *testing.T)
 	if err != nil {
 		t.Fatalf("Keychain no-op switch error = %v", err)
 	}
-	noOpBackup, err := environment.switching.ShowBackup(ctx, noOpSwitch.OperationID)
-	if err != nil || len(noOpBackup.Entries) != 1 || noOpBackup.Entries[0].Action != planActionNoop || noOpBackup.Entries[0].Path != "" || noOpBackup.Entries[0].BeforeSHA256 != "" {
-		t.Fatalf("public Keychain no-op backup = %#v, error = %v", noOpBackup, err)
-	}
-	if _, err := environment.switching.Rollback(ctx, switching.ApplyRollbackRequest{BackupID: noOpSwitch.OperationID, Confirm: true}); err != nil {
-		t.Fatalf("Keychain no-op rollback error = %v", err)
-	}
-
-	firstSwitch, err := environment.switching.Apply(ctx, switching.ApplySwitchRequest{ProviderID: claudecodeconfig.ProviderID, ProfileID: "first", Confirm: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	backup, err := environment.switching.ShowBackup(ctx, firstSwitch.OperationID)
-	if err != nil || len(backup.Entries) != 1 || backup.Entries[0].Path != "" || backup.Entries[0].BeforeSHA256 != "" {
-		t.Fatalf("public Keychain backup = %#v, error = %v", backup, err)
-	}
-	if encoded := mustJSON(t, backup); bytes.Contains(encoded, reference) || bytes.Contains(encoded, []byte("private_locator")) {
-		t.Fatalf("public backup leaked persistent reference: %s", encoded)
-	}
-	if _, err := environment.switching.Rollback(ctx, switching.ApplyRollbackRequest{BackupID: firstSwitch.OperationID, Confirm: true}); err != nil {
-		t.Fatalf("exact-reference rollback error = %v", err)
-	}
-	if !strings.Contains(string(driver.items[string(reference)].Data), "access-b") {
-		t.Fatal("exact-reference rollback did not restore the previous login")
-	}
-
-	secondSwitch, err := environment.switching.Apply(ctx, switching.ApplySwitchRequest{ProviderID: claudecodeconfig.ProviderID, ProfileID: "first", Confirm: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	replacement := []byte("replacement-reference")
-	delete(driver.items, string(reference))
-	driver.references = []claudekeychain.Reference{{Persistent: replacement, Service: claudecodeconfig.KeychainService, Account: "tester"}}
-	driver.items[string(replacement)] = claudekeychain.Item{
-		Service: claudecodeconfig.KeychainService, Account: "tester", Data: []byte(testClaudeCodePayload("access-a", "refresh-a", 4102444800000)),
-	}
-	updatesBefore := len(driver.updates)
-	_, err = environment.switching.Rollback(ctx, switching.ApplyRollbackRequest{BackupID: secondSwitch.OperationID, Confirm: true})
-	assertErrorCode(t, err, apperror.TargetChanged)
-	if len(driver.updates) != updatesBefore || !strings.Contains(string(driver.items[string(replacement)].Data), "access-a") {
-		t.Fatal("rollback wrote to a recreated Keychain item")
+	if !noOpSwitch.RecoveryCleanupCompleted {
+		t.Fatalf("successful no-op switch did not remove recovery state: %#v", noOpSwitch)
 	}
 }
 
@@ -935,8 +852,8 @@ func TestClaudeCodeFailedSwitchRecoveryRejectsRecreatedKeychainItem(t *testing.T
 		Service: claudecodeconfig.KeychainService, Account: "tester", Data: []byte(testClaudeCodePayload("access-a", "refresh-a", 4102444800000)),
 	}
 	updatesBefore := len(driver.updates)
-	_, err = environment.switching.RecoverFailedSwitch(ctx, switching.RecoverFailedSwitchParams{OperationID: failedSwitchID, Confirm: true})
-	assertErrorCode(t, err, apperror.TargetChanged)
+	_, err = environment.switching.RecoverOperation(ctx, switching.RecoverOperationParams{OperationID: failedSwitchID, Confirm: true})
+	assertErrorCode(t, err, apperror.RecoveryUnsupported)
 	if len(driver.updates) != updatesBefore || !strings.Contains(string(driver.items[string(replacement)].Data), "access-a") {
 		t.Fatal("failed-switch recovery wrote to a recreated Keychain item")
 	}

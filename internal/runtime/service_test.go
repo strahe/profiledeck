@@ -45,7 +45,7 @@ func TestInitCreatesRuntimeAndIsIdempotent(t *testing.T) {
 	for _, path := range []string{
 		first.RuntimeRoot,
 		filepath.Join(first.RuntimeRoot, "backups"),
-		filepath.Join(first.RuntimeRoot, "updates", "backups"),
+		filepath.Join(first.RuntimeRoot, "recovery"),
 		filepath.Join(first.RuntimeRoot, "exports"),
 		filepath.Join(first.RuntimeRoot, "logs"),
 		filepath.Join(first.RuntimeRoot, "locks"),
@@ -54,6 +54,9 @@ func TestInitCreatesRuntimeAndIsIdempotent(t *testing.T) {
 		if err != nil || !info.IsDir() {
 			t.Fatalf("runtime directory %s is invalid: info=%#v err=%v", path, info, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(first.RuntimeRoot, "updates")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy update backup directory should not exist: %v", err)
 	}
 	if info, err := os.Stat(first.DatabasePath); err != nil || info.IsDir() {
 		t.Fatalf("runtime database is invalid: info=%#v err=%v", info, err)

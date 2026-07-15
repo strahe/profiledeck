@@ -1,6 +1,6 @@
 # Profiles, Logins, and Settings
 
-A Profile names the login and settings you want to use for one supported tool. Saving a Profile does not immediately change that tool; files and system logins change only when you confirm a switch, recovery, or rollback.
+A Profile names the login and settings you want to use for one supported tool. Saving a Profile does not immediately change that tool; files and system logins change only when you confirm a switch or recovery of an unfinished switch.
 
 ## What a Profile saves
 
@@ -38,12 +38,12 @@ Config Sets do not include sessions, logs, skills, plugin caches, project `.code
 
 ## What ProfileDeck changes
 
-Creating, editing, forking, or importing a Profile changes only saved ProfileDeck data. Confirming a switch, recovery, or rollback may change the selected tool's working login or files.
+Creating, editing, forking, or importing a Profile changes only saved ProfileDeck data. Confirming a switch or unfinished-switch recovery may change the selected tool's working login or files.
 
-Every such change is reviewed against the current tool state and backed up first. See [Review and Switch](../operations/switching.md) for the normal flow and [Recover or Undo](../operations/recovery.md) when a change does not finish or needs to be reversed.
+Every such change is reviewed against the current tool state and gets a temporary operation recovery point first. See [Review and Switch](../operations/switching.md) for the normal flow and [Diagnostics and Recovery](../operations/recovery.md) when a change does not finish. Successful switches cannot be undone.
 
 ## Local data
 
 Profiles, Config Sets, saved logins, preferences, usage reports, and operation history are stored in ProfileDeck's local data directory. Supported tools continue to own their working files and system credential entries.
 
-Saved data and backups may contain complete sign-in data. Read [Data and Security](../reference/data-security.md) before copying, exporting, or deleting ProfileDeck data.
+Saved data, operation recovery points, and encrypted application backups may contain complete sign-in data. Read [Data and Security](../reference/data-security.md) before copying, exporting, or deleting ProfileDeck data.

@@ -24,6 +24,10 @@ type switchingTestEnvironment struct {
 }
 
 func newSwitchingTestEnvironment(t *testing.T, configDir string) *switchingTestEnvironment {
+	return newSwitchingTestEnvironmentWithTargets(t, configDir, switchtarget.MustRegistry(switchtarget.FileBackend{}))
+}
+
+func newSwitchingTestEnvironmentWithTargets(t *testing.T, configDir string, targets switchtarget.Registry) *switchingTestEnvironment {
 	t.Helper()
 	runtimeService, err := profilesruntime.NewService(configDir)
 	if err != nil {
@@ -32,7 +36,7 @@ func newSwitchingTestEnvironment(t *testing.T, configDir string) *switchingTestE
 	agentRegistry := agent.BuiltinRegistry()
 	agentService := agent.NewService(agentRegistry, runtimeService.StoreFactory(), agent.AccessUnrestricted)
 	dependencies := NewDependencies(
-		switchtarget.MustRegistry(switchtarget.FileBackend{}),
+		targets,
 		switchplan.MustRegistry(switchplan.GenericAdapter{}),
 	)
 	service := NewService(runtimeService.Paths(), runtimeService.StoreFactory(), agentService, dependencies)

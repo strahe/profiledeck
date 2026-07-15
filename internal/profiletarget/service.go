@@ -268,7 +268,7 @@ func (service *Service) profileTargetsForRead(ctx context.Context, db *store.Sto
 	// typed Agent services expose their own bindings without leaking locators.
 	targets := make([]store.ProfileTarget, 0, len(storedTargets))
 	for _, target := range storedTargets {
-		visible, visibilityErr := service.providerVisible(ctx, target.ProviderID)
+		visible, visibilityErr := service.providerVisible(ctx, db, target.ProviderID)
 		if visibilityErr != nil {
 			return nil, visibilityErr
 		}
@@ -595,8 +595,13 @@ func (service *Service) requireProvider(ctx context.Context, providerID string) 
 	return service.policy.RequireProvider(ctx, providerID)
 }
 
-func (service *Service) providerVisible(ctx context.Context, providerID string) (bool, error) {
-	err := service.requireProvider(ctx, providerID)
+func (service *Service) providerVisible(ctx context.Context, db *store.Store, providerID string) (bool, error) {
+	var err error
+	if policy, ok := service.policy.(agent.StorePolicy); ok {
+		err = policy.RequireProviderWithStore(ctx, db, providerID)
+	} else {
+		err = service.requireProvider(ctx, providerID)
+	}
 	if err == nil {
 		return true, nil
 	}

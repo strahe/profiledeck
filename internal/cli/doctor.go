@@ -134,11 +134,11 @@ func doctorOperationErrorDetails(operation doctor.DoctorOperation) string {
 		errorMessage = "-"
 	}
 	details := fmt.Sprintf("\terror_code=%s\terror_message=%s", errorCode, errorMessage)
-	if operation.RollbackKind != "" {
-		details += fmt.Sprintf("\trollback_kind=%s", doctorOutputField(operation.RollbackKind))
-	}
 	if operation.RecoveryStatus != "" {
 		details += fmt.Sprintf("\trecovery_status=%s", doctorOutputField(operation.RecoveryStatus))
+	}
+	if operation.RecoveryAction != "" {
+		details += fmt.Sprintf("\trecovery_action=%s", doctorOutputField(operation.RecoveryAction))
 	}
 	if operation.RecoveryReason != "" {
 		details += fmt.Sprintf("\trecovery_reason=%s", doctorOutputField(operation.RecoveryReason))

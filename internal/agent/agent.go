@@ -41,6 +41,14 @@ type Policy interface {
 	RequireProvider(context.Context, string) error
 }
 
+// StorePolicy lets a caller that already owns a Store evaluate Desktop Agent
+// preferences without opening a nested database connection.
+type StorePolicy interface {
+	Policy
+	RequireAgentWithStore(context.Context, *store.Store, ID) error
+	RequireProviderWithStore(context.Context, *store.Store, string) error
+}
+
 type State struct {
 	Manifest Manifest `json:"manifest"`
 	Enabled  bool     `json:"enabled"`
@@ -153,15 +161,22 @@ func (service *Service) Registry() Registry {
 }
 
 func (service *Service) List(ctx context.Context) ([]State, error) {
-	states := service.defaultStates()
 	if service.mode == AccessUnrestricted {
-		return states, nil
+		return service.defaultStates(), nil
 	}
 	db, err := service.stores.OpenHealthy(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
+	return service.listWithStore(ctx, db)
+}
+
+func (service *Service) listWithStore(ctx context.Context, db *store.Store) ([]State, error) {
+	states := service.defaultStates()
+	if service.mode == AccessUnrestricted {
+		return states, nil
+	}
 	settings, err := db.ListSettingsByPrefix(ctx, desktopSettingPrefix)
 	if err != nil {
 		return nil, apperror.Wrap(apperror.StoreStatusFailed, "failed to load Desktop Agent preferences", err)
@@ -211,13 +226,28 @@ func (service *Service) SetEnabled(ctx context.Context, id ID, enabled bool) (St
 }
 
 func (service *Service) RequireAgent(ctx context.Context, id ID) error {
+	if service.mode == AccessUnrestricted {
+		if _, ok := service.registry.Manifest(id); !ok {
+			return apperror.New(apperror.SettingInvalid, "Agent is not registered").WithDetail("agent_id", id)
+		}
+		return nil
+	}
+	db, err := service.stores.OpenHealthy(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return service.RequireAgentWithStore(ctx, db, id)
+}
+
+func (service *Service) RequireAgentWithStore(ctx context.Context, db *store.Store, id ID) error {
 	if _, ok := service.registry.Manifest(id); !ok {
 		return apperror.New(apperror.SettingInvalid, "Agent is not registered").WithDetail("agent_id", id)
 	}
 	if service.mode == AccessUnrestricted {
 		return nil
 	}
-	states, err := service.List(ctx)
+	states, err := service.listWithStore(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -238,6 +268,14 @@ func (service *Service) RequireProvider(ctx context.Context, providerID string) 
 		return nil
 	}
 	return service.RequireAgent(ctx, id)
+}
+
+func (service *Service) RequireProviderWithStore(ctx context.Context, db *store.Store, providerID string) error {
+	id, managed := service.registry.AgentForProvider(providerID)
+	if !managed {
+		return nil
+	}
+	return service.RequireAgentWithStore(ctx, db, id)
 }
 
 func (service *Service) Subscribe(listener func(StateEvent)) func() {

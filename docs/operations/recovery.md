@@ -1,10 +1,10 @@
-# Diagnostics and Recovery
+# Diagnostics, Backups, and Recovery
 
-Open Diagnostics when a switch or rollback does not finish, Profile switching is blocked, or ProfileDeck reports a local-data problem.
+Open **Diagnostics** when Profile switching is blocked or a switch did not finish. Open **Settings → Application data and backups** to protect or restore ProfileDeck's saved application data. These are separate workflows.
 
-## Check the problem first
+## Check an unfinished switch first
 
-In the Desktop app, open **Diagnostics** and review the recommended action.
+In the Desktop app, Diagnostics shows only unresolved root switch operations and the safe action available for each one.
 
 From the CLI, run:
 
@@ -13,53 +13,67 @@ profiledeck doctor
 profiledeck doctor --json
 ```
 
-Diagnostics checks whether ProfileDeck can read its local data, whether an operation failed or did not finish, whether another change may still be running, and whether sensitive local files are private.
-
-## Restore Profile switching
-
-If Diagnostics says no change is still running and offers to restore switching, use its Desktop action or run:
+If Diagnostics says no change is still running and offers to repair the switch lock, use its Desktop action or run:
 
 ```bash
 profiledeck doctor repair-lock --yes
 ```
 
-Do not use this command merely because a switch is taking longer than expected. ProfileDeck refuses it when the situation cannot be verified safely.
+Do not repair a lock merely because a switch is taking longer than expected. ProfileDeck refuses recovery while the switch lock is held or when it cannot recognize every affected target safely.
 
-## Recover a failed switch
+## Resolve an unfinished switch
 
-When Desktop Diagnostics shows a failed switch with a usable backup, choose **Recover** and confirm.
+Diagnostics may offer one of two actions:
 
-From the CLI, run `profiledeck doctor`. For a failed switch reported as recoverable, use the identifier shown for that switch:
+- **Close unfinished record** when ProfileDeck confirms that no target was changed or every target is already in its pre-switch state.
+- **Restore pre-switch state** when every target still matches either its pre-switch or intended state.
+
+Confirm the offered Desktop action, or use the operation ID shown by `doctor`:
 
 ```bash
-profiledeck recover <failed-switch-id> --yes
+profiledeck recover <operation-id> --yes
 ```
 
-Recovery restores the files or login and the previously current Profile from the backup created before that switch. It supports Codex, Claude Code, and Antigravity. Use rollback, not recovery, to undo a switch that completed successfully.
+Recovery may restore tool-owned files or the selected system login and then restores the previously current Profile record. If a target was modified by another program, recovery metadata is damaged, or a target cannot be read, ProfileDeck refuses to write and reports what must be checked. A failed attempt can be retried against the same original switch.
 
-## Undo a successful switch
+Successful switches do not retain recovery files and cannot be undone. Choose the intended Profile and switch again if you want a different active setup.
 
-List and inspect backups:
+## Create and manage application backups
+
+An application backup contains the complete ProfileDeck database, including saved Profiles, settings, usage records, and credentials held in that database; the resulting archive is encrypted. It does not include external tool working files or entries from the operating system credential store.
+
+Create and inspect backups with:
 
 ```bash
+profiledeck backup create
 profiledeck backup list
 profiledeck backup show <backup-id>
+profiledeck backup export <backup-id> --output <private-file>
 ```
 
-Then restore the backup you want:
+Automatic backups are enabled by default. Desktop and Tray create one when the newest automatic backup is more than 24 hours old, and also before an update restart or a healthy-database restore. Scheduled, pre-update, and pre-restore backups share a limit of ten; manual backups remain until you delete them.
+
+Backup files are encrypted with the recovery key stored in your system credential store. Export that key separately before moving a backup to another computer:
 
 ```bash
-profiledeck rollback <backup-id> --yes
+profiledeck backup key status
+profiledeck backup key export --output <private-key-file> --yes
+profiledeck backup key import --file <private-key-file> --yes
 ```
 
-Rollback supports Codex, Claude Code, and Antigravity. Before restoring the older state, ProfileDeck creates another backup of the current state. If the rollback succeeds, it restores both the selected tool and the Profile that was current when the chosen backup was created.
+Keep the exported key private. Importing a different key requires `--replace --yes` and makes backups encrypted to the previous key unavailable until that previous key is imported again.
 
-## Choose the right action
+## Restore application data
 
-| Situation | Action |
-| --- | --- |
-| Diagnostics says switching is blocked but no change is running | Restore Profile switching |
-| A failed switch has a usable backup | Choose **Recover** in Diagnostics or run the CLI recovery command |
-| A switch completed but you want the previous state | Roll back its backup |
+Restore a managed or exported backup with:
 
-If Diagnostics does not offer a safe action or no usable backup exists, do not remove ProfileDeck data or backups manually. Preserve the ProfileDeck data directory and review the reported error before trying again.
+```bash
+profiledeck backup restore <backup-id> --yes
+profiledeck backup restore --file <private-file> --yes
+```
+
+ProfileDeck verifies the encrypted archive and database before replacing current application data. When the current database is healthy, it first creates an automatic safety backup. A damaged current database can be replaced after confirmation without that safety backup.
+
+Restore clears every current-Profile marker and closes unresolved operations so restored history cannot be mistaken for current external tool state. It does not change any tool-owned file or system login and does not apply a Profile. Desktop restarts after success; from the CLI, restart ProfileDeck and explicitly switch to the Profile you want. CLI restore is refused while Desktop or another ProfileDeck process is using the application data.
+
+If ProfileDeck cannot open its database at startup, the Desktop recovery screen still lets you import the recovery key, list available backups, and restore one.

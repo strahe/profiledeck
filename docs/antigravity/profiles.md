@@ -49,7 +49,7 @@ profiledeck plan antigravity work
 profiledeck switch antigravity work --yes
 ```
 
-ProfileDeck checks the current login again and creates a private backup before changing it. If the switch is interrupted, use [Diagnostics and recovery](../operations/recovery.md).
+ProfileDeck checks the current login again and creates a private operation recovery point before changing it. If the switch is interrupted, use [Diagnostics and recovery](../operations/recovery.md).
 
 ## Save a refreshed login
 

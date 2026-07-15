@@ -1,6 +1,6 @@
 # Getting Started
 
-Use the macOS Desktop app for a visual workflow, or build the CLI for terminal use. Both use the same Profiles, backups, and switching rules.
+Use the macOS Desktop app for a visual workflow, or build the CLI for terminal use. Both use the same Profiles, application backups, operation recovery, and switching rules.
 
 ## Before you start
 
@@ -30,7 +30,7 @@ profiledeck version
 profiledeck init
 ```
 
-`profiledeck init` creates ProfileDeck's local data and backup folders. To use a different location, pass the parent config directory:
+`profiledeck init` creates ProfileDeck's local database, encrypted application-backup folder, and operation-recovery folder. To use a different location, pass the parent config directory:
 
 ```bash
 profiledeck --config-dir /path/to/config-root init
@@ -99,7 +99,7 @@ If ProfileDeck reports an incomplete change or blocks another switch, open **Dia
 profiledeck doctor
 ```
 
-Follow only the recovery action that Diagnostics recommends. See [Recovery](../operations/recovery.md) for the difference between recovering a failed change and undoing a successful switch.
+Follow only the recovery action that Diagnostics recommends. See [Diagnostics and Recovery](../operations/recovery.md) for unfinished-switch recovery and application backup restore. Successful switches cannot be undone.
 
 ## Next steps
 

@@ -8,6 +8,17 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as doctor$0 from "../../internal/doctor/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as switching$0 from "../../internal/switching/models.js";
+
+export function InspectRecovery(operationID: string): $CancellablePromise<switching$0.RecoveryInspection> {
+    return $Call.ByID(3899025869, operationID);
+}
+
+export function RecoverOperation(operationID: string, confirm: boolean): $CancellablePromise<switching$0.RecoverOperationResult> {
+    return $Call.ByID(2747197695, operationID, confirm);
+}
 
 export function RepairLock(confirm: boolean): $CancellablePromise<doctor$0.DoctorRepairLockResult> {
     return $Call.ByID(19841452, confirm);

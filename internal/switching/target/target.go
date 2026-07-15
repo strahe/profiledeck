@@ -201,7 +201,7 @@ func ResolveFileSpec(targetID, backendID, path, label string) (Spec, error) {
 	if backendID == "" || backendID == BackendFile {
 		return FileSpec{ID: targetID, Path: path, NeedsContent: true, Label: label}, nil
 	}
-	return nil, apperror.New(apperror.RollbackUnsupported, "target backend cannot be resolved").
+	return nil, apperror.New(apperror.RecoveryUnsupported, "target backend cannot be resolved").
 		WithDetail("backend_id", backendID).WithDetail("target_id", targetID)
 }
 

@@ -35,6 +35,11 @@ type Service struct {
 	configDir string
 	paths     Paths
 	stores    store.Factory
+	dataLease *DataLease
+}
+
+func (service *Service) AttachDataLease(lease *DataLease) {
+	service.dataLease = lease
 }
 
 func NewService(configDir string) (*Service, error) {
@@ -80,6 +85,20 @@ func (service *Service) Init(ctx context.Context) (InitResult, error) {
 	if err := createDirs(service.paths); err != nil {
 		return InitResult{}, apperror.Wrap(apperror.RuntimeInitFailed, "failed to initialize runtime directories", err)
 	}
+	lease, closeLease, err := service.leaseForOperation()
+	if err != nil {
+		return InitResult{}, err
+	}
+	if closeLease {
+		defer lease.Close()
+	}
+	if store.DatabaseSwapPending(service.paths.Database) {
+		if err := lease.RunExclusive(ctx, "startup-restore-reconcile", func(ctx context.Context) error {
+			return store.ReconcileDatabaseSwap(ctx, service.paths.Database)
+		}); err != nil {
+			return InitResult{}, apperror.Wrap(apperror.RestoreFailed, "failed to resolve an interrupted application restore", err)
+		}
+	}
 	db, err := service.stores.Open(ctx, false)
 	if err != nil {
 		return InitResult{}, err
@@ -113,6 +132,13 @@ func (service *Service) Status(ctx context.Context) (StatusResult, error) {
 		}
 		return StatusResult{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to inspect application database", err)
 	}
+	lease, closeLease, err := service.leaseForOperation()
+	if err != nil {
+		return StatusResult{}, err
+	}
+	if closeLease {
+		defer lease.Close()
+	}
 	db, err := service.stores.Open(ctx, true)
 	if err != nil {
 		return StatusResult{}, err
@@ -129,8 +155,19 @@ func (service *Service) Status(ctx context.Context) (StatusResult, error) {
 	return result, nil
 }
 
+func (service *Service) leaseForOperation() (*DataLease, bool, error) {
+	if service.dataLease != nil {
+		return service.dataLease, false, nil
+	}
+	lease, err := AcquireDataLease(service.paths.DataLock, service.stores.AccessGate())
+	if err != nil {
+		return nil, false, err
+	}
+	return lease, true, nil
+}
+
 func createDirs(paths Paths) error {
-	for _, dir := range []string{paths.Root, paths.Backups, paths.UpdateBackups, paths.Exports, paths.Logs, filepath.Dir(paths.Lock)} {
+	for _, dir := range []string{paths.Root, paths.Backups, paths.Recovery, paths.Exports, paths.Logs, filepath.Dir(paths.Lock)} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}

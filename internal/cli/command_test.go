@@ -19,6 +19,7 @@ import (
 	"github.com/strahe/profiledeck/internal/antigravity"
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/appbackup"
 	"github.com/strahe/profiledeck/internal/apperror"
 	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
 	"github.com/strahe/profiledeck/internal/codex"
@@ -105,8 +106,8 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	if cmd.Command("recover") == nil {
 		t.Fatalf("expected recover subcommand")
 	}
-	if cmd.Command("rollback") == nil {
-		t.Fatalf("expected rollback subcommand")
+	if cmd.Command("rollback") != nil {
+		t.Fatalf("rollback command must not be registered")
 	}
 }
 
@@ -120,6 +121,7 @@ func TestCLICommandsIgnoreDesktopAgentPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create unrestricted Application: %v", err)
 	}
+	defer application.Close()
 	db, err := application.Runtime().StoreFactory().OpenHealthy(ctx, false)
 	if err != nil {
 		t.Fatalf("open database: %v", err)
@@ -164,19 +166,31 @@ func TestWritePlanUsesSafeTargetLabelWithoutPath(t *testing.T) {
 	}
 }
 
-func TestWriteBackupDetailUsesSafeTargetLabelWithoutPath(t *testing.T) {
+func TestWriteBackupDetailUsesApplicationBackupMetadata(t *testing.T) {
 	var output bytes.Buffer
-	err := writeBackupDetail(&output, switching.BackupDetail{
-		BackupSummary: switching.BackupSummary{BackupID: "switch-test", ProviderID: agyconfig.ProviderID},
-		Entries: []switching.BackupEntrySummary{{
-			TargetID: "auth", BackendID: "keyring", TargetLabel: "Antigravity login", Action: "update", Existed: true,
-		}},
-	})
+	err := writeBackupDetail(&output, appbackup.BackupDetail{
+		BackupSummary: appbackup.BackupSummary{ID: "manual-test", Kind: appbackup.KindManual},
+		Reason:        appbackup.ReasonManual, FormatVersion: 1,
+	}, "Application backup")
 	if err != nil {
 		t.Fatalf("expected backup output to succeed, got %v", err)
 	}
-	if !strings.Contains(output.String(), "Antigravity login") {
-		t.Fatalf("expected safe target label in backup output, got %q", output.String())
+	if !strings.Contains(output.String(), "manual-test") || strings.Contains(output.String(), "path") {
+		t.Fatalf("unexpected application backup output: %q", output.String())
+	}
+}
+
+func TestWriteBackupListReportsIncompleteAutomaticCleanup(t *testing.T) {
+	var output bytes.Buffer
+	err := writeBackupList(&output, appbackup.ListResult{
+		Backups:                  []appbackup.BackupSummary{{ID: "auto-test", Kind: appbackup.KindAutomatic}},
+		AutomaticCleanupRequired: true,
+	})
+	if err != nil {
+		t.Fatalf("expected backup list output to succeed, got %v", err)
+	}
+	if !strings.Contains(output.String(), "More than 10 automatic backups") {
+		t.Fatalf("backup cleanup warning is missing: %q", output.String())
 	}
 }
 
@@ -348,8 +362,8 @@ func TestStatusJSONBeforeInit(t *testing.T) {
 	if result.SchemaHealthy {
 		t.Fatalf("expected schema before init to be unhealthy")
 	}
-	if _, err := os.Stat(configDir); !os.IsNotExist(err) {
-		t.Fatalf("expected status not to create config dir, stat error: %v", err)
+	if _, err := os.Stat(filepath.Join(configDir, "profiledeck", "profiledeck.db")); !os.IsNotExist(err) {
+		t.Fatalf("status before init created an application database: %v", err)
 	}
 }
 
@@ -1301,7 +1315,7 @@ func TestProfileTargetAndPlanCLIFlow(t *testing.T) {
 	}
 	var switchResult switching.ApplySwitchResult
 	decodeCLIJSON(t, []byte(out), &switchResult)
-	if switchResult.Status != "applied" || switchResult.Counts.Create != 1 || switchResult.OperationID == "" || switchResult.BackupPath == "" {
+	if switchResult.Status != "applied" || switchResult.Counts.Create != 1 || switchResult.OperationID == "" || !switchResult.RecoveryCleanupCompleted {
 		t.Fatalf("unexpected switch result: %#v", switchResult)
 	}
 	rawTarget, err := os.ReadFile(targetPath)
@@ -1392,102 +1406,101 @@ func TestSwitchCLIRejectsStalePlanFingerprint(t *testing.T) {
 	}
 }
 
-func TestRollbackCLIJSONFlow(t *testing.T) {
+func TestApplicationBackupCLIJSONFlow(t *testing.T) {
+	keyring.MockInit()
+	t.Cleanup(keyring.MockInit)
 	configDir := t.TempDir()
 	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
-		t.Fatalf("expected init to succeed, got %v", err)
+		t.Fatalf("initialize runtime: %v", err)
 	}
-	if _, err := runCLI(t,
-		"--config-dir", configDir,
-		"provider", "create", "provider-a",
-		"--name", "Provider A",
-		"--adapter", "generic",
-		"--json",
-	); err != nil {
-		t.Fatalf("expected provider create to succeed, got %v", err)
-	}
-	if _, err := runCLI(t,
-		"--config-dir", configDir,
-		"profile", "create", "profile-a",
-		"--name", "Profile A",
-		"--json",
-	); err != nil {
-		t.Fatalf("expected profile create to succeed, got %v", err)
+	if _, err := runCLI(t, "--config-dir", configDir, "profile", "create", "before", "--name", "Before", "--json"); err != nil {
+		t.Fatalf("create pre-backup Profile: %v", err)
 	}
 
-	targetPath := filepath.Join(t.TempDir(), "target.env")
-	if err := os.WriteFile(targetPath, []byte("OLD=value\n"), 0o600); err != nil {
-		t.Fatalf("expected old target setup to succeed, got %v", err)
-	}
-	if _, err := runCLI(t,
-		"--config-dir", configDir,
-		"profile", "target", "add", "profile-a", "target-a",
-		"--provider", "provider-a",
-		"--path", targetPath,
-		"--format", "text",
-		"--strategy", "replace-file",
-		"--value-json", `{"content":"OPENAI_API_KEY=raw-key\n"}`,
-		"--json",
-	); err != nil {
-		t.Fatalf("expected profile target add to succeed, got %v", err)
-	}
-
-	switchOut, err := runCLI(t, "--config-dir", configDir, "switch", "provider-a", "profile-a", "--yes", "--json")
+	createOut, err := runCLI(t, "--config-dir", configDir, "backup", "create", "--json")
 	if err != nil {
-		t.Fatalf("expected switch to succeed, got %v", err)
+		t.Fatalf("create application backup: %v", err)
 	}
-	if strings.Contains(switchOut, "raw-key") {
-		t.Fatalf("expected switch output to exclude raw key, got %q", switchOut)
+	var created appbackup.BackupDetail
+	decodeCLIJSON(t, []byte(createOut), &created)
+	if created.ID == "" || created.Kind != appbackup.KindManual || created.Reason != appbackup.ReasonManual {
+		t.Fatalf("unexpected created backup: %#v", created)
 	}
-	var switchResult switching.ApplySwitchResult
-	decodeCLIJSON(t, []byte(switchOut), &switchResult)
-	if switchResult.OperationID == "" || switchResult.Counts.Update != 1 {
-		t.Fatalf("unexpected switch result: %#v", switchResult)
-	}
-
-	_, err = runCLI(t, "--config-dir", configDir, "rollback", switchResult.OperationID, "--json")
-	assertCLIAppErrorCode(t, err, apperror.ConfirmationRequired)
-	assertFileString(t, targetPath, "OPENAI_API_KEY=raw-key\n")
 
 	listOut, err := runCLI(t, "--config-dir", configDir, "backup", "list", "--json")
 	if err != nil {
-		t.Fatalf("expected backup list to succeed, got %v", err)
+		t.Fatalf("list application backups: %v", err)
 	}
-	if strings.Contains(listOut, "raw-key") {
-		t.Fatalf("expected backup list output to exclude raw key, got %q", listOut)
+	var listed appbackup.ListResult
+	decodeCLIJSON(t, []byte(listOut), &listed)
+	if len(listed.Backups) != 1 || listed.Backups[0].ID != created.ID {
+		t.Fatalf("unexpected backup list: %#v", listed)
 	}
-	var listResult switching.ListBackupsResult
-	decodeCLIJSON(t, []byte(listOut), &listResult)
-	if len(listResult.Backups) != 1 || !listResult.Backups[0].RollbackSupported {
-		t.Fatalf("unexpected backup list result: %#v", listResult)
+	showOut, err := runCLI(t, "--config-dir", configDir, "backup", "show", created.ID, "--json")
+	if err != nil {
+		t.Fatalf("show application backup: %v", err)
+	}
+	var shown appbackup.BackupDetail
+	decodeCLIJSON(t, []byte(showOut), &shown)
+	if shown.ID != created.ID || shown.FormatVersion != 1 {
+		t.Fatalf("unexpected backup detail: %#v", shown)
 	}
 
-	showOut, err := runCLI(t, "--config-dir", configDir, "backup", "show", switchResult.OperationID, "--json")
-	if err != nil {
-		t.Fatalf("expected backup show to succeed, got %v", err)
+	exportPath := filepath.Join(t.TempDir(), "exported.profiledeck-backup")
+	if _, err := runCLI(t, "--config-dir", configDir, "backup", "export", created.ID, "--output", exportPath, "--json"); err != nil {
+		t.Fatalf("export application backup: %v", err)
 	}
-	if strings.Contains(showOut, "raw-key") {
-		t.Fatalf("expected backup show output to exclude raw key, got %q", showOut)
+	if info, err := os.Stat(exportPath); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("exported backup is invalid: info=%#v error=%v", info, err)
 	}
-	var detail switching.BackupDetail
-	decodeCLIJSON(t, []byte(showOut), &detail)
-	if !detail.RollbackSupported || len(detail.Entries) != 1 {
-		t.Fatalf("unexpected backup detail: %#v", detail)
+	if _, err := runCLI(t, "--config-dir", configDir, "profile", "create", "after", "--name", "After", "--json"); err != nil {
+		t.Fatalf("create post-backup Profile: %v", err)
 	}
 
-	rollbackOut, err := runCLI(t, "--config-dir", configDir, "rollback", switchResult.OperationID, "--yes", "--json")
+	previewOut, err := runCLI(t, "--config-dir", configDir, "backup", "restore", created.ID, "--json")
+	assertCLIAppErrorCode(t, err, apperror.ConfirmationRequired)
+	var preview appbackup.RestorePreview
+	decodeCLIJSON(t, []byte(previewOut), &preview)
+	if preview.Backup.ID != created.ID || preview.Fingerprint == "" {
+		t.Fatalf("unexpected restore preview: %#v", preview)
+	}
+	restoreOut, err := runCLI(t, "--config-dir", configDir, "backup", "restore", created.ID, "--yes", "--json")
 	if err != nil {
-		t.Fatalf("expected rollback to succeed, got %v", err)
+		t.Fatalf("restore application backup: %v", err)
 	}
-	if strings.Contains(rollbackOut, "raw-key") {
-		t.Fatalf("expected rollback output to exclude raw key, got %q", rollbackOut)
+	var restored appbackup.RestoreResult
+	decodeCLIJSON(t, []byte(restoreOut), &restored)
+	if restored.Backup.ID != created.ID || restored.SafetyBackup == nil || !restored.RestartRequired {
+		t.Fatalf("unexpected restore result: %#v", restored)
 	}
-	var rollbackResult switching.ApplyRollbackResult
-	decodeCLIJSON(t, []byte(rollbackOut), &rollbackResult)
-	if rollbackResult.Status != "applied" || rollbackResult.SourceOperationID != switchResult.OperationID || rollbackResult.Counts.Restore != 1 {
-		t.Fatalf("unexpected rollback result: %#v", rollbackResult)
+	if _, err := runCLI(t, "--config-dir", configDir, "profile", "show", "after", "--json"); err == nil {
+		t.Fatal("post-backup Profile remained after restore")
+	} else {
+		assertCLIAppErrorCode(t, err, apperror.ProfileNotFound)
 	}
-	assertFileString(t, targetPath, "OLD=value\n")
+
+	_, err = runCLI(t, "--config-dir", configDir, "backup", "delete", created.ID)
+	assertCLIAppErrorCode(t, err, apperror.ConfirmationRequired)
+	if _, err := runCLI(t, "--config-dir", configDir, "backup", "delete", created.ID, "--yes"); err != nil {
+		t.Fatalf("delete manual backup: %v", err)
+	}
+
+	keyStatusOut, err := runCLI(t, "--config-dir", configDir, "backup", "key", "status", "--json")
+	if err != nil {
+		t.Fatalf("read recovery key status: %v", err)
+	}
+	var keyStatus appbackup.KeyStatus
+	decodeCLIJSON(t, []byte(keyStatusOut), &keyStatus)
+	if !keyStatus.Available || keyStatus.Recipient == "" {
+		t.Fatalf("unexpected key status: %#v", keyStatus)
+	}
+	keyPath := filepath.Join(t.TempDir(), "recovery-key.txt")
+	if _, err := runCLI(t, "--config-dir", configDir, "backup", "key", "export", "--output", keyPath, "--yes", "--json"); err != nil {
+		t.Fatalf("export recovery key: %v", err)
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "backup", "key", "import", "--file", keyPath, "--yes", "--json"); err != nil {
+		t.Fatalf("import identical recovery key: %v", err)
+	}
 }
 
 func TestRecoverCLIJSONAndHumanFlow(t *testing.T) {
@@ -1553,44 +1566,41 @@ func TestRecoverCLIJSONAndHumanFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected recovery JSON to succeed, got %v", err)
 	}
-	var recovery switching.RecoverFailedSwitchResult
+	var recovery switching.RecoverOperationResult
 	decodeCLIJSON(t, []byte(recoverOut), &recovery)
-	if recovery.OperationType != store.OperationTypeRollback || recovery.RollbackKind != "failed_switch_recovery" || recovery.SourceOperationID != failedSwitchID || recovery.Counts.Remove != 1 {
+	if recovery.Action != switching.RecoveryActionRestore || recovery.RecoveryOperationID == "" || recovery.SourceOperationID != failedSwitchID || recovery.Counts.Remove != 1 {
 		t.Fatalf("unexpected recovery result: %#v", recovery)
 	}
 	if _, err := os.Stat(firstPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected first target to be removed, got %v", err)
 	}
 
-	humanOut, err := runCLI(t, "--config-dir", configDir, "recover", failedSwitchID, "--yes")
-	if err != nil {
-		t.Fatalf("expected idempotent recovery human output to succeed, got %v", err)
+	var humanOut bytes.Buffer
+	if err := writeRecoverResult(&humanOut, recovery); err != nil {
+		t.Fatalf("write recovery human output: %v", err)
 	}
-	for _, expected := range []string{"Recovery applied", "rollback_kind: failed_switch_recovery", "operation_type: rollback"} {
-		if !strings.Contains(humanOut, expected) {
-			t.Fatalf("expected recovery human output to contain %q, got %q", expected, humanOut)
+	for _, expected := range []string{"Operation resolved", "action: restore", "changes: restore=0 remove=1 noop=1"} {
+		if !strings.Contains(humanOut.String(), expected) {
+			t.Fatalf("expected recovery human output to contain %q, got %q", expected, humanOut.String())
 		}
 	}
 }
 
-func TestRecoverHumanOutputIncludesWarnings(t *testing.T) {
+func TestRecoverHumanOutputWarnsWhenCleanupFails(t *testing.T) {
 	var out bytes.Buffer
-	err := writeRecoverResult(&out, switching.RecoverFailedSwitchResult{
-		OperationID:       "rollback-recovery",
-		OperationType:     store.OperationTypeRollback,
-		RollbackKind:      "failed_switch_recovery",
-		Status:            "applied",
-		SourceOperationID: "switch-failed",
-		ProviderID:        "provider-a",
-		ProfileID:         "profile-a",
-		Counts:            switching.RollbackCounts{Noop: 1},
-		BackupPath:        "/tmp/profiledeck-backup",
-		Warnings:          []string{"target already restored"},
+	err := writeRecoverResult(&out, switching.RecoverOperationResult{
+		RecoveryOperationID: "recovery-attempt",
+		SourceOperationID:   "switch-failed",
+		Action:              switching.RecoveryActionRestore,
+		Status:              "resolved",
+		ProviderID:          "provider-a",
+		ProfileID:           "profile-a",
+		Counts:              switching.RecoveryCounts{Noop: 1},
 	})
 	if err != nil {
 		t.Fatalf("expected recovery output to succeed, got %v", err)
 	}
-	if !strings.Contains(out.String(), "warning: target already restored") {
+	if !strings.Contains(out.String(), "warning: Operation recovery files could not be removed.") {
 		t.Fatalf("expected recovery output to include warning, got %q", out.String())
 	}
 }
@@ -1601,7 +1611,7 @@ func TestBackupShowMissingReturnsNotFound(t *testing.T) {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 
-	_, err := runCLI(t, "--config-dir", configDir, "backup", "show", "missing-backup", "--json")
+	_, err := runCLI(t, "--config-dir", configDir, "backup", "show", "manual-20260101-000000Z", "--json")
 	assertCLIAppErrorCode(t, err, apperror.BackupNotFound)
 }
 
@@ -1616,8 +1626,8 @@ func TestDoctorCLIJSONAndHumanOutput(t *testing.T) {
 	if result.OverallLevel != doctor.LevelWarning || len(result.Findings) != 1 {
 		t.Fatalf("unexpected doctor before init result: %#v", result)
 	}
-	if _, err := os.Stat(configDir); !os.IsNotExist(err) {
-		t.Fatalf("expected doctor not to create config dir, got %v", err)
+	if _, err := os.Stat(filepath.Join(configDir, "profiledeck", "profiledeck.db")); !os.IsNotExist(err) {
+		t.Fatalf("doctor before init created an application database: %v", err)
 	}
 
 	initOut, err := runCLI(t, "--config-dir", configDir, "init", "--json")

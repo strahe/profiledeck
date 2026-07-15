@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -92,11 +93,9 @@ type Client struct {
 }
 
 func NewClient() *Client {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DisableCompression = true
 	return &Client{
 		http: &http.Client{
-			Transport: transport,
+			Transport: quotaTransport(),
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
@@ -104,6 +103,25 @@ func NewClient() *Client {
 		userAgent: NewInstallationResolver(), loadEndpoint: loadEndpoint,
 		summaryEndpoints: append([]string(nil), summaryEndpoints...),
 		timeout:          defaultTimeout, maxResponseBytes: maxResponseBytes, now: time.Now,
+	}
+}
+
+func quotaTransport() http.RoundTripper {
+	base := http.DefaultTransport
+	if transport, ok := base.(*http.Transport); ok && transport != nil {
+		clone := transport.Clone()
+		clone.DisableCompression = true
+		return clone
+	}
+	if base != nil {
+		return base
+	}
+	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment, DialContext: dialer.DialContext,
+		ForceAttemptHTTP2: true, DisableCompression: true, MaxIdleConns: 100,
+		IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 10 * time.Second,
+		ExpectContinueTimeout: time.Second,
 	}
 }
 
@@ -219,19 +237,29 @@ func (client *Client) postJSON(
 	if err != nil {
 		return nil, 0, true, nil
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return nil, response.StatusCode, false, nil
+	if response == nil || response.Body == nil {
+		return nil, 0, false, errors.New("quota response is invalid")
 	}
-	limit := client.maxResponseBytes
-	if limit <= 0 {
-		limit = maxResponseBytes
+	defer response.Body.Close()
+	limit := client.responseLimit()
+	if response.StatusCode != http.StatusOK {
+		// Reuse healthy connections for ordinary fallback responses without
+		// allowing an unbounded upstream error body to consume resources.
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, limit+1))
+		return nil, response.StatusCode, false, nil
 	}
 	raw, err = io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil || int64(len(raw)) > limit {
 		return nil, response.StatusCode, false, errors.New("quota response is invalid")
 	}
 	return raw, response.StatusCode, false, nil
+}
+
+func (client *Client) responseLimit() int64 {
+	if client.maxResponseBytes > 0 {
+		return client.maxResponseBytes
+	}
+	return maxResponseBytes
 }
 
 type rawSummary struct {

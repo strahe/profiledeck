@@ -115,7 +115,7 @@ func TestDesktopApplicationRejectsDisabledAgentButKeepsRecoveryServicesAvailable
 	if !errors.As(err, &appErr) || appErr.Code != apperror.AgentDisabled {
 		t.Fatalf("disabled Codex call returned %v", err)
 	}
-	if _, err := application.Switching().ListBackups(ctx); err != nil {
+	if _, err := application.Backups().List(ctx); err != nil {
 		t.Fatalf("Agent gate blocked backup inspection: %v", err)
 	}
 	if _, err := application.Doctor().Run(ctx); err != nil {

@@ -20,26 +20,28 @@ Common examples are:
 
 If you pass `--config-dir <directory>`, ProfileDeck uses `<directory>/profiledeck` instead.
 
-The directory contains ProfileDeck's saved data, switch and update backups, and files needed to complete or recover changes. Codex, Claude Code, and Antigravity logins may be stored there because ProfileDeck needs them to switch and restore Profiles.
+The directory contains `profiledeck.db`, encrypted application backups, and temporary recovery material for unfinished switches. Codex, Claude Code, and Antigravity logins may be stored in the database or operation recovery material because ProfileDeck needs them to switch Profiles safely.
 
 ## Protect local data
 
-ProfileDeck does not add its own encryption to saved data or backups. It restricts their file permissions where the operating system allows it, but anyone who can read your local files may be able to read saved logins.
+ProfileDeck encrypts `.profiledeck-backup` files with age X25519. The live database and unfinished-switch recovery material are not separately encrypted, so anyone who can read your local files may be able to read saved logins. ProfileDeck restricts their file permissions where the operating system allows it.
 
 - Use your operating system's full-disk encryption and screen lock.
-- Do not sync, commit, upload, or share the ProfileDeck data directory.
-- Back up the entire directory before moving or reinstalling ProfileDeck.
-- Keep backups until you have confirmed that your Profiles switch correctly.
+- Do not sync, commit, upload, or share the complete ProfileDeck data directory.
+- Use an exported encrypted application backup and separately exported recovery key when moving or reinstalling ProfileDeck.
+- Keep recovery-key files outside repositories and shared folders.
 
 Claude Code support is separate from Claude Desktop. ProfileDeck does not read or change Claude Desktop logins, settings, or processes.
 
-## Understand switch and update backups
+## Understand application backups and operation recovery
 
-Every switch and rollback creates a private backup before changing the selected tool. A backup may contain complete Codex files, a Claude Code subscription login, or an Antigravity login.
+Application backups contain the complete ProfileDeck database and are encrypted before they are published in `backups/`. Manual backups remain until you delete them. Automatic backups run every 24 hours and before update restart or database restore; the latest ten automatic backups are retained together.
 
-Before installing a Desktop update, ProfileDeck also backs up its local data and keeps the three newest update backups. If update verification or installation fails, the current version remains available.
+The private X25519 recovery key is stored in the operating system credential store. ProfileDeck does not store it inside a backup. Export the key separately before moving backups to another system, and remember that replacing the current key does not re-encrypt existing files.
 
-Backup lists and previews hide sensitive contents, but the backup files themselves must remain private.
+Before a switch changes an external tool, ProfileDeck creates a private recovery point under `recovery/<operation-id>/`. It may contain complete Codex files, a Claude Code subscription login, or an Antigravity login without application-backup encryption. It exists only for an unfinished switch and is deleted after success. It is not listed, exported, or usable to undo a successful switch.
+
+Backup lists and previews show only safe metadata. Keep encrypted backup files private as defense in depth, and never share operation recovery material.
 
 ## Export a Codex Profile safely
 
@@ -64,6 +66,6 @@ ProfileDeck does not provide cloud sync and does not send telemetry or analytics
 
 ## What output and usage reports omit
 
-Normal previews, commands, logs, errors, and backup summaries hide saved login values and other sensitive-looking settings. Only a sensitive Codex export that you explicitly create contains complete exported login and settings data.
+Normal previews, commands, logs, errors, and backup summaries hide saved login values and other sensitive-looking settings. Encrypted application backup exports copy ciphertext unchanged. Only a sensitive Codex Profile export that you explicitly create exposes complete login and settings data in its private bundle.
 
 Usage reports store token counts, model names, time information, and cost estimates. They do not store raw prompts, raw completions, API keys, complete session records, or full source-file paths. Local Codex activity cannot reliably identify the Profile or ChatGPT account that served a request, so ProfileDeck does not guess that attribution.

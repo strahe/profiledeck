@@ -10,6 +10,9 @@ import (
 	"image/png"
 	"log"
 	"net/http"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -44,6 +47,9 @@ func main() {
 	// The detached update helper must swap the application before runtime or
 	// database initialisation can fail or contend with the exiting process.
 	updater.HandleHelperMode()
+	if os.Getenv("PROFILEDECK_RESTART_DELAYED") == "1" {
+		time.Sleep(750 * time.Millisecond)
+	}
 
 	info := app.NewInfo(version, commit, buildDate)
 	env := backend.NewEnvironmentFromEnv()
@@ -58,6 +64,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer core.Close()
 	startupErr := backend.Bootstrap(desktopCtx, core)
 	services := backend.NewServices(core, info, env, startupErr)
 	updates := desktopupdate.NewService(core, desktopupdate.BuildConfig{
@@ -93,6 +100,7 @@ func main() {
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
 	})
+	backend.ConfigureBackupRestarter(services.Backup, desktopRestarter(wailsApp))
 	if err := desktopupdate.Attach(updates, wailsApp); err != nil {
 		log.Printf("profiledeck: automatic updates are unavailable: %v", err)
 	}
@@ -116,10 +124,54 @@ func main() {
 	setupUsageAutoSync(desktopCtx, wailsApp, services)
 	setupCodexQuotaRuntime(desktopCtx, wailsApp, services)
 	setupUpdateRuntime(desktopCtx, wailsApp, updates)
+	setupApplicationBackupRuntime(desktopCtx, wailsApp, services)
 
 	if err := wailsApp.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func setupApplicationBackupRuntime(ctx context.Context, wailsApp *application.App, services backend.Services) {
+	removeStartedHandler := wailsApp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		services.StartApplicationBackups(ctx)
+	})
+	wailsApp.OnShutdown(func() {
+		removeStartedHandler()
+		services.StopApplicationBackups()
+	})
+}
+
+func desktopRestarter(wailsApp *application.App) func() error {
+	return func() error {
+		executable, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		process, err := os.StartProcess(executable, os.Args, &os.ProcAttr{
+			Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+			Env:   restartEnvironment(os.Environ()),
+		})
+		if err != nil {
+			return err
+		}
+		_ = process.Release()
+		go func() {
+			time.Sleep(250 * time.Millisecond)
+			wailsApp.Quit()
+		}()
+		return nil
+	}
+}
+
+func restartEnvironment(current []string) []string {
+	result := make([]string, 0, len(current)+1)
+	for _, value := range current {
+		if strings.HasPrefix(value, "PROFILEDECK_RESTART_DELAYED=") {
+			continue
+		}
+		result = append(result, value)
+	}
+	return append(result, "PROFILEDECK_RESTART_DELAYED=1")
 }
 
 func setupUpdateRuntime(ctx context.Context, wailsApp *application.App, updates *desktopupdate.Service) {

@@ -72,14 +72,13 @@ func newSwitchCommand() *urfavecli.Command {
 func writeSwitchResult(w io.Writer, result switching.ApplySwitchResult) error {
 	if _, err := fmt.Fprintf(
 		w,
-		"Switch applied\noperation: %s\nprovider: %s (%s)\nprofile: %s (%s)\nplan_fingerprint: %s\nbackup: %s\nchanges: create=%d update=%d noop=%d\n",
+		"Switch applied\noperation: %s\nprovider: %s (%s)\nprofile: %s (%s)\nplan_fingerprint: %s\nchanges: create=%d update=%d noop=%d\n",
 		result.OperationID,
 		result.Provider.ID,
 		result.Provider.Name,
 		result.Profile.ID,
 		result.Profile.Name,
 		result.PlanFingerprint,
-		result.BackupPath,
 		result.Counts.Create,
 		result.Counts.Update,
 		result.Counts.Noop,
@@ -90,6 +89,10 @@ func writeSwitchResult(w io.Writer, result switching.ApplySwitchResult) error {
 		if _, err := fmt.Fprintf(w, "warning: %s\n", warning); err != nil {
 			return err
 		}
+	}
+	if !result.RecoveryCleanupCompleted {
+		_, err := fmt.Fprintln(w, "warning: Operation recovery files could not be removed.")
+		return err
 	}
 	return nil
 }

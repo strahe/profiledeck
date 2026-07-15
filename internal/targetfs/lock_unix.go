@@ -19,6 +19,17 @@ func tryLockFile(file *os.File) error {
 	return err
 }
 
+func trySharedLockFile(file *os.File) error {
+	err := syscall.Flock(int(file.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+		return errSystemLockHeld
+	}
+	return err
+}
+
 func unlockFileHandle(file *os.File) error {
 	return syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 }

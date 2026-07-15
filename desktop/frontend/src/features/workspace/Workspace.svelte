@@ -16,7 +16,6 @@
 	import {
 		AppService,
 		AntigravityService,
-		BackupService,
 		ClaudeCodeService,
 		CodexService,
 		DoctorService,
@@ -117,6 +116,8 @@
 	let sidebarOpen = $state(true);
 	let persistedSidebarCollapsed = $state(false);
 	let settingsLoaded = $state(false);
+	let automaticBackups = $state(true);
+	let startupRecoveryRedirected = false;
 	let lastToast = "";
 	let invalidRoute = "";
 	let currentPath = $state(router.location);
@@ -330,6 +331,7 @@
 			setMode(appearance);
 			persistedSidebarCollapsed = settings.sidebar_collapsed;
 			sidebarOpen = !settings.sidebar_collapsed;
+			automaticBackups = settings.automatic_backups;
 			settingsLoaded = true;
 		} catch (error) {
 			if (!isCancelError(error)) showError(error);
@@ -580,8 +582,11 @@
 
 	async function recoverOperation(operationID: string) {
 		await runAction(`recover:${operationID}`, async () => {
-			await track("recover", BackupService.RecoverFailedSwitch(operationID, true));
-			showNotice(translate("diagnosticsPage.recover.completedTitle"), translate("diagnosticsPage.recover.completedDescription"));
+			const result = await track("recover", DoctorService.RecoverOperation(operationID, true));
+			showNotice(
+				translate(result.action === "close" ? "diagnosticsPage.recover.closedTitle" : "diagnosticsPage.recover.completedTitle"),
+				translate(result.action === "close" ? "diagnosticsPage.recover.closedDescription" : "diagnosticsPage.recover.completedDescription"),
+			);
 		});
 	}
 
@@ -643,7 +648,13 @@
 		loadingAntigravityProfiles = false;
 		claudeCodeProfileSummaries = next.claude_code_profiles?.profiles ?? [];
 		loadingClaudeCodeProfiles = false;
-		if (next.startup_error) dashboardError = desktopErrorMessage(next.startup_error, translate("errors.desktopUnavailable"));
+		if (next.startup_error) {
+			dashboardError = desktopErrorMessage(next.startup_error, translate("errors.desktopUnavailable"));
+			if (!startupRecoveryRedirected) {
+				startupRecoveryRedirected = true;
+				void push("/settings");
+			}
+		}
 		else dashboardError = "";
 	}
 
@@ -1033,6 +1044,9 @@
 						onAutomaticChange={changeAutomaticUpdates}
 						onCheckForUpdates={checkForUpdates}
 						onRestart={restartWithUpdate}
+						{automaticBackups}
+						databaseHealthy={dashboard?.status.schema_healthy ?? false}
+						onAutomaticBackupsChange={(enabled) => { automaticBackups = enabled; }}
 					/>
 				{:else}
 					<DiagnosticsPage

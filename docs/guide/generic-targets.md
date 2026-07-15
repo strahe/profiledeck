@@ -48,7 +48,7 @@ profiledeck plan my-tool work
 profiledeck switch my-tool work --yes
 ```
 
-The preview shows the selected file and hides sensitive-looking values. ProfileDeck checks the file again and creates a backup before applying the change.
+The preview shows the selected file and hides sensitive-looking values. ProfileDeck checks the file again and creates an operation recovery point before applying the change.
 
 ## Inspect or recover
 
@@ -61,4 +61,4 @@ profiledeck profile target show work my-tool settings
 
 Adding or editing a target changes only the saved rule. The external file changes only after `profiledeck switch` succeeds.
 
-If a switch does not finish, run `profiledeck doctor` before trying again. Use [Recover or Undo](../operations/recovery.md) to restore a failed or unwanted change.
+If a switch does not finish, run `profiledeck doctor` before trying again. Use [Diagnostics and Recovery](../operations/recovery.md) to restore its pre-switch state. A successful switch cannot be undone; switch to the intended Profile instead.

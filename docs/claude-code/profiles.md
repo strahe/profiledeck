@@ -39,7 +39,7 @@ List and show commands display login status and expiry information without print
 
 ## Switch accounts
 
-In Desktop, choose **Use Profile**, review the login change, and confirm. ProfileDeck creates a private backup before continuing.
+In Desktop, choose **Use Profile**, review the login change, and confirm. ProfileDeck creates a private operation recovery point before continuing.
 
 With the CLI:
 

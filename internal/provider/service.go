@@ -80,7 +80,7 @@ func (service *Service) List(ctx context.Context, req ListRequest) ([]Provider, 
 	}
 	result := make([]Provider, 0, len(providers))
 	for _, stored := range providers {
-		allowed, err := service.visible(ctx, stored.ID)
+		allowed, err := service.visible(ctx, db, stored.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -207,7 +207,7 @@ func (service *Service) ListActiveStates(ctx context.Context) ([]ActiveState, er
 	}
 	result := make([]ActiveState, 0, len(providers))
 	for _, storedProvider := range providers {
-		allowed, err := service.visible(ctx, storedProvider.ID)
+		allowed, err := service.visible(ctx, db, storedProvider.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -246,8 +246,13 @@ func (service *Service) require(ctx context.Context, providerID string) error {
 	return service.policy.RequireProvider(ctx, providerID)
 }
 
-func (service *Service) visible(ctx context.Context, providerID string) (bool, error) {
-	err := service.require(ctx, providerID)
+func (service *Service) visible(ctx context.Context, db *store.Store, providerID string) (bool, error) {
+	var err error
+	if policy, ok := service.policy.(agent.StorePolicy); ok {
+		err = policy.RequireProviderWithStore(ctx, db, providerID)
+	} else {
+		err = service.require(ctx, providerID)
+	}
 	if err == nil {
 		return true, nil
 	}

@@ -56,12 +56,14 @@ func upInitialSchema(ctx context.Context, db *bun.DB) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS operations (
 			id TEXT PRIMARY KEY,
-			operation_type TEXT NOT NULL CHECK (operation_type IN ('switch', 'rollback', 'import', 'maintenance')),
+			operation_type TEXT NOT NULL CHECK (operation_type IN ('switch', 'recovery', 'import', 'maintenance')),
 			status TEXT NOT NULL CHECK (status IN ('pending', 'failed', 'applied')),
 			profile_id TEXT NOT NULL DEFAULT '',
 			metadata_json TEXT NOT NULL DEFAULT '{}',
 			error_code TEXT NOT NULL DEFAULT '',
 			error_message TEXT NOT NULL DEFAULT '',
+			resolution_kind TEXT NOT NULL DEFAULT '',
+			resolved_at_unix_ms INTEGER NOT NULL DEFAULT 0,
 			created_at_unix_ms INTEGER NOT NULL,
 			updated_at_unix_ms INTEGER NOT NULL
 		)`,

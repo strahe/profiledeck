@@ -48,7 +48,7 @@ profiledeck plan my-tool work
 profiledeck switch my-tool work --yes
 ```
 
-预览会显示所选文件，并隐藏疑似敏感值。应用前，ProfileDeck 会再次检查文件并创建备份。
+预览会显示所选文件，并隐藏疑似敏感值。应用前，ProfileDeck 会再次检查文件并创建操作恢复点。
 
 ## 查看或恢复
 
@@ -61,4 +61,4 @@ profiledeck profile target show work my-tool settings
 
 添加或编辑目标时，只会修改已保存规则。只有 `profiledeck switch` 成功后，外部文件才会改变。
 
-如果切换没有完成，请先运行 `profiledeck doctor`。需要恢复失败或不再需要的更改时，请参阅[恢复或撤销](../operations/recovery.md)。
+如果切换没有完成，请先运行 `profiledeck doctor`。恢复切换前状态的方法见[诊断与恢复](../operations/recovery.md)。成功切换不能撤销；如需更换配置，请切换到目标 Profile。

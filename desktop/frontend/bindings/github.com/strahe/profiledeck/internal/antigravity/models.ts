@@ -53,6 +53,11 @@ export interface AntigravityProfileSummary {
     "provider_id": string;
     "credential_id": string;
     "credential_reference_count": number;
+
+    /**
+     * ExpiresAtUnixMS remains available to machine-readable clients; human
+     * surfaces avoid presenting a short-lived access-token expiry as login health.
+     */
     "expires_at_unix_ms"?: number;
     "active": boolean;
     "active_operation_id"?: string;
