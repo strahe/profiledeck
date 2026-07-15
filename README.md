@@ -15,7 +15,7 @@ ProfileDeck saves local AI coding tool logins and settings as Profiles, then let
 | --- | --- |
 | Codex | Login and settings |
 | Claude Code | Subscription login |
-| Antigravity | agy v2 login |
+| Antigravity | Consumer OAuth login |
 
 You can also view local Codex usage and check usage limits. See [supported tools and limitations](docs/index.md#supported-tools).
 

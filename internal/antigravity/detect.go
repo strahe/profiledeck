@@ -49,7 +49,7 @@ func (service *Service) Detect(ctx context.Context) (AntigravityDetectResult, er
 			}
 			if err := validateAntigravityProvider(provider); err != nil {
 				result.ProviderCompatible = false
-				result.Warnings = append(result.Warnings, "Existing Antigravity profiles are not compatible with agy v2")
+				result.Warnings = append(result.Warnings, "Existing Antigravity Profiles use a saved setup that is not supported by this version of ProfileDeck")
 				return result, nil
 			}
 		case !errors.Is(providerErr, store.ErrNotFound):
@@ -67,7 +67,7 @@ func (service *Service) Detect(ctx context.Context) (AntigravityDetectResult, er
 	} else if snapshot.Exists {
 		if _, _, err := agyauth.Normalize([]byte(snapshot.Content)); err != nil {
 			result.CredentialStatus = "invalid"
-			result.Warnings = append(result.Warnings, "Antigravity login is not compatible with agy v2")
+			result.Warnings = append(result.Warnings, "Antigravity login is not supported by ProfileDeck")
 		} else {
 			result.CredentialStatus = "valid"
 		}

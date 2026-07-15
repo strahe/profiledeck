@@ -18,7 +18,7 @@
 
 | 命令 | 用途 |
 | --- | --- |
-| `antigravity` | 保存和管理 Antigravity agy v2 Profile。 |
+| `antigravity` | 保存和管理 Antigravity Profile。 |
 | `backup` | 列出或检查切换备份。 |
 | `claude-code` | 保存和管理 Claude Code 官方订阅 Profile。 |
 | `codex` | 管理 Codex Profile 和已保存设置（配置集）。 |
@@ -93,7 +93,7 @@ Claude Code 没有 `claude` 别名。请使用 `profiledeck plan claude-code <pr
 
 登录要求与验证方式见 [Claude Code Profile](../claude-code/profiles.md)。
 
-## Antigravity agy v2
+## Antigravity
 
 ```bash
 profiledeck antigravity detect [--json]
@@ -104,7 +104,7 @@ profiledeck antigravity profile update <profile-id> [--name NAME] [--description
 profiledeck antigravity profile save-current [--json]
 ```
 
-`agy` 是 `antigravity` 的别名。`create` 和 `save-current` 要求 Antigravity agy v2 当前存在有效的个人 OAuth 登录。输出只显示安全元数据，不会打印登录内容。
+`agy` 是 `antigravity` 的别名。`create` 和 `save-current` 要求 Antigravity 当前存在有效的个人 OAuth 登录。输出只显示安全元数据，不会打印登录内容。
 
 兼容性和切换建议见 [Antigravity Profile](../antigravity/profiles.md)。
 

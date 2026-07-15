@@ -1,14 +1,13 @@
 # Antigravity Profile
 
-ProfileDeck 可以保存和切换 Antigravity agy v2 使用的个人 OAuth 登录，但不会代替你登录 Antigravity。
+ProfileDeck 可以保存和切换存储在操作系统凭据存储中的 Antigravity 个人 OAuth 登录，但不会代替你登录 Antigravity。
 
 ## 开始前准备
 
-1. 使用 Antigravity agy v2。
-2. 在 Antigravity 中完成登录，并确认登录可用。
-3. 启动 ProfileDeck；如果使用 CLI，请运行 `profiledeck init`。
+1. 登录 Antigravity，并确认可以正常使用。
+2. 启动 ProfileDeck；如果使用 CLI，请运行 `profiledeck init`。
 
-ProfileDeck 不支持旧版 Antigravity 存储方式或其他 Antigravity 版本。
+ProfileDeck 不支持旧版 Antigravity 存储方式。
 
 ## 在桌面端保存 Profile
 
@@ -64,4 +63,4 @@ profiledeck antigravity profile save-current
 
 ## 不支持的范围
 
-ProfileDeck 不提供 Antigravity 登录、旧版存储迁移、Manager 导入、限额查询、用量归属，也不支持 agy v2 以外的 Antigravity 版本。
+ProfileDeck 不管理 Antigravity 登录流程、设置、旧版存储迁移、Manager 数据、限额、用量归属，也不管理 SSH 或容器会话使用的独立登录文件。

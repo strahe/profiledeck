@@ -23,7 +23,7 @@ type providerMetadata struct {
 	PresetVersion int    `json:"preset_version"`
 }
 
-// TargetSpec is the only physical target bound by an agy v2 Profile.
+// TargetSpec is the only physical target bound by a preset version 2 Profile.
 func TargetSpec() switchtarget.KeyringSpec {
 	return switchtarget.KeyringSpec{
 		ID: agyconfig.TargetID, Service: agyconfig.KeyringService,
@@ -68,7 +68,7 @@ func ValidateProviderRecord(adapterID, metadataJSON string) error {
 	}
 	var metadata providerMetadata
 	if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil || metadata.Preset != agyconfig.PresetName || metadata.PresetVersion != agyconfig.PresetVersion {
-		return apperror.New(apperror.AntigravityInvalid, "existing Antigravity provider is incompatible with agy v2")
+		return apperror.New(apperror.AntigravityInvalid, "existing Antigravity setup is not supported by this version of ProfileDeck")
 	}
 	return nil
 }
@@ -87,7 +87,7 @@ func RequireProvider(ctx context.Context, db *store.Store) (store.Provider, erro
 	return provider, nil
 }
 
-// EnsureProvider creates or repairs the fixed agy v2 provider metadata.
+// EnsureProvider creates or repairs the fixed preset version 2 provider metadata.
 func EnsureProvider(ctx context.Context, db *store.Store) error {
 	provider, err := db.GetProvider(ctx, agyconfig.ProviderID)
 	if errors.Is(err, store.ErrNotFound) {

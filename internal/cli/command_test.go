@@ -180,7 +180,7 @@ func TestWriteBackupDetailUsesSafeTargetLabelWithoutPath(t *testing.T) {
 	}
 }
 
-func TestAntigravityProfileCLIUsesAgyV2KeyringState(t *testing.T) {
+func TestAntigravityProfileCLIUsesAntigravityKeyringState(t *testing.T) {
 	keyring.MockInit()
 	t.Cleanup(keyring.MockInit)
 	configDir := t.TempDir()
@@ -208,7 +208,7 @@ func TestAntigravityProfileCLIUsesAgyV2KeyringState(t *testing.T) {
 	}
 	for _, secret := range []string{"cli-access-secret", "cli-refresh-secret", "access_token", "refresh_token"} {
 		if strings.Contains(createdRaw, secret) || strings.Contains(listed, secret) {
-			t.Fatalf("expected Antigravity CLI output to hide %q", secret)
+			t.Fatalf("expected Antigravity output to hide %q", secret)
 		}
 	}
 }

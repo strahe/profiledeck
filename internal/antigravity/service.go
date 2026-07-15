@@ -155,11 +155,11 @@ func (service *Service) CreateProfile(ctx context.Context, req CreateAntigravity
 			return err
 		}
 		if !snapshot.Exists {
-			return apperror.New(apperror.AntigravityInvalid, "Antigravity is not signed in; sign in with agy first")
+			return apperror.New(apperror.AntigravityInvalid, "Antigravity is not signed in; sign in to Antigravity first")
 		}
 		payload, _, err := agyauth.Normalize([]byte(snapshot.Content))
 		if err != nil {
-			return apperror.New(apperror.AntigravityInvalid, "Antigravity login is not compatible with agy v2")
+			return apperror.New(apperror.AntigravityInvalid, "Antigravity login is not supported by ProfileDeck")
 		}
 		profile, profileErr := tx.GetProfile(ctx, profileID)
 		hasProfile := profileErr == nil
@@ -302,11 +302,11 @@ func (service *Service) SaveActiveProfile(ctx context.Context) (AntigravityProfi
 			return err
 		}
 		if !snapshot.Exists {
-			return apperror.New(apperror.AntigravityInvalid, "Antigravity is not signed in; sign in with agy first")
+			return apperror.New(apperror.AntigravityInvalid, "Antigravity is not signed in; sign in to Antigravity first")
 		}
 		payload, _, err := agyauth.Normalize([]byte(snapshot.Content))
 		if err != nil {
-			return apperror.New(apperror.AntigravityInvalid, "Antigravity login is not compatible with agy v2")
+			return apperror.New(apperror.AntigravityInvalid, "Antigravity login is not supported by ProfileDeck")
 		}
 		active, err := tx.GetActiveState(ctx, store.ActiveStateScopeProvider, agyconfig.ProviderID)
 		if errors.Is(err, store.ErrNotFound) {

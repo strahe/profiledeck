@@ -2,7 +2,7 @@ package auth
 
 import "testing"
 
-func TestNormalizeAgyV2Payload(t *testing.T) {
+func TestNormalizeConsumerOAuthPayload(t *testing.T) {
 	raw := []byte(`{"token":{"access_token":" access ","token_type":"Bearer","refresh_token":" refresh ","expiry":"2026-07-12T04:00:00.000000Z"},"auth_method":"consumer"}`)
 	normalized, payload, err := Normalize(raw)
 	if err != nil {

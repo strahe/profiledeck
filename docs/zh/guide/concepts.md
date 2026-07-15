@@ -8,7 +8,7 @@ Profile 用来标记某个受支持工具应使用的登录和设置。保存 Pr
 | --- | --- | --- |
 | Codex | 一份 Codex 登录 | 一组已保存的 Codex 设置（配置集） |
 | Claude Code | 一份官方订阅登录 | 不包含设置 |
-| Antigravity | 一份 agy v2 使用的个人 OAuth 登录 | 不包含设置 |
+| Antigravity | 一份个人 OAuth 登录 | 不包含设置 |
 
 每个 Profile 都有用于 CLI 命令和链接的永久 ID。不同工具共用同一个 Profile ID 命名空间，一个 Profile 也可以包含多个工具的已保存数据。
 
@@ -18,7 +18,7 @@ ProfileDeck 会分别记录每个受支持工具的当前 Profile。当前 Profi
 
 - Codex 使用当前 Codex 目录中的 `auth.json` 和 `config.toml`。
 - Claude Code 在 macOS 上使用 Keychain 中的官方订阅登录，在 Linux 和 Windows 上使用凭据文件。
-- Antigravity 使用系统凭据存储中的 agy v2 登录。
+- Antigravity 使用系统凭据存储中的当前登录。
 
 离开当前 Profile 前，ProfileDeck 会在可以安全保存时保留有效的刷新登录或 Codex 设置。内容缺失、无效或不受支持时，ProfileDeck 会报告问题，不会静默保存。
 

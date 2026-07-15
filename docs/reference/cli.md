@@ -18,7 +18,7 @@ This value is the parent config directory. ProfileDeck creates or uses its `prof
 
 | Command | Use it to |
 | --- | --- |
-| `antigravity` | Save and manage Antigravity agy v2 Profiles. |
+| `antigravity` | Save and manage Antigravity Profiles. |
 | `backup` | List or inspect switch backups. |
 | `claude-code` | Save and manage official Claude Code subscription Profiles. |
 | `codex` | Manage Codex Profiles and saved settings (Config Sets). |
@@ -93,7 +93,7 @@ There is no `claude` alias. Switch with `profiledeck plan claude-code <profile-i
 
 See [Claude Code Profiles](../claude-code/profiles.md) for login requirements and verification.
 
-## Antigravity agy v2
+## Antigravity
 
 ```bash
 profiledeck antigravity detect [--json]
@@ -104,7 +104,7 @@ profiledeck antigravity profile update <profile-id> [--name NAME] [--description
 profiledeck antigravity profile save-current [--json]
 ```
 
-`agy` is an alias for `antigravity`. `create` and `save-current` require a valid consumer OAuth login from Antigravity agy v2. Output shows safe metadata and never prints login values.
+`agy` is an alias for `antigravity`. `create` and `save-current` require a valid current Antigravity consumer OAuth login. Output shows safe metadata and never prints login values.
 
 See [Antigravity Profiles](../antigravity/profiles.md) for compatibility and switching advice.
 

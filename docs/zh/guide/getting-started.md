@@ -46,7 +46,7 @@ ProfileDeck 会在该目录下创建 `profiledeck` 文件夹。
 
 - **Codex：**确认 `CODEX_HOME` 或 `~/.codex` 中存在 `config.toml` 和 `auth.json`。如果缺少 `auth.json`，请完成 [Codex 前置设置](../codex/profiles.md#开始前准备)。
 - **Claude Code：**在 Claude Code 中运行 `/login`，登录官方订阅账号。
-- **Antigravity：**通过 Antigravity agy v2 登录。
+- **Antigravity：**登录 Antigravity，并确认可以正常使用。
 
 在桌面端选择工具，然后使用 Profiles 页面中的保存操作。输入创建后不会改变的 Profile ID 和用于显示的名称。要保存另一个账号，请先在对应工具中切换登录，再回到 ProfileDeck 保存另一个 Profile。
 

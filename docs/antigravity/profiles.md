@@ -1,14 +1,13 @@
 # Antigravity Profiles
 
-ProfileDeck can save and switch the consumer OAuth login used by Antigravity agy v2. It does not sign you in to Antigravity.
+ProfileDeck can save and switch an Antigravity consumer OAuth login stored in the operating system credential store. It does not sign you in to Antigravity.
 
 ## Before you start
 
-1. Use Antigravity agy v2.
-2. Sign in through Antigravity and confirm that it works.
-3. Start ProfileDeck, or run `profiledeck init` if you use the CLI.
+1. Sign in to Antigravity and confirm that it works.
+2. Start ProfileDeck, or run `profiledeck init` if you use the CLI.
 
-Legacy Antigravity storage and other Antigravity versions are not supported.
+Legacy Antigravity storage is not supported.
 
 ## Save a Profile in the Desktop app
 
@@ -64,4 +63,4 @@ In the Desktop app, open the current Profile and select **Update from Current An
 
 ## What is not supported
 
-ProfileDeck does not provide Antigravity sign-in, legacy-storage migration, Manager import, quota checks, usage attribution, or support for Antigravity versions other than agy v2.
+ProfileDeck does not manage Antigravity sign-in, settings, legacy-storage migration, Manager data, quotas, usage attribution, or separate login files used by SSH or container sessions.

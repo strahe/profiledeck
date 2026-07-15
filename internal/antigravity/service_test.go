@@ -441,7 +441,7 @@ func TestAntigravityCreateCanAttachToExistingGlobalProfile(t *testing.T) {
 	assertErrorCode(t, err, apperror.ProfileAlreadyExists)
 }
 
-func TestAntigravityCreateAndSaveRequireCurrentAgyV2Login(t *testing.T) {
+func TestAntigravityCreateAndSaveRequireCurrentConsumerOAuthLogin(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	if _, err := initAntigravityTestRuntime(ctx, configDir); err != nil {

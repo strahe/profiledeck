@@ -17,7 +17,7 @@ The Desktop Alpha requires macOS 14 or later on Apple silicon. The CLI requires 
 | --- | --- | --- |
 | Codex | A saved login and reusable user-level settings | Sessions, logs, skills, project settings, and system policy |
 | Claude Code | An official subscription login | Claude Code settings, plugins, API keys, cloud providers, and Claude Desktop |
-| Antigravity | The consumer OAuth login used by Antigravity agy v2 | Login flow, quotas, Manager data, and other Antigravity versions |
+| Antigravity | A consumer OAuth login | Sign-in flow, settings, quotas, Manager data, and SSH or container login files |
 
 Codex usage reports are separate from Profile switching. They summarize local session data without assigning activity to a Profile or account.
 

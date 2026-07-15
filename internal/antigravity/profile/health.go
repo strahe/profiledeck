@@ -15,7 +15,7 @@ import (
 // target backend selection or external credential-store access.
 type TargetInspector func(context.Context, switchtarget.Spec) (switchtarget.Snapshot, error)
 
-// InspectHealth validates agy v2 resource bindings and the active credential-store working copy.
+// InspectHealth validates preset version 2 resource bindings and the active credential-store working copy.
 func InspectHealth(ctx context.Context, db *store.Store, inspect TargetInspector) []doctorcore.Finding {
 	if db == nil {
 		return nil
@@ -31,7 +31,7 @@ func InspectHealth(ctx context.Context, db *store.Store, inspect TargetInspector
 	if err := ValidateProvider(provider); err != nil {
 		findings = append(findings, doctorcore.Finding{
 			ID: "antigravity_agy_v2_invalid", Level: doctorcore.LevelError,
-			Message: "Antigravity provider is not compatible with agy v2",
+			Message: "Saved Antigravity setup is not supported by this version of ProfileDeck",
 		})
 	}
 	bindings, err := db.ListProfileCredentialBindingsByProvider(ctx, agyconfig.ProviderID)
@@ -98,13 +98,13 @@ func InspectHealth(ctx context.Context, db *store.Store, inspect TargetInspector
 	if !snapshot.Exists {
 		return append(findings, doctorcore.Finding{
 			ID: "antigravity_login_missing", Level: doctorcore.LevelWarning,
-			Message: "Antigravity is not signed in with agy v2",
+			Message: "Antigravity is not signed in",
 		})
 	}
 	if _, _, err := agyauth.Normalize([]byte(snapshot.Content)); err != nil {
 		findings = append(findings, doctorcore.Finding{
 			ID: "antigravity_login_invalid", Level: doctorcore.LevelError,
-			Message: "Antigravity login is not compatible with agy v2",
+			Message: "Antigravity login is not supported by ProfileDeck",
 		})
 	}
 	return findings

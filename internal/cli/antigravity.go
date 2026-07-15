@@ -16,14 +16,14 @@ func newAntigravityCommand() *urfavecli.Command {
 	return &urfavecli.Command{
 		Name:     "antigravity",
 		Aliases:  []string{"agy"},
-		Usage:    "Manage Antigravity agy v2 profiles",
+		Usage:    "Manage Antigravity Profiles",
 		Commands: []*urfavecli.Command{newAntigravityDetectCommand(), newAntigravityProfileCommand()},
 	}
 }
 
 func newAntigravityDetectCommand() *urfavecli.Command {
 	return &urfavecli.Command{
-		Name: "detect", Usage: "Detect the Antigravity agy v2 login",
+		Name: "detect", Usage: "Detect the current Antigravity login",
 		Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
 			application, err := applicationFor(cmd)
@@ -44,7 +44,7 @@ func newAntigravityDetectCommand() *urfavecli.Command {
 
 func newAntigravityProfileCommand() *urfavecli.Command {
 	return &urfavecli.Command{
-		Name: "profile", Usage: "Manage Antigravity agy v2 profiles",
+		Name: "profile", Usage: "Manage Antigravity Profiles",
 		Commands: []*urfavecli.Command{
 			newAntigravityProfileListCommand(), newAntigravityProfileShowCommand(),
 			newAntigravityProfileCreateCommand(), newAntigravityProfileUpdateCommand(),
@@ -101,7 +101,7 @@ func newAntigravityProfileShowCommand() *urfavecli.Command {
 
 func newAntigravityProfileCreateCommand() *urfavecli.Command {
 	return &urfavecli.Command{
-		Name: "create", Usage: "Save and activate the current agy v2 login as a Profile", ArgsUsage: "<profile-id>",
+		Name: "create", Usage: "Save and activate the current Antigravity login as a Profile", ArgsUsage: "<profile-id>",
 		Flags: []urfavecli.Flag{
 			stringFlag(nameFlagName, "Profile display name"), stringFlag(descriptionFlagName, "Profile description"),
 			boolFlag(jsonFlagName, "Write JSON output"),
@@ -163,7 +163,7 @@ func newAntigravityProfileUpdateCommand() *urfavecli.Command {
 
 func newAntigravityProfileSaveCurrentCommand() *urfavecli.Command {
 	return &urfavecli.Command{
-		Name: "save-current", Usage: "Save the current agy v2 login into the active Antigravity Profile",
+		Name: "save-current", Usage: "Save the current Antigravity login into the active Antigravity Profile",
 		Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
 			application, err := applicationFor(cmd)
@@ -183,7 +183,7 @@ func newAntigravityProfileSaveCurrentCommand() *urfavecli.Command {
 }
 
 func writeAntigravityDetect(w io.Writer, result antigravity.AntigravityDetectResult) error {
-	if _, err := fmt.Fprintf(w, "Antigravity agy v2\nlogin: %s\nprovider: %s\ncompatible: %t\n", result.CredentialStatus, result.ProviderID, result.ProviderCompatible); err != nil {
+	if _, err := fmt.Fprintf(w, "Antigravity\nlogin: %s\nprovider: %s\ncompatible: %t\n", result.CredentialStatus, result.ProviderID, result.ProviderCompatible); err != nil {
 		return err
 	}
 	return writeWarnings(w, result.Warnings)

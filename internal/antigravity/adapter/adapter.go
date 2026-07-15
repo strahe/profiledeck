@@ -128,7 +128,7 @@ func (Adapter) Finalize(_ context.Context, input switchplan.Input, preparedResul
 	if before.Exists {
 		normalized, _, err := agyauth.Normalize([]byte(before.Content))
 		if err != nil {
-			return switchplan.Result{}, apperror.New(apperror.AntigravityInvalid, "current Antigravity login is not compatible with agy v2")
+			return switchplan.Result{}, apperror.New(apperror.AntigravityInvalid, "current Antigravity login is not supported by ProfileDeck")
 		}
 		currentPayload = normalized
 		currentValid = true
