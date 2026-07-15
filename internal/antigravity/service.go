@@ -11,6 +11,7 @@ import (
 	agyauth "github.com/strahe/profiledeck/internal/antigravity/auth"
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	agyprofile "github.com/strahe/profiledeck/internal/antigravity/profile"
+	agyquota "github.com/strahe/profiledeck/internal/antigravity/quota"
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/maintenance"
 	profilecore "github.com/strahe/profiledeck/internal/profile"
@@ -24,12 +25,25 @@ type Service struct {
 	runtime     *runtime.Service
 	stores      store.Factory
 	maintenance maintenance.Runner
+	sharedLock  maintenance.SharedLockRunner
 	policy      agent.Policy
 	targets     switchtarget.Registry
+	quotaReader agyquota.Reader
+	now         func() time.Time
 }
 
-func NewService(runtimeService *runtime.Service, stores store.Factory, maintenance maintenance.Runner, policy agent.Policy, targets switchtarget.Registry) *Service {
-	return &Service{runtime: runtimeService, stores: stores, maintenance: maintenance, policy: policy, targets: targets}
+func NewService(
+	runtimeService *runtime.Service,
+	stores store.Factory,
+	maintenanceRunner maintenance.Runner,
+	sharedLock maintenance.SharedLockRunner,
+	policy agent.Policy,
+	targets switchtarget.Registry,
+) *Service {
+	return &Service{
+		runtime: runtimeService, stores: stores, maintenance: maintenanceRunner, sharedLock: sharedLock,
+		policy: policy, targets: targets, quotaReader: agyquota.NewClient(), now: time.Now,
+	}
 }
 
 type AntigravityProfileSummary struct {

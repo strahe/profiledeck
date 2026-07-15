@@ -32,10 +32,14 @@ type fakeKeyringClient struct {
 	setErr     error
 	setThenErr bool
 	getCalls   int
+	onGet      func()
 }
 
 func (client *fakeKeyringClient) Get(_, _ string) (string, error) {
 	client.getCalls++
+	if client.onGet != nil {
+		client.onGet()
+	}
 	if client.getErr != nil {
 		return "", client.getErr
 	}

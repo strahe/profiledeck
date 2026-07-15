@@ -206,8 +206,21 @@ func TestAntigravityProfileCLIUsesAntigravityKeyringState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected Antigravity list to succeed, got %v", err)
 	}
+	humanList, err := runCLI(t, "--config-dir", configDir, "antigravity", "profile", "list")
+	if err != nil {
+		t.Fatalf("expected Antigravity human-readable list to succeed, got %v", err)
+	}
+	humanDetail, err := runCLI(t, "--config-dir", configDir, "antigravity", "profile", "show", "work")
+	if err != nil {
+		t.Fatalf("expected Antigravity human-readable detail to succeed, got %v", err)
+	}
+	for _, output := range []string{humanList, humanDetail} {
+		if strings.Contains(output, "expires:") {
+			t.Fatalf("expected short-lived token expiry to stay out of human-readable login output, got %q", output)
+		}
+	}
 	for _, secret := range []string{"cli-access-secret", "cli-refresh-secret", "access_token", "refresh_token"} {
-		if strings.Contains(createdRaw, secret) || strings.Contains(listed, secret) {
+		if strings.Contains(createdRaw, secret) || strings.Contains(listed, secret) || strings.Contains(humanList, secret) || strings.Contains(humanDetail, secret) {
 			t.Fatalf("expected Antigravity output to hide %q", secret)
 		}
 	}

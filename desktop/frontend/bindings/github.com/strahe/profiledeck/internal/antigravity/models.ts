@@ -23,6 +23,25 @@ export interface AntigravityProfileListResult {
     "profiles": AntigravityProfileSummary[] | null;
 }
 
+export interface AntigravityProfileQuota {
+    "profile_id": string;
+    "credential_id": string;
+    "status": AntigravityProfileQuotaStatus;
+    "snapshot"?: AntigravityQuotaSnapshot | null;
+}
+
+export enum AntigravityProfileQuotaStatus {
+    /**
+     * The Go zero value for the underlying type of the enum.
+     */
+    $zero = "",
+
+    AntigravityProfileQuotaAvailable = "available",
+    AntigravityProfileQuotaInactive = "inactive",
+    AntigravityProfileQuotaAuthRequired = "auth_required",
+    AntigravityProfileQuotaUnavailable = "unavailable",
+};
+
 export interface AntigravityProfileSaveResult {
     "operation_id": string;
     "summary": AntigravityProfileSummary;
@@ -39,4 +58,21 @@ export interface AntigravityProfileSummary {
     "active_operation_id"?: string;
     "updated_at_unix_ms": number;
     "warnings"?: string[] | null;
+}
+
+export interface AntigravityQuotaBucket {
+    "bucket_id": string;
+    "window": string;
+    "remaining_percent": number;
+    "reset_at_unix_seconds": number;
+}
+
+export interface AntigravityQuotaGroup {
+    "display_name": string;
+    "buckets": AntigravityQuotaBucket[] | null;
+}
+
+export interface AntigravityQuotaSnapshot {
+    "fetched_at_unix_ms": number;
+    "groups": AntigravityQuotaGroup[] | null;
 }

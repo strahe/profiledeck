@@ -97,7 +97,7 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 
 	codexService := codex.NewService(runtimeService, switchingService, switchingService, agentService, config.CodexDir)
 	antigravityService := antigravity.NewService(
-		runtimeService, stores, switchingService, agentService, dependencies.switching.Targets,
+		runtimeService, stores, switchingService, switchingService, agentService, dependencies.switching.Targets,
 	)
 	claudeCodeService := claudecode.NewService(
 		runtimeService, stores, switchingService, agentService, dependencies.switching.Targets,

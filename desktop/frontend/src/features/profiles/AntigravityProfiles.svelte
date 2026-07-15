@@ -24,11 +24,13 @@
 	import type {
 		AntigravityDetectResult,
 		AntigravityProfileDetail,
+		AntigravityProfileQuota,
 		AntigravityProfileSummary,
 	} from "../../../bindings/github.com/strahe/profiledeck/internal/antigravity/models";
 	import type { SwitchPlan } from "../../../bindings/github.com/strahe/profiledeck/internal/switching/models";
 
 	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
+	import IconAction from "$lib/components/app/IconAction.svelte";
 	import PageHeader from "$lib/components/app/PageHeader.svelte";
 	import InfoTooltip from "$lib/components/app/InfoTooltip.svelte";
 	import StatusBadge from "$lib/components/app/StatusBadge.svelte";
@@ -47,11 +49,15 @@
 	import { Spinner } from "$lib/components/ui/spinner";
 	import { Textarea } from "$lib/components/ui/textarea";
 	import { desktopErrorMessage, isCancelError, isDesktopErrorCode } from "$lib/desktop-errors";
-	import { currentDesktopLocale, translate } from "$lib/i18n";
+	import { translate } from "$lib/i18n";
 	import { cn } from "$lib/utils";
 	import { joinUserMessages, profileChangeWarningMessage, profileWarningMessage } from "$lib/user-facing-messages";
 
+	import AntigravityQuotaCard from "./AntigravityQuotaCard.svelte";
+	import AntigravityQuotaSummary from "./AntigravityQuotaSummary.svelte";
+	import ProfileQuotaFreshness from "./ProfileQuotaFreshness.svelte";
 	import UseProfileDialog from "./UseProfileDialog.svelte";
+	import type { AntigravityQuotaCheck } from "./antigravity-quota.svelte.js";
 	import type { AntigravityProfileRoute, ProfileUseRequest, SwitchProfileItem } from "./types";
 
 	interface Props {
@@ -65,6 +71,10 @@
 		useRequest: ProfileUseRequest | null;
 		refreshDetect: () => Promise<AntigravityDetectResult | null>;
 		refreshProfiles: () => Promise<void>;
+		quotaForSummary: (summary: AntigravityProfileSummary) => AntigravityProfileQuota | null;
+		quotaCheckForSummary: (summary: AntigravityProfileSummary) => AntigravityQuotaCheck;
+		quotaLoading: (profileID: string) => boolean;
+		refreshQuota: (profileID: string) => Promise<AntigravityProfileQuota | null>;
 		onUseRequestHandled: (sequence: number) => void;
 		showError: (value: unknown) => void;
 		showNotice: (title: string, description: string) => void;
@@ -72,7 +82,8 @@
 
 	let {
 		route, profiles, detectResult, detectError, activeProfileID, loadingProfiles, profileError,
-		useRequest, refreshDetect, refreshProfiles, onUseRequestHandled, showError, showNotice,
+		useRequest, refreshDetect, refreshProfiles, quotaForSummary, quotaCheckForSummary, quotaLoading,
+		refreshQuota, onUseRequestHandled, showError, showNotice,
 	}: Props = $props();
 
 	const providerID = "antigravity";
@@ -84,6 +95,7 @@
 	let detailError = $state("");
 	let routeKey = "";
 	let routeSequence = 0;
+	let nowUnixMS = $state(Date.now());
 
 	let profileID = $state("");
 	let profileName = $state("");
@@ -137,7 +149,15 @@
 		void openUseByProfileID(useRequest.profileID).finally(() => onUseRequestHandled(useRequest.sequence));
 	});
 
-	onMount(() => () => cancelAll());
+	onMount(() => {
+		const timer = window.setInterval(() => {
+			nowUnixMS = Date.now();
+		}, 60_000);
+		return () => {
+			window.clearInterval(timer);
+			cancelAll();
+		};
+	});
 
 	async function enterRoute(next: AntigravityProfileRoute) {
 		const sequence = ++routeSequence;
@@ -271,6 +291,7 @@
 		const sequence = useSequence;
 		useApplying = true;
 		try {
+			const activatedProfileID = useProfile.id;
 			const result = await track("antigravity-use-apply", SwitchService.Apply({
 				provider_id: providerID,
 				profile_id: useProfile.id,
@@ -279,7 +300,11 @@
 			}));
 			if (sequence !== useSequence) return;
 			closeUse();
-			await Promise.all([refreshProfiles(), refreshDetect()]);
+			await Promise.all([
+				refreshProfiles(),
+				refreshDetect(),
+				detail ? loadDetail(activatedProfileID) : Promise.resolve(),
+			]);
 			showNotice(translate("antigravity.notice.switchedTitle"), translate("antigravity.notice.switchedDescription", { profile: result.profile.name || result.profile.id }));
 		} catch (error) {
 			if (sequence !== useSequence || isCancelError(error)) return;
@@ -352,11 +377,6 @@
 		if (detectResult && !detectResult.profiledeck_initialized) return translate("antigravity.source.notInitialized");
 		if (detectResult && !detectResult.provider_compatible) return translate("antigravity.source.incompatible");
 		return translate(`antigravity.source.${detectResult?.credential_status || "missing"}`);
-	}
-
-	function formatExpiry(value: number | undefined): string {
-		if (!value) return translate("antigravity.detail.unknownExpiry");
-		return new Date(value).toLocaleString(currentDesktopLocale(), { dateStyle: "medium", timeStyle: "short" });
 	}
 
 	function showID(summary: AntigravityProfileSummary): boolean {
@@ -452,6 +472,9 @@
 					</Empty.Root>
 				{:else}
 					{#each profiles as summary, index (summary.profile.id)}
+						{@const quota = quotaForSummary(summary)}
+						{@const quotaCheck = quotaCheckForSummary(summary)}
+						{@const isQuotaLoading = quotaLoading(summary.profile.id)}
 						<div class={cn("flex flex-col gap-2.5 px-4 py-3", summary.active && "bg-primary/5 ring-1 ring-inset ring-primary/20")}>
 							<div class="flex min-w-0 items-center gap-4">
 								<div class="flex min-w-0 flex-1 flex-wrap items-center gap-2">
@@ -464,7 +487,17 @@
 									{#if summary.warnings?.length}<StatusBadge tone="warning">{$_("status.warning")}</StatusBadge>{/if}
 								</div>
 
-							<div class="ml-auto flex shrink-0 items-center gap-2">
+								<div class="ml-auto flex shrink-0 items-center gap-2">
+									<ProfileQuotaFreshness checkedAtUnixMS={quotaCheck.checkedAtUnixMS} checkOutcome={quotaCheck.outcome} {nowUnixMS} />
+									{#if summary.active}
+										<IconAction
+											label={$_("actions.refreshProfileQuota", { values: { profile: summary.profile.name || $_("profile.unnamed") } })}
+											disabled={isQuotaLoading}
+											onclick={() => { void refreshQuota(summary.profile.id); }}
+										>
+											{#if isQuotaLoading}<Spinner />{:else}<RefreshCwIcon />{/if}
+										</IconAction>
+									{/if}
 									{#if !summary.active || activeLoginMissing}
 										<Button size="sm" disabled={!switchReady || !!busyAction || useBuilding || useApplying} onclick={() => openUse({ id: summary.profile.id, name: summary.profile.name || $_("profile.unnamed") })}>{$_("actions.useProfile")}</Button>
 									{/if}
@@ -481,7 +514,7 @@
 									</DropdownMenu.Root>
 								</div>
 							</div>
-							<div class="text-sm text-muted-foreground">{$_("antigravity.detail.expiry")}: {formatExpiry(summary.expires_at_unix_ms)}</div>
+							<AntigravityQuotaSummary {quota} loading={isQuotaLoading} {nowUnixMS} />
 
 							{#if summary.warnings?.length}
 								<Alert.Root>
@@ -540,6 +573,9 @@
 {:else if detailError || !detail}
 	<div class="mx-auto w-full max-w-3xl"><Alert.Root variant="destructive"><TriangleAlertIcon data-icon="inline-start" /><Alert.Title>{$_("profilePages.errorTitle")}</Alert.Title><Alert.Description>{detailError || $_("errors.profileNotReady")}</Alert.Description></Alert.Root></div>
 {:else}
+	{@const detailQuota = quotaForSummary(detail.summary)}
+	{@const detailQuotaCheck = quotaCheckForSummary(detail.summary)}
+	{@const detailQuotaLoading = quotaLoading(detail.summary.profile.id)}
 	<div class="mx-auto flex w-full max-w-3xl flex-col gap-4">
 		<Button class="self-start" variant="ghost" onclick={() => push("/antigravity/profiles")}><ArrowLeftIcon data-icon="inline-start" />{$_("actions.backToProfiles")}</Button>
 		{#if (detectResult !== null || !!detectError) && !sourceReady}
@@ -559,7 +595,7 @@
 			<Card.Content class="flex flex-col gap-4">
 				<dl class="grid gap-4 text-sm sm:grid-cols-2">
 					<div class="flex flex-col gap-1"><dt class="text-muted-foreground">{$_("profilePages.form.profileID")}</dt><dd class="font-mono">{detail.summary.profile.id}</dd></div>
-					<div class="flex flex-col gap-1"><dt class="text-muted-foreground">{$_("antigravity.detail.expiry")}</dt><dd>{formatExpiry(detail.summary.expires_at_unix_ms)}</dd></div>
+					<div class="flex flex-col gap-1"><dt class="text-muted-foreground">{$_("antigravity.detail.loginSource")}</dt><dd>{detail.summary.active ? $_("antigravity.detail.currentLogin") : $_("antigravity.detail.savedLogin")}</dd></div>
 					<div class="flex flex-col gap-1"><dt class="text-muted-foreground">{$_("antigravity.detail.references")}</dt><dd>{detail.summary.credential_reference_count}</dd></div>
 				</dl>
 				{#if detail.summary.warnings?.length}
@@ -572,6 +608,15 @@
 					<Button disabled={!switchReady || (detail.summary.active && !activeLoginMissing) || !!busyAction || useBuilding || useApplying} onclick={() => openUse({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || $_("profile.unnamed") })}>{$_("actions.useProfile")}</Button>
 			</Card.Footer>
 		</Card.Root>
+		<AntigravityQuotaCard
+			quota={detailQuota}
+			loading={detailQuotaLoading}
+			active={detail.summary.active}
+			checkedAtUnixMS={detailQuotaCheck.checkedAtUnixMS}
+			checkOutcome={detailQuotaCheck.outcome}
+			{nowUnixMS}
+			onRefresh={() => { void refreshQuota(detail!.summary.profile.id); }}
+		/>
 	</div>
 {/if}
 

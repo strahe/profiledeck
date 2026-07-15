@@ -21,6 +21,8 @@ The Desktop Alpha requires macOS 14 or later on Apple silicon. The CLI requires 
 
 Codex usage reports are separate from Profile switching. They summarize local session data without assigning activity to a Profile or account.
 
+The Desktop app can also show temporary usage-limit snapshots for the current Codex or Antigravity Profile. These checks do not change limits or add activity attribution.
+
 ## What happens when you switch
 
 1. Review what will change. Login values remain hidden.

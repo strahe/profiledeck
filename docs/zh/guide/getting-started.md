@@ -12,7 +12,7 @@
 
 1. 从 [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases) 下载最新的 macOS arm64 ZIP。
 2. 解压后，把 `ProfileDeck.app` 移到“应用程序”文件夹。
-3. 打开 ProfileDeck。应用会自动创建本地数据。如果已有当前 Codex Profile，启动时还会检查其限额；Codex 可能在检查过程中刷新已保存登录。
+3. 打开 ProfileDeck。应用会自动创建本地数据。如果已有当前 Codex 或 Antigravity Profile，启动时还会检查其限额。Codex 可能在检查过程中刷新已保存登录；Antigravity 检查只读取数据。
 4. 在侧栏选择 Codex、Claude Code 或 Antigravity，然后打开 **Profiles**。
 
 当前 Alpha 尚未通过 Apple 公证。如果 macOS 阻止首次启动，请打开**系统设置 → 隐私与安全性**，对 ProfileDeck 选择**仍要打开**。只有确认文件来自官方 Releases 页面时才执行此操作。

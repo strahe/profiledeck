@@ -12,7 +12,7 @@ Use the macOS Desktop app for a visual workflow, or build the CLI for terminal u
 
 1. Download the latest macOS arm64 ZIP from [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases).
 2. Expand the ZIP and move `ProfileDeck.app` to Applications.
-3. Open ProfileDeck. The app creates its local data automatically. If you already have a current Codex Profile, startup also checks its limits; Codex may refresh the saved login during that check.
+3. Open ProfileDeck. The app creates its local data automatically. If you already have a current Codex or Antigravity Profile, startup also checks its limits. Codex may refresh its saved login during that check; Antigravity checks are read-only.
 4. Select Codex, Claude Code, or Antigravity in the sidebar, then open **Profiles**.
 
 Current Alpha builds are not notarized. If macOS blocks the first launch, open **System Settings → Privacy & Security** and choose **Open Anyway** for ProfileDeck. Only do this for a file you downloaded from the official Releases page.

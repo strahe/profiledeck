@@ -57,6 +57,7 @@ ProfileDeck 的大部分操作只使用本地数据。
 
 - 用量同步和报告读取本地 Codex 会话文件，不会请求计费服务。
 - Codex 限额查询会使用所选的已保存登录连接 Codex 或 OpenAI。该登录绝不会发送到已保存 Codex 设置中的自定义模型服务地址。限额结果是临时数据，不会写入用量报告。
+- Antigravity 限额检查会把当前 Antigravity 访问令牌发送到用于检查的固定 Google Cloud Code 服务。检查过程中，ProfileDeck 不会刷新或保存令牌。结果只保留在应用内存中，不会写入数据库、用量报告、导出或备份。
 - 桌面端更新检查和下载会连接 GitHub 上公开的 ProfileDeck Release。
 
 ProfileDeck 不提供云同步，也不会发送遥测或分析数据。Codex 自动限额刷新和登录续期默认关闭，而且只会在桌面端打开或驻留菜单栏时运行。

@@ -99,6 +99,7 @@ desktop-frontend-install:
 
 desktop-frontend-check: desktop-frontend-install
 	npm --prefix $(DESKTOP_FRONTEND) run check
+	npm --prefix $(DESKTOP_FRONTEND) run test:unit
 
 desktop-frontend-build: desktop-frontend-install
 	npm --prefix $(DESKTOP_FRONTEND) run build

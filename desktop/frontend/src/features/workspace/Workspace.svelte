@@ -47,6 +47,8 @@
 		type DesktopLanguage,
 	} from "$lib/i18n";
 	import AntigravityProfiles from "../profiles/AntigravityProfiles.svelte";
+	import { AntigravityQuotaReadPolicy } from "../profiles/antigravity-quota-policy.js";
+	import { AntigravityQuotaController } from "../profiles/antigravity-quota.svelte.js";
 	import CodexProfiles from "../profiles/CodexProfiles.svelte";
 	import ClaudeCodeProfiles from "../profiles/ClaudeCodeProfiles.svelte";
 	import type { AntigravityProfileRoute, ClaudeCodeProfileRoute, CodexProfileRoute, ProfileUseRequest } from "../profiles/types";
@@ -65,6 +67,8 @@
 		kind: string;
 		status?: string;
 		error?: DesktopError | null;
+		profile_id?: string;
+		operation_id?: string;
 		profile_changed?: boolean;
 		config_sets_changed?: boolean;
 		active_state_changed?: boolean;
@@ -151,9 +155,11 @@
 	let antigravityUseRequest = $state<ProfileUseRequest | null>(null);
 	let claudeCodeUseRequest = $state<ProfileUseRequest | null>(null);
 	let useRequestSequence = 0;
-	let startupQuotaReadStarted = false;
+	let codexStartupQuotaReadStarted = false;
 
 	const codexRuntime = provideCodexRuntime({ showError, showNotice });
+	const antigravityQuota = new AntigravityQuotaController({ showError });
+	const antigravityQuotaReadPolicy = new AntigravityQuotaReadPolicy();
 	let workspaceRoute = $derived(parseWorkspaceRoute(currentPath));
 	let agentWorkspace = $derived(isAgentWorkspace(workspaceRoute.view));
 	let selectedAgent = $derived<AgentID | null>(workspaceRoute.view === "antigravity-profiles" ? "antigravity" : workspaceRoute.view === "claude-code-profiles" ? "claude-code" : agentWorkspace ? "codex" : null);
@@ -196,6 +202,11 @@
 	});
 
 	$effect(() => {
+		const profiles = antigravityProfileSummaries;
+		untrack(() => antigravityQuota.setProfiles(profiles));
+	});
+
+	$effect(() => {
 		const version = updateStatus.state === "ready" ? updateStatus.available_version : "";
 		const busy = actionBusy || updateBusy;
 		if (version && !busy && promptedUpdateVersion !== version) {
@@ -208,8 +219,8 @@
 
 	$effect(() => {
 		const profileID = codexActiveProfileID;
-		if (!profileID || startupQuotaReadStarted) return;
-		startupQuotaReadStarted = true;
+		if (!profileID || codexStartupQuotaReadStarted) return;
+		codexStartupQuotaReadStarted = true;
 		untrack(() => { void codexRuntime.readQuota(profileID); });
 	});
 
@@ -273,6 +284,7 @@
 			window.removeEventListener("hashchange", syncPath);
 			for (const dispose of off) dispose();
 			stopRuntime();
+			antigravityQuota.stop();
 			cancelAll();
 		};
 	});
@@ -282,6 +294,11 @@
 		try {
 			const dashboardResult = await track("dashboard", AppService.Dashboard());
 			applyDashboardResult(dashboardResult);
+			antigravityQuota.setProfiles(antigravityProfileSummaries);
+			const startupProfileID = antigravityQuotaReadPolicy.startup(
+				dashboardResult.active_states?.find((state) => state.provider_id === antigravityProviderID)?.profile_id ?? "",
+			);
+			if (startupProfileID) void antigravityQuota.readQuota(startupProfileID);
 			dashboardError = "";
 
 			const tasks: Promise<unknown>[] = [];
@@ -583,6 +600,11 @@
 	function handleDashboardUpdate(payload: DashboardUpdatePayload | null | undefined) {
 		if (!payload) return;
 		if (payload.dashboard) applyDashboardResult(payload.dashboard);
+		const switchedProfileID = antigravityQuotaReadPolicy.afterSwitch(payload.event);
+		if (switchedProfileID) {
+			antigravityQuota.setProfiles(antigravityProfileSummaries);
+			void antigravityQuota.readQuota(switchedProfileID);
+		}
 		if (payload.error && !isCancelError(payload.error)) showError(payload.error);
 		if (payload.event?.error && !isCancelError(payload.event.error)) showError(payload.event.error);
 		if (payload.event?.profile_changed || payload.event?.active_state_changed) {
@@ -600,12 +622,13 @@
 		if (!agentEnabled(next.agents ?? [], "codex")) {
 			detectResult = null;
 			detectError = "";
-			startupQuotaReadStarted = false;
+			codexStartupQuotaReadStarted = false;
 			codexRuntime.reset();
 		}
 		if (!agentEnabled(next.agents ?? [], "antigravity")) {
 			antigravityDetectResult = null;
 			antigravityDetectError = "";
+			antigravityQuota.reset("agent-disabled");
 		}
 		if (!agentEnabled(next.agents ?? [], "claude-code")) {
 			claudeCodeDetectResult = null;
@@ -968,6 +991,10 @@
 						useRequest={antigravityUseRequest}
 						refreshDetect={refreshAntigravityDetect}
 						refreshProfiles={refreshAntigravityProfiles}
+						quotaForSummary={(summary) => antigravityQuota.quotaForSummary(summary)}
+						quotaCheckForSummary={(summary) => antigravityQuota.checkForSummary(summary)}
+						quotaLoading={(profileID) => antigravityQuota.isLoading(profileID)}
+						refreshQuota={(profileID) => antigravityQuota.readQuota(profileID)}
 						onUseRequestHandled={(sequence) => { if (antigravityUseRequest?.sequence === sequence) antigravityUseRequest = null; }}
 						{showError}
 						{showNotice}

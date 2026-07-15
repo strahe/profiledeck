@@ -53,7 +53,7 @@ ProfileDeck checks the current login again and creates a private backup before c
 
 ## Save a refreshed login
 
-Antigravity may refresh its login while it runs. ProfileDeck saves a valid refreshed login when you switch away from the current Profile. You can also save it explicitly:
+Antigravity may refresh its login while it runs. The short-lived access-token expiry does not describe how long a saved Profile can be reused, so ProfileDeck does not present it as a login expiry. ProfileDeck saves a valid refreshed login when you switch away from the current Profile. You can also save it explicitly:
 
 ```bash
 profiledeck antigravity profile save-current
@@ -61,6 +61,14 @@ profiledeck antigravity profile save-current
 
 In the Desktop app, open the current Profile and select **Update from Current Antigravity**.
 
+## Check usage limits
+
+The Desktop app checks the current Antigravity Profile once at startup and after a successful switch. Select **Refresh limits** on the current Profile to check again. ProfileDeck does not poll in the background.
+
+The Profile list shows a compact summary. Profile details show each available group, its 5-hour and weekly windows, remaining percentage, reset time, and check time. A non-current Profile can keep a snapshot checked earlier in the same app session, but you must use that Profile before refreshing it.
+
+Limit snapshots are temporary. They are not saved to usage reports, exports, backups, or the ProfileDeck database, and they do not identify which Profile produced earlier Antigravity activity.
+
 ## What is not supported
 
-ProfileDeck does not manage Antigravity sign-in, settings, legacy-storage migration, Manager data, quotas, usage attribution, or separate login files used by SSH or container sessions.
+ProfileDeck does not manage Antigravity sign-in, settings, legacy-storage migration, Manager data, model-level limit details, usage attribution, or separate login files used by SSH or container sessions. Antigravity limit checks are available only in the Desktop app.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"time"
 
 	urfavecli "github.com/urfave/cli/v3"
 
@@ -202,8 +201,8 @@ func writeAntigravityProfileList(w io.Writer, result antigravity.AntigravityProf
 		if profile.Active {
 			status = "active"
 		}
-		if _, err := fmt.Fprintf(w, "- %s name: %s status: %s expires: %s references: %d updated: %d\n",
-			profile.Profile.ID, profile.Profile.Name, status, formatAntigravityExpiry(profile.ExpiresAtUnixMS),
+		if _, err := fmt.Fprintf(w, "- %s name: %s status: %s references: %d updated: %d\n",
+			profile.Profile.ID, profile.Profile.Name, status,
 			profile.CredentialReferenceCount, profile.UpdatedAtUnixMS); err != nil {
 			return err
 		}
@@ -216,8 +215,8 @@ func writeAntigravityProfileList(w io.Writer, result antigravity.AntigravityProf
 
 func writeAntigravityProfileDetail(w io.Writer, detail antigravity.AntigravityProfileDetail) error {
 	summary := detail.Summary
-	if _, err := fmt.Fprintf(w, "Antigravity profile\nprofile: %s\nname: %s\nactive: %t\nexpires: %s\nlogin references: %d\nupdated: %d\n",
-		summary.Profile.ID, summary.Profile.Name, summary.Active, formatAntigravityExpiry(summary.ExpiresAtUnixMS),
+	if _, err := fmt.Fprintf(w, "Antigravity profile\nprofile: %s\nname: %s\nactive: %t\nlogin references: %d\nupdated: %d\n",
+		summary.Profile.ID, summary.Profile.Name, summary.Active,
 		summary.CredentialReferenceCount, summary.UpdatedAtUnixMS); err != nil {
 		return err
 	}
@@ -225,17 +224,10 @@ func writeAntigravityProfileDetail(w io.Writer, detail antigravity.AntigravityPr
 }
 
 func writeAntigravityProfileSave(w io.Writer, title string, result antigravity.AntigravityProfileSaveResult) error {
-	if _, err := fmt.Fprintf(w, "%s\noperation: %s\nprovider: %s\nprofile: %s\nexpires: %s\nlogin references: %d\n",
+	if _, err := fmt.Fprintf(w, "%s\noperation: %s\nprovider: %s\nprofile: %s\nlogin references: %d\n",
 		title, result.OperationID, result.Summary.ProviderID, result.Summary.Profile.ID,
-		formatAntigravityExpiry(result.Summary.ExpiresAtUnixMS), result.Summary.CredentialReferenceCount); err != nil {
+		result.Summary.CredentialReferenceCount); err != nil {
 		return err
 	}
 	return writeWarnings(w, result.Warnings)
-}
-
-func formatAntigravityExpiry(unixMS int64) string {
-	if unixMS <= 0 {
-		return "unknown"
-	}
-	return time.UnixMilli(unixMS).UTC().Format(time.RFC3339)
 }

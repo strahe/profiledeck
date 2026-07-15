@@ -407,6 +407,10 @@ func (s *AntigravityService) ShowProfile(ctx context.Context, profileID string) 
 	return s.application.Antigravity().GetProfile(ctx, antigravity.GetAntigravityProfileRequest{ProfileID: profileID})
 }
 
+func (s *AntigravityService) ReadProfileQuota(ctx context.Context, profileID string) (antigravity.AntigravityProfileQuota, error) {
+	return s.application.Antigravity().ReadProfileQuota(ctx, profileID)
+}
+
 func (s *AntigravityService) CreateProfile(ctx context.Context, req CreateAntigravityProfileRequest) (antigravity.AntigravityProfileSaveResult, error) {
 	result, err := s.application.Antigravity().CreateProfile(ctx, antigravity.CreateAntigravityProfileRequest{
 		ProfileID: req.ProfileID, Name: req.Name, Description: req.Description,

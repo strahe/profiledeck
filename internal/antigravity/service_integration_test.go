@@ -52,7 +52,7 @@ func newAntigravityTestEnvironment(t *testing.T, configDir string, client switch
 		switching.NewDependencies(targetRegistry, adapterRegistry),
 	)
 	antigravityService := NewService(
-		runtimeService, runtimeService.StoreFactory(), switchingService, agentService, targetRegistry,
+		runtimeService, runtimeService.StoreFactory(), switchingService, switchingService, agentService, targetRegistry,
 	)
 	doctorService := doctor.NewService(
 		runtimeService,

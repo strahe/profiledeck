@@ -57,6 +57,7 @@ Most ProfileDeck actions use local data only.
 
 - Usage sync and reports read local Codex session files and do not contact a billing service.
 - Codex limit checks contact Codex or OpenAI with the selected saved login. That login is never sent to a custom model-service URL from the saved Codex settings. Limit results are temporary and are not added to usage reports.
+- Antigravity limit checks send the current Antigravity access token to the fixed Google Cloud Code service used for the check. ProfileDeck does not refresh or save the token during a check. The result stays in app memory and is not added to the database, usage reports, exports, or backups.
 - Desktop update checks and downloads contact the public ProfileDeck release on GitHub.
 
 ProfileDeck does not provide cloud sync and does not send telemetry or analytics data. Automatic Codex limit refresh and sign-in renewal are off by default and run only while the Desktop app is open or in the menu bar.
