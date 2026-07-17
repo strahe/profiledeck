@@ -53,7 +53,7 @@ tasks:
     cmds:
       - mkdir -p "$(dirname '{{.OUTPUT_PATH}}')"
       - >-
-        wails3 tool lipo
+        "{{.TASK_EXE}}" tool lipo
         -input "{{.SLICE_DIR}}/{{.APP_NAME}}-arm64"
         -input "{{.SLICE_DIR}}/{{.APP_NAME}}-amd64"
         -output "{{.OUTPUT_PATH}}"

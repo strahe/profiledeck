@@ -16,6 +16,24 @@ import (
 
 const moduleInternal = "github.com/strahe/profiledeck/internal/"
 
+// Shared core and CLI code must remain buildable without Wails or the Desktop layer.
+func TestSharedCoreDoesNotImportWails(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, directory := range []string{"cmd", "internal"} {
+		err := walkGo(filepath.Join(root, directory), func(path string, file *ast.File) error {
+			for _, imported := range importPaths(file) {
+				if imported == "github.com/wailsapp/wails" || strings.HasPrefix(imported, "github.com/wailsapp/wails/") {
+					return boundaryFailure(path, "shared core imports Wails "+imported)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestLowerPackagesDoNotImportApp(t *testing.T) {
 	internalRoot := filepath.Join(repositoryRoot(t), "internal")
 	err := walkProductionGo(internalRoot, func(path string, file *ast.File) error {
@@ -257,11 +275,20 @@ func TestAgentRegistryRejectsOwnershipConflictsAndReturnsCopies(t *testing.T) {
 }
 
 func walkProductionGo(root string, visit func(string, *ast.File) error) error {
+	return walkGo(root, func(path string, file *ast.File) error {
+		if strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		return visit(path, file)
+	})
+}
+
+func walkGo(root string, visit func(string, *ast.File) error) error {
 	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") {
 			return nil
 		}
 		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)

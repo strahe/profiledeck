@@ -54,7 +54,7 @@ func (factory Factory) CreateSnapshot(ctx context.Context, destination string) e
 		return fmt.Errorf("secure snapshot file: %w", err)
 	}
 
-	source, err := factory.OpenHealthy(ctx, true)
+	source, err := factory.openSnapshotSource(ctx)
 	if err != nil {
 		return err
 	}
@@ -108,6 +108,27 @@ func (factory Factory) CreateSnapshot(ctx context.Context, destination string) e
 	return nil
 }
 
+func (factory Factory) openSnapshotSource(ctx context.Context) (*Store, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		source, err := factory.OpenHealthy(ctx, true)
+		if err == nil {
+			return source, nil
+		}
+		// A burst of writers can exhaust one connection's busy timeout before
+		// the online backup starts. Keep the backup available during writes by
+		// retrying transient source-open locks until the caller cancels.
+		if !isSQLiteBusyError(err) {
+			return nil, err
+		}
+		if err := waitForSnapshotRetry(ctx); err != nil {
+			return nil, err
+		}
+	}
+}
+
 func stepBackup(ctx context.Context, backup *sqlite.Backup) error {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -122,12 +143,19 @@ func stepBackup(ctx context.Context, backup *sqlite.Backup) error {
 		}
 		// Online backups may be retried after SQLITE_BUSY or SQLITE_LOCKED.
 		// Yield between chunks too, so concurrent writers can release their locks.
-		timer := time.NewTimer(snapshotStepDelay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
+		if err := waitForSnapshotRetry(ctx); err != nil {
+			return err
 		}
+	}
+}
+
+func waitForSnapshotRetry(ctx context.Context) error {
+	timer := time.NewTimer(snapshotStepDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }

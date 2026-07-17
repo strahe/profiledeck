@@ -89,11 +89,11 @@ func preflight(
 	if notaryProfile == "" {
 		return fmt.Errorf("notary profile is required")
 	}
+	// Wails invokes this preflight, so resolving another copy from PATH could validate the wrong executable.
 	if err := requireCommands(
 		"git",
 		"go",
 		"npm",
-		"wails3",
 		"security",
 		"codesign",
 		"xcrun",

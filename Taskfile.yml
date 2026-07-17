@@ -13,6 +13,7 @@ includes:
   windows: ./build/windows/Taskfile.yml
   linux: ./build/linux/Taskfile.yml
 
+# Wails embeds Task, so TASK_EXE preserves the CLI path selected by Make.
 tasks:
   build:
     desc: Build the Wails desktop application
@@ -35,4 +36,6 @@ tasks:
   dev:
     desc: Run the desktop application with Wails and Vite hot reload
     cmds:
-      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+      - '"{{.TASK_EXE}}" dev -config ./build/config.yml -port {{.VITE_PORT}}'
+    env:
+      PATH: '{{if ne (osBase .TASK_EXE) .TASK_EXE}}{{osDir .TASK_EXE}}{{.PATH_LIST_SEPARATOR}}{{end}}{{.PATH}}'

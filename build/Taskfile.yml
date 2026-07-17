@@ -6,11 +6,11 @@ tasks:
     run: once
     dir: build
     preconditions:
-      - sh: wails3 version
+      - sh: '"{{.TASK_EXE}}" version'
         msg: wails3 is required to generate application icons.
     cmds:
       - >-
-        wails3 generate icons
+        "{{.TASK_EXE}}" generate icons
         -input ../desktop/assets/appicon.png
         -macfilename darwin/icons.icns
         -windowsfilename windows/icon.ico
@@ -35,7 +35,7 @@ tasks:
   bindings:
     run: once
     cmds:
-      - wails3 generate bindings -d {{.FRONTEND_DIR}}/bindings -ts -i ./desktop/...
+      - '"{{.TASK_EXE}}" generate bindings -d {{.FRONTEND_DIR}}/bindings -ts -i ./desktop/...'
 
   frontend:build:
     run: once

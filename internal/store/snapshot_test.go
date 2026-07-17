@@ -2,17 +2,16 @@ package store_test
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
+	"time"
 
 	"github.com/strahe/profiledeck/internal/store"
 )
 
 func TestCreateSnapshotIsConsistentAndPrivateDuringWrites(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	dir := t.TempDir()
 	factory := store.NewFactory(filepath.Join(dir, "source.db"))
@@ -23,8 +22,10 @@ func TestCreateSnapshotIsConsistentAndPrivateDuringWrites(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("migrate source database: %v", err)
 	}
-	if _, err := db.UpsertSetting(ctx, store.UpsertSettingParams{Key: "snapshot.sequence", ValueJSON: "0"}); err != nil {
-		t.Fatalf("seed source database: %v", err)
+	for _, key := range []string{"snapshot.sequence.a", "snapshot.sequence.b"} {
+		if _, err := db.UpsertSetting(ctx, store.UpsertSettingParams{Key: key, ValueJSON: "0"}); err != nil {
+			t.Fatalf("seed source database: %v", err)
+		}
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close source database: %v", err)
@@ -35,32 +36,46 @@ func TestCreateSnapshotIsConsistentAndPrivateDuringWrites(t *testing.T) {
 		t.Fatalf("open writer: %v", err)
 	}
 	defer writer.Close()
-	started := make(chan struct{})
-	var writerWG sync.WaitGroup
-	writerWG.Add(1)
+	writerStarted := make(chan struct{})
+	allowCommit := make(chan struct{})
+	writerResult := make(chan error, 1)
 	go func() {
-		defer writerWG.Done()
-		close(started)
-		for sequence := 1; ; sequence++ {
-			select {
-			case <-ctx.Done():
-				return
-			default:
+		writerResult <- writer.WithTransaction(ctx, func(txStore *store.Store) error {
+			if _, err := txStore.UpsertSetting(ctx, store.UpsertSettingParams{
+				Key: "snapshot.sequence.a", ValueJSON: "1",
+			}); err != nil {
+				return err
 			}
-			value, _ := json.Marshal(sequence)
-			_, _ = writer.UpsertSetting(ctx, store.UpsertSettingParams{
-				Key: "snapshot.sequence", ValueJSON: string(value),
+			close(writerStarted)
+			select {
+			case <-allowCommit:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			_, err := txStore.UpsertSetting(ctx, store.UpsertSettingParams{
+				Key: "snapshot.sequence.b", ValueJSON: "1",
 			})
-		}
+			return err
+		})
 	}()
-	<-started
+	select {
+	case <-writerStarted:
+	case err := <-writerResult:
+		t.Fatalf("start concurrent writer: %v", err)
+	case <-ctx.Done():
+		t.Fatalf("writer did not start: %v", ctx.Err())
+	}
 
 	destination := filepath.Join(dir, "snapshots", "snapshot.db")
-	if err := factory.CreateSnapshot(ctx, destination); err != nil {
-		t.Fatalf("create online snapshot: %v", err)
+	snapshotErr := factory.CreateSnapshot(ctx, destination)
+	close(allowCommit)
+	writerErr := <-writerResult
+	if snapshotErr != nil {
+		t.Fatalf("create online snapshot: %v", snapshotErr)
 	}
-	cancel()
-	writerWG.Wait()
+	if writerErr != nil {
+		t.Fatalf("commit concurrent writer: %v", writerErr)
+	}
 
 	info, err := os.Stat(destination)
 	if err != nil {
@@ -75,13 +90,14 @@ func TestCreateSnapshotIsConsistentAndPrivateDuringWrites(t *testing.T) {
 		t.Fatalf("open snapshot: %v", err)
 	}
 	defer snapshot.Close()
-	setting, err := snapshot.GetSetting(context.Background(), "snapshot.sequence")
-	if err != nil {
-		t.Fatalf("read snapshot setting: %v", err)
-	}
-	var sequence int
-	if err := json.Unmarshal([]byte(setting.ValueJSON), &sequence); err != nil || sequence < 0 {
-		t.Fatalf("snapshot contains an inconsistent value %q: %v", setting.ValueJSON, err)
+	for _, key := range []string{"snapshot.sequence.a", "snapshot.sequence.b"} {
+		setting, err := snapshot.GetSetting(context.Background(), key)
+		if err != nil {
+			t.Fatalf("read snapshot setting %q: %v", key, err)
+		}
+		if setting.ValueJSON != "0" {
+			t.Fatalf("snapshot included uncommitted value for %q: %q", key, setting.ValueJSON)
+		}
 	}
 }
 

@@ -31,7 +31,7 @@ SIGN_IDENTITY ?=
 RELEASES_DIR ?= $(CURDIR)/.task/releases
 RELEASE_CANDIDATE ?= $(CURDIR)/bin/ProfileDeck.dmg
 
-.PHONY: fmt vet lint lint-core lint-desktop test build core-boundary core-check check clean wails-boundary desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-build release-build release-draft release-copy-draft release-publish verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-core-check ci-desktop-check
+.PHONY: fmt vet lint lint-core lint-desktop test build core-boundary core-check check clean desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-build release-build release-draft release-copy-draft release-publish verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-core-check ci-desktop-check
 
 fmt:
 	$(GOLANGCI_LINT) fmt $(GO_PKGS)
@@ -62,9 +62,6 @@ core-check: lint-core core-boundary test build
 
 check: core-check desktop-check docs-check
 
-wails-boundary:
-	! rg -n 'github.com/wailsapp/wails|@wailsio/runtime' cmd internal
-
 desktop-bindings:
 	$(WAILS3) task common:bindings
 
@@ -76,6 +73,7 @@ desktop-bindings-check:
 
 desktop-taskfile-check:
 	$(WAILS3) task --list >/dev/null
+	$(WAILS3) task dev -dry >/dev/null
 	$(WAILS3) task common:generate:icons -dry >/dev/null
 	$(WAILS3) task build GOOS=darwin -dry >/dev/null
 	$(WAILS3) task build GOOS=darwin DEV=true EXTRA_TAGS=taskfilecheck -dry >/dev/null
@@ -119,7 +117,7 @@ verify-update-e2e:
 	go run ./scripts/updatee2e/runner
 
 desktop-check: DESKTOP_SIGN = false
-desktop-check: wails-boundary lint-desktop desktop-bindings-check desktop-taskfile-check desktop-frontend-check desktop-build
+desktop-check: core-boundary lint-desktop desktop-bindings-check desktop-taskfile-check desktop-frontend-check desktop-build
 	$(DESKTOP_GO_ENV) go test $(DESKTOP_PKGS) $(RELEASE_TOOL_PKGS)
 	$(DESKTOP_GO_ENV) go test -tags updatee2e $(UPDATE_E2E_PKG)
 

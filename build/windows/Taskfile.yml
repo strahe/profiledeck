@@ -37,7 +37,7 @@ tasks:
       - task: common:generate:icons
     cmds:
       - >-
-        wails3 generate syso
+        "{{.TASK_EXE}}" generate syso
         -arch "{{.ARCH}}"
         -icon build/windows/icon.ico
         -manifest build/windows/wails.exe.manifest
