@@ -19,7 +19,7 @@ You can change channels while the updater is idle, up to date, or showing an err
 
 ## Install a downloaded update
 
-When the update is ready, choose **Restart to update** in the sidebar or **Restart now** in the prompt. Choose **Later** to keep working; the sidebar action remains available, and ProfileDeck never restarts without confirmation.
+When the update is ready, choose **Restart to update** in the lower-left sidebar when you are ready. ProfileDeck stays open until you choose this action.
 
 Before restarting, ProfileDeck verifies the update and creates an encrypted automatic application backup. If verification, backup, or preparation fails, the update is not installed and the current version remains in place. Update backups share the latest-ten automatic retention pool. Return to **Settings → General → App updates** and try again later.
 

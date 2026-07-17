@@ -61,7 +61,6 @@ const messages = {
 			overwrite: "Overwrite",
 			checkForUpdates: "Check for updates",
 			restartNow: "Restart now",
-			later: "Later",
 		},
 		header: {
 			currentProfile: "Current: {profile}",
@@ -782,10 +781,6 @@ const messages = {
 					settingsUnavailable: "ProfileDeck could not save this setting. Try again.",
 					generic: "ProfileDeck could not complete the update. You are still using the current version. Try again.",
 				},
-				restartPrompt: {
-					title: "Restart to finish updating?",
-					description: "Version {version} is ready. ProfileDeck will close and reopen to finish installing it.",
-				},
 			},
 		},
 		codexSettings: {
@@ -1016,7 +1011,6 @@ const messages = {
 			overwrite: "覆盖",
 			checkForUpdates: "检查更新",
 			restartNow: "立即重启",
-			later: "稍后",
 		},
 		header: {
 			currentProfile: "当前：{profile}",
@@ -1736,10 +1730,6 @@ const messages = {
 					restartFailed: "ProfileDeck 无法准备此次更新，你仍在使用当前版本。请重试。",
 					settingsUnavailable: "ProfileDeck 无法保存此设置，请重试。",
 					generic: "ProfileDeck 无法完成更新，你仍在使用当前版本。请重试。",
-				},
-				restartPrompt: {
-					title: "重启以完成更新？",
-					description: "版本 {version} 已准备好。ProfileDeck 将关闭并重新打开以完成安装。",
 				},
 			},
 		},

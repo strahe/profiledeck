@@ -31,7 +31,6 @@
 	import { darkThemeAppIconURL, lightThemeAppIconURL } from "$lib/app-icon";
 	import StatusBadge from "$lib/components/app/StatusBadge.svelte";
 	import * as Alert from "$lib/components/ui/alert";
-	import * as AlertDialog from "$lib/components/ui/alert-dialog";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
@@ -141,8 +140,6 @@
 		last_checked_at_unix_ms: 0,
 		error_code: "",
 	});
-	let updateRestartPromptOpen = $state(false);
-	let promptedUpdateVersion = "";
 
 	let dashboard = $state<DashboardResult | null>(null);
 	let detectResult = $state<CodexDetectResult | null>(null);
@@ -246,17 +243,6 @@
 	$effect(() => {
 		const profiles = antigravityProfileSummaries;
 		untrack(() => antigravityQuota.setProfiles(profiles));
-	});
-
-	$effect(() => {
-		const version = updateStatus.state === "ready" ? updateStatus.available_version : "";
-		const busy = actionBusy || updateBusy;
-		if (version && !busy && promptedUpdateVersion !== version) {
-			untrack(() => {
-				promptedUpdateVersion = version;
-				updateRestartPromptOpen = true;
-			});
-		}
 	});
 
 	$effect(() => {
@@ -992,9 +978,9 @@
 									tooltipContent={sidebarUpdate.accessibleLabel}
 									aria-label={sidebarUpdate.accessibleLabel}
 									aria-disabled={!!updateBusy}
-									onclick={() => { if (!updateBusy) updateRestartPromptOpen = true; }}
+									onclick={restartWithUpdate}
 								>
-									<CircleArrowUpIcon />
+									{#if updateBusy === "restart"}<Spinner />{:else}<CircleArrowUpIcon />{/if}
 									<span class="group-data-[collapsible=icon]:hidden">{sidebarUpdate.label}</span>
 								</Sidebar.MenuButton>
 							{:else}
@@ -1174,21 +1160,3 @@
 		</Sidebar.Inset>
 	</div>
 </Sidebar.Provider>
-
-<AlertDialog.Root bind:open={updateRestartPromptOpen}>
-	<AlertDialog.Content>
-		<AlertDialog.Header>
-			<AlertDialog.Title>{$_("settings.updates.restartPrompt.title")}</AlertDialog.Title>
-			<AlertDialog.Description>
-				{$_("settings.updates.restartPrompt.description", { values: { version: updateStatus.available_version } })}
-			</AlertDialog.Description>
-		</AlertDialog.Header>
-		<AlertDialog.Footer>
-			<AlertDialog.Cancel disabled={!!updateBusy}>{$_("actions.later")}</AlertDialog.Cancel>
-			<AlertDialog.Action disabled={!!updateBusy} onclick={restartWithUpdate}>
-				{#if updateBusy === "restart"}<Spinner />{/if}
-				{$_("actions.restartNow")}
-			</AlertDialog.Action>
-		</AlertDialog.Footer>
-	</AlertDialog.Content>
-</AlertDialog.Root>
