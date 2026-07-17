@@ -33,22 +33,20 @@ func notarize(
 	runner commandRunner,
 	input string,
 	profile string,
+	keychain string,
 ) (notarizationResult, error) {
 	if input == "" || profile == "" {
 		return notarizationResult{}, fmt.Errorf("notarization input and profile are required")
 	}
-	output, err := runner.run(
-		ctx,
-		"xcrun",
-		"notarytool",
-		"submit",
-		input,
-		"--keychain-profile",
-		profile,
+	args := []string{"notarytool", "submit", input}
+	args = append(args, notaryCredentialArgs(profile, keychain)...)
+	args = append(
+		args,
 		"--wait",
 		"--output-format",
 		"json",
 	)
+	output, err := runner.run(ctx, "xcrun", args...)
 	if err != nil {
 		return notarizationResult{}, err
 	}
@@ -57,15 +55,9 @@ func notarize(
 		return notarizationResult{}, err
 	}
 	if result.Status != "Accepted" {
-		logOutput, logErr := runner.run(
-			ctx,
-			"xcrun",
-			"notarytool",
-			"log",
-			result.ID,
-			"--keychain-profile",
-			profile,
-		)
+		logArgs := []string{"notarytool", "log", result.ID}
+		logArgs = append(logArgs, notaryCredentialArgs(profile, keychain)...)
+		logOutput, logErr := runner.run(ctx, "xcrun", logArgs...)
 		if len(logOutput) > 0 {
 			fmt.Fprintln(os.Stderr, string(logOutput))
 		}
@@ -80,6 +72,14 @@ func notarize(
 	}
 	fmt.Printf("Notarization accepted for %s: %s\n", filepath.Base(input), result.ID)
 	return result, nil
+}
+
+func notaryCredentialArgs(profile, keychain string) []string {
+	args := []string{"--keychain-profile", profile}
+	if keychain != "" {
+		args = append(args, "--keychain", keychain)
+	}
+	return args
 }
 
 func writeInfoPlist(

@@ -20,12 +20,24 @@ func parseReleaseVersion(value string) (releaseVersion, error) {
 	if matches == nil {
 		return releaseVersion{}, fmt.Errorf("version must be X.Y.Z or X.Y.Z-beta.N")
 	}
-	major, _ := strconv.Atoi(matches[1])
-	minor, _ := strconv.Atoi(matches[2])
-	patch, _ := strconv.Atoi(matches[3])
+	major, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return releaseVersion{}, fmt.Errorf("version component is too large")
+	}
+	minor, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return releaseVersion{}, fmt.Errorf("version component is too large")
+	}
+	patch, err := strconv.Atoi(matches[3])
+	if err != nil {
+		return releaseVersion{}, fmt.Errorf("version component is too large")
+	}
 	beta := 0
 	if matches[4] != "" {
-		beta, _ = strconv.Atoi(matches[4])
+		beta, err = strconv.Atoi(matches[4])
+		if err != nil {
+			return releaseVersion{}, fmt.Errorf("version component is too large")
+		}
 	}
 	return releaseVersion{major: major, minor: minor, patch: patch, beta: beta}, nil
 }

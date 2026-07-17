@@ -1,11 +1,56 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestNotaryCredentialArgs(t *testing.T) {
+	t.Parallel()
+	if got := strings.Join(notaryCredentialArgs("apple-notary", ""), " "); got != "--keychain-profile apple-notary" {
+		t.Fatalf("default credentials = %q", got)
+	}
+	if got := strings.Join(
+		notaryCredentialArgs("apple-notary", "/tmp/release.keychain-db"),
+		" ",
+	); got != "--keychain-profile apple-notary --keychain /tmp/release.keychain-db" {
+		t.Fatalf("explicit credentials = %q", got)
+	}
+}
+
+func TestNotarizeUsesExplicitKeychainForSubmissionAndLog(t *testing.T) {
+	t.Parallel()
+	const (
+		input    = "/tmp/ProfileDeck.dmg"
+		profile  = "apple-notary"
+		keychain = "/tmp/release.keychain-db"
+		id       = "01234567-89ab-cdef-0123-456789abcdef"
+	)
+	submitKey := strings.Join([]string{
+		"xcrun", "notarytool", "submit", input,
+		"--keychain-profile", profile,
+		"--keychain", keychain,
+		"--wait", "--output-format", "json",
+	}, "\x00")
+	logKey := strings.Join([]string{
+		"xcrun", "notarytool", "log", id,
+		"--keychain-profile", profile,
+		"--keychain", keychain,
+	}, "\x00")
+	runner := &scriptedCommandRunner{results: map[string][]scriptedCommandResult{
+		submitKey: {{output: []byte(`{"id":"` + id + `","status":"Invalid","message":"rejected"}`)}},
+		logKey:    {{output: []byte(`{"issues":[]}`)}},
+	}}
+	if _, err := notarize(context.Background(), runner, input, profile, keychain); err == nil {
+		t.Fatal("rejected notarization succeeded")
+	}
+	if len(runner.results[submitKey]) != 0 || len(runner.results[logKey]) != 0 {
+		t.Fatal("notarization did not use the explicit Keychain for both submission and log retrieval")
+	}
+}
 
 func TestParseNotarizationResult(t *testing.T) {
 	t.Parallel()

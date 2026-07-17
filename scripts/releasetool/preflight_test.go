@@ -43,13 +43,14 @@ func TestDiscoverIdentityRequiresAnUnambiguousMatch(t *testing.T) {
 2) BBB "Developer ID Application: Example Two (TEAMTWO)"
 `),
 	}}
-	if _, err := discoverIdentity(context.Background(), runner, ""); err == nil {
+	if _, err := discoverIdentity(context.Background(), runner, "", ""); err == nil {
 		t.Fatal("ambiguous identities were accepted")
 	}
 	identity, err := discoverIdentity(
 		context.Background(),
 		runner,
 		"Developer ID Application: Example Two (TEAMTWO)",
+		"",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -58,8 +59,27 @@ func TestDiscoverIdentityRequiresAnUnambiguousMatch(t *testing.T) {
 		t.Fatalf("identity = %q", identity)
 	}
 	runner.errors = map[string]error{key: errors.New("keychain unavailable")}
-	if _, err := discoverIdentity(context.Background(), runner, ""); err == nil {
+	if _, err := discoverIdentity(context.Background(), runner, "", ""); err == nil {
 		t.Fatal("security failure was ignored")
+	}
+}
+
+func TestDiscoverIdentityUsesExplicitKeychain(t *testing.T) {
+	t.Parallel()
+	const keychain = "/tmp/profiledeck-release.keychain-db"
+	key := strings.Join(
+		[]string{"security", "find-identity", "-v", "-p", "codesigning", keychain},
+		"\x00",
+	)
+	runner := fakeCommandRunner{outputs: map[string][]byte{
+		key: []byte(`1) AAA "Developer ID Application: Example (TEAMONE)"`),
+	}}
+	identity, err := discoverIdentity(context.Background(), runner, "", keychain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity != "Developer ID Application: Example (TEAMONE)" {
+		t.Fatalf("identity = %q", identity)
 	}
 }
 

@@ -274,32 +274,6 @@ func verifyAppleReleaseArtifacts(
 	return buildNumber, nil
 }
 
-func verifyRemoteRelease(
-	ctx context.Context,
-	runner commandRunner,
-	directory string,
-	version releaseVersion,
-	candidatePath string,
-) (int, error) {
-	if err := verifyRemoteDirectoryLayout(directory, version); err != nil {
-		return 0, err
-	}
-	if _, err := verifyChecksums(directory, version); err != nil {
-		return 0, err
-	}
-	zipPath := filepath.Join(directory, updaterZIPName(version))
-	if err := verifyZIPLayout(zipPath); err != nil {
-		return 0, err
-	}
-	if err := verifyCandidateMatchesDMG(
-		candidatePath,
-		filepath.Join(directory, installerDMGName(version)),
-	); err != nil {
-		return 0, err
-	}
-	return verifyAppleReleaseArtifacts(ctx, runner, directory, version, 0)
-}
-
 func verifyLocalRelease(
 	ctx context.Context,
 	runner commandRunner,
@@ -308,10 +282,10 @@ func verifyLocalRelease(
 	buildNumber int,
 	verifyAppleArtifacts bool,
 ) (releaseMetadata, error) {
-	if err := verifyDirectoryLayout(directory, version); err != nil {
+	if err := verifyPlatformDirectoryLayout(directory, macOSPlatform, version); err != nil {
 		return releaseMetadata{}, err
 	}
-	metadata, err := readMetadata(directory, version)
+	metadata, err := readMetadata(directory, macOSPlatform, version)
 	if err != nil {
 		return releaseMetadata{}, err
 	}

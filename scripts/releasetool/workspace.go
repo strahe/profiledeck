@@ -7,37 +7,68 @@ import (
 )
 
 type releaseWorkspace struct {
-	root      string
-	stage     string
-	work      string
-	artifacts string
-	final     string
+	root          string
+	versionRoot   string
+	platformsRoot string
+	platform      string
+	stage         string
+	work          string
+	artifacts     string
+	final         string
 }
 
-func newReleaseWorkspace(root string, version releaseVersion) (releaseWorkspace, error) {
-	if root == "" {
-		return releaseWorkspace{}, fmt.Errorf("releases directory is required")
-	}
-	absoluteRoot, err := filepath.Abs(root)
+func newReleaseWorkspace(
+	root string,
+	version releaseVersion,
+	platform string,
+) (releaseWorkspace, error) {
+	absoluteRoot, err := resolveReleaseRoot(root)
 	if err != nil {
-		return releaseWorkspace{}, fmt.Errorf("resolve releases directory: %w", err)
+		return releaseWorkspace{}, err
 	}
-	absoluteRoot = filepath.Clean(absoluteRoot)
-	if absoluteRoot == string(filepath.Separator) {
-		return releaseWorkspace{}, fmt.Errorf("releases directory cannot be the filesystem root")
+	if _, err := platformAssetSpecs(platform, version); err != nil {
+		return releaseWorkspace{}, err
 	}
-	stage := filepath.Join(absoluteRoot, "."+version.tag()+".in-progress")
-	if filepath.Dir(stage) != absoluteRoot ||
-		filepath.Base(stage) != "."+version.tag()+".in-progress" {
+	versionRoot := filepath.Join(absoluteRoot, version.tag())
+	platformsRoot := filepath.Join(versionRoot, "platforms")
+	stageName := "." + version.tag() + "-" + platform + ".in-progress"
+	stage := filepath.Join(absoluteRoot, stageName)
+	if filepath.Dir(stage) != absoluteRoot || filepath.Base(stage) != stageName {
 		return releaseWorkspace{}, fmt.Errorf("unsafe release staging path")
 	}
 	return releaseWorkspace{
-		root:      absoluteRoot,
-		stage:     stage,
-		work:      filepath.Join(stage, "work"),
-		artifacts: filepath.Join(stage, "artifacts"),
-		final:     filepath.Join(absoluteRoot, version.tag()),
+		root:          absoluteRoot,
+		versionRoot:   versionRoot,
+		platformsRoot: platformsRoot,
+		platform:      platform,
+		stage:         stage,
+		work:          filepath.Join(stage, "work"),
+		artifacts:     filepath.Join(stage, "artifacts"),
+		final:         filepath.Join(platformsRoot, platform),
 	}, nil
+}
+
+func resolveReleaseRoot(root string) (string, error) {
+	if root == "" {
+		return "", fmt.Errorf("releases directory is required")
+	}
+	absoluteRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve releases directory: %w", err)
+	}
+	absoluteRoot = filepath.Clean(absoluteRoot)
+	if absoluteRoot == string(filepath.Separator) {
+		return "", fmt.Errorf("releases directory cannot be the filesystem root")
+	}
+	return absoluteRoot, nil
+}
+
+func releaseBundlePath(root string, version releaseVersion) (string, error) {
+	absoluteRoot, err := resolveReleaseRoot(root)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(absoluteRoot, version.tag(), "bundle"), nil
 }
 
 func (workspace releaseWorkspace) prepare() error {
@@ -99,28 +130,12 @@ func (workspace releaseWorkspace) commit() error {
 	if !info.IsDir() {
 		return fmt.Errorf("staged release artifacts are not a directory")
 	}
+	if err := os.MkdirAll(workspace.platformsRoot, 0o755); err != nil {
+		return fmt.Errorf("create platform release directory: %w", err)
+	}
+	// Platform outputs are committed independently so future build jobs can converge on one version root.
 	if err := os.Rename(workspace.artifacts, workspace.final); err != nil {
 		return fmt.Errorf("commit release artifacts: %w", err)
-	}
-	return nil
-}
-
-func (workspace releaseWorkspace) removeFinal() error {
-	if filepath.Dir(workspace.final) != workspace.root {
-		return fmt.Errorf("unsafe final release path")
-	}
-	info, err := os.Lstat(workspace.final)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect final release directory: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return fmt.Errorf("final release path is not a directory: %s", workspace.final)
-	}
-	if err := os.RemoveAll(workspace.final); err != nil {
-		return fmt.Errorf("remove consumed release artifacts: %w", err)
 	}
 	return nil
 }

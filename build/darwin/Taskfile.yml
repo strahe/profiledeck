@@ -9,7 +9,9 @@ vars:
   DEFAULT_UNIVERSAL_DIR: '{{.BIN_DIR}}/darwin-universal'
   DEFAULT_UNIVERSAL_BINARY: '{{.DEFAULT_UNIVERSAL_DIR}}/{{.APP_NAME}}'
   RELEASES_DIR: '{{.RELEASES_DIR | default ".task/releases"}}'
+  RELEASE_PLATFORM: macos
   NOTARY_PROFILE: '{{.NOTARY_PROFILE | default "apple-notary"}}'
+  RELEASE_KEYCHAIN: '{{.RELEASE_KEYCHAIN | default ""}}'
 
 tasks:
   build:
@@ -105,16 +107,20 @@ tasks:
         go run ./scripts/releasetool preflight
         --version "{{.VERSION}}"
         --build-number "{{.BUILD_NUMBER}}"
+        --platform "{{.RELEASE_PLATFORM}}"
         --releases-dir "{{.RELEASES_DIR}}"
         --identity "{{.RELEASE_SIGN_IDENTITY}}"
         --notary-profile "{{.NOTARY_PROFILE}}"
+        --keychain "{{.RELEASE_KEYCHAIN}}"
       - >-
         go run ./scripts/releasetool prepare
         --version "{{.VERSION}}"
+        --platform "{{.RELEASE_PLATFORM}}"
         --releases-dir "{{.RELEASES_DIR}}"
       - defer: >-
           go run ./scripts/releasetool cleanup
           --version "{{.VERSION}}"
+          --platform "{{.RELEASE_PLATFORM}}"
           --releases-dir "{{.RELEASES_DIR}}"
       - task: package:universal
         vars:
@@ -151,6 +157,7 @@ tasks:
         go run ./scripts/releasetool notarize
         --input "{{.RELEASE_WORK_DIR}}/ProfileDeck-notary.zip"
         --profile "{{.NOTARY_PROFILE}}"
+        --keychain "{{.RELEASE_KEYCHAIN}}"
       - xcrun stapler staple "{{.RELEASE_APP_PATH}}"
       - xcrun stapler validate "{{.RELEASE_APP_PATH}}"
       - >-
@@ -177,6 +184,7 @@ tasks:
         go run ./scripts/releasetool notarize
         --input "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
         --profile "{{.NOTARY_PROFILE}}"
+        --keychain "{{.RELEASE_KEYCHAIN}}"
       - xcrun stapler staple "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
       - xcrun stapler validate "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
       - >-
@@ -185,22 +193,25 @@ tasks:
         --build-number "{{.BUILD_NUMBER}}"
         --commit "{{.RELEASE_COMMIT}}"
         --built-at "{{.RELEASE_BUILD_DATE}}"
+        --platform "{{.RELEASE_PLATFORM}}"
         --directory "{{.RELEASE_ARTIFACT_DIR}}"
       - >-
         go run ./scripts/releasetool verify
         --version "{{.VERSION}}"
         --build-number "{{.BUILD_NUMBER}}"
+        --platform "{{.RELEASE_PLATFORM}}"
         --directory "{{.RELEASE_ARTIFACT_DIR}}"
       - >-
         go run ./scripts/releasetool commit
         --version "{{.VERSION}}"
+        --platform "{{.RELEASE_PLATFORM}}"
         --releases-dir "{{.RELEASES_DIR}}"
     requires:
       vars:
         - VERSION
         - BUILD_NUMBER
     vars:
-      RELEASE_STAGE_DIR: '{{.RELEASES_DIR}}/.v{{.VERSION}}.in-progress'
+      RELEASE_STAGE_DIR: '{{.RELEASES_DIR}}/.v{{.VERSION}}-{{.RELEASE_PLATFORM}}.in-progress'
       RELEASE_WORK_DIR: '{{.RELEASE_STAGE_DIR}}/work'
       RELEASE_ARTIFACT_DIR: '{{.RELEASE_STAGE_DIR}}/artifacts'
       RELEASE_APP_PATH: '{{.RELEASE_WORK_DIR}}/ProfileDeck.app'
@@ -214,6 +225,7 @@ tasks:
         sh: >-
           go run ./scripts/releasetool identity
           --requested "{{.SIGN_IDENTITY}}"
+          --keychain "{{.RELEASE_KEYCHAIN}}"
 
   run:
     cmds:

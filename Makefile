@@ -25,13 +25,14 @@ DESKTOP_GO_ENV := GOOS=$(DESKTOP_GOOS) GOARCH=$(DESKTOP_GOARCH)
 DESKTOP_SIGN ?= true
 VERSION ?=
 BUILD_NUMBER ?=
-RELEASE_REPO ?= strahe/profiledeck-private
-SOURCE_RELEASE_REPO ?= strahe/profiledeck-private
+RELEASE_REPO ?=
+RELEASE_COMMIT ?= $(shell git rev-parse HEAD)
+RELEASE_PLATFORMS ?= macos
 SIGN_IDENTITY ?=
+RELEASE_KEYCHAIN ?=
 RELEASES_DIR ?= $(CURDIR)/.task/releases
-RELEASE_CANDIDATE ?= $(CURDIR)/bin/ProfileDeck.dmg
 
-.PHONY: fmt vet lint lint-core lint-desktop test build core-boundary core-check check clean desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-build release-build release-draft release-copy-draft release-publish verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-core-check ci-desktop-check
+.PHONY: fmt vet lint lint-core lint-desktop test build core-boundary core-check check clean desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-build release-github-check release-build release-build-macos release-assemble release-draft verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-check ci-core-check ci-desktop-check ci-release-build-macos ci-release-assemble ci-release-draft
 
 fmt:
 	$(GOLANGCI_LINT) fmt $(GO_PKGS)
@@ -101,17 +102,19 @@ ifeq ($(DESKTOP_GOOS),darwin)
 	fi
 endif
 
-release-build:
-	$(WAILS3) task darwin:release VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" SIGN_IDENTITY="$(SIGN_IDENTITY)" RELEASES_DIR="$(RELEASES_DIR)"
+release-github-check:
+	go run ./scripts/releasetool github-check --version "$(VERSION)" --repo "$(RELEASE_REPO)" --commit "$(RELEASE_COMMIT)" --platforms "$(RELEASE_PLATFORMS)"
+
+release-build: release-build-macos
+
+release-build-macos:
+	$(WAILS3) task darwin:release VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_COMMIT="$(RELEASE_COMMIT)" SIGN_IDENTITY="$(SIGN_IDENTITY)" RELEASE_KEYCHAIN="$(RELEASE_KEYCHAIN)" RELEASES_DIR="$(RELEASES_DIR)"
+
+release-assemble:
+	go run ./scripts/releasetool assemble --version "$(VERSION)" --build-number "$(BUILD_NUMBER)" --commit "$(RELEASE_COMMIT)" --platforms "$(RELEASE_PLATFORMS)" --releases-dir "$(RELEASES_DIR)"
 
 release-draft:
-	go run ./scripts/releasetool draft --version "$(VERSION)" --repo "$(RELEASE_REPO)" --releases-dir "$(RELEASES_DIR)" --candidate "$(RELEASE_CANDIDATE)"
-
-release-copy-draft:
-	go run ./scripts/releasetool copy-draft --version "$(VERSION)" --source-repo "$(SOURCE_RELEASE_REPO)" --repo "$(RELEASE_REPO)" --candidate "$(RELEASE_CANDIDATE)"
-
-release-publish:
-	go run ./scripts/releasetool publish --version "$(VERSION)" --repo "$(RELEASE_REPO)" --candidate "$(RELEASE_CANDIDATE)"
+	go run ./scripts/releasetool draft --version "$(VERSION)" --build-number "$(BUILD_NUMBER)" --repo "$(RELEASE_REPO)" --commit "$(RELEASE_COMMIT)" --platforms "$(RELEASE_PLATFORMS)" --releases-dir "$(RELEASES_DIR)"
 
 verify-update-e2e:
 	go run ./scripts/updatee2e/runner
@@ -143,13 +146,25 @@ $(CI_WAILS3):
 	mkdir -p $(CI_WAILS3_DIR)
 	GOBIN=$(abspath $(CI_WAILS3_DIR)) go install github.com/wailsapp/wails/v3/cmd/wails3@$(WAILS3_VERSION)
 
+ci-check: $(CI_GOLANGCI_LINT) $(CI_WAILS3)
+	$(MAKE) check GOLANGCI_LINT=$(abspath $(CI_GOLANGCI_LINT)) WAILS3=$(abspath $(CI_WAILS3))
+
 ci-core-check: $(CI_GOLANGCI_LINT)
 	$(MAKE) core-check GOLANGCI_LINT=$(abspath $(CI_GOLANGCI_LINT))
 
 ci-desktop-check: $(CI_GOLANGCI_LINT) $(CI_WAILS3)
 	$(MAKE) desktop-check GOLANGCI_LINT=$(abspath $(CI_GOLANGCI_LINT)) WAILS3=$(abspath $(CI_WAILS3))
 
+ci-release-build-macos: $(CI_WAILS3)
+	$(MAKE) release-build-macos VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_COMMIT="$(RELEASE_COMMIT)" SIGN_IDENTITY="$(SIGN_IDENTITY)" RELEASE_KEYCHAIN="$(RELEASE_KEYCHAIN)" RELEASES_DIR="$(RELEASES_DIR)" WAILS3=$(abspath $(CI_WAILS3))
+
+ci-release-assemble:
+	$(MAKE) release-assemble VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_COMMIT="$(RELEASE_COMMIT)" RELEASE_PLATFORMS="$(RELEASE_PLATFORMS)" RELEASES_DIR="$(RELEASES_DIR)"
+
+ci-release-draft:
+	$(MAKE) release-draft VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_REPO="$(RELEASE_REPO)" RELEASE_COMMIT="$(RELEASE_COMMIT)" RELEASE_PLATFORMS="$(RELEASE_PLATFORMS)" RELEASES_DIR="$(RELEASES_DIR)"
+
 clean:
 	@if [ -d "$(BIN_DIR)" ]; then \
-		find "$(BIN_DIR)" -mindepth 1 -maxdepth 1 ! -name ProfileDeck.dmg -exec rm -rf -- {} +; \
+		find "$(BIN_DIR)" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; \
 	fi

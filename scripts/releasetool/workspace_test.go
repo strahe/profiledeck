@@ -9,7 +9,11 @@ import (
 func TestReleaseWorkspacePreparesAndCommitsWithoutOverwriting(t *testing.T) {
 	t.Parallel()
 	version, _ := parseReleaseVersion("1.2.3-beta.4")
-	workspace, err := newReleaseWorkspace(filepath.Join(t.TempDir(), "releases"), version)
+	workspace, err := newReleaseWorkspace(
+		filepath.Join(t.TempDir(), "releases"),
+		version,
+		macOSPlatform,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,6 +33,9 @@ func TestReleaseWorkspacePreparesAndCommitsWithoutOverwriting(t *testing.T) {
 	if err := workspace.commit(); err != nil {
 		t.Fatal(err)
 	}
+	if filepath.Base(filepath.Dir(workspace.final)) != "platforms" {
+		t.Fatalf("platform handoff path = %s", workspace.final)
+	}
 	if _, err := os.Stat(filepath.Join(workspace.final, "asset")); err != nil {
 		t.Fatal(err)
 	}
@@ -41,21 +48,12 @@ func TestReleaseWorkspacePreparesAndCommitsWithoutOverwriting(t *testing.T) {
 	if _, err := os.Stat(workspace.final); err != nil {
 		t.Fatalf("cleanup removed committed release: %v", err)
 	}
-	if err := workspace.removeFinal(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(workspace.final); !os.IsNotExist(err) {
-		t.Fatalf("consumed release still exists: %v", err)
-	}
-	if err := workspace.removeFinal(); err != nil {
-		t.Fatalf("second removal failed: %v", err)
-	}
 }
 
 func TestReleaseWorkspaceRejectsUnsafeRoot(t *testing.T) {
 	t.Parallel()
 	version, _ := parseReleaseVersion("1.2.3")
-	if _, err := newReleaseWorkspace(string(filepath.Separator), version); err == nil {
+	if _, err := newReleaseWorkspace(string(filepath.Separator), version, macOSPlatform); err == nil {
 		t.Fatal("filesystem root was accepted as the releases directory")
 	}
 }

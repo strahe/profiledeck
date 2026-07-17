@@ -27,8 +27,17 @@ func parseDeveloperIDIdentities(output string) []string {
 	return identities
 }
 
-func discoverIdentity(ctx context.Context, runner commandRunner, requested string) (string, error) {
-	output, err := runner.run(ctx, "security", "find-identity", "-v", "-p", "codesigning")
+func discoverIdentity(
+	ctx context.Context,
+	runner commandRunner,
+	requested string,
+	keychain string,
+) (string, error) {
+	args := []string{"find-identity", "-v", "-p", "codesigning"}
+	if keychain != "" {
+		args = append(args, keychain)
+	}
+	output, err := runner.run(ctx, "security", args...)
 	if err != nil {
 		return "", err
 	}
@@ -79,6 +88,7 @@ func preflight(
 	workspace releaseWorkspace,
 	identity string,
 	notaryProfile string,
+	keychain string,
 ) error {
 	if runtime.GOOS != "darwin" {
 		return fmt.Errorf("macOS release builds must run on macOS")
@@ -124,17 +134,12 @@ func preflight(
 			return err
 		}
 	}
-	if _, err := discoverIdentity(ctx, runner, identity); err != nil {
+	if _, err := discoverIdentity(ctx, runner, identity, keychain); err != nil {
 		return err
 	}
-	if _, err := runner.run(
-		ctx,
-		"xcrun",
-		"notarytool",
-		"history",
-		"--keychain-profile",
-		notaryProfile,
-	); err != nil {
+	notaryArgs := []string{"notarytool", "history"}
+	notaryArgs = append(notaryArgs, notaryCredentialArgs(notaryProfile, keychain)...)
+	if _, err := runner.run(ctx, "xcrun", notaryArgs...); err != nil {
 		return fmt.Errorf("validate notary profile %q: %w", notaryProfile, err)
 	}
 	targets, err := runner.run(ctx, "go", "tool", "dist", "list")

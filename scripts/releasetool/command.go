@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 )
@@ -35,17 +34,6 @@ func (systemCommandRunner) run(ctx context.Context, name string, args ...string)
 		return stderr.Bytes(), nil
 	}
 	return stdout.Bytes(), nil
-}
-
-func runVisible(ctx context.Context, name string, args ...string) error {
-	command := exec.CommandContext(ctx, name, args...)
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	command.Stdin = os.Stdin
-	if err := command.Run(); err != nil {
-		return fmt.Errorf("%s failed: %w", name, err)
-	}
-	return nil
 }
 
 func requireCommands(names ...string) error {

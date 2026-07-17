@@ -32,6 +32,8 @@ func TestParseReleaseVersion(t *testing.T) {
 		"01.2.3",
 		"1.02.3",
 		"1.2.03",
+		"999999999999999999999999999999999999.2.3",
+		"1.2.3-beta.999999999999999999999999999999999999",
 	} {
 		if _, err := parseReleaseVersion(value); err == nil {
 			t.Fatalf("parseReleaseVersion(%q) succeeded, want error", value)

@@ -16,30 +16,78 @@ import (
 	"time"
 )
 
-var checksumLinePattern = regexp.MustCompile(`^([0-9a-f]{64})  ([A-Za-z0-9._-]+)$`)
+const (
+	releaseMetadataSchemaVersion = 1
+	macOSPlatform                = "macos"
+	assetRoleUpdater             = "updater"
+	assetRoleInstaller           = "installer"
+)
+
+var (
+	checksumLinePattern = regexp.MustCompile(`^([0-9a-f]{64})  ([A-Za-z0-9._-]+)$`)
+	platformNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+)
+
+type releaseAssetSpec struct {
+	Name string
+	Role string
+}
 
 type releaseAsset struct {
 	Name   string `json:"name"`
+	Role   string `json:"role"`
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
 }
 
 type releaseMetadata struct {
-	Version     string         `json:"version"`
-	Channel     string         `json:"channel"`
-	BuildNumber int            `json:"build_number"`
-	Commit      string         `json:"commit"`
-	BuiltAt     string         `json:"built_at"`
-	Assets      []releaseAsset `json:"assets"`
+	SchemaVersion int            `json:"schema_version"`
+	Platform      string         `json:"platform"`
+	Version       string         `json:"version"`
+	Channel       string         `json:"channel"`
+	BuildNumber   int            `json:"build_number"`
+	Commit        string         `json:"commit"`
+	BuiltAt       string         `json:"built_at"`
+	Assets        []releaseAsset `json:"assets"`
 }
 
-func expectedAssetNames(version releaseVersion) []string {
-	names := []string{updaterZIPName(version), installerDMGName(version)}
+func platformAssetSpecs(platform string, version releaseVersion) ([]releaseAssetSpec, error) {
+	if !platformNamePattern.MatchString(platform) {
+		return nil, fmt.Errorf("release platform is invalid")
+	}
+	var specs []releaseAssetSpec
+	switch platform {
+	case macOSPlatform:
+		specs = []releaseAssetSpec{
+			{Name: updaterZIPName(version), Role: assetRoleUpdater},
+			{Name: installerDMGName(version), Role: assetRoleInstaller},
+		}
+	default:
+		return nil, fmt.Errorf("unsupported release platform %q", platform)
+	}
+	sort.Slice(specs, func(left, right int) bool {
+		return specs[left].Name < specs[right].Name
+	})
+	return specs, nil
+}
+
+func assetSpecNames(specs []releaseAssetSpec) []string {
+	names := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		names = append(names, spec.Name)
+	}
 	sort.Strings(names)
 	return names
 }
 
-func hashFile(path string) (releaseAsset, error) {
+func hashFile(path string, spec releaseAssetSpec) (releaseAsset, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return releaseAsset{}, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return releaseAsset{}, fmt.Errorf("release asset is not a regular file: %s", spec.Name)
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return releaseAsset{}, err
@@ -50,19 +98,23 @@ func hashFile(path string) (releaseAsset, error) {
 	if err != nil {
 		return releaseAsset{}, err
 	}
+	if size < 1 {
+		return releaseAsset{}, fmt.Errorf("release asset is empty: %s", spec.Name)
+	}
 	return releaseAsset{
-		Name:   filepath.Base(path),
+		Name:   spec.Name,
+		Role:   spec.Role,
 		SHA256: hex.EncodeToString(hash.Sum(nil)),
 		Size:   size,
 	}, nil
 }
 
-func writeChecksums(directory string, version releaseVersion) ([]releaseAsset, error) {
-	assets := make([]releaseAsset, 0, 2)
-	for _, name := range expectedAssetNames(version) {
-		asset, err := hashFile(filepath.Join(directory, name))
+func writeChecksums(directory string, specs []releaseAssetSpec) ([]releaseAsset, error) {
+	assets := make([]releaseAsset, 0, len(specs))
+	for _, spec := range specs {
+		asset, err := hashFile(filepath.Join(directory, spec.Name), spec)
 		if err != nil {
-			return nil, fmt.Errorf("hash %s: %w", name, err)
+			return nil, fmt.Errorf("hash %s: %w", spec.Name, err)
 		}
 		assets = append(assets, asset)
 	}
@@ -77,13 +129,13 @@ func writeChecksums(directory string, version releaseVersion) ([]releaseAsset, e
 	return assets, nil
 }
 
-func readChecksums(path string, version releaseVersion) (map[string]string, error) {
+func readChecksums(path string, specs []releaseAssetSpec) (map[string]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open SHA256SUMS: %w", err)
 	}
 	defer file.Close()
-	checksums := make(map[string]string, 2)
+	checksums := make(map[string]string, len(specs))
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -102,9 +154,9 @@ func readChecksums(path string, version releaseVersion) (map[string]string, erro
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read SHA256SUMS: %w", err)
 	}
-	expected := expectedAssetNames(version)
+	expected := assetSpecNames(specs)
 	if len(checksums) != len(expected) {
-		return nil, fmt.Errorf("SHA256SUMS must contain exactly the updater ZIP and installer DMG")
+		return nil, fmt.Errorf("SHA256SUMS asset count does not match the release contract")
 	}
 	for _, name := range expected {
 		if _, ok := checksums[name]; !ok {
@@ -114,19 +166,19 @@ func readChecksums(path string, version releaseVersion) (map[string]string, erro
 	return checksums, nil
 }
 
-func verifyChecksums(directory string, version releaseVersion) ([]releaseAsset, error) {
-	checksums, err := readChecksums(filepath.Join(directory, "SHA256SUMS"), version)
+func verifyChecksums(directory string, specs []releaseAssetSpec) ([]releaseAsset, error) {
+	checksums, err := readChecksums(filepath.Join(directory, "SHA256SUMS"), specs)
 	if err != nil {
 		return nil, err
 	}
-	assets := make([]releaseAsset, 0, len(checksums))
-	for _, name := range expectedAssetNames(version) {
-		asset, err := hashFile(filepath.Join(directory, name))
+	assets := make([]releaseAsset, 0, len(specs))
+	for _, spec := range specs {
+		asset, err := hashFile(filepath.Join(directory, spec.Name), spec)
 		if err != nil {
-			return nil, fmt.Errorf("hash %s: %w", name, err)
+			return nil, fmt.Errorf("hash %s: %w", spec.Name, err)
 		}
-		if checksums[name] != asset.SHA256 {
-			return nil, fmt.Errorf("SHA-256 mismatch for %s", name)
+		if checksums[spec.Name] != asset.SHA256 {
+			return nil, fmt.Errorf("SHA-256 mismatch for %s", spec.Name)
 		}
 		assets = append(assets, asset)
 	}
@@ -135,110 +187,164 @@ func verifyChecksums(directory string, version releaseVersion) ([]releaseAsset, 
 
 func writeMetadata(
 	directory string,
+	platform string,
 	version releaseVersion,
 	buildNumber int,
 	commit string,
 	builtAt time.Time,
 ) error {
+	specs, err := platformAssetSpecs(platform, version)
+	if err != nil {
+		return err
+	}
+	return writeMetadataWithSpecs(
+		directory,
+		platform,
+		version,
+		buildNumber,
+		commit,
+		builtAt,
+		specs,
+	)
+}
+
+func writeMetadataWithSpecs(
+	directory string,
+	platform string,
+	version releaseVersion,
+	buildNumber int,
+	commit string,
+	builtAt time.Time,
+	specs []releaseAssetSpec,
+) error {
+	if buildNumber < 1 {
+		return fmt.Errorf("build number must be a positive integer")
+	}
 	if !commitPattern.MatchString(commit) {
 		return fmt.Errorf("commit must be a full lowercase Git SHA")
 	}
-	assets, err := verifyChecksums(directory, version)
+	assets, err := verifyChecksums(directory, specs)
 	if err != nil {
 		return err
 	}
 	metadata := releaseMetadata{
-		Version:     version.String(),
-		Channel:     version.channel(),
-		BuildNumber: buildNumber,
-		Commit:      commit,
-		BuiltAt:     builtAt.UTC().Format(time.RFC3339),
-		Assets:      assets,
+		SchemaVersion: releaseMetadataSchemaVersion,
+		Platform:      platform,
+		Version:       version.String(),
+		Channel:       version.channel(),
+		BuildNumber:   buildNumber,
+		Commit:        commit,
+		BuiltAt:       builtAt.UTC().Format(time.RFC3339),
+		Assets:        assets,
 	}
-	content, err := json.MarshalIndent(metadata, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode release metadata: %w", err)
-	}
-	content = append(content, '\n')
-	if err := os.WriteFile(filepath.Join(directory, "release-metadata.json"), content, 0o644); err != nil {
-		return fmt.Errorf("write release metadata: %w", err)
-	}
-	return nil
+	return writeJSONFile(filepath.Join(directory, "release-metadata.json"), metadata)
 }
 
-func readMetadata(directory string, version releaseVersion) (releaseMetadata, error) {
+func readMetadata(directory, platform string, version releaseVersion) (releaseMetadata, error) {
+	specs, err := platformAssetSpecs(platform, version)
+	if err != nil {
+		return releaseMetadata{}, err
+	}
+	return readMetadataWithSpecs(directory, platform, version, specs)
+}
+
+func readMetadataWithSpecs(
+	directory string,
+	platform string,
+	version releaseVersion,
+	specs []releaseAssetSpec,
+) (releaseMetadata, error) {
 	content, err := os.ReadFile(filepath.Join(directory, "release-metadata.json"))
 	if err != nil {
 		return releaseMetadata{}, fmt.Errorf("read release metadata: %w", err)
 	}
 	var metadata releaseMetadata
-	decoder := json.NewDecoder(strings.NewReader(string(content)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&metadata); err != nil {
+	if err := decodeStrictJSON(content, &metadata); err != nil {
 		return releaseMetadata{}, fmt.Errorf("decode release metadata: %w", err)
 	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return releaseMetadata{}, fmt.Errorf("release metadata contains trailing content")
+	if err := validateMetadata(metadata, platform, version, specs); err != nil {
+		return releaseMetadata{}, err
 	}
-	if metadata.Version != version.String() || metadata.Channel != version.channel() {
-		return releaseMetadata{}, fmt.Errorf("release metadata version or channel does not match")
-	}
-	if metadata.BuildNumber < 1 || !commitPattern.MatchString(metadata.Commit) {
-		return releaseMetadata{}, fmt.Errorf("release metadata build number or commit is invalid")
-	}
-	if parsed, err := time.Parse(time.RFC3339, metadata.BuiltAt); err != nil ||
-		parsed.Format(time.RFC3339) != metadata.BuiltAt {
-		return releaseMetadata{}, fmt.Errorf("release metadata build time is invalid")
-	}
-	assets, err := verifyChecksums(directory, version)
+	assets, err := verifyChecksums(directory, specs)
 	if err != nil {
 		return releaseMetadata{}, err
 	}
-	if len(metadata.Assets) != len(assets) {
+	if !equalReleaseAssets(metadata.Assets, assets) {
 		return releaseMetadata{}, fmt.Errorf("release metadata assets do not match")
-	}
-	for index := range assets {
-		if metadata.Assets[index] != assets[index] {
-			return releaseMetadata{}, fmt.Errorf("release metadata asset %s does not match", assets[index].Name)
-		}
 	}
 	return metadata, nil
 }
 
-func verifyDirectoryLayout(directory string, version releaseVersion) error {
+func validateMetadata(
+	metadata releaseMetadata,
+	platform string,
+	version releaseVersion,
+	specs []releaseAssetSpec,
+) error {
+	if metadata.SchemaVersion != releaseMetadataSchemaVersion || metadata.Platform != platform {
+		return fmt.Errorf("release metadata schema or platform does not match")
+	}
+	if metadata.Version != version.String() || metadata.Channel != version.channel() {
+		return fmt.Errorf("release metadata version or channel does not match")
+	}
+	if metadata.BuildNumber < 1 || !commitPattern.MatchString(metadata.Commit) {
+		return fmt.Errorf("release metadata build number or commit is invalid")
+	}
+	if parsed, err := time.Parse(time.RFC3339, metadata.BuiltAt); err != nil ||
+		parsed.Format(time.RFC3339) != metadata.BuiltAt {
+		return fmt.Errorf("release metadata build time is invalid")
+	}
+	if len(metadata.Assets) != len(specs) {
+		return fmt.Errorf("release metadata assets do not match")
+	}
+	for index, spec := range specs {
+		asset := metadata.Assets[index]
+		if asset.Name != spec.Name || asset.Role != spec.Role || asset.Size < 1 ||
+			!checksumLinePattern.MatchString(asset.SHA256+"  "+asset.Name) {
+			return fmt.Errorf("release metadata asset %s is invalid", spec.Name)
+		}
+	}
+	return nil
+}
+
+func verifyDirectoryLayout(directory string, specs []releaseAssetSpec, includeMetadata bool) error {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return fmt.Errorf("read release directory: %w", err)
 	}
 	actual := make([]string, 0, len(entries))
 	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("inspect release directory entry %s: %w", entry.Name(), err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("release directory entry is not a regular file: %s", entry.Name())
+		}
 		actual = append(actual, entry.Name())
 	}
 	sort.Strings(actual)
-	expected := append(expectedAssetNames(version), "SHA256SUMS", "release-metadata.json")
+	expected := append(assetSpecNames(specs), "SHA256SUMS")
+	if includeMetadata {
+		expected = append(expected, "release-metadata.json")
+	}
 	sort.Strings(expected)
 	if strings.Join(actual, "\n") != strings.Join(expected, "\n") {
-		return fmt.Errorf("release directory must contain exactly the ZIP, DMG, SHA256SUMS, and release-metadata.json")
+		return fmt.Errorf("release directory contents do not match the release contract")
 	}
 	return nil
 }
 
-func verifyRemoteDirectoryLayout(directory string, version releaseVersion) error {
-	entries, err := os.ReadDir(directory)
+func verifyPlatformDirectoryLayout(directory, platform string, version releaseVersion) error {
+	specs, err := platformAssetSpecs(platform, version)
 	if err != nil {
-		return fmt.Errorf("read downloaded release directory: %w", err)
+		return err
 	}
-	actual := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		actual = append(actual, entry.Name())
-	}
-	sort.Strings(actual)
-	expected := append(expectedAssetNames(version), "SHA256SUMS")
-	sort.Strings(expected)
-	if strings.Join(actual, "\n") != strings.Join(expected, "\n") {
-		return fmt.Errorf("downloaded release must contain exactly the ZIP, DMG, and SHA256SUMS")
-	}
-	return nil
+	return verifyDirectoryLayout(directory, specs, true)
+}
+
+func verifyRemoteDirectoryLayout(directory string, specs []releaseAssetSpec) error {
+	return verifyDirectoryLayout(directory, specs, false)
 }
 
 func verifyZIPLayout(path string) error {
@@ -264,4 +370,40 @@ func verifyZIPLayout(path string) error {
 		}
 	}
 	return nil
+}
+
+func writeJSONFile(path string, value any) error {
+	content, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode JSON: %w", err)
+	}
+	content = append(content, '\n')
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
+	}
+	return nil
+}
+
+func decodeStrictJSON(content []byte, target any) error {
+	decoder := json.NewDecoder(strings.NewReader(string(content)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return fmt.Errorf("JSON contains trailing content")
+	}
+	return nil
+}
+
+func equalReleaseAssets(left, right []releaseAsset) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }

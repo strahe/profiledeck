@@ -26,10 +26,11 @@ func run(ctx context.Context, args []string) error {
 	case "identity":
 		flags := newFlagSet("identity")
 		requested := flags.String("requested", "", "Developer ID identity override")
+		keychain := flags.String("keychain", "", "Keychain containing the signing identity")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		identity, err := discoverIdentity(ctx, runner, *requested)
+		identity, err := discoverIdentity(ctx, runner, *requested, cleanOptionalPath(*keychain))
 		if err != nil {
 			return err
 		}
@@ -41,7 +42,11 @@ func run(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		workspace, err := newReleaseWorkspace(options.releasesDirectory, options.version)
+		workspace, err := newReleaseWorkspace(
+			options.releasesDirectory,
+			options.version,
+			options.platform,
+		)
 		if err != nil {
 			return err
 		}
@@ -53,25 +58,26 @@ func run(ctx context.Context, args []string) error {
 			workspace,
 			options.identity,
 			options.notaryProfile,
+			options.keychain,
 		)
 
 	case "prepare":
-		version, releasesDirectory, err := parseWorkspaceOptions("prepare", args[1:])
+		version, releasesDirectory, platform, err := parseWorkspaceOptions("prepare", args[1:])
 		if err != nil {
 			return err
 		}
-		workspace, err := newReleaseWorkspace(releasesDirectory, version)
+		workspace, err := newReleaseWorkspace(releasesDirectory, version, platform)
 		if err != nil {
 			return err
 		}
 		return workspace.prepare()
 
 	case "cleanup":
-		version, releasesDirectory, err := parseWorkspaceOptions("cleanup", args[1:])
+		version, releasesDirectory, platform, err := parseWorkspaceOptions("cleanup", args[1:])
 		if err != nil {
 			return err
 		}
-		workspace, err := newReleaseWorkspace(releasesDirectory, version)
+		workspace, err := newReleaseWorkspace(releasesDirectory, version, platform)
 		if err != nil {
 			return err
 		}
@@ -103,11 +109,42 @@ func run(ctx context.Context, args []string) error {
 		flags := newFlagSet("notarize")
 		input := flags.String("input", "", "artifact to submit")
 		profile := flags.String("profile", "", "notarytool Keychain profile")
+		keychain := flags.String("keychain", "", "Keychain containing the notary profile")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		_, err := notarize(ctx, runner, *input, *profile)
+		_, err := notarize(ctx, runner, *input, *profile, cleanOptionalPath(*keychain))
 		return err
+
+	case "github-check":
+		flags := newFlagSet("github-check")
+		versionValue := flags.String("version", "", "release version")
+		repository := flags.String("repo", "", "GitHub owner/repository")
+		commit := flags.String("commit", "", "release Git commit")
+		platforms := flags.String("platforms", macOSPlatform, "comma-separated release platforms")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		version, err := parseReleaseVersion(*versionValue)
+		if err != nil {
+			return err
+		}
+		definitions, err := parseReleasePlatforms(*platforms, version)
+		if err != nil {
+			return err
+		}
+		if err := checkGitHubRelease(
+			ctx,
+			runner,
+			*repository,
+			version,
+			*commit,
+			definitions,
+		); err != nil {
+			return err
+		}
+		fmt.Printf("GitHub release state is ready for %s at %s\n", version.tag(), *commit)
+		return nil
 
 	case "source-check":
 		flags := newFlagSet("source-check")
@@ -124,6 +161,7 @@ func run(ctx context.Context, args []string) error {
 		commit := flags.String("commit", "", "built Git commit")
 		builtAtValue := flags.String("built-at", "", "RFC3339 build time")
 		directory := flags.String("directory", "", "artifact directory")
+		platform := flags.String("platform", macOSPlatform, "release platform")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -139,10 +177,14 @@ func run(ctx context.Context, args []string) error {
 		if err != nil {
 			return fmt.Errorf("built-at must use RFC3339: %w", err)
 		}
-		if _, err := writeChecksums(*directory, version); err != nil {
+		specs, err := platformAssetSpecs(*platform, version)
+		if err != nil {
 			return err
 		}
-		return writeMetadata(*directory, version, buildNumber, *commit, builtAt)
+		if _, err := writeChecksums(*directory, specs); err != nil {
+			return err
+		}
+		return writeMetadata(*directory, *platform, version, buildNumber, *commit, builtAt)
 
 	case "verify":
 		options, err := parseReleaseOptions("verify", args[1:], false)
@@ -151,7 +193,11 @@ func run(ctx context.Context, args []string) error {
 		}
 		directory := options.directory
 		if directory == "" {
-			workspace, err := newReleaseWorkspace(options.releasesDirectory, options.version)
+			workspace, err := newReleaseWorkspace(
+				options.releasesDirectory,
+				options.version,
+				options.platform,
+			)
 			if err != nil {
 				return err
 			}
@@ -171,38 +217,40 @@ func run(ctx context.Context, args []string) error {
 		return err
 
 	case "commit":
-		version, releasesDirectory, err := parseWorkspaceOptions("commit", args[1:])
+		version, releasesDirectory, platform, err := parseWorkspaceOptions("commit", args[1:])
 		if err != nil {
 			return err
 		}
-		workspace, err := newReleaseWorkspace(releasesDirectory, version)
+		workspace, err := newReleaseWorkspace(releasesDirectory, version, platform)
 		if err != nil {
 			return err
 		}
-		metadata, err := readMetadata(workspace.artifacts, version)
+		metadata, err := readMetadata(workspace.artifacts, platform, version)
 		if err != nil {
 			return err
 		}
-		if err := verifyDirectoryLayout(workspace.artifacts, version); err != nil {
+		if err := verifyPlatformDirectoryLayout(workspace.artifacts, platform, version); err != nil {
 			return err
 		}
 		if err := workspace.commit(); err != nil {
 			return err
 		}
 		fmt.Printf(
-			"macOS release %s (build %d) is ready: %s\n",
+			"%s release %s (build %d) is ready: %s\n",
+			platform,
 			version,
 			metadata.BuildNumber,
 			workspace.final,
 		)
 		return nil
 
-	case "draft":
-		flags := newFlagSet("draft")
+	case "assemble":
+		flags := newFlagSet("assemble")
 		versionValue := flags.String("version", "", "release version")
-		repository := flags.String("repo", "", "GitHub owner/repository")
-		releasesDirectory := flags.String("releases-dir", ".task/releases", "temporary releases directory")
-		candidatePath := flags.String("candidate", "bin/ProfileDeck.dmg", "retained release candidate DMG")
+		buildValue := flags.String("build-number", "", "release build number")
+		commit := flags.String("commit", "", "release Git commit")
+		platforms := flags.String("platforms", macOSPlatform, "comma-separated release platforms")
+		releasesDirectory := flags.String("releases-dir", ".task/releases", "release output root")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -210,22 +258,62 @@ func run(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		workspace, err := newReleaseWorkspace(*releasesDirectory, version)
+		buildNumber, err := parseBuildNumber(*buildValue)
 		if err != nil {
 			return err
 		}
-		metadata, err := readMetadata(workspace.final, version)
+		definitions, err := parseReleasePlatforms(*platforms, version)
 		if err != nil {
 			return err
 		}
-		if _, err := verifyLocalRelease(
-			ctx,
-			runner,
-			workspace.final,
+		directory, err := assembleRelease(
+			*releasesDirectory,
 			version,
-			metadata.BuildNumber,
-			false,
-		); err != nil {
+			buildNumber,
+			*commit,
+			definitions,
+		)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Release bundle is ready: %s\n", directory)
+		return nil
+
+	case "draft":
+		flags := newFlagSet("draft")
+		versionValue := flags.String("version", "", "release version")
+		buildValue := flags.String("build-number", "", "release build number")
+		repository := flags.String("repo", "", "GitHub owner/repository")
+		commit := flags.String("commit", "", "release Git commit")
+		platforms := flags.String("platforms", macOSPlatform, "comma-separated release platforms")
+		releasesDirectory := flags.String("releases-dir", ".task/releases", "temporary releases directory")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		version, err := parseReleaseVersion(*versionValue)
+		if err != nil {
+			return err
+		}
+		buildNumber, err := parseBuildNumber(*buildValue)
+		if err != nil {
+			return err
+		}
+		definitions, err := parseReleasePlatforms(*platforms, version)
+		if err != nil {
+			return err
+		}
+		bundleDirectory, err := releaseBundlePath(*releasesDirectory, version)
+		if err != nil {
+			return err
+		}
+		metadata, err := verifyReleaseBundle(
+			bundleDirectory,
+			version,
+			buildNumber,
+			*commit,
+			definitions,
+		)
+		if err != nil {
 			return err
 		}
 		release, err := createDraftRelease(
@@ -233,75 +321,17 @@ func run(ctx context.Context, args []string) error {
 			runner,
 			*repository,
 			version,
-			workspace.final,
-			metadata.Commit,
+			bundleDirectory,
+			metadata,
+			definitions,
 		)
 		if err != nil {
 			return err
 		}
-		if err := promoteCandidateDMG(
-			filepath.Join(workspace.final, installerDMGName(version)),
-			*candidatePath,
-		); err != nil {
-			return err
-		}
-		if err := workspace.removeFinal(); err != nil {
+		if err := removeReleaseBundle(*releasesDirectory, version); err != nil {
 			return err
 		}
 		fmt.Printf("Draft Release is ready for review: %s\n", release.URL)
-		fmt.Printf("Release candidate is ready: %s\n", filepath.Clean(*candidatePath))
-		return nil
-
-	case "copy-draft":
-		flags := newFlagSet("copy-draft")
-		versionValue := flags.String("version", "", "release version")
-		sourceRepository := flags.String("source-repo", "", "source GitHub owner/repository")
-		repository := flags.String("repo", "", "target GitHub owner/repository")
-		candidatePath := flags.String("candidate", "bin/ProfileDeck.dmg", "retained release candidate DMG")
-		if err := flags.Parse(args[1:]); err != nil {
-			return err
-		}
-		version, err := parseReleaseVersion(*versionValue)
-		if err != nil {
-			return err
-		}
-		release, err := copyDraftRelease(
-			ctx,
-			runner,
-			*sourceRepository,
-			*repository,
-			version,
-			*candidatePath,
-		)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Draft Release is ready for review: %s\n", release.URL)
-		return nil
-
-	case "publish":
-		flags := newFlagSet("publish")
-		versionValue := flags.String("version", "", "release version")
-		repository := flags.String("repo", "", "GitHub owner/repository")
-		candidatePath := flags.String("candidate", "bin/ProfileDeck.dmg", "retained release candidate DMG")
-		if err := flags.Parse(args[1:]); err != nil {
-			return err
-		}
-		version, err := parseReleaseVersion(*versionValue)
-		if err != nil {
-			return err
-		}
-		release, err := publishRelease(
-			ctx,
-			runner,
-			*repository,
-			version,
-			*candidatePath,
-		)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Release published: %s\n", release.URL)
 		return nil
 
 	default:
@@ -312,10 +342,12 @@ func run(ctx context.Context, args []string) error {
 type releaseOptions struct {
 	version           releaseVersion
 	buildNumber       int
+	platform          string
 	releasesDirectory string
 	directory         string
 	identity          string
 	notaryProfile     string
+	keychain          string
 }
 
 func parseReleaseOptions(name string, args []string, includeSigning bool) (releaseOptions, error) {
@@ -326,6 +358,8 @@ func parseReleaseOptions(name string, args []string, includeSigning bool) (relea
 	directory := flags.String("directory", "", "release artifact directory")
 	identity := flags.String("identity", "", "Developer ID identity")
 	notaryProfile := flags.String("notary-profile", "", "notarytool Keychain profile")
+	keychain := flags.String("keychain", "", "Keychain containing release credentials")
+	platform := flags.String("platform", macOSPlatform, "release platform")
 	if err := flags.Parse(args); err != nil {
 		return releaseOptions{}, err
 	}
@@ -335,6 +369,9 @@ func parseReleaseOptions(name string, args []string, includeSigning bool) (relea
 	}
 	buildNumber, err := parseBuildNumber(*buildValue)
 	if err != nil {
+		return releaseOptions{}, err
+	}
+	if _, err := platformAssetSpecs(*platform, version); err != nil {
 		return releaseOptions{}, err
 	}
 	if includeSigning && (*identity == "" || *notaryProfile == "") {
@@ -347,22 +384,41 @@ func parseReleaseOptions(name string, args []string, includeSigning bool) (relea
 	return releaseOptions{
 		version:           version,
 		buildNumber:       buildNumber,
+		platform:          *platform,
 		releasesDirectory: *releasesDirectory,
 		directory:         cleanDirectory,
 		identity:          *identity,
 		notaryProfile:     *notaryProfile,
+		keychain:          cleanOptionalPath(*keychain),
 	}, nil
 }
 
-func parseWorkspaceOptions(name string, args []string) (releaseVersion, string, error) {
+func cleanOptionalPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
+}
+
+func parseWorkspaceOptions(
+	name string,
+	args []string,
+) (releaseVersion, string, string, error) {
 	flags := newFlagSet(name)
 	versionValue := flags.String("version", "", "release version")
 	releasesDirectory := flags.String("releases-dir", ".task/releases", "release output root")
+	platform := flags.String("platform", macOSPlatform, "release platform")
 	if err := flags.Parse(args); err != nil {
-		return releaseVersion{}, "", err
+		return releaseVersion{}, "", "", err
 	}
 	version, err := parseReleaseVersion(*versionValue)
-	return version, *releasesDirectory, err
+	if err != nil {
+		return releaseVersion{}, "", "", err
+	}
+	if _, err := platformAssetSpecs(*platform, version); err != nil {
+		return releaseVersion{}, "", "", err
+	}
+	return version, *releasesDirectory, *platform, nil
 }
 
 func newFlagSet(name string) *flag.FlagSet {
