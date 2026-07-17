@@ -341,27 +341,17 @@ func ensureNewestRelease(
 	return nil
 }
 
-func verifyRemoteAssets(
+func downloadReleaseAssets(
 	ctx context.Context,
 	runner commandRunner,
 	repository string,
 	version releaseVersion,
-	localDirectory string,
+	release githubRelease,
+	directory string,
 ) error {
-	release, err := loadGitHubRelease(ctx, runner, repository, version.tag())
-	if err != nil {
-		return err
-	}
 	if err := validateRemoteAssetNames(release, version); err != nil {
 		return err
 	}
-	downloadDirectory, err := os.MkdirTemp("", "profiledeck-release-download-*")
-	if err != nil {
-		return fmt.Errorf("create release download directory: %w", err)
-	}
-	defer func() {
-		_ = os.RemoveAll(downloadDirectory)
-	}()
 	assets := make(map[string]githubAsset, len(release.Assets))
 	for _, asset := range release.Assets {
 		assets[asset.Name] = asset
@@ -382,9 +372,40 @@ func verifyRemoteAssets(
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(downloadDirectory, name), content, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(directory, name), content, 0o600); err != nil {
 			return fmt.Errorf("write downloaded GitHub Release asset %s: %w", name, err)
 		}
+	}
+	return verifyRemoteDirectoryLayout(directory, version)
+}
+
+func verifyRemoteAssets(
+	ctx context.Context,
+	runner commandRunner,
+	repository string,
+	version releaseVersion,
+	localDirectory string,
+) error {
+	release, err := loadGitHubRelease(ctx, runner, repository, version.tag())
+	if err != nil {
+		return err
+	}
+	downloadDirectory, err := os.MkdirTemp("", "profiledeck-release-download-*")
+	if err != nil {
+		return fmt.Errorf("create release download directory: %w", err)
+	}
+	defer func() {
+		_ = os.RemoveAll(downloadDirectory)
+	}()
+	if err := downloadReleaseAssets(
+		ctx,
+		runner,
+		repository,
+		version,
+		release,
+		downloadDirectory,
+	); err != nil {
+		return err
 	}
 	localChecksums, err := os.ReadFile(filepath.Join(localDirectory, "SHA256SUMS"))
 	if err != nil {
@@ -403,13 +424,42 @@ func verifyRemoteAssets(
 	return nil
 }
 
+func verifyRemoteCandidate(
+	ctx context.Context,
+	runner commandRunner,
+	repository string,
+	version releaseVersion,
+	release githubRelease,
+	candidatePath string,
+) error {
+	downloadDirectory, err := os.MkdirTemp("", "profiledeck-release-download-*")
+	if err != nil {
+		return fmt.Errorf("create release download directory: %w", err)
+	}
+	defer func() {
+		_ = os.RemoveAll(downloadDirectory)
+	}()
+	if err := downloadReleaseAssets(
+		ctx,
+		runner,
+		repository,
+		version,
+		release,
+		downloadDirectory,
+	); err != nil {
+		return err
+	}
+	_, err = verifyRemoteRelease(ctx, runner, downloadDirectory, version, candidatePath)
+	return err
+}
+
 func createDraftRelease(
 	ctx context.Context,
 	runner commandRunner,
 	repository string,
 	version releaseVersion,
 	directory string,
-	metadata releaseMetadata,
+	commit string,
 ) (githubRelease, error) {
 	if err := validateRepository(repository); err != nil {
 		return githubRelease{}, err
@@ -417,7 +467,7 @@ func createDraftRelease(
 	if _, err := runner.run(ctx, "gh", "auth", "status"); err != nil {
 		return githubRelease{}, err
 	}
-	if err := ensureCommitExists(ctx, runner, repository, metadata.Commit); err != nil {
+	if err := ensureCommitExists(ctx, runner, repository, commit); err != nil {
 		return githubRelease{}, err
 	}
 	if err := ensureNewestRelease(ctx, runner, repository, version); err != nil {
@@ -428,7 +478,7 @@ func createDraftRelease(
 		return githubRelease{}, err
 	}
 	if found {
-		if err := validateDraftRelease(existing, version, metadata.Commit, false); err != nil {
+		if err := validateDraftRelease(existing, version, commit, false); err != nil {
 			return githubRelease{}, fmt.Errorf("release %s already exists: %w", version.tag(), err)
 		}
 		if err := verifyRemoteAssets(ctx, runner, repository, version, directory); err != nil {
@@ -449,7 +499,7 @@ func createDraftRelease(
 		"--repo",
 		repository,
 		"--target",
-		metadata.Commit,
+		commit,
 		"--draft",
 		"--generate-notes",
 		"--title",
@@ -465,7 +515,7 @@ func createDraftRelease(
 	if err != nil {
 		return githubRelease{}, err
 	}
-	if err := validateDraftRelease(release, version, metadata.Commit, false); err != nil {
+	if err := validateDraftRelease(release, version, commit, false); err != nil {
 		return githubRelease{}, err
 	}
 	if err := verifyRemoteAssets(ctx, runner, repository, version, directory); err != nil {
@@ -474,13 +524,89 @@ func createDraftRelease(
 	return release, nil
 }
 
+func validateSourceRelease(
+	release githubRelease,
+	version releaseVersion,
+	commit string,
+) error {
+	if release.IsDraft {
+		return validateDraftRelease(release, version, commit, false)
+	}
+	return validatePublishedRelease(release, version, commit)
+}
+
+func copyDraftRelease(
+	ctx context.Context,
+	runner commandRunner,
+	sourceRepository string,
+	targetRepository string,
+	version releaseVersion,
+	candidatePath string,
+) (githubRelease, error) {
+	if err := validateRepository(sourceRepository); err != nil {
+		return githubRelease{}, err
+	}
+	if err := validateRepository(targetRepository); err != nil {
+		return githubRelease{}, err
+	}
+	if sourceRepository == targetRepository {
+		return githubRelease{}, fmt.Errorf("source and target release repositories must differ")
+	}
+	if _, err := runner.run(ctx, "gh", "auth", "status"); err != nil {
+		return githubRelease{}, err
+	}
+	source, err := loadGitHubRelease(ctx, runner, sourceRepository, version.tag())
+	if err != nil {
+		return githubRelease{}, err
+	}
+	if err := verifySourceState(ctx, runner, source.TargetCommitish); err != nil {
+		return githubRelease{}, err
+	}
+	if err := validateSourceRelease(source, version, source.TargetCommitish); err != nil {
+		return githubRelease{}, err
+	}
+	downloadDirectory, err := os.MkdirTemp("", "profiledeck-release-copy-*")
+	if err != nil {
+		return githubRelease{}, fmt.Errorf("create release copy directory: %w", err)
+	}
+	defer func() {
+		_ = os.RemoveAll(downloadDirectory)
+	}()
+	if err := downloadReleaseAssets(
+		ctx,
+		runner,
+		sourceRepository,
+		version,
+		source,
+		downloadDirectory,
+	); err != nil {
+		return githubRelease{}, err
+	}
+	if _, err := verifyRemoteRelease(
+		ctx,
+		runner,
+		downloadDirectory,
+		version,
+		candidatePath,
+	); err != nil {
+		return githubRelease{}, err
+	}
+	return createDraftRelease(
+		ctx,
+		runner,
+		targetRepository,
+		version,
+		downloadDirectory,
+		source.TargetCommitish,
+	)
+}
+
 func publishRelease(
 	ctx context.Context,
 	runner commandRunner,
 	repository string,
 	version releaseVersion,
-	directory string,
-	metadata releaseMetadata,
+	candidatePath string,
 ) (githubRelease, error) {
 	if err := validateRepository(repository); err != nil {
 		return githubRelease{}, err
@@ -492,10 +618,13 @@ func publishRelease(
 	if err != nil {
 		return githubRelease{}, err
 	}
-	if err := validateDraftRelease(release, version, metadata.Commit, true); err != nil {
+	if err := verifySourceState(ctx, runner, release.TargetCommitish); err != nil {
 		return githubRelease{}, err
 	}
-	if err := ensureCommitExists(ctx, runner, repository, metadata.Commit); err != nil {
+	if err := validateDraftRelease(release, version, release.TargetCommitish, true); err != nil {
+		return githubRelease{}, err
+	}
+	if err := ensureCommitExists(ctx, runner, repository, release.TargetCommitish); err != nil {
 		return githubRelease{}, err
 	}
 	if err := ensureNewestRelease(ctx, runner, repository, version); err != nil {
@@ -506,11 +635,18 @@ func publishRelease(
 		runner,
 		repository,
 		version.tag(),
-		metadata.Commit,
+		release.TargetCommitish,
 	); err != nil {
 		return githubRelease{}, err
 	}
-	if err := verifyRemoteAssets(ctx, runner, repository, version, directory); err != nil {
+	if err := verifyRemoteCandidate(
+		ctx,
+		runner,
+		repository,
+		version,
+		release,
+		candidatePath,
+	); err != nil {
 		return githubRelease{}, err
 	}
 	if release.ID <= 0 {
@@ -541,13 +677,26 @@ func publishRelease(
 	if err != nil {
 		return githubRelease{}, err
 	}
-	if err := validatePublishedRelease(published, version, metadata.Commit); err != nil {
+	if err := validatePublishedRelease(published, version, release.TargetCommitish); err != nil {
 		return githubRelease{}, err
 	}
-	if err := ensureTagMatchesCommit(ctx, runner, repository, version.tag(), metadata.Commit); err != nil {
+	if err := ensureTagMatchesCommit(
+		ctx,
+		runner,
+		repository,
+		version.tag(),
+		release.TargetCommitish,
+	); err != nil {
 		return githubRelease{}, err
 	}
-	if err := verifyRemoteAssets(ctx, runner, repository, version, directory); err != nil {
+	if err := verifyRemoteCandidate(
+		ctx,
+		runner,
+		repository,
+		version,
+		published,
+		candidatePath,
+	); err != nil {
 		return githubRelease{}, err
 	}
 	return published, nil

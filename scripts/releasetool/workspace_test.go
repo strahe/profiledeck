@@ -41,6 +41,15 @@ func TestReleaseWorkspacePreparesAndCommitsWithoutOverwriting(t *testing.T) {
 	if _, err := os.Stat(workspace.final); err != nil {
 		t.Fatalf("cleanup removed committed release: %v", err)
 	}
+	if err := workspace.removeFinal(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(workspace.final); !os.IsNotExist(err) {
+		t.Fatalf("consumed release still exists: %v", err)
+	}
+	if err := workspace.removeFinal(); err != nil {
+		t.Fatalf("second removal failed: %v", err)
+	}
 }
 
 func TestReleaseWorkspaceRejectsUnsafeRoot(t *testing.T) {

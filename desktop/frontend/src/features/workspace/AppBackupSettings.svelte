@@ -369,7 +369,7 @@
 				<Alert.Description>{$_("settings.backups.cleanupDescription")}</Alert.Description>
 			</Alert.Root>
 		{/if}
-		<div class="max-h-72 overflow-auto rounded-md border">
+		<div class="rounded-md border">
 			<Table.Root>
 				<Table.Header><Table.Row>
 					<Table.Head>{$_("settings.backups.table.backup")}</Table.Head>

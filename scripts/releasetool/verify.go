@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -203,6 +204,102 @@ func verifyDMG(
 	return nil
 }
 
+func appBuildNumber(ctx context.Context, runner commandRunner, appPath string) (int, error) {
+	value, err := plistValue(
+		ctx,
+		runner,
+		filepath.Join(appPath, "Contents", "Info.plist"),
+		"CFBundleVersion",
+	)
+	if err != nil {
+		return 0, fmt.Errorf("read application build number: %w", err)
+	}
+	buildNumber, err := strconv.Atoi(value)
+	if err != nil || buildNumber < 1 || strconv.Itoa(buildNumber) != value {
+		return 0, fmt.Errorf("application build number is invalid")
+	}
+	return buildNumber, nil
+}
+
+func verifyAppleReleaseArtifacts(
+	ctx context.Context,
+	runner commandRunner,
+	directory string,
+	version releaseVersion,
+	expectedBuildNumber int,
+) (int, error) {
+	temporaryRoot, err := os.MkdirTemp("", "profiledeck-release-verify-*")
+	if err != nil {
+		return 0, fmt.Errorf("create verification directory: %w", err)
+	}
+	defer func() {
+		_ = os.RemoveAll(temporaryRoot)
+	}()
+	zipPath := filepath.Join(directory, updaterZIPName(version))
+	if _, err := runner.run(ctx, "ditto", "-x", "-k", zipPath, temporaryRoot); err != nil {
+		return 0, err
+	}
+	entries, err := os.ReadDir(temporaryRoot)
+	if err != nil {
+		return 0, fmt.Errorf("read extracted updater ZIP: %w", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "ProfileDeck.app" || !entries[0].IsDir() {
+		return 0, fmt.Errorf("updater ZIP must contain exactly one top-level ProfileDeck.app")
+	}
+	appPath := filepath.Join(temporaryRoot, "ProfileDeck.app")
+	buildNumber, err := appBuildNumber(ctx, runner, appPath)
+	if err != nil {
+		return 0, err
+	}
+	if expectedBuildNumber > 0 && buildNumber != expectedBuildNumber {
+		return 0, fmt.Errorf(
+			"application build number is %d, want %d",
+			buildNumber,
+			expectedBuildNumber,
+		)
+	}
+	if err := verifyApp(ctx, runner, appPath, version, buildNumber); err != nil {
+		return 0, err
+	}
+	if err := verifyDMG(
+		ctx,
+		runner,
+		filepath.Join(directory, installerDMGName(version)),
+		version,
+		buildNumber,
+		temporaryRoot,
+	); err != nil {
+		return 0, err
+	}
+	return buildNumber, nil
+}
+
+func verifyRemoteRelease(
+	ctx context.Context,
+	runner commandRunner,
+	directory string,
+	version releaseVersion,
+	candidatePath string,
+) (int, error) {
+	if err := verifyRemoteDirectoryLayout(directory, version); err != nil {
+		return 0, err
+	}
+	if _, err := verifyChecksums(directory, version); err != nil {
+		return 0, err
+	}
+	zipPath := filepath.Join(directory, updaterZIPName(version))
+	if err := verifyZIPLayout(zipPath); err != nil {
+		return 0, err
+	}
+	if err := verifyCandidateMatchesDMG(
+		candidatePath,
+		filepath.Join(directory, installerDMGName(version)),
+	); err != nil {
+		return 0, err
+	}
+	return verifyAppleReleaseArtifacts(ctx, runner, directory, version, 0)
+}
+
 func verifyLocalRelease(
 	ctx context.Context,
 	runner commandRunner,
@@ -232,40 +329,7 @@ func verifyLocalRelease(
 	if !verifyAppleArtifacts {
 		return metadata, nil
 	}
-	temporaryRoot, err := os.MkdirTemp("", "profiledeck-release-verify-*")
-	if err != nil {
-		return releaseMetadata{}, fmt.Errorf("create verification directory: %w", err)
-	}
-	defer func() {
-		_ = os.RemoveAll(temporaryRoot)
-	}()
-	if _, err := runner.run(ctx, "ditto", "-x", "-k", zipPath, temporaryRoot); err != nil {
-		return releaseMetadata{}, err
-	}
-	entries, err := os.ReadDir(temporaryRoot)
-	if err != nil {
-		return releaseMetadata{}, fmt.Errorf("read extracted updater ZIP: %w", err)
-	}
-	if len(entries) != 1 || entries[0].Name() != "ProfileDeck.app" || !entries[0].IsDir() {
-		return releaseMetadata{}, fmt.Errorf("updater ZIP must contain exactly one top-level ProfileDeck.app")
-	}
-	if err := verifyApp(
-		ctx,
-		runner,
-		filepath.Join(temporaryRoot, "ProfileDeck.app"),
-		version,
-		buildNumber,
-	); err != nil {
-		return releaseMetadata{}, err
-	}
-	if err := verifyDMG(
-		ctx,
-		runner,
-		filepath.Join(directory, installerDMGName(version)),
-		version,
-		buildNumber,
-		temporaryRoot,
-	); err != nil {
+	if _, err := verifyAppleReleaseArtifacts(ctx, runner, directory, version, buildNumber); err != nil {
 		return releaseMetadata{}, err
 	}
 	return metadata, nil

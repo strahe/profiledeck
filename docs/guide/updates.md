@@ -13,15 +13,15 @@ A fresh stable build starts on Stable, and a fresh Beta build starts on Beta. La
 
 Automatic checks are on by default. ProfileDeck checks after startup and every six hours while it remains open or hidden in the menu bar.
 
-Open **Settings → App updates** to choose the update channel, turn automatic checks on or off, check now, or view download progress. ProfileDeck stays open while an update downloads.
+Open **Settings → General → App updates** to choose the update channel, turn automatic checks on or off, check now, or view download progress. ProfileDeck stays open while an update downloads. After an update is found, the sidebar also shows its download and preparation status.
 
 You can change channels while the updater is idle, up to date, or showing an error. ProfileDeck waits until an active check, download, or pending restart finishes before allowing another channel change. When automatic checks are enabled, changing channels starts a new check immediately.
 
 ## Install a downloaded update
 
-When the update is ready, choose **Restart now** to install it. Choose **Later** to keep working; ProfileDeck never restarts without confirmation.
+When the update is ready, choose **Restart to update** in the sidebar or **Restart now** in the prompt. Choose **Later** to keep working; the sidebar action remains available, and ProfileDeck never restarts without confirmation.
 
-Before restarting, ProfileDeck verifies the update and creates an encrypted automatic application backup. If verification, backup, or preparation fails, the update is not installed and the current version remains in place. Update backups share the latest-ten automatic retention pool. Return to **Settings → App updates** and try again later.
+Before restarting, ProfileDeck verifies the update and creates an encrypted automatic application backup. If verification, backup, or preparation fails, the update is not installed and the current version remains in place. Update backups share the latest-ten automatic retention pool. Return to **Settings → General → App updates** and try again later.
 
 ## Understand the downloaded files
 

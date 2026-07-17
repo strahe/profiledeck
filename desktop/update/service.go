@@ -36,6 +36,7 @@ const (
 )
 
 type UpdateStatus struct {
+	Revision            uint64 `json:"revision"`
 	Configured          bool   `json:"configured"`
 	Automatic           bool   `json:"automatic"`
 	Channel             string `json:"channel"`
@@ -399,22 +400,26 @@ func (service *Service) checkAndDownload(ctx context.Context) UpdateStatus {
 		status.ErrorCode = ""
 	})
 	release, err := engine.Check(ctx)
-	service.setStatus(func(status *UpdateStatus) { status.LastCheckedAtUnixMS = service.now().UnixMilli() })
+	checkedAtUnixMS := service.now().UnixMilli()
 	if err != nil {
-		service.failCheck(err)
+		service.failCheck(err, checkedAtUnixMS)
 		return service.Status(ctx)
 	}
 	if release == nil {
-		service.setState(StateUpToDate)
+		service.setStatus(func(status *UpdateStatus) {
+			status.State = StateUpToDate
+			status.LastCheckedAtUnixMS = checkedAtUnixMS
+		})
 		return service.Status(ctx)
 	}
 	service.setStatus(func(status *UpdateStatus) {
 		status.State = StateDownloading
 		status.AvailableVersion = release.Version
 		status.TotalBytes = release.Artifact.Size
+		status.LastCheckedAtUnixMS = checkedAtUnixMS
 	})
 	if err := engine.DownloadAndInstall(ctx); err != nil {
-		service.failCheck(err)
+		service.failCheck(err, 0)
 		return service.Status(ctx)
 	}
 	service.setStatus(func(status *UpdateStatus) {
@@ -425,7 +430,7 @@ func (service *Service) checkAndDownload(ctx context.Context) UpdateStatus {
 	return service.Status(ctx)
 }
 
-func (service *Service) failCheck(err error) {
+func (service *Service) failCheck(err error, checkedAtUnixMS int64) {
 	code := ErrorCode(err)
 	service.mu.RLock()
 	state := service.status.State
@@ -437,6 +442,9 @@ func (service *Service) failCheck(err error) {
 	service.setStatus(func(status *UpdateStatus) {
 		status.State = StateError
 		status.ErrorCode = code
+		if checkedAtUnixMS > 0 {
+			status.LastCheckedAtUnixMS = checkedAtUnixMS
+		}
 	})
 }
 
@@ -464,6 +472,9 @@ func (service *Service) setState(state string) {
 func (service *Service) setStatus(change func(*UpdateStatus)) {
 	service.mu.Lock()
 	change(&service.status)
+	// Events and RPC snapshots may arrive out of order; revisions let the UI
+	// discard an older snapshot without coupling delivery to the service lock.
+	service.status.Revision++
 	status, emit := service.status, service.emit
 	service.mu.Unlock()
 	if emit != nil {

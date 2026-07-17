@@ -17,7 +17,7 @@ Use the macOS Desktop app for a visual workflow, or build the CLI for terminal u
 
 Published DMGs are Developer ID signed and notarized by Apple. If macOS reports that the app is damaged or cannot verify its developer, delete that copy and download it again from the official Releases page instead of bypassing the warning.
 
-Signed Desktop releases can follow Stable updates or opt into Beta updates from **Settings → App updates**. Local development builds do not check for updates.
+Signed Desktop releases can follow Stable updates or opt into Beta updates from **Settings → General → App updates**. Local development builds do not check for updates.
 
 ## Build and use the CLI
 

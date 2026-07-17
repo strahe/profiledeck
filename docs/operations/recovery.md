@@ -1,6 +1,6 @@
 # Diagnostics, Backups, and Recovery
 
-Open **Diagnostics** when Profile switching is blocked or a switch did not finish. Open **Settings → Application data and backups** to protect or restore ProfileDeck's saved application data. These are separate workflows.
+Open **Diagnostics** when Profile switching is blocked or a switch did not finish. Open **Settings → Backups** to protect or restore ProfileDeck's saved application data. These are separate workflows.
 
 ## Check an unfinished switch first
 

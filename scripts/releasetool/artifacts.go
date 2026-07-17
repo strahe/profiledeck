@@ -223,6 +223,24 @@ func verifyDirectoryLayout(directory string, version releaseVersion) error {
 	return nil
 }
 
+func verifyRemoteDirectoryLayout(directory string, version releaseVersion) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return fmt.Errorf("read downloaded release directory: %w", err)
+	}
+	actual := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		actual = append(actual, entry.Name())
+	}
+	sort.Strings(actual)
+	expected := append(expectedAssetNames(version), "SHA256SUMS")
+	sort.Strings(expected)
+	if strings.Join(actual, "\n") != strings.Join(expected, "\n") {
+		return fmt.Errorf("downloaded release must contain exactly the ZIP, DMG, and SHA256SUMS")
+	}
+	return nil
+}
+
 func verifyZIPLayout(path string) error {
 	reader, err := zip.OpenReader(path)
 	if err != nil {

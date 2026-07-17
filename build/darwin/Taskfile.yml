@@ -8,8 +8,7 @@ vars:
   DEFAULT_BINARY: '{{.BIN_DIR}}/{{.APP_NAME}}'
   DEFAULT_UNIVERSAL_DIR: '{{.BIN_DIR}}/darwin-universal'
   DEFAULT_UNIVERSAL_BINARY: '{{.DEFAULT_UNIVERSAL_DIR}}/{{.APP_NAME}}'
-  DEFAULT_APP_PATH: '{{.BIN_DIR}}/ProfileDeck.app'
-  RELEASES_DIR: '{{.RELEASES_DIR | default "dist/releases"}}'
+  RELEASES_DIR: '{{.RELEASES_DIR | default ".task/releases"}}'
   NOTARY_PROFILE: '{{.NOTARY_PROFILE | default "apple-notary"}}'
 
 tasks:
@@ -91,11 +90,13 @@ tasks:
         --output "{{.APP_PATH}}/Contents/Info.plist"
       - plutil -lint "{{.APP_PATH}}/Contents/Info.plist"
     vars:
-      APP_PATH: '{{.APP_PATH | default .DEFAULT_APP_PATH}}'
       WORK_DIR: '{{.WORK_DIR | default .DEFAULT_UNIVERSAL_DIR}}'
       UNIVERSAL_BINARY: '{{.UNIVERSAL_BINARY | default .DEFAULT_UNIVERSAL_BINARY}}'
       BUNDLE_VERSION: '{{.VERSION | default "0.0.0"}}'
       BUNDLE_BUILD_NUMBER: '{{.BUILD_NUMBER | default "1"}}'
+    requires:
+      vars:
+        - APP_PATH
 
   release:
     desc: Build, sign, notarize, package, and verify a macOS release

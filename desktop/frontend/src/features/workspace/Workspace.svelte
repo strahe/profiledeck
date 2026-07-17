@@ -6,6 +6,7 @@
 	import { _, locale } from "svelte-i18n";
 	import { toast } from "svelte-sonner";
 	import BotIcon from "@lucide/svelte/icons/bot";
+	import CircleArrowUpIcon from "@lucide/svelte/icons/circle-arrow-up";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import OrbitIcon from "@lucide/svelte/icons/orbit";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -27,6 +28,7 @@
 	import type { ClaudeCodeDetectResult, ClaudeCodeProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/claudecode/models";
 	import type { CodexConfigSet, CodexDetectResult, CodexProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
 	import type { DoctorResult } from "../../../bindings/github.com/strahe/profiledeck/internal/doctor/models";
+	import { darkThemeAppIconURL, lightThemeAppIconURL } from "$lib/app-icon";
 	import StatusBadge from "$lib/components/app/StatusBadge.svelte";
 	import * as Alert from "$lib/components/ui/alert";
 	import * as AlertDialog from "$lib/components/ui/alert-dialog";
@@ -48,6 +50,7 @@
 	import AntigravityProfiles from "../profiles/AntigravityProfiles.svelte";
 	import { AntigravityQuotaReadPolicy } from "../profiles/antigravity-quota-policy.js";
 	import { AntigravityQuotaController } from "../profiles/antigravity-quota.svelte.js";
+	import { CodexStartupQuotaReadCoordinator } from "../profiles/codex-quota-policy.js";
 	import CodexProfiles from "../profiles/CodexProfiles.svelte";
 	import ClaudeCodeProfiles from "../profiles/ClaudeCodeProfiles.svelte";
 	import type { AntigravityProfileRoute, ClaudeCodeProfileRoute, CodexProfileRoute, ProfileUseRequest } from "../profiles/types";
@@ -56,11 +59,13 @@
 	import UsagePage from "../usage/UsagePage.svelte";
 	import DiagnosticsPage from "./DiagnosticsPage.svelte";
 	import GlobalSettings from "./GlobalSettings.svelte";
+	import { selectLatestUpdateStatus } from "./update-status-policy.js";
 
 	type WorkspaceView = "profiles" | "antigravity-profiles" | "claude-code-profiles" | "usage" | "codex-settings" | "settings" | "diagnostics";
 	type AgentID = "codex" | "antigravity" | "claude-code";
 	type Appearance = "system" | "light" | "dark";
 	type Platform = "macos" | "windows" | "linux";
+	type GlobalSettingsTab = "general" | "backups";
 
 	type DesktopChangeEvent = {
 		kind: string;
@@ -117,11 +122,14 @@
 	let persistedSidebarCollapsed = $state(false);
 	let settingsLoaded = $state(false);
 	let automaticBackups = $state(true);
+	let globalSettingsTab = $state<GlobalSettingsTab>("general");
+	let contentViewport = $state<HTMLDivElement | null>(null);
 	let startupRecoveryRedirected = false;
 	let lastToast = "";
 	let invalidRoute = "";
 	let currentPath = $state(router.location);
 	let updateStatus = $state<UpdateStatus>({
+		revision: 0,
 		configured: false,
 		automatic: true,
 		channel: "",
@@ -157,9 +165,9 @@
 	let antigravityUseRequest = $state<ProfileUseRequest | null>(null);
 	let claudeCodeUseRequest = $state<ProfileUseRequest | null>(null);
 	let useRequestSequence = 0;
-	let codexStartupQuotaReadStarted = false;
 
 	const codexRuntime = provideCodexRuntime({ showError, showNotice });
+	const codexStartupQuotaRead = new CodexStartupQuotaReadCoordinator();
 	const antigravityQuota = new AntigravityQuotaController({ showError });
 	const antigravityQuotaReadPolicy = new AntigravityQuotaReadPolicy();
 	let workspaceRoute = $derived(parseWorkspaceRoute(currentPath));
@@ -197,6 +205,38 @@
 		}
 	});
 	let titlebarOffset = $derived(sidebarOpen ? "10rem" : platform === "macos" ? "5rem" : "3rem");
+	let sidebarUpdate = $derived.by(() => {
+		void $locale;
+		const version = updateStatus.available_version;
+		if (updateStatus.state === "downloading") {
+			const percent = updateStatus.total_bytes > 0
+				? Math.round(Math.min(100, Math.max(0, (updateStatus.downloaded_bytes / updateStatus.total_bytes) * 100)))
+				: 0;
+			return {
+				visible: true,
+				ready: false,
+				label: translate("settings.updates.sidebar.downloading", { value: percent }),
+				accessibleLabel: translate("settings.updates.sidebar.downloadingDescription", { version, value: percent }),
+			};
+		}
+		if (updateStatus.state === "verifying" || updateStatus.state === "preparing") {
+			return {
+				visible: true,
+				ready: false,
+				label: translate("settings.updates.sidebar.preparing"),
+				accessibleLabel: translate("settings.updates.sidebar.preparingDescription", { version }),
+			};
+		}
+		if (updateStatus.state === "ready") {
+			return {
+				visible: true,
+				ready: true,
+				label: translate("settings.updates.sidebar.restart"),
+				accessibleLabel: translate("settings.updates.sidebar.restartDescription", { version }),
+			};
+		}
+		return { visible: false, ready: false, label: "", accessibleLabel: "" };
+	});
 
 	$effect(() => {
 		const profiles = codexProfileSummaries;
@@ -217,13 +257,6 @@
 				updateRestartPromptOpen = true;
 			});
 		}
-	});
-
-	$effect(() => {
-		const profileID = codexActiveProfileID;
-		if (!profileID || codexStartupQuotaReadStarted) return;
-		codexStartupQuotaReadStarted = true;
-		untrack(() => { void codexRuntime.readQuota(profileID); });
 	});
 
 	$effect(() => {
@@ -275,7 +308,7 @@
 				if (!isCancelError(event.data)) showError(event.data);
 			}),
 			Events.On("profiledeck:update-status", (event) => {
-				updateStatus = event.data as UpdateStatus;
+				applyUpdateStatus(event.data as UpdateStatus);
 			}),
 		];
 		// Subscribe before the initial snapshot so a fast background download
@@ -296,6 +329,7 @@
 		try {
 			const dashboardResult = await track("dashboard", AppService.Dashboard());
 			applyDashboardResult(dashboardResult);
+			codexRuntime.setProfiles(codexProfileSummaries);
 			antigravityQuota.setProfiles(antigravityProfileSummaries);
 			const startupProfileID = antigravityQuotaReadPolicy.startup(
 				dashboardResult.active_states?.find((state) => state.provider_id === antigravityProviderID)?.profile_id ?? "",
@@ -308,7 +342,17 @@
 			if (routeAgent && isAgentEnabled(routeAgent)) {
 				tasks.push(routeAgent === "antigravity" ? refreshAntigravityDetect() : routeAgent === "claude-code" ? refreshClaudeCodeDetect() : refreshDetect());
 			}
-			if (reloadRuntime && isAgentEnabled("codex")) tasks.push(codexRuntime.load());
+			if (reloadRuntime && isAgentEnabled("codex")) {
+				const runtimeReady = codexRuntime.load();
+				tasks.push(runtimeReady);
+				tasks.push(codexStartupQuotaRead.start(
+					dashboardResult.active_states?.find((state) => state.provider_id === codexProviderID)?.profile_id ?? "",
+					runtimeReady,
+					(profileID) => { void codexRuntime.readQuota(profileID); },
+				));
+			} else if (!isAgentEnabled("codex")) {
+				tasks.push(codexStartupQuotaRead.start("", Promise.resolve(), () => {}));
+			}
 			await Promise.all(tasks);
 		} catch (error) {
 			if (!isCancelError(error)) {
@@ -341,7 +385,7 @@
 
 	async function loadUpdateStatus() {
 		try {
-			updateStatus = await track("update-status", UpdateService.Status());
+			applyUpdateStatus(await track("update-status", UpdateService.Status()));
 		} catch (error) {
 			if (!isCancelError(error)) showError(error);
 		}
@@ -351,8 +395,9 @@
 		if (updateBusy) return;
 		updateBusy = "automatic";
 		try {
-			updateStatus = await track("update-automatic", UpdateService.SetAutomatic(enabled));
-			if (updateStatus.error_code === "settings_unavailable") {
+			const next = await track("update-automatic", UpdateService.SetAutomatic(enabled));
+			applyUpdateStatus(next);
+			if (next.error_code === "settings_unavailable") {
 				toast.error(translate("settings.updates.error.settingsUnavailable"));
 			}
 		} catch (error) {
@@ -366,8 +411,9 @@
 		if (updateBusy || channel === updateStatus.channel) return;
 		updateBusy = "channel";
 		try {
-			updateStatus = await track("update-channel", UpdateService.SetChannel(channel));
-			if (updateStatus.error_code === "settings_unavailable") {
+			const next = await track("update-channel", UpdateService.SetChannel(channel));
+			applyUpdateStatus(next);
+			if (next.error_code === "settings_unavailable") {
 				toast.error(translate("settings.updates.error.settingsUnavailable"));
 			}
 		} catch (error) {
@@ -381,10 +427,11 @@
 		if (updateBusy) return;
 		updateBusy = "check";
 		try {
-			updateStatus = await track("update-check", UpdateService.CheckAndDownload());
-			if (updateStatus.state === "error") {
-				toast.error(updateFailureMessage(updateStatus.error_code));
-			} else if (updateStatus.state === "up_to_date") {
+			const next = await track("update-check", UpdateService.CheckAndDownload());
+			applyUpdateStatus(next);
+			if (next.state === "error") {
+				toast.error(updateFailureMessage(next.error_code));
+			} else if (next.state === "up_to_date") {
 				showNotice(translate("settings.updates.upToDateTitle"), translate("settings.updates.state.upToDate"));
 			}
 		} catch (error) {
@@ -413,6 +460,10 @@
 			case "artifact_verification_failed": return translate("settings.updates.error.artifactRejected");
 			default: return translate("settings.updates.error.generic");
 		}
+	}
+
+	function applyUpdateStatus(next: UpdateStatus) {
+		updateStatus = selectLatestUpdateStatus(updateStatus, next);
 	}
 
 	async function changeLanguage(value: string) {
@@ -640,7 +691,6 @@
 		if (!agentEnabled(next.agents ?? [], "codex")) {
 			detectResult = null;
 			detectError = "";
-			codexStartupQuotaReadStarted = false;
 			codexRuntime.reset();
 		}
 		if (!agentEnabled(next.agents ?? [], "antigravity")) {
@@ -771,6 +821,12 @@
 		}
 	}
 
+	function selectGlobalSettingsTab(value: string) {
+		if (value !== "general" && value !== "backups") return;
+		globalSettingsTab = value;
+		contentViewport?.scrollTo({ top: 0 });
+	}
+
 	function normalizeAppearance(value: string): Appearance {
 		return value === "light" || value === "dark" ? value : "system";
 	}
@@ -896,7 +952,8 @@
 		<Sidebar.Root collapsible="icon" class="md:top-[52px]! md:bottom-0! md:h-[calc(100svh-52px)]!">
 			<Sidebar.Header class="no-drag shrink-0">
 				<div class="flex h-8 min-w-0 items-center gap-2">
-					<div class="grid size-8 shrink-0 select-none place-items-center rounded-md bg-primary text-sm font-bold text-primary-foreground">P</div>
+					<img src={lightThemeAppIconURL} alt="" draggable="false" class="size-8 shrink-0 select-none rounded-md dark:hidden" />
+					<img src={darkThemeAppIconURL} alt="" draggable="false" class="hidden size-8 shrink-0 select-none rounded-md dark:block" />
 					<div class="min-w-0 truncate text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">ProfileDeck</div>
 				</div>
 			</Sidebar.Header>
@@ -926,6 +983,36 @@
 
 			<Sidebar.Footer class="no-drag shrink-0">
 				<Sidebar.Menu>
+					{#if sidebarUpdate.visible}
+						<Sidebar.MenuItem>
+							{#if sidebarUpdate.ready}
+								<Sidebar.MenuButton
+									variant="outline"
+									class="[&_svg]:size-5!"
+									tooltipContent={sidebarUpdate.accessibleLabel}
+									aria-label={sidebarUpdate.accessibleLabel}
+									aria-disabled={!!updateBusy}
+									onclick={() => { if (!updateBusy) updateRestartPromptOpen = true; }}
+								>
+									<CircleArrowUpIcon />
+									<span class="group-data-[collapsible=icon]:hidden">{sidebarUpdate.label}</span>
+								</Sidebar.MenuButton>
+							{:else}
+								<Sidebar.MenuButton
+									variant="outline"
+									class="[&_svg]:size-5!"
+									tooltipContent={sidebarUpdate.accessibleLabel}
+								>
+									{#snippet child({ props })}
+										<div {...props} role="status" aria-label={sidebarUpdate.accessibleLabel}>
+											<Spinner />
+											<span class="group-data-[collapsible=icon]:hidden">{sidebarUpdate.label}</span>
+										</div>
+									{/snippet}
+								</Sidebar.MenuButton>
+							{/if}
+						</Sidebar.MenuItem>
+					{/if}
 					<Sidebar.MenuItem>
 						<Sidebar.MenuButton
 							class="[&_svg]:size-5!"
@@ -964,6 +1051,15 @@
 						</Tabs.List>
 					</Tabs.Root>
 				</div>
+			{:else if workspaceRoute.view === "settings"}
+				<div class="no-drag shrink-0 border-b px-4">
+					<Tabs.Root value={globalSettingsTab} onValueChange={selectGlobalSettingsTab}>
+						<Tabs.List variant="line" class="h-auto bg-transparent p-0">
+							<Tabs.Trigger value="general">{$_("settings.tabs.general")}</Tabs.Trigger>
+							<Tabs.Trigger value="backups">{$_("settings.tabs.backups")}</Tabs.Trigger>
+						</Tabs.List>
+					</Tabs.Root>
+				</div>
 			{/if}
 
 			{#if dashboardError && workspaceRoute.view !== "diagnostics"}
@@ -982,7 +1078,7 @@
 				</div>
 			{/if}
 
-			<div class="min-h-0 flex-1 overflow-auto p-4">
+			<div bind:this={contentViewport} class="min-h-0 flex-1 overflow-auto p-4">
 				{#if !agentWorkspaceReady}
 					{#if loading}<div class="grid h-full place-items-center"><Spinner /></div>{/if}
 				{:else if workspaceRoute.view === "profiles"}
@@ -1046,6 +1142,7 @@
 					<CodexSettings />
 				{:else if workspaceRoute.view === "settings"}
 					<GlobalSettings
+						section={globalSettingsTab}
 						language={languagePreference}
 						{appearance}
 						{languageBusy}

@@ -15,6 +15,7 @@
 	import AppBackupSettings from "./AppBackupSettings.svelte";
 
 	let {
+		section,
 		language,
 		appearance,
 		languageBusy,
@@ -31,6 +32,7 @@
 		databaseHealthy,
 		onAutomaticBackupsChange,
 	}: {
+		section: "general" | "backups";
 		language: DesktopLanguage;
 		appearance: "system" | "light" | "dark";
 		languageBusy: boolean;
@@ -101,113 +103,127 @@
 </script>
 
 <ContentContainer class="max-w-3xl">
-	<SectionCard title={$_("settings.preferences.title")}>
-		<Field.FieldGroup>
-			<SettingsRow label={$_("settings.language.label")} description={$_("settings.language.description")} forID="desktop-language">
-				{#snippet control()}
-					{#if languageBusy}<Spinner />{/if}
-					<Select.Root type="single" value={language} onValueChange={onLanguageChange}>
-						<Select.Trigger id="desktop-language" class="min-w-36" disabled={languageBusy}>
-							{language === "zh-CN" ? $_("settings.language.zhCN") : language === "en-US" ? $_("settings.language.enUS") : $_("settings.language.auto")}
-						</Select.Trigger>
-						<Select.Content><Select.Group>
-							<Select.Item value="auto" label={$_("settings.language.auto")} />
-							<Select.Item value="zh-CN" label={$_("settings.language.zhCN")} />
-							<Select.Item value="en-US" label={$_("settings.language.enUS")} />
-						</Select.Group></Select.Content>
-					</Select.Root>
-				{/snippet}
-			</SettingsRow>
-
-			<SettingsRow label={$_("settings.appearance.label")} description={$_("settings.appearance.description")} forID="desktop-appearance">
-				{#snippet control()}
-					{#if appearanceBusy}<Spinner />{/if}
-					<Select.Root type="single" value={appearance} onValueChange={onAppearanceChange}>
-						<Select.Trigger id="desktop-appearance" class="min-w-36" disabled={appearanceBusy}>
-							{appearance === "dark" ? $_("settings.appearance.dark") : appearance === "light" ? $_("settings.appearance.light") : $_("settings.appearance.system")}
-						</Select.Trigger>
-						<Select.Content><Select.Group>
-							<Select.Item value="system" label={$_("settings.appearance.system")} />
-							<Select.Item value="light" label={$_("settings.appearance.light")} />
-							<Select.Item value="dark" label={$_("settings.appearance.dark")} />
-						</Select.Group></Select.Content>
-					</Select.Root>
-				{/snippet}
-			</SettingsRow>
-		</Field.FieldGroup>
-	</SectionCard>
-
-	<AppBackupSettings {automaticBackups} {databaseHealthy} {onAutomaticBackupsChange} />
-
-	{#if updateStatus.configured}
-		<SectionCard title={$_("settings.updates.title")} description={$_("settings.updates.description")}>
+	{#if section === "general"}
+		<SectionCard title={$_("settings.preferences.title")}>
 			<Field.FieldGroup>
-				<SettingsRow
-					label={$_("settings.updates.channel.label")}
-					description={updateChannelDescription()}
-					forID="desktop-update-channel"
-					disabled={channelChangeDisabled}
-				>
+				<SettingsRow label={$_("settings.language.label")} description={$_("settings.language.description")} forID="desktop-language">
 					{#snippet control()}
-						{#if updateBusy === "channel"}<Spinner />{/if}
-						<Select.Root type="single" value={updateStatus.channel} onValueChange={onChannelChange}>
-							<Select.Trigger
-								id="desktop-update-channel"
-								class="min-w-28"
-								disabled={channelChangeDisabled || !!updateBusy}
-							>
-								{updateStatus.channel === "beta"
-									? $_("settings.updates.channel.beta")
-									: $_("settings.updates.channel.stable")}
+						{#if languageBusy}<Spinner />{/if}
+						<Select.Root type="single" value={language} onValueChange={onLanguageChange}>
+							<Select.Trigger id="desktop-language" class="min-w-36" disabled={languageBusy}>
+								{language === "zh-CN" ? $_("settings.language.zhCN") : language === "en-US" ? $_("settings.language.enUS") : $_("settings.language.auto")}
 							</Select.Trigger>
 							<Select.Content><Select.Group>
-								<Select.Item value="stable" label={$_("settings.updates.channel.stable")} />
-								<Select.Item value="beta" label={$_("settings.updates.channel.beta")} />
+								<Select.Item value="auto" label={$_("settings.language.auto")} />
+								<Select.Item value="zh-CN" label={$_("settings.language.zhCN")} />
+								<Select.Item value="en-US" label={$_("settings.language.enUS")} />
 							</Select.Group></Select.Content>
 						</Select.Root>
 					{/snippet}
 				</SettingsRow>
 
-				<SettingsRow
-					label={$_("settings.updates.automatic.label")}
-					description={$_("settings.updates.automatic.description")}
-					forID="desktop-automatic-updates"
-				>
+				<SettingsRow label={$_("settings.appearance.label")} description={$_("settings.appearance.description")} forID="desktop-appearance">
 					{#snippet control()}
-						{#if updateBusy === "automatic"}<Spinner />{/if}
-						<Switch.Root
-							id="desktop-automatic-updates"
-							checked={updateStatus.automatic}
-							disabled={!!updateBusy}
-							onCheckedChange={onAutomaticChange}
-						/>
-					{/snippet}
-				</SettingsRow>
-
-				<SettingsRow
-					label={$_("settings.updates.status")}
-					description={updateStateDescription()}
-					message={`${$_("settings.updates.currentVersion", { values: { version: updateStatus.current_version } })} · ${lastCheckedDescription()}`}
-				>
-					{#snippet control()}
-						{#if updateStatus.state === "ready"}
-							<Button size="sm" disabled={!!updateBusy} onclick={onRestart}>
-								{#if updateBusy === "restart"}<Spinner />{/if}
-								{$_("actions.restartNow")}
-							</Button>
-						{:else}
-							<Button size="sm" variant="outline" disabled={updateActive || !!updateBusy} onclick={onCheckForUpdates}>
-								{#if updateActive || updateBusy === "check"}<Spinner />{/if}
-								{$_("actions.checkForUpdates")}
-							</Button>
-						{/if}
+						{#if appearanceBusy}<Spinner />{/if}
+						<Select.Root type="single" value={appearance} onValueChange={onAppearanceChange}>
+							<Select.Trigger id="desktop-appearance" class="min-w-36" disabled={appearanceBusy}>
+								{appearance === "dark" ? $_("settings.appearance.dark") : appearance === "light" ? $_("settings.appearance.light") : $_("settings.appearance.system")}
+							</Select.Trigger>
+							<Select.Content><Select.Group>
+								<Select.Item value="system" label={$_("settings.appearance.system")} />
+								<Select.Item value="light" label={$_("settings.appearance.light")} />
+								<Select.Item value="dark" label={$_("settings.appearance.dark")} />
+							</Select.Group></Select.Content>
+						</Select.Root>
 					{/snippet}
 				</SettingsRow>
 			</Field.FieldGroup>
+		</SectionCard>
 
-			{#if updateStatus.state === "downloading"}
-				<Progress class="mt-4" value={downloadPercent} aria-label={$_("settings.updates.downloadProgress", { values: { value: Math.round(downloadPercent) } })} />
+		<SectionCard title={$_("settings.updates.title")} description={$_("settings.updates.description")}>
+			{#if updateStatus.configured}
+				<Field.FieldGroup>
+					<SettingsRow
+						label={$_("settings.updates.channel.label")}
+						description={updateChannelDescription()}
+						forID="desktop-update-channel"
+						disabled={channelChangeDisabled}
+					>
+						{#snippet control()}
+							{#if updateBusy === "channel"}<Spinner />{/if}
+							<Select.Root type="single" value={updateStatus.channel} onValueChange={onChannelChange}>
+								<Select.Trigger
+									id="desktop-update-channel"
+									class="min-w-28"
+									disabled={channelChangeDisabled || !!updateBusy}
+								>
+									{updateStatus.channel === "beta"
+										? $_("settings.updates.channel.beta")
+										: $_("settings.updates.channel.stable")}
+								</Select.Trigger>
+								<Select.Content><Select.Group>
+									<Select.Item value="stable" label={$_("settings.updates.channel.stable")} />
+									<Select.Item value="beta" label={$_("settings.updates.channel.beta")} />
+								</Select.Group></Select.Content>
+							</Select.Root>
+						{/snippet}
+					</SettingsRow>
+
+					<SettingsRow
+						label={$_("settings.updates.automatic.label")}
+						description={$_("settings.updates.automatic.description")}
+						forID="desktop-automatic-updates"
+					>
+						{#snippet control()}
+							{#if updateBusy === "automatic"}<Spinner />{/if}
+							<Switch.Root
+								id="desktop-automatic-updates"
+								checked={updateStatus.automatic}
+								disabled={!!updateBusy}
+								onCheckedChange={onAutomaticChange}
+							/>
+						{/snippet}
+					</SettingsRow>
+
+					<SettingsRow
+						label={$_("settings.updates.status")}
+						description={updateStateDescription()}
+						message={`${$_("settings.updates.currentVersion", { values: { version: updateStatus.current_version } })} · ${lastCheckedDescription()}`}
+					>
+						{#snippet control()}
+							{#if updateStatus.state === "ready"}
+								<Button size="sm" disabled={!!updateBusy} onclick={onRestart}>
+									{#if updateBusy === "restart"}<Spinner />{/if}
+									{$_("actions.restartNow")}
+								</Button>
+							{:else}
+								<Button size="sm" variant="outline" disabled={updateActive || !!updateBusy} onclick={onCheckForUpdates}>
+									{#if updateActive || updateBusy === "check"}<Spinner />{/if}
+									{$_("actions.checkForUpdates")}
+								</Button>
+							{/if}
+						{/snippet}
+					</SettingsRow>
+				</Field.FieldGroup>
+
+				{#if updateStatus.state === "downloading"}
+					<Progress class="mt-4" value={downloadPercent} aria-label={$_("settings.updates.downloadProgress", { values: { value: Math.round(downloadPercent) } })} />
+				{/if}
+			{:else}
+				<Field.FieldGroup>
+					<SettingsRow
+						label={$_("settings.updates.status")}
+						description={updateStateDescription()}
+						message={$_("settings.updates.currentVersion", { values: { version: updateStatus.current_version } })}
+					>
+						{#snippet control()}
+							<Button size="sm" variant="outline" disabled>{$_("actions.checkForUpdates")}</Button>
+						{/snippet}
+					</SettingsRow>
+				</Field.FieldGroup>
 			{/if}
 		</SectionCard>
+	{:else}
+		<AppBackupSettings {automaticBackups} {databaseHealthy} {onAutomaticBackupsChange} />
 	{/if}
 </ContentContainer>

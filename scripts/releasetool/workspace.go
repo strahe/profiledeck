@@ -104,3 +104,23 @@ func (workspace releaseWorkspace) commit() error {
 	}
 	return nil
 }
+
+func (workspace releaseWorkspace) removeFinal() error {
+	if filepath.Dir(workspace.final) != workspace.root {
+		return fmt.Errorf("unsafe final release path")
+	}
+	info, err := os.Lstat(workspace.final)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect final release directory: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("final release path is not a directory: %s", workspace.final)
+	}
+	if err := os.RemoveAll(workspace.final); err != nil {
+		return fmt.Errorf("remove consumed release artifacts: %w", err)
+	}
+	return nil
+}

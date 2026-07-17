@@ -88,6 +88,26 @@ func TestVerifyZIPLayout(t *testing.T) {
 	}
 }
 
+func TestVerifyRemoteDirectoryLayoutRejectsExtraFiles(t *testing.T) {
+	t.Parallel()
+	version, _ := parseReleaseVersion("1.2.3")
+	directory := t.TempDir()
+	for _, name := range append(expectedAssetNames(version), "SHA256SUMS") {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := verifyRemoteDirectoryLayout(directory, version); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "release-metadata.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyRemoteDirectoryLayout(directory, version); err == nil {
+		t.Fatal("downloaded release with an extra file passed verification")
+	}
+}
+
 func writeTestZIP(t *testing.T, path string, names []string) {
 	t.Helper()
 	file, err := os.Create(path)

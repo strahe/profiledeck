@@ -651,6 +651,10 @@ const messages = {
 		},
 		settings: {
 			title: "Settings",
+			tabs: {
+				general: "General",
+				backups: "Backups",
+			},
 			preferences: {
 				title: "Preferences",
 			},
@@ -735,6 +739,14 @@ const messages = {
 			updates: {
 				title: "App updates",
 				description: "Download updates in the background and choose when to restart.",
+				sidebar: {
+					downloading: "Update {value}%",
+					downloadingDescription: "Downloading version {version}: {value}%",
+					preparing: "Preparing update",
+					preparingDescription: "Preparing version {version}",
+					restart: "Restart to update",
+					restartDescription: "Restart to update to version {version}",
+				},
 				channel: {
 					label: "Update channel",
 					description: "Stable receives regular releases. Beta also receives early releases.",
@@ -1594,6 +1606,10 @@ const messages = {
 		},
 		settings: {
 			title: "设置",
+			tabs: {
+				general: "常规",
+				backups: "备份",
+			},
 			preferences: {
 				title: "偏好设置",
 			},
@@ -1678,6 +1694,14 @@ const messages = {
 			updates: {
 				title: "应用更新",
 				description: "在后台下载更新，并由你选择何时重启。",
+				sidebar: {
+					downloading: "更新 {value}%",
+					downloadingDescription: "正在下载版本 {version}：{value}%",
+					preparing: "正在准备更新",
+					preparingDescription: "正在准备版本 {version}",
+					restart: "重启并更新",
+					restartDescription: "重启并更新至版本 {version}",
+				},
 				channel: {
 					label: "更新通道",
 					description: "正式版通道仅接收正式发布；Beta 通道还会接收抢先体验版本。",

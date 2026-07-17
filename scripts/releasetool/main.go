@@ -197,11 +197,12 @@ func run(ctx context.Context, args []string) error {
 		)
 		return nil
 
-	case "draft", "publish":
-		flags := newFlagSet(args[0])
+	case "draft":
+		flags := newFlagSet("draft")
 		versionValue := flags.String("version", "", "release version")
 		repository := flags.String("repo", "", "GitHub owner/repository")
-		releasesDirectory := flags.String("releases-dir", "dist/releases", "local releases directory")
+		releasesDirectory := flags.String("releases-dir", ".task/releases", "temporary releases directory")
+		candidatePath := flags.String("candidate", "bin/ProfileDeck.dmg", "retained release candidate DMG")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -227,28 +228,75 @@ func run(ctx context.Context, args []string) error {
 		); err != nil {
 			return err
 		}
-		if args[0] == "draft" {
-			release, err := createDraftRelease(
-				ctx,
-				runner,
-				*repository,
-				version,
-				workspace.final,
-				metadata,
-			)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Draft Release is ready for review: %s\n", release.URL)
-			return nil
+		release, err := createDraftRelease(
+			ctx,
+			runner,
+			*repository,
+			version,
+			workspace.final,
+			metadata.Commit,
+		)
+		if err != nil {
+			return err
+		}
+		if err := promoteCandidateDMG(
+			filepath.Join(workspace.final, installerDMGName(version)),
+			*candidatePath,
+		); err != nil {
+			return err
+		}
+		if err := workspace.removeFinal(); err != nil {
+			return err
+		}
+		fmt.Printf("Draft Release is ready for review: %s\n", release.URL)
+		fmt.Printf("Release candidate is ready: %s\n", filepath.Clean(*candidatePath))
+		return nil
+
+	case "copy-draft":
+		flags := newFlagSet("copy-draft")
+		versionValue := flags.String("version", "", "release version")
+		sourceRepository := flags.String("source-repo", "", "source GitHub owner/repository")
+		repository := flags.String("repo", "", "target GitHub owner/repository")
+		candidatePath := flags.String("candidate", "bin/ProfileDeck.dmg", "retained release candidate DMG")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		version, err := parseReleaseVersion(*versionValue)
+		if err != nil {
+			return err
+		}
+		release, err := copyDraftRelease(
+			ctx,
+			runner,
+			*sourceRepository,
+			*repository,
+			version,
+			*candidatePath,
+		)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Draft Release is ready for review: %s\n", release.URL)
+		return nil
+
+	case "publish":
+		flags := newFlagSet("publish")
+		versionValue := flags.String("version", "", "release version")
+		repository := flags.String("repo", "", "GitHub owner/repository")
+		candidatePath := flags.String("candidate", "bin/ProfileDeck.dmg", "retained release candidate DMG")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		version, err := parseReleaseVersion(*versionValue)
+		if err != nil {
+			return err
 		}
 		release, err := publishRelease(
 			ctx,
 			runner,
 			*repository,
 			version,
-			workspace.final,
-			metadata,
+			*candidatePath,
 		)
 		if err != nil {
 			return err
@@ -274,7 +322,7 @@ func parseReleaseOptions(name string, args []string, includeSigning bool) (relea
 	flags := newFlagSet(name)
 	versionValue := flags.String("version", "", "release version")
 	buildValue := flags.String("build-number", "", "bundle build number")
-	releasesDirectory := flags.String("releases-dir", "dist/releases", "release output root")
+	releasesDirectory := flags.String("releases-dir", ".task/releases", "release output root")
 	directory := flags.String("directory", "", "release artifact directory")
 	identity := flags.String("identity", "", "Developer ID identity")
 	notaryProfile := flags.String("notary-profile", "", "notarytool Keychain profile")
@@ -309,7 +357,7 @@ func parseReleaseOptions(name string, args []string, includeSigning bool) (relea
 func parseWorkspaceOptions(name string, args []string) (releaseVersion, string, error) {
 	flags := newFlagSet(name)
 	versionValue := flags.String("version", "", "release version")
-	releasesDirectory := flags.String("releases-dir", "dist/releases", "release output root")
+	releasesDirectory := flags.String("releases-dir", ".task/releases", "release output root")
 	if err := flags.Parse(args); err != nil {
 		return releaseVersion{}, "", err
 	}

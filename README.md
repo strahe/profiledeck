@@ -9,7 +9,7 @@ ProfileDeck saves local AI coding tool logins and settings as Profiles, then let
 - **Desktop:** [Download the signed Universal app for macOS 14+](https://github.com/strahe/profiledeck/releases)
 - **CLI:** [Build from source](docs/guide/getting-started.md#build-and-use-the-cli)
 
-Signed Desktop releases can follow the Stable channel or opt into Beta updates from **Settings → App updates**.
+Signed Desktop releases can follow the Stable channel or opt into Beta updates from **Settings → General → App updates**.
 
 ## Supported tools
 

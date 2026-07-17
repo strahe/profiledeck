@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
@@ -22,6 +24,128 @@ import (
 
 type failSecondProviderPolicy struct {
 	calls int
+}
+
+func TestRunWithSharedLockQueuesConcurrentWork(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	if _, err := initSwitchingTestRuntime(ctx, configDir); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	service := newSwitchingTestEnvironment(t, configDir).service
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseFirst) }) }
+	t.Cleanup(release)
+	go func() {
+		firstDone <- service.RunWithSharedLock(ctx, "first", func(context.Context) error {
+			close(firstStarted)
+			<-releaseFirst
+			return nil
+		})
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first shared-lock operation")
+	}
+
+	secondStarted := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- service.RunWithSharedLock(ctx, "second", func(context.Context) error {
+			close(secondStarted)
+			return nil
+		})
+	}()
+
+	select {
+	case <-secondStarted:
+		t.Fatal("second shared-lock operation started before the first completed")
+	case err := <-secondDone:
+		t.Fatalf("second shared-lock operation returned while queued: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("expected first shared-lock operation to succeed, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first shared-lock operation to finish")
+	}
+	select {
+	case <-secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued shared-lock operation")
+	}
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("expected queued shared-lock operation to succeed, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued shared-lock operation to finish")
+	}
+}
+
+func TestRunWithSharedLockHonorsCancellationWhileQueued(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	if _, err := initSwitchingTestRuntime(ctx, configDir); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	service := newSwitchingTestEnvironment(t, configDir).service
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan error, 1)
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseFirst) }) }
+	t.Cleanup(release)
+	go func() {
+		firstDone <- service.RunWithSharedLock(ctx, "first", func(context.Context) error {
+			close(firstStarted)
+			<-releaseFirst
+			return nil
+		})
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first shared-lock operation")
+	}
+
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	called := false
+	err := service.RunWithSharedLock(canceledCtx, "canceled", func(context.Context) error {
+		called = true
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled queued operation, got %v", err)
+	}
+	if called {
+		t.Fatal("expected canceled queued operation not to run")
+	}
+
+	release()
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("expected first shared-lock operation to succeed, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first shared-lock operation to finish")
+	}
 }
 
 func (policy *failSecondProviderPolicy) RequireAgent(context.Context, agent.ID) error {

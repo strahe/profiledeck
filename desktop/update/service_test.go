@@ -117,8 +117,8 @@ func TestServiceSwitchesChannelOnlyWhileUpdateIsIdle(t *testing.T) {
 
 func TestServiceCheckStateMachineAndReadyState(t *testing.T) {
 	service, engine := newUpdateTestService(t, time.Hour)
-	var states []string
-	service.emit = func(status UpdateStatus) { states = append(states, status.State) }
+	var emitted []UpdateStatus
+	service.emit = func(status UpdateStatus) { emitted = append(emitted, status) }
 	engine.release = &updater.Release{
 		Version:  "0.1.0-beta.2",
 		Artifact: updater.Artifact{Filename: "ProfileDeck_0.1.0-beta.2_macos_universal.zip", Size: 128},
@@ -139,6 +139,13 @@ func TestServiceCheckStateMachineAndReadyState(t *testing.T) {
 		t.Fatalf("unexpected ready status: %#v", status)
 	}
 	wantStates := []string{StateChecking, StateDownloading, StateVerifying, StatePreparing, StateReady}
+	states := make([]string, 0, len(emitted))
+	for index, emittedStatus := range emitted {
+		states = append(states, emittedStatus.State)
+		if index > 0 && emittedStatus.Revision <= emitted[index-1].Revision {
+			t.Fatalf("update revisions did not increase: %#v", emitted)
+		}
+	}
 	states = compactStates(states)
 	if len(states) != len(wantStates) {
 		t.Fatalf("state sequence = %#v, want %#v", states, wantStates)
@@ -152,6 +159,46 @@ func TestServiceCheckStateMachineAndReadyState(t *testing.T) {
 	service.CheckAndDownload(context.Background())
 	if engine.checks.Load() != 1 {
 		t.Fatalf("ready update should be retained until restart, checks=%d", engine.checks.Load())
+	}
+}
+
+func TestServicePublishesCheckCompletionWithTimestampAndNewRevision(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		check     func() (*updater.Release, error)
+		wantState string
+	}{
+		{name: "up to date", wantState: StateUpToDate},
+		{
+			name: "check failed",
+			check: func() (*updater.Release, error) {
+				return nil, updateError(ErrorFeedUnavailable, errors.New("offline"))
+			},
+			wantState: StateError,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, engine := newUpdateTestService(t, time.Hour)
+			checkedAt := time.UnixMilli(1_752_700_000_000)
+			service.now = func() time.Time { return checkedAt }
+			engine.check = test.check
+			var emitted []UpdateStatus
+			service.emit = func(status UpdateStatus) { emitted = append(emitted, status) }
+
+			status := service.CheckAndDownload(context.Background())
+			if status.State != test.wantState || status.LastCheckedAtUnixMS != checkedAt.UnixMilli() {
+				t.Fatalf("unexpected completed status: %#v", status)
+			}
+			if len(emitted) != 2 || emitted[0].State != StateChecking || emitted[1].State != test.wantState {
+				t.Fatalf("unexpected emitted statuses: %#v", emitted)
+			}
+			if emitted[0].LastCheckedAtUnixMS != 0 || emitted[1].LastCheckedAtUnixMS != checkedAt.UnixMilli() {
+				t.Fatalf("check timestamp was not committed with the result: %#v", emitted)
+			}
+			if emitted[1].Revision <= emitted[0].Revision || status.Revision != emitted[1].Revision {
+				t.Fatalf("update revision did not advance with the result: %#v", emitted)
+			}
+		})
 	}
 }
 

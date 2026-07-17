@@ -20,14 +20,23 @@ import (
 const operationRandomBytes = 6
 
 type Service struct {
-	paths        runtime.Paths
-	stores       store.Factory
-	policy       agent.Policy
-	dependencies Dependencies
+	paths          runtime.Paths
+	stores         store.Factory
+	policy         agent.Policy
+	dependencies   Dependencies
+	sharedLockGate chan struct{}
 }
 
 func NewService(paths runtime.Paths, stores store.Factory, policy agent.Policy, dependencies Dependencies) *Service {
-	return &Service{paths: paths, stores: stores, policy: policy, dependencies: dependencies}
+	sharedLockGate := make(chan struct{}, 1)
+	sharedLockGate <- struct{}{}
+	return &Service{
+		paths:          paths,
+		stores:         stores,
+		policy:         policy,
+		dependencies:   dependencies,
+		sharedLockGate: sharedLockGate,
+	}
 }
 
 func (service *Service) RunMaintenance(ctx context.Context, req maintenance.Request, mutation maintenance.Func) error {
@@ -78,6 +87,15 @@ func (service *Service) RunWithSharedLock(ctx context.Context, operation string,
 	if run == nil {
 		return apperror.New(apperror.CommandFailed, "shared-lock operation is required")
 	}
+	// Queue same-process runtime work so it cannot be misreported as another
+	// ProfileDeck process; the filesystem lock still rejects external contention.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-service.sharedLockGate:
+	}
+	defer func() { service.sharedLockGate <- struct{}{} }()
+
 	operationID, err := newOperationID(operation, time.Now())
 	if err != nil {
 		return apperror.Wrap(apperror.OperationCreateFailed, "failed to create shared-lock operation id", err)
