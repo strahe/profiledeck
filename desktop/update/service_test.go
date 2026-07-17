@@ -2,9 +2,6 @@ package update
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -24,16 +21,97 @@ import (
 func TestServiceDisablesUnconfiguredBuilds(t *testing.T) {
 	application := newUpdateTestApplication(t)
 	for _, config := range []BuildConfig{
-		{CurrentVersion: "dev", FeedURL: DefaultFeedURL, PublicKeyBase64: testPublicKeyBase64(t)},
-		{CurrentVersion: "not-semver", FeedURL: DefaultFeedURL, PublicKeyBase64: testPublicKeyBase64(t)},
-		{CurrentVersion: "0.1.0-alpha.1", PublicKeyBase64: testPublicKeyBase64(t)},
-		{CurrentVersion: "0.1.0-alpha.1", FeedURL: DefaultFeedURL},
-		{CurrentVersion: "0.1.0-alpha.1", FeedURL: "https://github.com/strahe/profiledeck/releases/download/alpha/feed.json", PublicKeyBase64: testPublicKeyBase64(t)},
+		{CurrentVersion: "dev"},
+		{CurrentVersion: "not-semver"},
+		{CurrentVersion: "0.1.0-alpha.1"},
+		{CurrentVersion: "0.1.0-beta.0"},
 	} {
-		status := NewService(application, config).Status(context.Background())
+		status := NewService(context.Background(), application, config).Status(context.Background())
 		if status.Configured || status.State != StateUnavailable {
 			t.Fatalf("build should be unavailable: config=%#v status=%#v", config, status)
 		}
+	}
+}
+
+func TestServiceConfiguresStableAndPrereleaseBuilds(t *testing.T) {
+	for _, test := range []struct {
+		version string
+		channel string
+	}{
+		{version: "0.1.0", channel: ChannelStable},
+		{version: "0.1.0-beta.1", channel: ChannelBeta},
+	} {
+		application := newUpdateTestApplication(t)
+		version := test.version
+		status := NewService(context.Background(), application, BuildConfig{CurrentVersion: version}).Status(context.Background())
+		if !status.Configured || status.State != StateIdle || status.Channel != test.channel {
+			t.Fatalf("build should be configured: version=%q status=%#v", version, status)
+		}
+	}
+}
+
+func TestServicePersistsChannelInsteadOfReplacingItFromBuildVersion(t *testing.T) {
+	ctx := context.Background()
+	application := newUpdateTestApplication(t)
+	service := NewService(ctx, application, BuildConfig{CurrentVersion: "0.1.0-beta.1"})
+	if status := service.Status(ctx); status.Channel != ChannelBeta {
+		t.Fatalf("beta build default channel = %q", status.Channel)
+	}
+	status, err := service.SetChannel(ctx, ChannelStable)
+	if err != nil || status.Channel != ChannelStable {
+		t.Fatalf("switch stable: status=%#v err=%v", status, err)
+	}
+	restarted := NewService(ctx, application, BuildConfig{CurrentVersion: "0.2.0-beta.1"})
+	if status := restarted.Status(ctx); status.Channel != ChannelStable {
+		t.Fatalf("new beta build replaced persisted channel: %#v", status)
+	}
+}
+
+func TestServiceSwitchesChannelOnlyWhileUpdateIsIdle(t *testing.T) {
+	ctx := context.Background()
+	service, engine := newUpdateTestService(t, time.Hour)
+	status, err := service.SetChannel(ctx, ChannelStable)
+	if err != nil || status.Channel != ChannelStable {
+		t.Fatalf("switch stable: status=%#v err=%v", status, err)
+	}
+	status.LastCheckedAtUnixMS = 123
+	service.status = status
+	status, err = service.SetChannel(ctx, ChannelBeta)
+	if err != nil {
+		t.Fatalf("switch beta: %v", err)
+	}
+	if status.Channel != ChannelBeta ||
+		status.State != StateIdle ||
+		status.LastCheckedAtUnixMS != 0 ||
+		status.AvailableVersion != "" {
+		t.Fatalf("channel switch did not reset channel-specific state: %#v", status)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	engine.check = func() (*updater.Release, error) {
+		close(started)
+		<-release
+		return nil, nil
+	}
+	done := make(chan UpdateStatus, 1)
+	go func() { done <- service.CheckAndDownload(ctx) }()
+	<-started
+	_, err = service.SetChannel(ctx, ChannelStable)
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.Code != apperror.UpdateChannelBusy {
+		t.Fatalf("channel switch during check error = %v", err)
+	}
+	close(release)
+	<-done
+	if status := service.Status(ctx); status.Channel != ChannelBeta {
+		t.Fatalf("busy channel switch changed provider: %#v", status)
+	}
+
+	service.status.State = StateReady
+	_, err = service.SetChannel(ctx, ChannelStable)
+	if !errors.As(err, &appErr) || appErr.Code != apperror.UpdateChannelBusy {
+		t.Fatalf("channel switch with ready update error = %v", err)
 	}
 }
 
@@ -42,8 +120,8 @@ func TestServiceCheckStateMachineAndReadyState(t *testing.T) {
 	var states []string
 	service.emit = func(status UpdateStatus) { states = append(states, status.State) }
 	engine.release = &updater.Release{
-		Version:  "0.1.0-alpha.2",
-		Artifact: updater.Artifact{Filename: "ProfileDeck_0.1.0-alpha.2_darwin_arm64.zip", Size: 128},
+		Version:  "0.1.0-beta.2",
+		Artifact: updater.Artifact{Filename: "ProfileDeck_0.1.0-beta.2_macos_universal.zip", Size: 128},
 	}
 	engine.download = func() error {
 		service.setStatus(func(status *UpdateStatus) {
@@ -57,7 +135,7 @@ func TestServiceCheckStateMachineAndReadyState(t *testing.T) {
 	}
 
 	status := service.CheckAndDownload(context.Background())
-	if status.State != StateReady || status.AvailableVersion != "0.1.0-alpha.2" || status.DownloadedBytes != 128 {
+	if status.State != StateReady || status.AvailableVersion != "0.1.0-beta.2" || status.DownloadedBytes != 128 {
 		t.Fatalf("unexpected ready status: %#v", status)
 	}
 	wantStates := []string{StateChecking, StateDownloading, StateVerifying, StatePreparing, StateReady}
@@ -106,6 +184,23 @@ func TestServiceSerialisesConcurrentChecksAndAllowsRetry(t *testing.T) {
 	}
 }
 
+func TestServiceReportsArtifactVerificationFailure(t *testing.T) {
+	service, engine := newUpdateTestService(t, time.Hour)
+	engine.release = &updater.Release{
+		Version:  "0.1.0-beta.2",
+		Artifact: updater.Artifact{Filename: "ProfileDeck_0.1.0-beta.2_macos_universal.zip", Size: 128},
+	}
+	engine.download = func() error {
+		service.setState(StateVerifying)
+		return errors.New("digest mismatch")
+	}
+
+	status := service.CheckAndDownload(context.Background())
+	if status.State != StateError || status.ErrorCode != ErrorArtifactVerificationFailed {
+		t.Fatalf("unexpected verification failure status: %#v", status)
+	}
+}
+
 func TestServiceSchedulerStartsImmediatelyRunsPeriodicallyAndStopsWhenDisabled(t *testing.T) {
 	service, engine := newUpdateTestService(t, 20*time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -151,7 +246,7 @@ func TestRestartCreatesEncryptedApplicationBackup(t *testing.T) {
 	service.executable = func() (string, error) { return executable, nil }
 	engine.downloadedPath = filepath.Join(os.TempDir(), "wails-update-test", "ProfileDeck.app")
 	service.status.State = StateReady
-	service.status.AvailableVersion = "0.1.0-alpha.2"
+	service.status.AvailableVersion = "0.1.0-beta.2"
 
 	if err := service.Restart(context.Background()); err != nil {
 		t.Fatalf("restart: %v", err)
@@ -191,7 +286,7 @@ func TestRestartStopsBeforeUpdaterWhenSnapshotFails(t *testing.T) {
 	}
 	service.executable = func() (string, error) { return executable, nil }
 	service.status.State = StateReady
-	service.status.AvailableVersion = "0.1.0-alpha.2"
+	service.status.AvailableVersion = "0.1.0-beta.2"
 	engine.downloadedPath = "staged"
 	if err := os.Remove(service.application.Runtime().Paths().Database); err != nil {
 		t.Fatal(err)
@@ -220,7 +315,7 @@ func TestRestartRejectsConcurrentAndRepeatedAttempts(t *testing.T) {
 	}
 	service.executable = func() (string, error) { return executable, nil }
 	service.status.State = StateReady
-	service.status.AvailableVersion = "0.1.0-alpha.2"
+	service.status.AvailableVersion = "0.1.0-beta.2"
 	engine.downloadedPath = "staged"
 
 	started := make(chan struct{})
@@ -291,11 +386,9 @@ func (engine *fakeUpdateEngine) DownloadedPath() string { return engine.download
 
 func newUpdateTestService(t *testing.T, interval time.Duration) (*Service, *fakeUpdateEngine) {
 	t.Helper()
-	service := NewService(newUpdateTestApplication(t), BuildConfig{
-		CurrentVersion:  "0.1.0-alpha.1",
-		FeedURL:         DefaultFeedURL,
-		PublicKeyBase64: testPublicKeyBase64(t),
-		CheckInterval:   interval,
+	service := NewService(context.Background(), newUpdateTestApplication(t), BuildConfig{
+		CurrentVersion: "0.1.0-beta.1",
+		CheckInterval:  interval,
 	})
 	engine := &fakeUpdateEngine{}
 	service.engine = engine
@@ -315,15 +408,6 @@ func newUpdateTestApplication(t *testing.T) *coreapp.Application {
 	}
 	t.Cleanup(application.Close)
 	return application
-}
-
-func testPublicKeyBase64(t *testing.T) string {
-	t.Helper()
-	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return base64.StdEncoding.EncodeToString(publicKey)
 }
 
 func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {

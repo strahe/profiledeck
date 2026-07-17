@@ -21,6 +21,10 @@ export function SetAutomatic(enabled: boolean): $CancellablePromise<$models.Upda
     return $Call.ByID(2063367537, enabled);
 }
 
+export function SetChannel(channel: string): $CancellablePromise<$models.UpdateStatus> {
+    return $Call.ByID(2103121129, channel);
+}
+
 export function Status(): $CancellablePromise<$models.UpdateStatus> {
     return $Call.ByID(2583455528);
 }

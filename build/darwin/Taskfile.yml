@@ -3,6 +3,15 @@ version: '3'
 includes:
   common: ../Taskfile.yml
 
+vars:
+  MACOS_MIN_VERSION: '14.0'
+  DEFAULT_BINARY: '{{.BIN_DIR}}/{{.APP_NAME}}'
+  DEFAULT_UNIVERSAL_DIR: '{{.BIN_DIR}}/darwin-universal'
+  DEFAULT_UNIVERSAL_BINARY: '{{.DEFAULT_UNIVERSAL_DIR}}/{{.APP_NAME}}'
+  DEFAULT_APP_PATH: '{{.BIN_DIR}}/ProfileDeck.app'
+  RELEASES_DIR: '{{.RELEASES_DIR | default "dist/releases"}}'
+  NOTARY_PROFILE: '{{.NOTARY_PROFILE | default "apple-notary"}}'
+
 tasks:
   build:
     deps:
@@ -10,18 +19,200 @@ tasks:
         vars:
           DEV: '{{.DEV}}'
     cmds:
-      - mkdir -p "{{.BIN_DIR}}"
-      - 'go build {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.APP_NAME}}" ./desktop'
+      - mkdir -p "$(dirname '{{.OUTPUT_PATH}}')"
+      - 'go build {{.BUILD_FLAGS}} -o "{{.OUTPUT_PATH}}" ./desktop'
     vars:
-      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if .EXTRA_TAGS}}-tags {{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s"{{end}}'
+      OUTPUT_PATH: '{{.OUTPUT | default .DEFAULT_BINARY}}'
+      RELEASE_LDFLAGS: '{{if .VERSION}}-w -s -X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.buildDate={{.BUILD_DATE}}{{else}}-w -s{{end}}'
+      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if .EXTRA_TAGS}}-tags {{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="{{.RELEASE_LDFLAGS}}"{{end}}'
     env:
       GOOS: darwin
       GOARCH: '{{.ARCH | default ARCH}}'
       CGO_ENABLED: '1'
-      MACOSX_DEPLOYMENT_TARGET: '14.0'
-      CGO_CFLAGS: '-O2 -g -mmacosx-version-min=14.0'
-      CGO_CXXFLAGS: '-O2 -g -mmacosx-version-min=14.0'
-      CGO_LDFLAGS: '-O2 -g -mmacosx-version-min=14.0'
+      MACOSX_DEPLOYMENT_TARGET: '{{.MACOS_MIN_VERSION}}'
+      CGO_CFLAGS: '-O2 -g -mmacosx-version-min={{.MACOS_MIN_VERSION}}'
+      CGO_CXXFLAGS: '-O2 -g -mmacosx-version-min={{.MACOS_MIN_VERSION}}'
+      CGO_LDFLAGS: '-O2 -g -mmacosx-version-min={{.MACOS_MIN_VERSION}}'
+
+  build:universal:
+    desc: Build a Universal macOS desktop binary
+    deps:
+      - task: build
+        vars:
+          ARCH: arm64
+          OUTPUT: '{{.SLICE_DIR}}/{{.APP_NAME}}-arm64'
+          VERSION: '{{.VERSION}}'
+          COMMIT: '{{.COMMIT}}'
+          BUILD_DATE: '{{.BUILD_DATE}}'
+      - task: build
+        vars:
+          ARCH: amd64
+          OUTPUT: '{{.SLICE_DIR}}/{{.APP_NAME}}-amd64'
+          VERSION: '{{.VERSION}}'
+          COMMIT: '{{.COMMIT}}'
+          BUILD_DATE: '{{.BUILD_DATE}}'
+    cmds:
+      - mkdir -p "$(dirname '{{.OUTPUT_PATH}}')"
+      - >-
+        wails3 tool lipo
+        -input "{{.SLICE_DIR}}/{{.APP_NAME}}-arm64"
+        -input "{{.SLICE_DIR}}/{{.APP_NAME}}-amd64"
+        -output "{{.OUTPUT_PATH}}"
+      - xcrun lipo "{{.OUTPUT_PATH}}" -verify_arch arm64 x86_64
+    vars:
+      SLICE_DIR: '{{.WORK_DIR | default .DEFAULT_UNIVERSAL_DIR}}'
+      OUTPUT_PATH: '{{.OUTPUT | default .DEFAULT_UNIVERSAL_BINARY}}'
+
+  package:universal:
+    desc: Package a Universal macOS application bundle
+    deps:
+      - task: common:generate:icons
+      - task: build:universal
+        vars:
+          WORK_DIR: '{{.WORK_DIR}}'
+          OUTPUT: '{{.UNIVERSAL_BINARY}}'
+          VERSION: '{{.VERSION}}'
+          COMMIT: '{{.COMMIT}}'
+          BUILD_DATE: '{{.BUILD_DATE}}'
+    cmds:
+      - mkdir -p "{{.APP_PATH}}/Contents/MacOS"
+      - mkdir -p "{{.APP_PATH}}/Contents/Resources"
+      - install -m 0755 "{{.UNIVERSAL_BINARY}}" "{{.APP_PATH}}/Contents/MacOS/{{.APP_NAME}}"
+      - install -m 0644 build/darwin/icons.icns "{{.APP_PATH}}/Contents/Resources/icons.icns"
+      - >-
+        if [ -f build/darwin/Assets.car ]; then
+          install -m 0644 build/darwin/Assets.car "{{.APP_PATH}}/Contents/Resources/Assets.car";
+        fi
+      - >-
+        go run ./scripts/releasetool plist
+        --version "{{.BUNDLE_VERSION}}"
+        --build-number "{{.BUNDLE_BUILD_NUMBER}}"
+        --template build/darwin/Info.plist.tmpl
+        --output "{{.APP_PATH}}/Contents/Info.plist"
+      - plutil -lint "{{.APP_PATH}}/Contents/Info.plist"
+    vars:
+      APP_PATH: '{{.APP_PATH | default .DEFAULT_APP_PATH}}'
+      WORK_DIR: '{{.WORK_DIR | default .DEFAULT_UNIVERSAL_DIR}}'
+      UNIVERSAL_BINARY: '{{.UNIVERSAL_BINARY | default .DEFAULT_UNIVERSAL_BINARY}}'
+      BUNDLE_VERSION: '{{.VERSION | default "0.0.0"}}'
+      BUNDLE_BUILD_NUMBER: '{{.BUILD_NUMBER | default "1"}}'
+
+  release:
+    desc: Build, sign, notarize, package, and verify a macOS release
+    cmds:
+      - >-
+        go run ./scripts/releasetool preflight
+        --version "{{.VERSION}}"
+        --build-number "{{.BUILD_NUMBER}}"
+        --releases-dir "{{.RELEASES_DIR}}"
+        --identity "{{.RELEASE_SIGN_IDENTITY}}"
+        --notary-profile "{{.NOTARY_PROFILE}}"
+      - >-
+        go run ./scripts/releasetool prepare
+        --version "{{.VERSION}}"
+        --releases-dir "{{.RELEASES_DIR}}"
+      - defer: >-
+          go run ./scripts/releasetool cleanup
+          --version "{{.VERSION}}"
+          --releases-dir "{{.RELEASES_DIR}}"
+      - task: package:universal
+        vars:
+          VERSION: '{{.VERSION}}'
+          BUILD_NUMBER: '{{.BUILD_NUMBER}}'
+          COMMIT: '{{.RELEASE_COMMIT}}'
+          BUILD_DATE: '{{.RELEASE_BUILD_DATE}}'
+          WORK_DIR: '{{.RELEASE_WORK_DIR}}/slices'
+          UNIVERSAL_BINARY: '{{.RELEASE_WORK_DIR}}/{{.APP_NAME}}'
+          APP_PATH: '{{.RELEASE_APP_PATH}}'
+      - >-
+        go run ./scripts/releasetool source-check
+        --commit "{{.RELEASE_COMMIT}}"
+      - >-
+        codesign
+        --force
+        --sign "{{.RELEASE_SIGN_IDENTITY}}"
+        --options runtime
+        --timestamp
+        "{{.RELEASE_APP_PATH}}/Contents/MacOS/{{.APP_NAME}}"
+      - >-
+        codesign
+        --force
+        --sign "{{.RELEASE_SIGN_IDENTITY}}"
+        --options runtime
+        --timestamp
+        "{{.RELEASE_APP_PATH}}"
+      - codesign --verify --deep --strict --verbose=2 "{{.RELEASE_APP_PATH}}"
+      - >-
+        ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent
+        "{{.RELEASE_APP_PATH}}"
+        "{{.RELEASE_WORK_DIR}}/ProfileDeck-notary.zip"
+      - >-
+        go run ./scripts/releasetool notarize
+        --input "{{.RELEASE_WORK_DIR}}/ProfileDeck-notary.zip"
+        --profile "{{.NOTARY_PROFILE}}"
+      - xcrun stapler staple "{{.RELEASE_APP_PATH}}"
+      - xcrun stapler validate "{{.RELEASE_APP_PATH}}"
+      - >-
+        ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent
+        "{{.RELEASE_APP_PATH}}"
+        "{{.RELEASE_ARTIFACT_DIR}}/{{.UPDATER_ZIP_NAME}}"
+      - mkdir -p "{{.RELEASE_WORK_DIR}}/dmg"
+      - ditto "{{.RELEASE_APP_PATH}}" "{{.RELEASE_WORK_DIR}}/dmg/ProfileDeck.app"
+      - ln -s /Applications "{{.RELEASE_WORK_DIR}}/dmg/Applications"
+      - >-
+        diskutil image create from
+        --format UDZO
+        --volumeName ProfileDeck
+        "{{.RELEASE_WORK_DIR}}/dmg"
+        "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
+      - >-
+        codesign
+        --force
+        --sign "{{.RELEASE_SIGN_IDENTITY}}"
+        --timestamp
+        "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
+      - codesign --verify --verbose=2 "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
+      - >-
+        go run ./scripts/releasetool notarize
+        --input "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
+        --profile "{{.NOTARY_PROFILE}}"
+      - xcrun stapler staple "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
+      - xcrun stapler validate "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
+      - >-
+        go run ./scripts/releasetool manifest
+        --version "{{.VERSION}}"
+        --build-number "{{.BUILD_NUMBER}}"
+        --commit "{{.RELEASE_COMMIT}}"
+        --built-at "{{.RELEASE_BUILD_DATE}}"
+        --directory "{{.RELEASE_ARTIFACT_DIR}}"
+      - >-
+        go run ./scripts/releasetool verify
+        --version "{{.VERSION}}"
+        --build-number "{{.BUILD_NUMBER}}"
+        --directory "{{.RELEASE_ARTIFACT_DIR}}"
+      - >-
+        go run ./scripts/releasetool commit
+        --version "{{.VERSION}}"
+        --releases-dir "{{.RELEASES_DIR}}"
+    requires:
+      vars:
+        - VERSION
+        - BUILD_NUMBER
+    vars:
+      RELEASE_STAGE_DIR: '{{.RELEASES_DIR}}/.v{{.VERSION}}.in-progress'
+      RELEASE_WORK_DIR: '{{.RELEASE_STAGE_DIR}}/work'
+      RELEASE_ARTIFACT_DIR: '{{.RELEASE_STAGE_DIR}}/artifacts'
+      RELEASE_APP_PATH: '{{.RELEASE_WORK_DIR}}/ProfileDeck.app'
+      UPDATER_ZIP_NAME: 'ProfileDeck_{{.VERSION}}_macos_universal.zip'
+      INSTALLER_DMG_NAME: 'ProfileDeck_{{.VERSION}}_macos_universal.dmg'
+      RELEASE_COMMIT:
+        sh: git rev-parse HEAD
+      RELEASE_BUILD_DATE:
+        sh: date -u +%Y-%m-%dT%H:%M:%SZ
+      RELEASE_SIGN_IDENTITY:
+        sh: >-
+          go run ./scripts/releasetool identity
+          --requested "{{.SIGN_IDENTITY}}"
 
   run:
     cmds:

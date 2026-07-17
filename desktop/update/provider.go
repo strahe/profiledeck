@@ -1,199 +1,335 @@
+// Package update owns the Wails-specific Desktop update runtime.
 package update
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/updater"
+	githubprovider "github.com/wailsapp/wails/v3/pkg/updater/providers/github"
+
+	"github.com/strahe/profiledeck/internal/settings"
 )
 
-const maxFeedBytes = 1024 * 1024
+const (
+	UpdateRepository = "strahe/profiledeck"
+	UpdatePlatform   = "darwin"
+	ChecksumAsset    = "SHA256SUMS"
+	ChannelStable    = settings.DesktopUpdateChannelStable
+	ChannelBeta      = settings.DesktopUpdateChannelBeta
 
-type ProviderConfig struct {
-	FeedURL         string
-	PublicKey       []byte
-	HTTPClient      *http.Client
-	AllowTestSource bool
+	ErrorFeedUnavailable            = "feed_unavailable"
+	ErrorFeedInvalid                = "feed_invalid"
+	ErrorArtifactVerificationFailed = "artifact_verification_failed"
+)
+
+var (
+	stableVersionPattern = regexp.MustCompile(`^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$`)
+	betaVersionPattern   = regexp.MustCompile(`^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)-beta\.[1-9][0-9]*$`)
+	artifactNamePattern  = regexp.MustCompile(`^ProfileDeck_(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-beta\.[1-9][0-9]*)?_macos_universal\.zip$`)
+)
+
+type codedError struct {
+	code  string
+	cause error
 }
 
-type StrictProvider struct {
-	feedURL         string
-	publicKey       ed25519.PublicKey
-	client          *http.Client
-	allowTestSource bool
-	errorMu         sync.RWMutex
-	lastErrorCode   string
+func (err *codedError) Error() string {
+	if err.cause == nil {
+		return err.code
+	}
+	return fmt.Sprintf("%s: %v", err.code, err.cause)
 }
 
-func NewStrictProvider(config ProviderConfig) (*StrictProvider, error) {
-	feedURL := strings.TrimSpace(config.FeedURL)
-	if feedURL == "" {
-		return nil, errors.New("update feed URL is required")
+func (err *codedError) Unwrap() error { return err.cause }
+
+func updateError(code string, cause error) error {
+	return &codedError{code: code, cause: cause}
+}
+
+func ErrorCode(err error) string {
+	var coded *codedError
+	if errors.As(err, &coded) {
+		return coded.code
 	}
-	// Production builds pin the signed channel location so configuration cannot redirect update checks.
-	if !config.AllowTestSource && feedURL != DefaultFeedURL {
-		return nil, errors.New("production update feed URL is not trusted")
+	return "update_failed"
+}
+
+type releaseChannel int
+
+const (
+	releaseChannelInvalid releaseChannel = iota
+	releaseChannelStable
+	releaseChannelPrerelease
+)
+
+func channelForVersion(version string) releaseChannel {
+	version = strings.TrimSpace(version)
+	switch {
+	case stableVersionPattern.MatchString(version):
+		return releaseChannelStable
+	case betaVersionPattern.MatchString(version):
+		return releaseChannelPrerelease
+	default:
+		return releaseChannelInvalid
 	}
-	publicKey, err := ParsePublicKey(config.PublicKey)
+}
+
+func artifactName(version string) string {
+	return fmt.Sprintf("ProfileDeck_%s_macos_universal.zip", version)
+}
+
+type githubProviderOptions struct {
+	Repository string
+	BaseURL    string
+	HTTPClient *http.Client
+}
+
+// channelGitHubProvider lets the Desktop switch update channels without
+// reinitializing Wails' process-scoped updater.
+type channelGitHubProvider struct {
+	mu      sync.RWMutex
+	channel string
+	stable  *verifiedGitHubProvider
+	beta    *verifiedGitHubProvider
+}
+
+// verifiedGitHubProvider delegates GitHub API and download behaviour to Wails,
+// then enforces ProfileDeck's immutable asset naming and checksum contract.
+type verifiedGitHubProvider struct {
+	delegate      *githubprovider.Provider
+	channel       string
+	trustedSource bool
+}
+
+func newGitHubProvider(version string, options githubProviderOptions) (*channelGitHubProvider, error) {
+	buildChannel := channelForVersion(version)
+	if buildChannel == releaseChannelInvalid {
+		return nil, errors.New("release version must be X.Y.Z or X.Y.Z-beta.N")
+	}
+	return newChannelGitHubProvider(channelName(buildChannel), options)
+}
+
+func newChannelGitHubProvider(channel string, options githubProviderOptions) (*channelGitHubProvider, error) {
+	channel, err := normalizeChannel(channel)
 	if err != nil {
 		return nil, err
 	}
-	client := config.HTTPClient
+	stable, err := newVerifiedGitHubProvider(ChannelStable, options)
+	if err != nil {
+		return nil, err
+	}
+	beta, err := newVerifiedGitHubProvider(ChannelBeta, options)
+	if err != nil {
+		return nil, err
+	}
+	return &channelGitHubProvider{channel: channel, stable: stable, beta: beta}, nil
+}
+
+func newVerifiedGitHubProvider(channel string, options githubProviderOptions) (*verifiedGitHubProvider, error) {
+	repository := strings.TrimSpace(options.Repository)
+	if repository == "" {
+		repository = UpdateRepository
+	}
+	client := options.HTTPClient
 	if client == nil {
 		client = &http.Client{
 			Timeout: 30 * time.Minute,
-			CheckRedirect: func(req *http.Request, _ []*http.Request) error {
-				if req.URL.Scheme != "https" {
+			CheckRedirect: func(request *http.Request, _ []*http.Request) error {
+				if request.URL.Scheme != "https" {
 					return errors.New("update redirect must use HTTPS")
 				}
 				return nil
 			},
 		}
 	}
-	return &StrictProvider{
-		feedURL: feedURL, publicKey: publicKey, client: client, allowTestSource: config.AllowTestSource,
-	}, nil
-}
-
-func (provider *StrictProvider) Name() string { return "profiledeck-github" }
-
-func (provider *StrictProvider) Check(ctx context.Context, request updater.CheckRequest) (release *updater.Release, finalErr error) {
-	provider.setLastErrorCode("")
-	defer func() {
-		if finalErr != nil {
-			provider.setLastErrorCode(ErrorCode(finalErr))
-		}
-	}()
-	if request.Platform != UpdatePlatform || request.Arch != UpdateArch {
-		return nil, updateError(ErrorFeedInvalid, errors.New("unsupported updater target"))
-	}
-	if !validVersion(request.CurrentVersion) {
-		return nil, updateError(ErrorFeedInvalid, errors.New("running version is not valid SemVer"))
-	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, provider.feedURL, nil)
-	if err != nil {
-		return nil, updateError(ErrorFeedUnavailable, err)
-	}
-	httpRequest.Header.Set("Accept", "application/json")
-	httpRequest.Header.Set("User-Agent", "ProfileDeck-Updater/1")
-	response, err := provider.client.Do(httpRequest)
-	if err != nil {
-		return nil, updateError(ErrorFeedUnavailable, err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return nil, updateError(ErrorFeedUnavailable, fmt.Errorf("feed returned HTTP %d", response.StatusCode))
-	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maxFeedBytes+1))
-	if err != nil {
-		return nil, updateError(ErrorFeedUnavailable, err)
-	}
-	if len(raw) > maxFeedBytes {
-		return nil, updateError(ErrorFeedInvalid, errors.New("feed is too large"))
-	}
-	manifest, err := verifyFeed(raw, provider.publicKey)
+	delegate, err := githubprovider.New(githubprovider.Config{
+		Repository:    repository,
+		Prerelease:    channel == ChannelBeta,
+		BaseURL:       options.BaseURL,
+		AssetMatcher:  universalAssetMatcher,
+		ChecksumAsset: ChecksumAsset,
+		HTTPClient:    client,
+	})
 	if err != nil {
 		return nil, err
 	}
-	return validateManifest(manifest, request.CurrentVersion, provider.allowTestSource)
+	return &verifiedGitHubProvider{
+		delegate:      delegate,
+		channel:       channel,
+		trustedSource: repository == UpdateRepository && strings.TrimSpace(options.BaseURL) == "",
+	}, nil
 }
 
-func (provider *StrictProvider) Download(
+func (provider *channelGitHubProvider) Name() string {
+	return provider.stable.Name()
+}
+
+func (provider *channelGitHubProvider) Channel() string {
+	provider.mu.RLock()
+	defer provider.mu.RUnlock()
+	return provider.channel
+}
+
+func (provider *channelGitHubProvider) SetChannel(channel string) error {
+	channel, err := normalizeChannel(channel)
+	if err != nil {
+		return err
+	}
+	provider.mu.Lock()
+	provider.channel = channel
+	provider.mu.Unlock()
+	return nil
+}
+
+func (provider *channelGitHubProvider) Check(
+	ctx context.Context,
+	request updater.CheckRequest,
+) (*updater.Release, error) {
+	provider.mu.RLock()
+	delegate := provider.stable
+	if provider.channel == ChannelBeta {
+		delegate = provider.beta
+	}
+	provider.mu.RUnlock()
+	return delegate.Check(ctx, request)
+}
+
+func (provider *channelGitHubProvider) Download(
 	ctx context.Context,
 	release *updater.Release,
 	destination io.Writer,
 	onProgress func(written, total int64),
-) (finalErr error) {
-	provider.setLastErrorCode("")
-	defer func() {
-		if finalErr != nil {
-			provider.setLastErrorCode(ErrorCode(finalErr))
-		}
-	}()
-	if release == nil || release.Verification == nil {
-		return updateError(ErrorArtifactSignatureMissing, errors.New("verified release metadata is required"))
+) error {
+	// Both delegates share the same repository, asset matcher, and download
+	// contract; prerelease selection affects Check only.
+	return provider.stable.Download(ctx, release, destination, onProgress)
+}
+
+func (provider *verifiedGitHubProvider) Name() string {
+	return provider.delegate.Name()
+}
+
+func (provider *verifiedGitHubProvider) Check(
+	ctx context.Context,
+	request updater.CheckRequest,
+) (*updater.Release, error) {
+	if request.Platform != UpdatePlatform {
+		return nil, updateError(ErrorFeedInvalid, errors.New("unsupported updater platform"))
 	}
-	verification := release.Verification
-	if verification.DigestAlgo != DigestAlgorithm || len(verification.Digest) != 64 ||
-		verification.SignatureAlgo != SignatureAlgorithm || len(verification.Signature) != ed25519.SignatureSize {
-		return updateError(ErrorArtifactSignatureMissing, errors.New("artifact signature is required"))
+	if channelForVersion(request.CurrentVersion) == releaseChannelInvalid {
+		return nil, updateError(ErrorFeedInvalid, errors.New("running version is not releasable"))
 	}
-	artifactURL, ok := release.Metadata["url"].(string)
-	if !ok || strings.TrimSpace(artifactURL) == "" {
-		return updateError(ErrorFeedInvalid, errors.New("artifact URL is missing"))
+	release, err := provider.delegate.Check(ctx, request)
+	if err != nil {
+		return nil, githubCheckError(err)
 	}
-	if !provider.allowTestSource {
-		expected := fmt.Sprintf(
-			"https://github.com/strahe/profiledeck/releases/download/v%s/ProfileDeck_%s_darwin_arm64.zip",
-			release.Version, release.Version,
+	if release == nil {
+		return nil, nil
+	}
+	if channelForVersion(release.Version) == releaseChannelInvalid {
+		return nil, updateError(ErrorFeedInvalid, errors.New("release version is not supported"))
+	}
+	if provider.channel == ChannelStable && release.Channel != "stable" {
+		return nil, updateError(ErrorFeedInvalid, errors.New("stable build received a prerelease"))
+	}
+	if release.Channel != "stable" && release.Channel != "prerelease" {
+		return nil, updateError(ErrorFeedInvalid, errors.New("release channel is not supported"))
+	}
+	if release.Artifact.Filename != artifactName(release.Version) ||
+		release.Artifact.Filetype != "zip" ||
+		release.Artifact.Platform != UpdatePlatform {
+		return nil, updateError(ErrorFeedInvalid, errors.New("release asset does not match the ProfileDeck macOS package"))
+	}
+	if provider.trustedSource {
+		assetURL, _ := release.Metadata["github.asset.url"].(string)
+		parsedURL, err := url.Parse(assetURL)
+		expectedPath := fmt.Sprintf(
+			"/%s/releases/download/v%s/%s",
+			UpdateRepository,
+			release.Version,
+			release.Artifact.Filename,
 		)
-		if artifactURL != expected {
-			return updateError(ErrorFeedInvalid, errors.New("artifact URL changed after feed verification"))
+		if err != nil || parsedURL.Scheme != "https" || parsedURL.Host != "github.com" ||
+			parsedURL.EscapedPath() != expectedPath {
+			return nil, updateError(ErrorFeedInvalid, errors.New("release asset URL is not trusted"))
 		}
 	}
+	if release.Verification == nil ||
+		release.Verification.DigestAlgo != "sha256" ||
+		len(release.Verification.Digest) != 32 {
+		return nil, updateError(
+			ErrorArtifactVerificationFailed,
+			errors.New("release asset is missing its SHA-256 checksum"),
+		)
+	}
+	return release, nil
+}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, artifactURL, nil)
-	if err != nil {
+func githubCheckError(err error) error {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "github: load checksum sidecar:"):
+		return updateError(ErrorArtifactVerificationFailed, err)
+	case strings.Contains(message, " has no asset for "),
+		strings.Contains(message, "github: decode release"):
+		return updateError(ErrorFeedInvalid, err)
+	default:
 		return updateError(ErrorFeedUnavailable, err)
 	}
-	request.Header.Set("Accept", "application/octet-stream")
-	request.Header.Set("User-Agent", "ProfileDeck-Updater/1")
-	response, err := provider.client.Do(request)
-	if err != nil {
-		return updateError(ErrorFeedUnavailable, err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return updateError(ErrorFeedUnavailable, fmt.Errorf("artifact returned HTTP %d", response.StatusCode))
-	}
-	if response.ContentLength >= 0 && response.ContentLength != release.Artifact.Size {
-		return updateError(ErrorArtifactVerificationFailed, errors.New("artifact size does not match the signed feed"))
-	}
+}
 
-	written := int64(0)
-	buffer := make([]byte, 128*1024)
-	limited := io.LimitReader(response.Body, release.Artifact.Size+1)
-	for {
-		count, readErr := limited.Read(buffer)
-		if count > 0 {
-			writeCount, writeErr := destination.Write(buffer[:count])
-			written += int64(writeCount)
-			onProgress(written, release.Artifact.Size)
-			if writeErr != nil {
-				return updateError(ErrorFeedUnavailable, writeErr)
-			}
-			if writeCount != count {
-				return updateError(ErrorFeedUnavailable, io.ErrShortWrite)
-			}
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return updateError(ErrorFeedUnavailable, readErr)
-		}
-	}
-	if written != release.Artifact.Size {
-		return updateError(ErrorArtifactVerificationFailed, errors.New("artifact size does not match the signed feed"))
+func (provider *verifiedGitHubProvider) Download(
+	ctx context.Context,
+	release *updater.Release,
+	destination io.Writer,
+	onProgress func(written, total int64),
+) error {
+	if err := provider.delegate.Download(ctx, release, destination, onProgress); err != nil {
+		return updateError(ErrorFeedUnavailable, err)
 	}
 	return nil
 }
 
-func (provider *StrictProvider) LastErrorCode() string {
-	provider.errorMu.RLock()
-	defer provider.errorMu.RUnlock()
-	return provider.lastErrorCode
+func universalAssetMatcher(request updater.CheckRequest, assets []githubprovider.ReleaseAsset) int {
+	if request.Platform != UpdatePlatform {
+		return -1
+	}
+	match := -1
+	for index, asset := range assets {
+		if !artifactNamePattern.MatchString(asset.Name) {
+			continue
+		}
+		if match >= 0 {
+			return -1
+		}
+		match = index
+	}
+	return match
 }
 
-func (provider *StrictProvider) setLastErrorCode(code string) {
-	provider.errorMu.Lock()
-	provider.lastErrorCode = code
-	provider.errorMu.Unlock()
+func channelName(channel releaseChannel) string {
+	if channel == releaseChannelPrerelease {
+		return ChannelBeta
+	}
+	return ChannelStable
+}
+
+func normalizeChannel(channel string) (string, error) {
+	switch strings.TrimSpace(channel) {
+	case ChannelStable:
+		return ChannelStable, nil
+	case ChannelBeta:
+		return ChannelBeta, nil
+	default:
+		return "", errors.New("update channel must be stable or beta")
+	}
 }

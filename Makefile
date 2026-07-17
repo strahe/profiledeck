@@ -2,9 +2,8 @@ BINARY := profiledeck
 BIN_DIR := bin
 TOOLS_DIR := $(BIN_DIR)/tools
 CMD := ./cmd/profiledeck
-DESKTOP_CMD := ./desktop
 DESKTOP_FRONTEND := desktop/frontend
-RELEASE_TOOL_PKGS := ./scripts/feedtool ./scripts/updatee2e/server
+RELEASE_TOOL_PKGS := ./scripts/releasetool ./scripts/updatee2e/runner
 UPDATE_E2E_PKG := ./scripts/updatee2e/client
 DOCS_DIR := docs
 CORE_PKGS := ./cmd/... ./internal/...
@@ -20,25 +19,13 @@ CI_WAILS3_DIR := $(TOOLS_DIR)/wails3/$(WAILS3_VERSION)
 CI_WAILS3 := $(CI_WAILS3_DIR)/wails3
 DESKTOP_GOOS ?= $(or $(GOOS),$(shell go env GOOS))
 DESKTOP_GOARCH ?= $(or $(GOARCH),$(shell go env GOARCH))
-MACOS_MIN_VERSION ?= 14.0
-CGO_CFLAGS ?= -O2 -g
-CGO_CXXFLAGS ?= -O2 -g
-CGO_LDFLAGS ?= -O2 -g
 DESKTOP_GO_ENV := GOOS=$(DESKTOP_GOOS) GOARCH=$(DESKTOP_GOARCH)
-DESKTOP_VERSION ?=
-DESKTOP_BUILD_NUMBER ?=
-UPDATE_PUBLIC_KEY_BASE64 ?=
-LOCAL_DESKTOP_VERSION ?= 0.1.0-alpha.0.local
-LOCAL_DESKTOP_BUILD_NUMBER ?= $(shell git rev-list --count HEAD)
-DIST_DIR ?= $(CURDIR)/dist
-ifeq ($(DESKTOP_GOOS),darwin)
-DESKTOP_GO_ENV += MACOSX_DEPLOYMENT_TARGET=$(MACOS_MIN_VERSION)
-DESKTOP_GO_ENV += CGO_CFLAGS="$(CGO_CFLAGS) -mmacosx-version-min=$(MACOS_MIN_VERSION)"
-DESKTOP_GO_ENV += CGO_CXXFLAGS="$(CGO_CXXFLAGS) -mmacosx-version-min=$(MACOS_MIN_VERSION)"
-DESKTOP_GO_ENV += CGO_LDFLAGS="$(CGO_LDFLAGS) -mmacosx-version-min=$(MACOS_MIN_VERSION)"
-endif
+VERSION ?=
+BUILD_NUMBER ?=
+RELEASE_REPO ?= strahe/profiledeck-private
+SIGN_IDENTITY ?=
 
-.PHONY: fmt vet lint lint-core lint-desktop lint-release-tools test build core-boundary core-check check clean wails-boundary desktop-go-fmt desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-frontend-build desktop-build desktop-package desktop-package-local release-tools-check verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-core-check ci-desktop-check
+.PHONY: fmt vet lint lint-core lint-desktop test build core-boundary core-check check clean wails-boundary desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-build release-build release-draft release-publish verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-core-check ci-desktop-check
 
 fmt:
 	$(GOLANGCI_LINT) fmt $(GO_PKGS)
@@ -46,16 +33,13 @@ fmt:
 
 vet: lint-core
 
-lint: lint-core lint-desktop lint-release-tools
+lint: lint-core lint-desktop
 
 lint-core:
 	$(GOLANGCI_LINT) run $(CORE_PKGS)
 
 lint-desktop:
-	$(DESKTOP_GO_ENV) $(GOLANGCI_LINT) run $(DESKTOP_PKGS)
-
-lint-release-tools:
-	$(DESKTOP_GO_ENV) $(GOLANGCI_LINT) run $(RELEASE_TOOL_PKGS)
+	$(DESKTOP_GO_ENV) $(GOLANGCI_LINT) run $(DESKTOP_PKGS) $(RELEASE_TOOL_PKGS)
 	$(DESKTOP_GO_ENV) $(GOLANGCI_LINT) run --build-tags updatee2e $(UPDATE_E2E_PKG)
 
 test:
@@ -75,11 +59,8 @@ check: core-check desktop-check docs-check
 wails-boundary:
 	! rg -n 'github.com/wailsapp/wails|@wailsio/runtime' cmd internal
 
-desktop-go-fmt:
-	$(GOLANGCI_LINT) fmt $(DESKTOP_PKGS)
-
 desktop-bindings:
-	$(WAILS3) generate bindings -d $(DESKTOP_FRONTEND)/bindings -ts -i $(DESKTOP_PKGS)
+	$(WAILS3) task common:bindings
 
 desktop-bindings-check:
 	@temp_dir=$$(mktemp -d); \
@@ -89,53 +70,39 @@ desktop-bindings-check:
 
 desktop-taskfile-check:
 	$(WAILS3) task --list >/dev/null
+	$(WAILS3) task common:generate:icons -dry >/dev/null
 	$(WAILS3) task build GOOS=darwin -dry >/dev/null
 	$(WAILS3) task build GOOS=darwin DEV=true EXTRA_TAGS=taskfilecheck -dry >/dev/null
 	$(WAILS3) task build GOOS=windows DEV=true EXTRA_TAGS=taskfilecheck -dry >/dev/null
 	$(WAILS3) task build GOOS=linux DEV=true EXTRA_TAGS=taskfilecheck -dry >/dev/null
+	$(WAILS3) task darwin:build:universal VERSION=0.1.0-beta.1 COMMIT=0123456789abcdef0123456789abcdef01234567 BUILD_DATE=2026-07-16T00:00:00Z -dry >/dev/null
+	$(WAILS3) task darwin:package:universal VERSION=0.1.0-beta.1 BUILD_NUMBER=1 COMMIT=0123456789abcdef0123456789abcdef01234567 BUILD_DATE=2026-07-16T00:00:00Z -dry >/dev/null
 
 desktop-frontend-install:
-	npm --prefix $(DESKTOP_FRONTEND) ci
+	$(WAILS3) task common:frontend:install
 
 desktop-frontend-check: desktop-frontend-install
 	npm --prefix $(DESKTOP_FRONTEND) run check
 	npm --prefix $(DESKTOP_FRONTEND) run test:unit
 
-desktop-frontend-build: desktop-frontend-install
-	npm --prefix $(DESKTOP_FRONTEND) run build
+desktop-build:
+	$(WAILS3) task build GOOS=$(DESKTOP_GOOS) ARCH=$(DESKTOP_GOARCH)
 
-desktop-build: desktop-frontend-build
-	mkdir -p $(BIN_DIR)
-	$(DESKTOP_GO_ENV) go build -tags production -o $(BIN_DIR)/profiledeck-desktop $(DESKTOP_CMD)
+release-build:
+	$(WAILS3) task darwin:release VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" SIGN_IDENTITY="$(SIGN_IDENTITY)"
 
-desktop-package: desktop-frontend-build
-	PROFILEDECK_VERSION="$(DESKTOP_VERSION)" \
-	PROFILEDECK_BUILD_NUMBER="$(DESKTOP_BUILD_NUMBER)" \
-	PROFILEDECK_UPDATE_PUBLIC_KEY_BASE64="$(UPDATE_PUBLIC_KEY_BASE64)" \
-	PROFILEDECK_DIST_DIR="$(DIST_DIR)" \
-	./scripts/package-macos.sh
+release-draft:
+	go run ./scripts/releasetool draft --version "$(VERSION)" --repo "$(RELEASE_REPO)"
 
-desktop-package-local: $(CI_WAILS3)
-	@temp_dir=$$(mktemp -d); \
-	trap 'rm -rf "$$temp_dir"' EXIT; \
-	key_path="$$temp_dir/update.key"; \
-	$(CI_WAILS3) updater genkey -out "$$key_path" >/dev/null; \
-	public_key=$$(go run ./scripts/feedtool public-key --private-key "$$key_path"); \
-	$(MAKE) desktop-package \
-		DESKTOP_VERSION="$(LOCAL_DESKTOP_VERSION)" \
-		DESKTOP_BUILD_NUMBER="$(LOCAL_DESKTOP_BUILD_NUMBER)" \
-		UPDATE_PUBLIC_KEY_BASE64="$$public_key"
+release-publish:
+	go run ./scripts/releasetool publish --version "$(VERSION)" --repo "$(RELEASE_REPO)"
 
 verify-update-e2e:
-	./scripts/test-update-restart.sh
+	go run ./scripts/updatee2e/runner
 
-release-tools-check: lint-release-tools
-	$(DESKTOP_GO_ENV) go test $(RELEASE_TOOL_PKGS)
+desktop-check: wails-boundary lint-desktop desktop-bindings-check desktop-taskfile-check desktop-frontend-check desktop-build
+	$(DESKTOP_GO_ENV) go test $(DESKTOP_PKGS) $(RELEASE_TOOL_PKGS)
 	$(DESKTOP_GO_ENV) go test -tags updatee2e $(UPDATE_E2E_PKG)
-	bash -n scripts/package-macos.sh scripts/verify-macos-artifact.sh scripts/test-update-restart.sh
-
-desktop-check: wails-boundary lint-desktop release-tools-check desktop-bindings-check desktop-taskfile-check desktop-frontend-check desktop-build
-	$(DESKTOP_GO_ENV) go test ./desktop/...
 
 docs-install:
 	npm --prefix $(DOCS_DIR) ci

@@ -2,7 +2,6 @@ package update
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"log"
 	"os"
@@ -39,6 +38,7 @@ const (
 type UpdateStatus struct {
 	Configured          bool   `json:"configured"`
 	Automatic           bool   `json:"automatic"`
+	Channel             string `json:"channel"`
 	State               string `json:"state"`
 	CurrentVersion      string `json:"current_version"`
 	AvailableVersion    string `json:"available_version"`
@@ -49,10 +49,8 @@ type UpdateStatus struct {
 }
 
 type BuildConfig struct {
-	CurrentVersion  string
-	FeedURL         string
-	PublicKeyBase64 string
-	CheckInterval   time.Duration
+	CurrentVersion string
+	CheckInterval  time.Duration
 }
 
 type updateEngine interface {
@@ -64,8 +62,7 @@ type updateEngine interface {
 
 type Service struct {
 	application *coreapp.Application
-	provider    *StrictProvider
-	publicKey   []byte
+	provider    *channelGitHubProvider
 	interval    time.Duration
 	now         func() time.Time
 	executable  func() (string, error)
@@ -86,7 +83,7 @@ type Service struct {
 	workWG    sync.WaitGroup
 }
 
-func NewService(application *coreapp.Application, config BuildConfig) *Service {
+func NewService(ctx context.Context, application *coreapp.Application, config BuildConfig) *Service {
 	interval := config.CheckInterval
 	if interval <= 0 {
 		interval = defaultCheckInterval
@@ -100,20 +97,21 @@ func NewService(application *coreapp.Application, config BuildConfig) *Service {
 			Automatic: true, State: StateUnavailable, CurrentVersion: strings.TrimSpace(config.CurrentVersion),
 		},
 	}
-	if application == nil || !validVersion(config.CurrentVersion) || strings.TrimSpace(config.FeedURL) == "" || strings.TrimSpace(config.PublicKeyBase64) == "" {
+	if application == nil {
 		return service
 	}
-	publicKey, err := base64.StdEncoding.DecodeString(strings.TrimSpace(config.PublicKeyBase64))
+	provider, err := newGitHubProvider(config.CurrentVersion, githubProviderOptions{})
 	if err != nil {
 		return service
 	}
-	provider, err := NewStrictProvider(ProviderConfig{FeedURL: config.FeedURL, PublicKey: publicKey})
-	if err != nil {
-		return service
+	channel := provider.Channel()
+	if settings, err := application.Settings().EnsureUpdateChannel(ctx, channel); err == nil {
+		channel = settings.UpdateChannel
+		_ = provider.SetChannel(channel)
 	}
 	service.provider = provider
-	service.publicKey = publicKey
 	service.status.Configured = true
+	service.status.Channel = channel
 	service.status.State = StateIdle
 	return service
 }
@@ -125,10 +123,7 @@ func Attach(service *Service, wailsApp *application.App) error {
 	if err := wailsApp.Updater.Init(updater.Config{
 		CurrentVersion: service.status.CurrentVersion,
 		Providers:      []updater.Provider{service.provider},
-		PublicKey:      service.publicKey,
 		Platform:       UpdatePlatform,
-		Arch:           UpdateArch,
-		Channel:        UpdateChannel,
 		Window:         updater.WindowNone,
 	}); err != nil {
 		service.setStatus(func(status *UpdateStatus) {
@@ -171,7 +166,7 @@ func Start(parent context.Context, service *Service) {
 	if service.cancel != nil {
 		return
 	}
-	if service.application == nil {
+	if service.application == nil || !service.Status(parent).Configured {
 		return
 	}
 	settings, err := service.application.Settings().Get(parent)
@@ -182,7 +177,19 @@ func Start(parent context.Context, service *Service) {
 		})
 		return
 	}
-	service.setStatus(func(status *UpdateStatus) { status.Automatic = settings.AutomaticUpdates })
+	if service.provider != nil {
+		if err := service.provider.SetChannel(settings.UpdateChannel); err != nil {
+			service.setStatus(func(status *UpdateStatus) {
+				status.State = StateError
+				status.ErrorCode = "settings_unavailable"
+			})
+			return
+		}
+	}
+	service.setStatus(func(status *UpdateStatus) {
+		status.Automatic = settings.AutomaticUpdates
+		status.Channel = settings.UpdateChannel
+	})
 	ctx, cancel := context.WithCancel(parent)
 	service.cancel = cancel
 	service.wake = make(chan struct{}, 1)
@@ -241,6 +248,52 @@ func (service *Service) SetAutomatic(ctx context.Context, enabled bool) UpdateSt
 		service.signalScheduler()
 	}
 	return service.Status(ctx)
+}
+
+func (service *Service) SetChannel(ctx context.Context, channel string) (UpdateStatus, error) {
+	channel, err := normalizeChannel(channel)
+	if err != nil {
+		return service.Status(ctx), apperror.New(apperror.SettingInvalid, "Unsupported update channel")
+	}
+	current := service.Status(ctx)
+	if channel == current.Channel {
+		return current, nil
+	}
+	if !service.checkMu.TryLock() {
+		return current, apperror.New(apperror.UpdateChannelBusy, "Wait for the current update to finish")
+	}
+	service.mu.RLock()
+	state, provider := service.status.State, service.provider
+	service.mu.RUnlock()
+	if !channelCanChange(state) || provider == nil {
+		service.checkMu.Unlock()
+		return service.Status(ctx), apperror.New(apperror.UpdateChannelBusy, "Wait for the current update to finish")
+	}
+	settings, err := service.application.Settings().SetUpdateChannel(ctx, channel)
+	if err != nil {
+		service.checkMu.Unlock()
+		service.setStatus(func(status *UpdateStatus) { status.ErrorCode = "settings_unavailable" })
+		return service.Status(ctx), nil
+	}
+	if err := provider.SetChannel(settings.UpdateChannel); err != nil {
+		service.checkMu.Unlock()
+		return service.Status(ctx), apperror.New(apperror.SettingInvalid, "Unsupported update channel")
+	}
+	service.setStatus(func(status *UpdateStatus) {
+		status.Channel = settings.UpdateChannel
+		status.State = StateIdle
+		status.AvailableVersion = ""
+		status.DownloadedBytes = 0
+		status.TotalBytes = 0
+		status.LastCheckedAtUnixMS = 0
+		status.ErrorCode = ""
+	})
+	automatic := service.Status(ctx).Automatic
+	service.checkMu.Unlock()
+	if automatic {
+		service.signalScheduler()
+	}
+	return service.Status(ctx), nil
 }
 
 func (service *Service) Restart(ctx context.Context) error {
@@ -379,8 +432,6 @@ func (service *Service) failCheck(err error) {
 	service.mu.RUnlock()
 	if code == "update_failed" && (state == StateVerifying || state == StatePreparing) {
 		code = ErrorArtifactVerificationFailed
-	} else if code == "update_failed" && service.provider != nil && service.provider.LastErrorCode() != "" {
-		code = service.provider.LastErrorCode()
 	}
 	log.Printf("profiledeck: update check failed (%s): %v", code, err)
 	service.setStatus(func(status *UpdateStatus) {
@@ -439,6 +490,15 @@ func (service *Service) signalScheduler() {
 	select {
 	case wake <- struct{}{}:
 	default:
+	}
+}
+
+func channelCanChange(state string) bool {
+	switch state {
+	case StateIdle, StateUpToDate, StateError:
+		return true
+	default:
+		return false
 	}
 }
 

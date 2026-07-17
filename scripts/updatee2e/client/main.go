@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -20,16 +19,15 @@ import (
 )
 
 var (
-	version   = "dev"
-	feedURL   string
-	publicKey string
-	configDir string
-	marker    string
+	version       = "dev"
+	githubBaseURL string
+	configDir     string
+	marker        string
 )
 
 func main() {
 	updater.HandleHelperMode()
-	if version == "0.1.0-alpha.2" {
+	if version == "0.1.0-beta.2" {
 		finishUpdatedLaunch()
 		return
 	}
@@ -60,31 +58,12 @@ func runUpdate() error {
 	if err := db.Close(); err != nil {
 		return err
 	}
-	key, err := base64.StdEncoding.DecodeString(publicKey)
-	if err != nil {
-		return err
-	}
-	provider, err := desktopupdate.NewStrictProvider(desktopupdate.ProviderConfig{
-		FeedURL: feedURL, PublicKey: key, AllowTestSource: true,
-	})
-	if err != nil {
-		return err
-	}
 	host := headlessHost{}
 	engine := updater.New(host)
-	if err := engine.Init(updater.Config{
-		CurrentVersion: version,
-		Providers:      []updater.Provider{provider},
-		PublicKey:      key,
-		Platform:       desktopupdate.UpdatePlatform,
-		Arch:           desktopupdate.UpdateArch,
-		Channel:        desktopupdate.UpdateChannel,
-		Window:         updater.WindowNone,
-	}); err != nil {
+	service := desktopupdate.NewService(ctx, application, desktopupdate.BuildConfig{CurrentVersion: version})
+	if err := desktopupdate.ConfigureForE2E(service, engine, version, githubBaseURL); err != nil {
 		return err
 	}
-	service := desktopupdate.NewService(application, desktopupdate.BuildConfig{CurrentVersion: version})
-	desktopupdate.ConfigureForE2E(service, provider, key, engine, version)
 	status := service.CheckAndDownload(ctx)
 	if status.State != desktopupdate.StateReady {
 		return fmt.Errorf("update did not become ready: %#v", status)

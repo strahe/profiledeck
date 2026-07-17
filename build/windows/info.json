@@ -1,0 +1,15 @@
+{
+  "fixed": {
+    "file_version": "0.0.0.0"
+  },
+  "info": {
+    "0000": {
+      "ProductVersion": "0.0.0",
+      "CompanyName": "ProfileDeck",
+      "FileDescription": "Provider/profile switcher and local usage tracker for AI coding tools",
+      "LegalCopyright": "Copyright © ProfileDeck contributors",
+      "ProductName": "ProfileDeck",
+      "Comments": "ProfileDeck desktop application"
+    }
+  }
+}

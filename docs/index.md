@@ -9,7 +9,7 @@ ProfileDeck saves local AI coding tool logins and settings as Profiles, then let
 | macOS Desktop | Managing Profiles, usage, updates, and recovery in one app | [Download and open the Desktop app](./guide/getting-started.md#use-the-desktop-app) |
 | CLI | Terminal workflows and automation from a source build | [Build and initialize the CLI](./guide/getting-started.md#build-and-use-the-cli) |
 
-The Desktop Alpha requires macOS 14 or later on Apple silicon. The CLI requires Go 1.26 and Make when building from source.
+The Universal Desktop app requires macOS 14 or later and runs natively on Apple silicon and Intel Macs. The CLI requires Go 1.26 and Make when building from source.
 
 ## Supported tools
 

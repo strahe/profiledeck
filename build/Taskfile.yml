@@ -1,6 +1,22 @@
 version: '3'
 
 tasks:
+  generate:icons:
+    desc: Generate platform application icons
+    run: once
+    dir: build
+    preconditions:
+      - sh: wails3 version
+        msg: wails3 is required to generate application icons.
+    cmds:
+      - >-
+        wails3 generate icons
+        -input ../desktop/assets/appicon.png
+        -macfilename darwin/icons.icns
+        -windowsfilename windows/icon.ico
+        -iconcomposerinput appicon.icon
+        -macassetdir darwin
+
   frontend:install:
     run: once
     dir: '{{.FRONTEND_DIR}}'

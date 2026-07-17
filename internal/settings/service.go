@@ -11,17 +11,20 @@ import (
 )
 
 const (
-	DesktopLanguageAuto     = "auto"
-	DesktopLanguageZhCN     = "zh-CN"
-	DesktopLanguageEnUS     = "en-US"
-	DesktopAppearanceSystem = "system"
-	DesktopAppearanceLight  = "light"
-	DesktopAppearanceDark   = "dark"
+	DesktopLanguageAuto        = "auto"
+	DesktopLanguageZhCN        = "zh-CN"
+	DesktopLanguageEnUS        = "en-US"
+	DesktopAppearanceSystem    = "system"
+	DesktopAppearanceLight     = "light"
+	DesktopAppearanceDark      = "dark"
+	DesktopUpdateChannelStable = "stable"
+	DesktopUpdateChannelBeta   = "beta"
 
 	desktopLanguageSettingKey         = "desktop.language"
 	desktopAppearanceSettingKey       = "desktop.appearance"
 	desktopSidebarCollapsedSettingKey = "desktop.sidebar_collapsed"
 	desktopAutomaticUpdatesSettingKey = "desktop.automatic_updates"
+	desktopUpdateChannelSettingKey    = "desktop.update_channel"
 	desktopAutomaticBackupsSettingKey = "desktop.automatic_backups"
 )
 
@@ -36,6 +39,7 @@ type Desktop struct {
 	Appearance       string `json:"appearance"`
 	SidebarCollapsed bool   `json:"sidebar_collapsed"`
 	AutomaticUpdates bool   `json:"automatic_updates"`
+	UpdateChannel    string `json:"update_channel"`
 	AutomaticBackups bool   `json:"automatic_backups"`
 }
 
@@ -118,6 +122,55 @@ func (service *Service) SetAutomaticUpdates(ctx context.Context, enabled bool) (
 	return get(ctx, db)
 }
 
+// EnsureUpdateChannel persists the build-derived default only when the user
+// has not selected an update channel yet.
+func (service *Service) EnsureUpdateChannel(ctx context.Context, fallback string) (Desktop, error) {
+	fallback, err := normalizeUpdateChannel(fallback)
+	if err != nil {
+		return Desktop{}, err
+	}
+	db, err := service.stores.OpenHealthy(ctx, false)
+	if err != nil {
+		return Desktop{}, err
+	}
+	defer db.Close()
+	var updated Desktop
+	err = db.WithTransaction(ctx, func(tx *store.Store) error {
+		if _, err := tx.GetSetting(ctx, desktopUpdateChannelSettingKey); errors.Is(err, store.ErrNotFound) {
+			if err := upsert(ctx, tx, desktopUpdateChannelSettingKey, fallback); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return apperror.Wrap(apperror.StoreStatusFailed, "failed to load Desktop settings", err)
+		}
+		current, err := get(ctx, tx)
+		if err != nil {
+			return err
+		}
+		updated = current
+		return nil
+	})
+	return updated, err
+}
+
+// SetUpdateChannel is separate from UpdateRequest so the Desktop update
+// runtime can synchronize persistence with its active provider.
+func (service *Service) SetUpdateChannel(ctx context.Context, channel string) (Desktop, error) {
+	channel, err := normalizeUpdateChannel(channel)
+	if err != nil {
+		return Desktop{}, err
+	}
+	db, err := service.stores.OpenHealthy(ctx, false)
+	if err != nil {
+		return Desktop{}, err
+	}
+	defer db.Close()
+	if err := upsert(ctx, db, desktopUpdateChannelSettingKey, channel); err != nil {
+		return Desktop{}, err
+	}
+	return get(ctx, db)
+}
+
 // SetAutomaticBackups is separate from UpdateRequest so the Desktop backup
 // runtime can synchronize the persisted preference with its scheduler.
 func (service *Service) SetAutomaticBackups(ctx context.Context, enabled bool) (Desktop, error) {
@@ -149,13 +202,25 @@ func get(ctx context.Context, db *store.Store) (Desktop, error) {
 	if err != nil {
 		return Desktop{}, err
 	}
+	updateChannel, err := readString(
+		ctx,
+		db,
+		desktopUpdateChannelSettingKey,
+		DesktopUpdateChannelStable,
+		normalizeUpdateChannel,
+		"desktop update channel",
+	)
+	if err != nil {
+		return Desktop{}, err
+	}
 	automaticBackups, err := readBool(ctx, db, desktopAutomaticBackupsSettingKey, true, "automatic backups")
 	if err != nil {
 		return Desktop{}, err
 	}
 	return Desktop{
 		Language: language, Appearance: appearance, SidebarCollapsed: collapsed,
-		AutomaticUpdates: automaticUpdates, AutomaticBackups: automaticBackups,
+		AutomaticUpdates: automaticUpdates, UpdateChannel: updateChannel,
+		AutomaticBackups: automaticBackups,
 	}, nil
 }
 
@@ -208,6 +273,16 @@ func normalizeAppearance(value string) (string, error) {
 		return value, nil
 	default:
 		return "", apperror.New(apperror.SettingInvalid, "unsupported Desktop appearance").WithDetail("appearance", value)
+	}
+}
+
+func normalizeUpdateChannel(value string) (string, error) {
+	switch value {
+	case DesktopUpdateChannelStable, DesktopUpdateChannelBeta:
+		return value, nil
+	default:
+		return "", apperror.New(apperror.SettingInvalid, "unsupported Desktop update channel").
+			WithDetail("update_channel", value)
 	}
 }
 

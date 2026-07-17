@@ -18,7 +18,12 @@ func TestDesktopSettingsDefaultsAndPartialUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected default desktop settings, got %v", err)
 	}
-	if initial.Language != DesktopLanguageAuto || initial.Appearance != DesktopAppearanceSystem || initial.SidebarCollapsed || !initial.AutomaticUpdates || !initial.AutomaticBackups {
+	if initial.Language != DesktopLanguageAuto ||
+		initial.Appearance != DesktopAppearanceSystem ||
+		initial.SidebarCollapsed ||
+		!initial.AutomaticUpdates ||
+		initial.UpdateChannel != DesktopUpdateChannelStable ||
+		!initial.AutomaticBackups {
 		t.Fatalf("expected default desktop settings, settings=%#v err=%v", initial, err)
 	}
 
@@ -62,7 +67,10 @@ func TestDesktopSettingsCombinedUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected combined update to succeed, got %v", err)
 	}
-	want := Desktop{Language: language, Appearance: appearance, SidebarCollapsed: collapsed, AutomaticUpdates: true, AutomaticBackups: true}
+	want := Desktop{
+		Language: language, Appearance: appearance, SidebarCollapsed: collapsed,
+		AutomaticUpdates: true, UpdateChannel: DesktopUpdateChannelStable, AutomaticBackups: true,
+	}
 	if updated != want {
 		t.Fatalf("unexpected combined settings: got %#v want %#v", updated, want)
 	}
@@ -83,6 +91,39 @@ func TestDesktopAutomaticUpdatesUsesDedicatedSetter(t *testing.T) {
 	reloaded, err := service.Get(ctx)
 	if err != nil || reloaded.AutomaticUpdates {
 		t.Fatalf("expected automatic updates setting to persist: settings=%#v err=%v", reloaded, err)
+	}
+}
+
+func TestDesktopUpdateChannelUsesBuildDefaultUntilUserChangesIt(t *testing.T) {
+	ctx := context.Background()
+	service := newTestService(t, ctx, t.TempDir())
+
+	initialized, err := service.EnsureUpdateChannel(ctx, DesktopUpdateChannelBeta)
+	if err != nil || initialized.UpdateChannel != DesktopUpdateChannelBeta {
+		t.Fatalf("initialize beta channel: settings=%#v err=%v", initialized, err)
+	}
+	stillBeta, err := service.EnsureUpdateChannel(ctx, DesktopUpdateChannelStable)
+	if err != nil || stillBeta.UpdateChannel != DesktopUpdateChannelBeta {
+		t.Fatalf("build default replaced persisted channel: settings=%#v err=%v", stillBeta, err)
+	}
+	stable, err := service.SetUpdateChannel(ctx, DesktopUpdateChannelStable)
+	if err != nil || stable.UpdateChannel != DesktopUpdateChannelStable {
+		t.Fatalf("switch stable channel: settings=%#v err=%v", stable, err)
+	}
+	reloaded, err := service.Get(ctx)
+	if err != nil || reloaded.UpdateChannel != DesktopUpdateChannelStable {
+		t.Fatalf("reload stable channel: settings=%#v err=%v", reloaded, err)
+	}
+}
+
+func TestDesktopUpdateChannelRejectsUnsupportedValue(t *testing.T) {
+	ctx := context.Background()
+	service := newTestService(t, ctx, t.TempDir())
+
+	_, err := service.SetUpdateChannel(ctx, "dev")
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.Code != apperror.SettingInvalid {
+		t.Fatalf("expected unsupported update channel error, got %v", err)
 	}
 }
 

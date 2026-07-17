@@ -15,6 +15,10 @@
 bin/
 .task/
 /dist/
+build/darwin/Assets.car
+build/darwin/icons.icns
+build/windows/icon.ico
+desktop/wails_windows_*.syso
 
 # VitePress documentation output
 docs/node_modules/

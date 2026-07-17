@@ -28,9 +28,6 @@ var (
 	version   = app.DefaultVersion
 	commit    = app.UnknownBuildValue
 	buildDate = app.UnknownBuildValue
-
-	updateFeedURL         string
-	updatePublicKeyBase64 string
 )
 
 const (
@@ -42,6 +39,9 @@ const (
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+//go:embed assets/appicon.png
+var appIcon []byte
 
 func main() {
 	// The detached update helper must swap the application before runtime or
@@ -67,15 +67,14 @@ func main() {
 	defer core.Close()
 	startupErr := backend.Bootstrap(desktopCtx, core)
 	services := backend.NewServices(core, info, env, startupErr)
-	updates := desktopupdate.NewService(core, desktopupdate.BuildConfig{
-		CurrentVersion:  version,
-		FeedURL:         updateFeedURL,
-		PublicKeyBase64: updatePublicKeyBase64,
+	updates := desktopupdate.NewService(desktopCtx, core, desktopupdate.BuildConfig{
+		CurrentVersion: version,
 	})
 
 	wailsApp := application.New(application.Options{
 		Name:        app.ProductName,
 		Description: "Provider/profile switcher and local usage tracker for AI coding tools",
+		Icon:        appIcon,
 		Services: []application.Service{
 			application.NewService(services.App),
 			application.NewService(services.Agent),

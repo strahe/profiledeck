@@ -60,6 +60,7 @@ const userErrorKeys: Record<string, string> = {
 	IMPORT_INVALID: "errors.importInvalid",
 	IMPORT_CONFLICT: "errors.importConflict",
 	IMPORT_PLAN_CHANGED: "errors.importChanged",
+	UPDATE_CHANNEL_BUSY: "errors.updateChannelBusy",
 	UPDATE_NOT_READY: "errors.updateNotReady",
 	UPDATE_RESTART_FAILED: "errors.updateRestartFailed",
 	OPERATION_CREATE_FAILED: "errors.operationFailed",

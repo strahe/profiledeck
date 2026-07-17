@@ -23,6 +23,7 @@
 		updateBusy,
 		onLanguageChange,
 		onAppearanceChange,
+		onChannelChange,
 		onAutomaticChange,
 		onCheckForUpdates,
 		onRestart,
@@ -38,6 +39,7 @@
 		updateBusy: string;
 		onLanguageChange: (value: string) => void | Promise<void>;
 		onAppearanceChange: (value: string) => void | Promise<void>;
+		onChannelChange: (value: string) => void | Promise<void>;
 		onAutomaticChange: (enabled: boolean) => void | Promise<void>;
 		onCheckForUpdates: () => void | Promise<void>;
 		onRestart: () => void | Promise<void>;
@@ -47,6 +49,7 @@
 	} = $props();
 
 	let updateActive = $derived(["checking", "downloading", "verifying", "preparing"].includes(updateStatus.state));
+	let channelChangeDisabled = $derived(!["idle", "up_to_date", "error"].includes(updateStatus.state));
 	let downloadPercent = $derived(updateStatus.total_bytes > 0
 		? Math.min(100, Math.max(0, (updateStatus.downloaded_bytes / updateStatus.total_bytes) * 100))
 		: 0);
@@ -67,14 +70,17 @@
 		}
 	}
 
+	function updateChannelDescription(): string {
+		return channelChangeDisabled
+			? $_("settings.updates.channel.busy")
+			: $_("settings.updates.channel.description");
+	}
+
 	function updateErrorDescription(): string {
 		switch (updateStatus.error_code) {
 			case "feed_unavailable": return $_("settings.updates.error.unavailable");
-			case "feed_signature_missing":
-			case "feed_signature_invalid":
 			case "feed_invalid":
-			case "feed_rollback": return $_("settings.updates.error.feedRejected");
-			case "artifact_signature_missing":
+				return $_("settings.updates.error.feedRejected");
 			case "artifact_verification_failed": return $_("settings.updates.error.artifactRejected");
 			case "restart_failed": return $_("settings.updates.error.restartFailed");
 			default: return $_("settings.updates.error.generic");
@@ -136,6 +142,32 @@
 	{#if updateStatus.configured}
 		<SectionCard title={$_("settings.updates.title")} description={$_("settings.updates.description")}>
 			<Field.FieldGroup>
+				<SettingsRow
+					label={$_("settings.updates.channel.label")}
+					description={updateChannelDescription()}
+					forID="desktop-update-channel"
+					disabled={channelChangeDisabled}
+				>
+					{#snippet control()}
+						{#if updateBusy === "channel"}<Spinner />{/if}
+						<Select.Root type="single" value={updateStatus.channel} onValueChange={onChannelChange}>
+							<Select.Trigger
+								id="desktop-update-channel"
+								class="min-w-28"
+								disabled={channelChangeDisabled || !!updateBusy}
+							>
+								{updateStatus.channel === "beta"
+									? $_("settings.updates.channel.beta")
+									: $_("settings.updates.channel.stable")}
+							</Select.Trigger>
+							<Select.Content><Select.Group>
+								<Select.Item value="stable" label={$_("settings.updates.channel.stable")} />
+								<Select.Item value="beta" label={$_("settings.updates.channel.beta")} />
+							</Select.Group></Select.Content>
+						</Select.Root>
+					{/snippet}
+				</SettingsRow>
+
 				<SettingsRow
 					label={$_("settings.updates.automatic.label")}
 					description={$_("settings.updates.automatic.description")}

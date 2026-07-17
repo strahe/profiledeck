@@ -4,18 +4,20 @@ Use the macOS Desktop app for a visual workflow, or build the CLI for terminal u
 
 ## Before you start
 
-- The Desktop Alpha requires macOS 14 or later on Apple silicon.
+- The Universal Desktop app requires macOS 14 or later and supports Apple silicon and Intel Macs.
 - Building the CLI requires Git, Go 1.26, Make, and a POSIX shell.
 - Install the AI coding tool you want to manage and sign in before saving its first Profile.
 
 ## Use the Desktop app
 
-1. Download the latest macOS arm64 ZIP from [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases).
-2. Expand the ZIP and move `ProfileDeck.app` to Applications.
+1. Download the latest macOS Universal DMG from [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases). Stable releases use `X.Y.Z`; Beta releases use `X.Y.Z-beta.N`.
+2. Open the DMG and drag `ProfileDeck.app` to Applications.
 3. Open ProfileDeck. The app creates its local data automatically. If you already have a current Codex or Antigravity Profile, startup also checks its limits. Codex may refresh its saved login during that check; Antigravity checks are read-only.
 4. Select Codex, Claude Code, or Antigravity in the sidebar, then open **Profiles**.
 
-Current Alpha builds are not notarized. If macOS blocks the first launch, open **System Settings → Privacy & Security** and choose **Open Anyway** for ProfileDeck. Only do this for a file you downloaded from the official Releases page.
+Published DMGs are Developer ID signed and notarized by Apple. If macOS reports that the app is damaged or cannot verify its developer, delete that copy and download it again from the official Releases page instead of bypassing the warning.
+
+Signed Desktop releases can follow Stable updates or opt into Beta updates from **Settings → App updates**. Local development builds do not check for updates.
 
 ## Build and use the CLI
 

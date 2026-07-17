@@ -6,6 +6,7 @@ export interface Desktop {
     "appearance": string;
     "sidebar_collapsed": boolean;
     "automatic_updates": boolean;
+    "update_channel": string;
     "automatic_backups": boolean;
 }
 

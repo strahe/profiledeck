@@ -124,6 +124,7 @@
 	let updateStatus = $state<UpdateStatus>({
 		configured: false,
 		automatic: true,
+		channel: "",
 		state: "unavailable",
 		current_version: "dev",
 		available_version: "",
@@ -361,6 +362,21 @@
 		}
 	}
 
+	async function changeUpdateChannel(channel: string) {
+		if (updateBusy || channel === updateStatus.channel) return;
+		updateBusy = "channel";
+		try {
+			updateStatus = await track("update-channel", UpdateService.SetChannel(channel));
+			if (updateStatus.error_code === "settings_unavailable") {
+				toast.error(translate("settings.updates.error.settingsUnavailable"));
+			}
+		} catch (error) {
+			if (!isCancelError(error)) showError(error);
+		} finally {
+			updateBusy = "";
+		}
+	}
+
 	async function checkForUpdates() {
 		if (updateBusy) return;
 		updateBusy = "check";
@@ -392,11 +408,8 @@
 	function updateFailureMessage(code: string): string {
 		switch (code) {
 			case "feed_unavailable": return translate("settings.updates.error.unavailable");
-			case "feed_signature_missing":
-			case "feed_signature_invalid":
 			case "feed_invalid":
-			case "feed_rollback": return translate("settings.updates.error.feedRejected");
-			case "artifact_signature_missing":
+				return translate("settings.updates.error.feedRejected");
 			case "artifact_verification_failed": return translate("settings.updates.error.artifactRejected");
 			default: return translate("settings.updates.error.generic");
 		}
@@ -1041,6 +1054,7 @@
 						{updateBusy}
 						onLanguageChange={changeLanguage}
 						onAppearanceChange={changeAppearance}
+						onChannelChange={changeUpdateChannel}
 						onAutomaticChange={changeAutomaticUpdates}
 						onCheckForUpdates={checkForUpdates}
 						onRestart={restartWithUpdate}

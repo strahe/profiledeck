@@ -1,12 +1,21 @@
 # 更新桌面端
 
-桌面端更新适用于 macOS 14 或更高版本的 macOS arm64 Alpha 分发版本。CLI 不会自行更新。
+桌面端更新适用于 macOS 14 或更高版本中已签名的 Universal 构建。CLI 不会自行更新，本地 `dev` 桌面端构建不会检查在线更新，也不会显示更新通道选择器。
+
+ProfileDeck 提供两个持久保存的更新通道：
+
+- **正式版**只接收正式版本（`X.Y.Z`）。
+- **Beta**接收 Beta 版本（`X.Y.Z-beta.N`）和正式版本，因此可以从 Beta 升级到同版本或更高版本随后发布的正式版。
+
+首次运行时，正式构建默认选择“正式版”，Beta 构建默认选择“Beta”。后续安装会保留你的选择；从 Beta 升级到正式版后也不会自动退出 Beta 通道。
 
 ## 检查更新
 
 自动检查默认开启。ProfileDeck 会在启动后检查一次，并在保持打开或隐藏到菜单栏期间每 6 小时检查一次。
 
-打开**设置 → 应用更新**，可以开启或关闭自动检查、立即检查，或查看下载进度。下载期间 ProfileDeck 会保持打开。
+打开**设置 → 应用更新**，可以选择更新通道、开启或关闭自动检查、立即检查，或查看下载进度。下载期间 ProfileDeck 会保持打开。
+
+更新器处于空闲、已是最新版本或错误状态时可以切换通道。正在检查、下载或已有待重启更新时，需要先完成当前流程。自动检查开启时，切换通道后会立即按新通道检查。
 
 ## 安装已下载的更新
 
@@ -14,8 +23,8 @@
 
 重启前，ProfileDeck 会验证更新并创建加密的自动应用备份。如果验证、备份或准备失败，ProfileDeck 不会安装更新，当前版本也会保持不变。更新前备份与其他自动备份合计保留最近 10 个。稍后返回**设置 → 应用更新**重试。
 
-## 首次打开 Alpha
+## 了解下载文件
 
-当前 Alpha 尚未通过 Apple 公证，因此 macOS 可能阻止首次启动。如果文件来自 [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases) 且你信任该文件，请打开**系统设置 → 隐私与安全性**，对 ProfileDeck 选择**仍要打开**。
+GitHub Releases 提供经过公证的 Universal DMG 供首次安装，并提供经过公证的 Universal ZIP 用于自动更新。ProfileDeck 只会下载版本与 GitHub Release 一致的 ZIP，并在准备更新前按 `SHA256SUMS` 中对应的摘要完成校验。
 
-只有首次打开下载的 Alpha 时需要执行这一步。
+发布说明保存在对应的 [GitHub Release](https://github.com/strahe/profiledeck/releases) 中。

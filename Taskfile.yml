@@ -22,6 +22,10 @@ tasks:
           DEV: '{{.DEV}}'
           EXTRA_TAGS: '{{.EXTRA_TAGS}}'
           ARCH: '{{.ARCH}}'
+          OUTPUT: '{{.OUTPUT}}'
+          VERSION: '{{.VERSION}}'
+          COMMIT: '{{.COMMIT}}'
+          BUILD_DATE: '{{.BUILD_DATE}}'
 
   run:
     desc: Run the existing desktop binary

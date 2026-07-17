@@ -4,6 +4,7 @@
 export interface UpdateStatus {
     "configured": boolean;
     "automatic": boolean;
+    "channel": string;
     "state": string;
     "current_version": string;
     "available_version": string;

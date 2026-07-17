@@ -4,18 +4,20 @@
 
 ## 开始前准备
 
-- 桌面端 Alpha 要求配备 Apple 芯片的 macOS 14 或更高版本。
+- Universal 桌面端要求 macOS 14 或更高版本，支持 Apple 芯片和 Intel Mac。
 - 构建 CLI 需要 Git、Go 1.26、Make 和 POSIX shell。
 - 先安装要管理的 AI 编程工具，并在保存第一个 Profile 前完成登录。
 
 ## 使用桌面端
 
-1. 从 [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases) 下载最新的 macOS arm64 ZIP。
-2. 解压后，把 `ProfileDeck.app` 移到“应用程序”文件夹。
+1. 从 [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases) 下载最新的 macOS Universal DMG。正式版使用 `X.Y.Z`，Beta 版使用 `X.Y.Z-beta.N`。
+2. 打开 DMG，把 `ProfileDeck.app` 拖到“应用程序”文件夹。
 3. 打开 ProfileDeck。应用会自动创建本地数据。如果已有当前 Codex 或 Antigravity Profile，启动时还会检查其限额。Codex 可能在检查过程中刷新已保存登录；Antigravity 检查只读取数据。
 4. 在侧栏选择 Codex、Claude Code 或 Antigravity，然后打开 **Profiles**。
 
-当前 Alpha 尚未通过 Apple 公证。如果 macOS 阻止首次启动，请打开**系统设置 → 隐私与安全性**，对 ProfileDeck 选择**仍要打开**。只有确认文件来自官方 Releases 页面时才执行此操作。
+发布的 DMG 已使用 Developer ID 签名并通过 Apple 公证。如果 macOS 提示应用已损坏或无法验证开发者，请删除该副本，并从官方 Releases 页面重新下载，不要绕过安全警告。
+
+已签名的桌面端可以在**设置 → 应用更新**中选择接收正式版或 Beta 更新。本地开发构建不会检查更新。
 
 ## 构建并使用 CLI
 

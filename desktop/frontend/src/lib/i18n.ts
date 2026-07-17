@@ -735,6 +735,13 @@ const messages = {
 			updates: {
 				title: "App updates",
 				description: "Download updates in the background and choose when to restart.",
+				channel: {
+					label: "Update channel",
+					description: "Stable receives regular releases. Beta also receives early releases.",
+					busy: "Wait for the current update to finish before changing channels.",
+					stable: "Stable",
+					beta: "Beta",
+				},
 				automatic: {
 					label: "Check for updates automatically",
 					description: "Check after startup and every six hours, then download available updates in the background.",
@@ -932,6 +939,7 @@ const messages = {
 			importChanged: "The backup or saved ProfileDeck data changed after review. Review the import again.",
 			profileNotReady: "This Profile cannot be used yet. Check its login and settings, then try again.",
 			targetChanged: "The tool's login or settings changed after you reviewed them. Review the latest changes before continuing.",
+			updateChannelBusy: "Wait for the current update to finish before changing channels.",
 			updateNotReady: "No update is ready to restart.",
 			updateRestartFailed: "ProfileDeck could not restart safely. Your current version is unchanged.",
 		},
@@ -1670,6 +1678,13 @@ const messages = {
 			updates: {
 				title: "应用更新",
 				description: "在后台下载更新，并由你选择何时重启。",
+				channel: {
+					label: "更新通道",
+					description: "正式版通道仅接收正式发布；Beta 通道还会接收抢先体验版本。",
+					busy: "请等待当前更新完成后再切换通道。",
+					stable: "正式版",
+					beta: "Beta",
+				},
 				automatic: {
 					label: "自动检查更新",
 					description: "启动后及运行期间每 6 小时检查一次，并在后台下载可用更新。",
@@ -1867,6 +1882,7 @@ const messages = {
 			importChanged: "备份或已保存的 ProfileDeck 数据在审核后发生变化，请重新审核。",
 			profileNotReady: "此 Profile 暂时无法使用。请检查登录和设置后重试。",
 			targetChanged: "审核后工具登录或设置又发生了变化。请重新审核最新更改后再继续。",
+			updateChannelBusy: "请等待当前更新完成后再切换通道。",
 			updateNotReady: "当前没有已准备好重启的更新。",
 			updateRestartFailed: "ProfileDeck 无法安全重启；当前版本保持不变。",
 		},
