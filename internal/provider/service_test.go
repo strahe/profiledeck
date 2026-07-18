@@ -11,6 +11,7 @@ import (
 
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/bootstrap"
 	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/switching"
@@ -72,7 +73,7 @@ func TestServiceRequiresHealthyInitializedStore(t *testing.T) {
 func TestServiceValidatesAndRedactsMetadata(t *testing.T) {
 	ctx := context.Background()
 	environment := newProviderTestEnvironment(t, t.TempDir(), agent.AccessUnrestricted)
-	initResult, err := environment.runtime.Init(ctx)
+	initResult, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx)
 	if err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
@@ -129,7 +130,7 @@ func TestServiceValidatesAndRedactsMetadata(t *testing.T) {
 func TestServiceCRUDAndSharedLock(t *testing.T) {
 	ctx := context.Background()
 	environment := newProviderTestEnvironment(t, t.TempDir(), agent.AccessUnrestricted)
-	if _, err := environment.runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
 	disabled := false
@@ -169,7 +170,7 @@ func TestServiceCRUDAndSharedLock(t *testing.T) {
 func TestServiceRejectsGenericManagedProviderCreate(t *testing.T) {
 	ctx := context.Background()
 	environment := newProviderTestEnvironment(t, t.TempDir(), agent.AccessUnrestricted)
-	if _, err := environment.runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
 
@@ -182,7 +183,7 @@ func TestServiceRejectsGenericManagedProviderCreate(t *testing.T) {
 func TestDesktopAgentPolicyCoversManagedProviderCRUD(t *testing.T) {
 	ctx := context.Background()
 	environment := newProviderTestEnvironment(t, t.TempDir(), agent.AccessDesktopPreferences)
-	if _, err := environment.runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
 	db, err := environment.runtime.StoreFactory().OpenHealthy(ctx, false)

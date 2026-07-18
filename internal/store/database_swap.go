@@ -141,15 +141,12 @@ func validateCurrentDatabase(ctx context.Context, path string) error {
 		return err
 	}
 	defer db.Close()
-	if err := db.QuickCheck(ctx); err != nil {
-		return err
-	}
-	status, err := db.Status(ctx)
+	report, err := db.InspectIntegrity(ctx, IntegrityCurrentBaseline)
 	if err != nil {
 		return err
 	}
-	if !status.SchemaHealthy {
-		return errors.New("restored application database schema is unhealthy")
+	if !report.Healthy {
+		return errors.New("restored application database integrity is unhealthy")
 	}
 	return db.Checkpoint(ctx)
 }

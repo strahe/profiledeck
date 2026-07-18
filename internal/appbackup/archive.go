@@ -41,6 +41,11 @@ type inspectedArchive struct {
 	SizeBytes   int64
 }
 
+type automaticBackupFile struct {
+	name      string
+	createdAt time.Time
+}
+
 func writeArchive(
 	ctx context.Context,
 	databasePath string,
@@ -220,6 +225,38 @@ func inspectArchive(
 	}, nil
 }
 
+// readArchiveManifest decrypts only the first archive entry so retention can
+// classify protected backups without creating plaintext metadata sidecars.
+func readArchiveManifest(
+	ctx context.Context,
+	path string,
+	identity *age.X25519Identity,
+) (archiveManifest, error) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return archiveManifest{}, errors.New("backup archive is unavailable")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return archiveManifest{}, err
+	}
+	defer file.Close()
+	decrypted, err := age.Decrypt(file, identity)
+	if err != nil {
+		return archiveManifest{}, err
+	}
+	tr := tar.NewReader(&contextReader{ctx: ctx, reader: decrypted})
+	header, err := tr.Next()
+	if err != nil || !validTarHeader(header, manifestName, maxManifestSize) {
+		return archiveManifest{}, errors.New("backup manifest is invalid")
+	}
+	content, err := io.ReadAll(io.LimitReader(tr, maxManifestSize+1))
+	if err != nil || int64(len(content)) > maxManifestSize {
+		return archiveManifest{}, errors.New("backup manifest is invalid")
+	}
+	return decodeManifest(content)
+}
+
 func validTarHeader(header *tar.Header, name string, maxSize int64) bool {
 	return header != nil && header.Name == name && header.Typeflag == tar.TypeReg &&
 		header.Size >= 0 && header.Size <= maxSize
@@ -291,15 +328,19 @@ func safeArchiveReadError(err error) error {
 }
 
 func retainAutomaticBackups(dir string, limit int) error {
-	entries, err := os.ReadDir(dir)
+	backups, err := listAutomaticBackupFiles(dir)
 	if err != nil {
 		return err
 	}
-	type automaticBackup struct {
-		name      string
-		createdAt time.Time
+	return retainBackupFiles(dir, backups, limit)
+}
+
+func listAutomaticBackupFiles(dir string) ([]automaticBackupFile, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
 	}
-	backups := make([]automaticBackup, 0, len(entries))
+	backups := make([]automaticBackupFile, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), Extension) {
 			continue
@@ -313,7 +354,7 @@ func retainAutomaticBackups(dir string, limit int) error {
 		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		backups = append(backups, automaticBackup{name: entry.Name(), createdAt: createdAt})
+		backups = append(backups, automaticBackupFile{name: entry.Name(), createdAt: createdAt})
 	}
 	sort.Slice(backups, func(i, j int) bool {
 		if backups[i].createdAt.Equal(backups[j].createdAt) {
@@ -321,6 +362,43 @@ func retainAutomaticBackups(dir string, limit int) error {
 		}
 		return backups[i].createdAt.After(backups[j].createdAt)
 	})
+	return backups, nil
+}
+
+func listBeforeMigrationBackups(
+	ctx context.Context,
+	dir string,
+	identity *age.X25519Identity,
+) ([]automaticBackupFile, error) {
+	backups, err := listAutomaticBackupFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]automaticBackupFile, 0, len(backups))
+	for _, backup := range backups {
+		manifest, err := readArchiveManifest(ctx, filepath.Join(dir, backup.name), identity)
+		if err != nil || manifest.Reason != ReasonBeforeMigration || manifest.BackupID+Extension != backup.name {
+			continue
+		}
+		result = append(result, backup)
+	}
+	return result, nil
+}
+
+func retainBeforeMigrationBackups(
+	ctx context.Context,
+	dir string,
+	identity *age.X25519Identity,
+	limit int,
+) error {
+	backups, err := listBeforeMigrationBackups(ctx, dir, identity)
+	if err != nil {
+		return err
+	}
+	return retainBackupFiles(dir, backups, limit)
+}
+
+func retainBackupFiles(dir string, backups []automaticBackupFile, limit int) error {
 	if limit < 0 {
 		limit = 0
 	}

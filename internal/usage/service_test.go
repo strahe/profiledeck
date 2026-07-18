@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/strahe/profiledeck/internal/bootstrap"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -24,7 +25,7 @@ func TestUsageSyncCodexImportsAndSkipsUnchangedFiles(t *testing.T) {
 		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":25,"output_tokens":15,"total_tokens":165}}}}`,
 	}, "\n"))
 
-	if _, err := newUsageTestEnvironment(t, configDir, "").runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 
@@ -79,7 +80,7 @@ func TestUsageSyncCodexRefreshesLastSyncedForUnchangedFiles(t *testing.T) {
 	}, "\n")), 0o600); err != nil {
 		t.Fatalf("expected archive fixture write to succeed, got %v", err)
 	}
-	initResult, err := newUsageTestEnvironment(t, configDir, "").runtime.Init(ctx)
+	initResult, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx)
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
@@ -169,7 +170,7 @@ func TestUsageSyncCodexImportsOnlyAppendedEvents(t *testing.T) {
 		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":25,"output_tokens":15,"total_tokens":165}}}}`,
 	}, "\n"))
 
-	if _, err := newUsageTestEnvironment(t, configDir, "").runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 
@@ -211,7 +212,7 @@ func TestUsageSyncCodexDoesNotDoubleCountCopiedSessionFiles(t *testing.T) {
 	writeAppUsageFixture(t, firstCodexDir, content)
 	writeAppUsageFixture(t, secondCodexDir, content)
 
-	if _, err := newUsageTestEnvironment(t, configDir, "").runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 
@@ -274,7 +275,7 @@ func TestUsageSyncCodexDoesNotDoubleCountMultiLevelForkHistory(t *testing.T) {
 		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":40,"cached_input_tokens":6,"output_tokens":4,"total_tokens":44}}},"timestamp":"2026-07-03T00:03:00Z"}`,
 	}, "\n"))
 
-	if _, err := newUsageTestEnvironment(t, configDir, "").runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	result, err := newUsageTestEnvironment(t, configDir, codexDir).service.SyncCodex(ctx)
@@ -315,7 +316,7 @@ func TestUsageSyncCodexKeepsParentTimestampWhenParentArrivesAfterFork(t *testing
 		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":25,"output_tokens":15,"total_tokens":165}}},"timestamp":"2026-07-01T00:01:00Z"}`,
 	}, "\n"))
 
-	initialized, err := newUsageTestEnvironment(t, configDir, "").runtime.Init(ctx)
+	initialized, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx)
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
@@ -357,7 +358,7 @@ func TestUsageSyncCodexConcurrentRunsRemainIdempotent(t *testing.T) {
 		`{"type":"response_item","payload":{"type":"message"}}`,
 		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}}}`,
 	}, "\n"))
-	if _, err := newUsageTestEnvironment(t, configDir, "").runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 
@@ -394,7 +395,7 @@ func TestUsageSyncCodexConcurrentRunsRemainIdempotent(t *testing.T) {
 func TestUsageSyncCodexBackfillsExistingGPT56PartialCost(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	initialized, err := newUsageTestEnvironment(t, configDir, "").runtime.Init(ctx)
+	initialized, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx)
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
@@ -451,7 +452,7 @@ func TestUsageSyncCodexDoesNotDoubleCountSessionMovedToArchive(t *testing.T) {
 		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
 		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}}}`,
 	}, "\n"))
-	if _, err := newUsageTestEnvironment(t, configDir, "").runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	first, err := newUsageTestEnvironment(t, configDir, codexDir).service.SyncCodex(ctx)
@@ -489,7 +490,7 @@ func TestUsageReportCountsFallbackSessionsByDerivedIdentity(t *testing.T) {
 			t.Fatalf("expected fallback session fixture, got %v", err)
 		}
 	}
-	if _, err := newUsageTestEnvironment(t, configDir, "").runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	if result, err := newUsageTestEnvironment(t, configDir, codexDir).service.SyncCodex(ctx); err != nil || result.ImportedEvents != 2 {
@@ -514,7 +515,7 @@ func TestUsageSummaryReportsUnknownCostForUnknownModel(t *testing.T) {
 		`{"type":"event_msg","payload":{"type":"token_count","last_token_usage":{"input_tokens":5,"output_tokens":2}}}`,
 	}, "\n"))
 
-	if _, err := newUsageTestEnvironment(t, configDir, "").runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	if _, err := newUsageTestEnvironment(t, configDir, codexDir).service.SyncCodex(ctx); err != nil {

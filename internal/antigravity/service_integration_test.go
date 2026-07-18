@@ -8,6 +8,7 @@ import (
 	"github.com/strahe/profiledeck/internal/agent"
 	agyadapter "github.com/strahe/profiledeck/internal/antigravity/adapter"
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/bootstrap"
 	"github.com/strahe/profiledeck/internal/doctor"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/profiletarget"
@@ -78,7 +79,7 @@ func initAntigravityTestRuntime(ctx context.Context, configDir string) (profiles
 	if err != nil {
 		return profilesruntime.InitResult{}, err
 	}
-	return runtimeService.Init(ctx)
+	return bootstrap.NewService(runtimeService, nil, nil).Initialize(ctx)
 }
 
 func openHealthyStore(ctx context.Context, configDir string, readOnly bool) (*store.Store, error) {

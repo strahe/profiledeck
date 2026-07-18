@@ -11,6 +11,7 @@ import (
 
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/bootstrap"
 	"github.com/strahe/profiledeck/internal/codex"
 	codexadapter "github.com/strahe/profiledeck/internal/codex/adapter"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
@@ -33,6 +34,10 @@ type doctorTestApplication struct {
 	targets   *profiletarget.Service
 	switching *switching.Service
 	codex     *codex.Service
+}
+
+func (application *doctorTestApplication) Initialize(ctx context.Context) (profilesruntime.InitResult, error) {
+	return bootstrap.NewService(application.runtime, nil, nil).Initialize(ctx)
 }
 
 func newDoctorTestApplication(t *testing.T, configDir, codexDir string) *doctorTestApplication {
@@ -76,7 +81,7 @@ func TestDisabledAgentSkipsProviderHealthCheckButKeepsOperationInspection(t *tes
 	if err != nil {
 		t.Fatalf("create runtime Service: %v", err)
 	}
-	if _, err := runtimeService.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(runtimeService, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
 	agentService := agent.NewService(
@@ -205,7 +210,7 @@ func setupCodexSwitchProfiles(t *testing.T, independentConfig bool) (context.Con
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
 	application := newDoctorTestApplication(t, configDir, codexDir)
-	if _, err := application.Runtime().Init(ctx); err != nil {
+	if _, err := application.Initialize(ctx); err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
 	writeCodexProfileFixture(t, codexDir, "model = \"first\"\n", `{"tokens":{"account_id":"first","access_token":"first-token"}}`)

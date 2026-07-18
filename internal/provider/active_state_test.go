@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/agent"
+	"github.com/strahe/profiledeck/internal/bootstrap"
 	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 )
@@ -17,7 +18,7 @@ func TestListActiveProviderStatesMapsProvidersAndProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected runtime service, got %v", err)
 	}
-	initResult, err := runtimeService.Init(ctx)
+	initResult, err := bootstrap.NewService(runtimeService, nil, nil).Initialize(ctx)
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}

@@ -44,7 +44,7 @@ func runUpdate() error {
 		return err
 	}
 	defer application.Close()
-	if _, err := application.Runtime().Init(ctx); err != nil {
+	if _, err := application.Initialize(ctx); err != nil {
 		return err
 	}
 	db, err := application.Runtime().StoreFactory().OpenHealthy(ctx, false)
@@ -83,7 +83,7 @@ func finishUpdatedLaunch() {
 		return
 	}
 	defer application.Close()
-	if _, err := application.Runtime().Init(ctx); err != nil {
+	if _, err := application.Initialize(ctx); err != nil {
 		writeResult(err)
 		return
 	}

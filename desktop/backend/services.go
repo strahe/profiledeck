@@ -296,7 +296,7 @@ func (s Services) StopApplicationBackups() {
 func Bootstrap(ctx context.Context, application *app.Application) error {
 	// Desktop startup may create ProfileDeck runtime state, but it must not touch
 	// Codex or any other target tool files; target writes stay in switch/recovery.
-	_, err := application.Runtime().Init(ctx)
+	_, err := application.Initialize(ctx)
 	return err
 }
 
@@ -309,7 +309,7 @@ func (s *AppService) Environment(_ context.Context) Environment {
 }
 
 func (s *AppService) Initialize(ctx context.Context) (profilesruntime.InitResult, error) {
-	result, err := s.application.Runtime().Init(ctx)
+	result, err := s.application.Initialize(ctx)
 	if err == nil {
 		s.mu.Lock()
 		s.startupErr = nil

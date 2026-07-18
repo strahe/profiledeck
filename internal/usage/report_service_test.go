@@ -6,13 +6,14 @@ import (
 	"time"
 
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/bootstrap"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
 func TestUsageReportRangesUndatedAndPartialPricing(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	initResult, err := newUsageTestEnvironment(t, configDir, "").runtime.Init(ctx)
+	initResult, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx)
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
@@ -98,7 +99,7 @@ func TestUsageReportTodayUsesDSTBoundaries(t *testing.T) {
 	}
 	ctx := context.Background()
 	configDir := t.TempDir()
-	if _, err := newUsageTestEnvironment(t, configDir, "").runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 
@@ -125,7 +126,7 @@ func TestUsageReportTodayUsesDSTBoundaries(t *testing.T) {
 func TestUsageReportEmptyDefaultsAndValidation(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	if _, err := newUsageTestEnvironment(t, configDir, "").runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 

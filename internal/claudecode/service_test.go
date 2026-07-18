@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/bootstrap"
 	claudeadapter "github.com/strahe/profiledeck/internal/claudecode/adapter"
 	claudecodeauth "github.com/strahe/profiledeck/internal/claudecode/auth"
 	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
@@ -617,7 +618,7 @@ func TestClaudeCodeFileTargetOwnershipBlocksGenericPathReuseInBothDirections(t *
 		configDir := t.TempDir()
 		credentialPath := filepath.Join(t.TempDir(), claudecodeconfig.CredentialsFile)
 		environment := newClaudeCodeTestEnvironment(t, configDir)
-		if _, err := environment.runtime.Init(ctx); err != nil {
+		if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 			t.Fatal(err)
 		}
 		seedClaudeCodeFileProvider(t, ctx, configDir, credentialPath)
@@ -641,7 +642,7 @@ func TestClaudeCodeFileTargetOwnershipBlocksGenericPathReuseInBothDirections(t *
 		configDir := t.TempDir()
 		credentialPath := filepath.Join(t.TempDir(), claudecodeconfig.CredentialsFile)
 		environment := newClaudeCodeTestEnvironment(t, configDir)
-		if _, err := environment.runtime.Init(ctx); err != nil {
+		if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := environment.providers.Create(ctx, provider.CreateRequest{

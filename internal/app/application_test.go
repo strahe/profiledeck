@@ -62,7 +62,7 @@ func TestApplicationCoordinatesGenericProfileSwitchAcrossServices(t *testing.T) 
 	if err != nil {
 		t.Fatalf("create application: %v", err)
 	}
-	if _, err := application.Runtime().Init(ctx); err != nil {
+	if _, err := application.Initialize(ctx); err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
 	if _, err := application.Providers().Create(ctx, provider.CreateRequest{
@@ -104,7 +104,7 @@ func TestDesktopApplicationRejectsDisabledAgentButKeepsRecoveryServicesAvailable
 	if err != nil {
 		t.Fatalf("create application: %v", err)
 	}
-	if _, err := application.Runtime().Init(ctx); err != nil {
+	if _, err := application.Initialize(ctx); err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
 	if _, err := application.Agents().SetEnabled(ctx, agent.Codex, false); err != nil {

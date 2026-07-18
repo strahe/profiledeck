@@ -207,7 +207,7 @@ func (service *Service) CreateAutomaticIfDue(ctx context.Context) (*BackupDetail
 		return nil, err
 	}
 	if list.AutomaticCleanupRequired {
-		service.cleanupAutomaticBackups()
+		service.cleanupAutomaticBackups(ctx)
 	}
 	cutoff := service.now().Add(-24 * time.Hour).UnixMilli()
 	for _, backup := range list.Backups {

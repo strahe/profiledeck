@@ -80,7 +80,7 @@ func newInitCommand() *urfavecli.Command {
 			if err != nil {
 				return err
 			}
-			result, err := application.Runtime().Init(ctx)
+			result, err := application.Initialize(ctx)
 			if err != nil {
 				return err
 			}

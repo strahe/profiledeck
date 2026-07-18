@@ -14,6 +14,7 @@ import (
 
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/bootstrap"
 	"github.com/strahe/profiledeck/internal/codex"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
@@ -54,10 +55,79 @@ func TestDoctorBeforeInitReportsDiagnosticWithoutCreatingRuntime(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsVersionedDatabaseIntegrityFindings(t *testing.T) {
+	cases := []struct {
+		defect  string
+		finding string
+	}{
+		{defect: "quick", finding: "database_quick_check_failed"},
+		{defect: "foreign_keys", finding: "database_foreign_key_check_failed"},
+		{defect: "schema", finding: "database_schema_unhealthy"},
+		{defect: "json", finding: "database_json_invalid"},
+		{defect: "references", finding: "database_references_invalid"},
+	}
+	for _, test := range cases {
+		t.Run(test.defect, func(t *testing.T) {
+			ctx := context.Background()
+			configDir := t.TempDir()
+			application := newDoctorTestApplication(t, configDir, "")
+			initialized, err := application.Initialize(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			applyDoctorDatabaseDefect(t, initialized.DatabasePath, test.defect)
+
+			result, err := application.Doctor().Run(ctx)
+			if err != nil {
+				t.Fatalf("Doctor.Run() error = %v", err)
+			}
+			if !hasDoctorFinding(result.Findings, test.finding) {
+				t.Fatalf("Doctor findings = %#v, want %q", result.Findings, test.finding)
+			}
+			raw, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), "SECRET_INTEGRITY_SENTINEL") {
+				t.Fatalf("Doctor result exposed stored data: %s", raw)
+			}
+		})
+	}
+}
+
+func TestDoctorReportsUpgradeRequiredAndSkipsCurrentSchemaChecks(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	application := newDoctorTestApplication(t, configDir, "")
+	initialized, err := application.Initialize(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", initialized.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM bun_migrations WHERE name = (SELECT MAX(name) FROM bun_migrations)`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := application.Doctor().Run(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasDoctorFinding(result.Findings, "database_upgrade_required") {
+		t.Fatalf("Doctor findings = %#v", result.Findings)
+	}
+}
+
 func TestDoctorHealthyDatabaseReportsOK(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	if _, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx); err != nil {
+	if _, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 
@@ -76,7 +146,7 @@ func TestDoctorRejectsUnsupportedSchemaBeforeDatabaseChecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create runtime service: %v", err)
 	}
-	initialized, err := runtimeService.Init(ctx)
+	initialized, err := bootstrap.NewService(runtimeService, nil, nil).Initialize(ctx)
 	if err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
@@ -133,7 +203,7 @@ func TestDoctorRejectsUnsupportedSchemaBeforeDatabaseChecks(t *testing.T) {
 func TestDoctorTreatsReleasedMaintenanceLockAsSafeResidue(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	if _, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx); err != nil {
+	if _, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	if _, err := newDoctorTestApplication(t, configDir, "").Providers().Create(ctx, provider.CreateRequest{
@@ -155,7 +225,7 @@ func TestDoctorReportsCodexPresetAndBindingFailures(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
-	if _, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx); err != nil {
+	if _, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"tokens":{"account_id":"work","access_token":"token"}}`)
@@ -225,7 +295,7 @@ func TestDoctorInspectsTypedCodexBindingsWhenProviderMetadataIsInvalid(t *testin
 	}); err != nil {
 		t.Fatalf("expected unsupported binding setup, got %v", err)
 	}
-	invalidMetadata := "{"
+	invalidMetadata := "{}"
 	if _, err := db.UpdateProvider(ctx, store.UpdateProviderParams{ID: codexconfig.ProviderID, MetadataJSON: &invalidMetadata}); err != nil {
 		t.Fatalf("expected invalid metadata setup, got %v", err)
 	}
@@ -242,10 +312,10 @@ func TestDoctorInspectsTypedCodexBindingsWhenProviderMetadataIsInvalid(t *testin
 	}
 }
 
-func TestDoctorReportsIncompleteOperationsAndRedactsMalformedMetadata(t *testing.T) {
+func TestDoctorReportsIncompleteOperationsAndRedactsSensitiveMetadata(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	initResult, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx)
+	initResult, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx)
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
@@ -278,11 +348,11 @@ func TestDoctorReportsIncompleteOperationsAndRedactsMalformedMetadata(t *testing
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
 		ID:           "switch-malformed",
 		ProfileID:    "profile-a",
-		MetadataJSON: `{"api_key":"raw-secret"`,
+		MetadataJSON: `{"api_key":"raw-secret"}`,
 	}); err != nil {
 		t.Fatalf("expected malformed switch setup to succeed, got %v", err)
 	}
-	malformedMetadata := `{"api_key":"raw-secret"`
+	malformedMetadata := `{"api_key":"raw-secret"}`
 	if err := db.MarkOperationFailed(ctx, store.MarkOperationFailedParams{
 		ID:           "switch-malformed",
 		ErrorCode:    string(apperror.BackupInvalid),
@@ -310,10 +380,7 @@ func TestDoctorReportsIncompleteOperationsAndRedactsMalformedMetadata(t *testing
 	if strings.Contains(failedSwitch.ErrorMessage, "raw-error-secret") || !strings.Contains(failedSwitch.ErrorMessage, profiletarget.RedactedValue) {
 		t.Fatalf("expected failed switch error message to be redacted, got %#v", failedSwitch)
 	}
-	malformed := doctorTestOperationByID(t, result.Operations, "switch-malformed")
-	if !strings.Contains(malformed.Reason, "metadata_invalid") {
-		t.Fatalf("expected malformed metadata reason, got %#v", malformed)
-	}
+	doctorTestOperationByID(t, result.Operations, "switch-malformed")
 	raw, err := json.Marshal(result)
 	if err != nil {
 		t.Fatalf("expected doctor result marshal to succeed, got %v", err)
@@ -326,7 +393,7 @@ func TestDoctorReportsIncompleteOperationsAndRedactsMalformedMetadata(t *testing
 func TestDoctorReportsActiveLockAndPendingOperationAsWarning(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	initResult, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx)
+	initResult, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx)
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
@@ -364,7 +431,7 @@ func TestDoctorReportsActiveLockAndPendingOperationAsWarning(t *testing.T) {
 func TestDoctorReportsStaleFailedLockAndRepairRemovesOnlyLock(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	initResult, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx)
+	initResult, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx)
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
@@ -430,7 +497,7 @@ func TestDoctorReportsFailedSwitchRecoveryStatus(t *testing.T) {
 
 	t.Run("recoverable", func(t *testing.T) {
 		configDir := t.TempDir()
-		initResult, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx)
+		initResult, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx)
 		if err != nil {
 			t.Fatalf("expected init to succeed, got %v", err)
 		}
@@ -456,7 +523,7 @@ func TestDoctorReportsFailedSwitchRecoveryStatus(t *testing.T) {
 
 	t.Run("closable before target writes", func(t *testing.T) {
 		configDir := t.TempDir()
-		initResult, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx)
+		initResult, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx)
 		if err != nil {
 			t.Fatalf("expected init to succeed, got %v", err)
 		}
@@ -491,7 +558,7 @@ func TestDoctorReportsFailedSwitchRecoveryStatus(t *testing.T) {
 
 	t.Run("unknown target state", func(t *testing.T) {
 		configDir := t.TempDir()
-		initResult, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx)
+		initResult, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx)
 		if err != nil {
 			t.Fatalf("expected init to succeed, got %v", err)
 		}
@@ -523,7 +590,7 @@ func TestDoctorReportsFailedSwitchRecoveryStatus(t *testing.T) {
 func TestDoctorReportsMissingOperationLockAsRepairable(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	if _, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx); err != nil {
+	if _, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	_, paths, err := resolveRuntime(configDir)
@@ -544,11 +611,21 @@ func TestDoctorReportsMissingOperationLockAsRepairable(t *testing.T) {
 func TestDoctorReportsAppliedLockResidueAsOKAndRepairable(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	initResult, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx)
+	initResult, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx)
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	db := openWritableAppTestStore(t, ctx, initResult.DatabasePath)
+	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
+		ID: "provider-a", Name: "Provider A", AdapterID: "generic", Enabled: true, MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("create provider fixture: %v", err)
+	}
+	if _, err := db.CreateProfile(ctx, store.CreateProfileParams{
+		ID: "profile-a", Name: "Profile A", MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("create profile fixture: %v", err)
+	}
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
 		ID:           "switch-applied",
 		ProfileID:    "profile-a",
@@ -609,7 +686,7 @@ func TestDoctorReportsMalformedLockAsRepairableWhenUnlocked(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			configDir := t.TempDir()
-			if _, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx); err != nil {
+			if _, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx); err != nil {
 				t.Fatalf("expected init to succeed, got %v", err)
 			}
 			_, paths, err := resolveRuntime(configDir)
@@ -640,7 +717,7 @@ func TestDoctorReportsMalformedLockAsRepairableWhenUnlocked(t *testing.T) {
 func TestDoctorParsesLockFieldsWithWhitespace(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	if _, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx); err != nil {
+	if _, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	_, paths, err := resolveRuntime(configDir)
@@ -664,7 +741,7 @@ func TestDoctorRefusesUnsafeLocks(t *testing.T) {
 	ctx := context.Background()
 	t.Run("pending operation", func(t *testing.T) {
 		configDir := t.TempDir()
-		initResult, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx)
+		initResult, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx)
 		if err != nil {
 			t.Fatalf("expected init to succeed, got %v", err)
 		}
@@ -693,7 +770,7 @@ func TestDoctorRefusesUnsafeLocks(t *testing.T) {
 
 	t.Run("pending operation with reused pid", func(t *testing.T) {
 		configDir := t.TempDir()
-		initResult, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx)
+		initResult, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx)
 		if err != nil {
 			t.Fatalf("expected init to succeed, got %v", err)
 		}
@@ -726,7 +803,7 @@ func TestDoctorRefusesUnsafeLocks(t *testing.T) {
 
 	t.Run("reused pid with free os lock", func(t *testing.T) {
 		configDir := t.TempDir()
-		if _, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx); err != nil {
+		if _, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx); err != nil {
 			t.Fatalf("expected init to succeed, got %v", err)
 		}
 		_, paths, err := resolveRuntime(configDir)
@@ -766,7 +843,7 @@ func TestDoctorRefusesUnsafeLocks(t *testing.T) {
 
 	t.Run("unknown owner", func(t *testing.T) {
 		configDir := t.TempDir()
-		if _, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx); err != nil {
+		if _, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx); err != nil {
 			t.Fatalf("expected init to succeed, got %v", err)
 		}
 		_, paths, err := resolveRuntime(configDir)
@@ -826,7 +903,7 @@ func TestDoctorWarnsAboutWeakCodexAuthPermissions(t *testing.T) {
 	if err := os.Chmod(authPath, 0o644); err != nil {
 		t.Fatalf("expected Codex auth chmod setup to succeed, got %v", err)
 	}
-	if _, err := newDoctorTestApplication(t, configDir, "").Runtime().Init(ctx); err != nil {
+	if _, err := newDoctorTestApplication(t, configDir, "").Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	if _, err := newDoctorTestApplication(t, configDir, codexDir).Codex().CreateProfile(ctx, codex.CreateCodexProfileRequest{
@@ -841,6 +918,75 @@ func TestDoctorWarnsAboutWeakCodexAuthPermissions(t *testing.T) {
 	}
 	if !hasDoctorFinding(result.Findings, "codex_auth_target_permissions_weak") {
 		t.Fatalf("expected weak Codex auth permission warning, got %#v", result.Findings)
+	}
+}
+
+func applyDoctorDatabaseDefect(t *testing.T, path, defect string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corruptRootPage, pageSize int64
+	switch defect {
+	case "quick":
+		if _, err := db.Exec(`CREATE TABLE corruption_probe (value BLOB)`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO corruption_probe (value) VALUES (zeroblob(262144))`); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRow(`SELECT rootpage FROM sqlite_master WHERE name = 'corruption_probe'`).Scan(&corruptRootPage); err != nil {
+			t.Fatal(err)
+		}
+	case "foreign_keys":
+		if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO profile_credential_bindings
+			(profile_id, provider_id, slot_id, credential_id, created_at_unix_ms, updated_at_unix_ms)
+			VALUES ('missing-profile', 'missing-provider', 'auth', 'missing-credential', 1, 1)`); err != nil {
+			t.Fatal(err)
+		}
+	case "schema":
+		if _, err := db.Exec(`DROP INDEX idx_usage_events_model`); err != nil {
+			t.Fatal(err)
+		}
+	case "json":
+		if _, err := db.Exec(`INSERT INTO settings (key, value_json, updated_at_unix_ms)
+			VALUES ('invalid-json', '{"token":"SECRET_INTEGRITY_SENTINEL"', 1)`); err != nil {
+			t.Fatal(err)
+		}
+	case "references":
+		if _, err := db.Exec(`INSERT INTO provider_profile_settings
+			(profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms)
+			VALUES ('missing-profile', 'missing-provider', 0, 0, 1)`); err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatalf("unknown database defect %q", defect)
+	}
+	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if corruptRootPage > 0 {
+		file, err := os.OpenFile(path, os.O_RDWR, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.WriteAt(make([]byte, pageSize), (corruptRootPage-1)*pageSize); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

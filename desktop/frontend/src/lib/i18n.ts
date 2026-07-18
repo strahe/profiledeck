@@ -89,6 +89,10 @@ const messages = {
 				databaseUnavailableDescription: "ProfileDeck cannot read its local data. Recheck, then run profiledeck doctor if the problem continues.",
 				databaseVersionUnsupportedTitle: "ProfileDeck needs to be updated",
 				databaseVersionUnsupportedDescription: "This ProfileDeck version cannot open the existing local data. Update ProfileDeck, then recheck Diagnostics.",
+				databaseUpgradeRequiredTitle: "ProfileDeck needs to update local data",
+				databaseUpgradeRequiredDescription: "Close other ProfileDeck windows, then reopen ProfileDeck or run profiledeck init. An encrypted backup is created before the update.",
+				databaseIntegrityInvalidTitle: "Local ProfileDeck data needs attention",
+				databaseIntegrityInvalidDescription: "Do not switch Profiles. Restore a known-good application backup, then recheck Diagnostics.",
 				operationCheckFailedTitle: "Incomplete changes could not be checked",
 				operationCheckFailedDescription: "Recheck Diagnostics. If the problem continues, run profiledeck doctor before switching Profiles.",
 				codexSetupUnavailableTitle: "Saved Codex setup is incompatible",
@@ -678,7 +682,7 @@ const messages = {
 				description: "Create encrypted backups of all ProfileDeck data. Tool working files and system credential-store entries are not included.",
 				automatic: {
 					label: "Back up automatically",
-					description: "Create a backup every 24 hours while ProfileDeck is running. The 10 newest automatic backups are kept.",
+					description: "Create a backup every 24 hours while ProfileDeck is running. Up to 10 automatic backups are kept, including up to 3 created before local data updates.",
 					unavailable: "Restore or initialize local ProfileDeck data before enabling automatic backups.",
 				},
 				actions: {
@@ -714,7 +718,7 @@ const messages = {
 				emptyTitle: "No application backups",
 				emptyDescription: "Create a backup now, or enable automatic backups.",
 				cleanupTitle: "Automatic backups need attention",
-				cleanupDescription: "More than 10 automatic backups are stored. Delete backups you no longer need.",
+				cleanupDescription: "ProfileDeck kept extra automatic backups. Delete backups you no longer need.",
 				kind: { manual: "Manual", automatic: "Automatic" },
 				table: { backup: "Backup", created: "Created", size: "Size" },
 				restore: {
@@ -1043,6 +1047,10 @@ const messages = {
 				databaseUnavailableDescription: "请重新检查；如果问题持续存在，请运行 profiledeck doctor 查看技术详情。",
 				databaseVersionUnsupportedTitle: "需要更新 ProfileDeck",
 				databaseVersionUnsupportedDescription: "当前 ProfileDeck 版本无法打开现有本地数据。请更新 ProfileDeck，然后重新检查诊断信息。",
+				databaseUpgradeRequiredTitle: "ProfileDeck 需要更新本地数据",
+				databaseUpgradeRequiredDescription: "请关闭其他 ProfileDeck 窗口，然后重新打开 ProfileDeck 或运行 profiledeck init。更新前会先创建加密备份。",
+				databaseIntegrityInvalidTitle: "ProfileDeck 本地数据需要处理",
+				databaseIntegrityInvalidDescription: "请勿切换 Profile。请恢复一份确认正常的应用备份，然后重新检查诊断信息。",
 				operationCheckFailedTitle: "无法检查未完成的更改",
 				operationCheckFailedDescription: "请重新检查诊断信息；如果问题持续存在，请先运行 profiledeck doctor，再切换 Profile。",
 				codexSetupUnavailableTitle: "已保存的 Codex 配置不兼容",
@@ -1632,7 +1640,7 @@ const messages = {
 				description: "加密备份全部 ProfileDeck 数据；不包含工具工作文件和系统凭据存储条目。",
 				automatic: {
 					label: "自动备份",
-					description: "ProfileDeck 运行时每 24 小时创建一次，保留最新 10 份自动备份。",
+					description: "ProfileDeck 运行时每 24 小时创建一次，最多保留 10 份自动备份，其中本地数据更新前备份最多保留 3 份。",
 					unavailable: "请先恢复或初始化 ProfileDeck 本地数据，再开启自动备份。",
 				},
 				actions: {
@@ -1668,7 +1676,7 @@ const messages = {
 				emptyTitle: "还没有应用备份",
 				emptyDescription: "立即创建一份备份，或开启自动备份。",
 				cleanupTitle: "自动备份需要处理",
-				cleanupDescription: "当前保存了超过 10 份自动备份。请删除不再需要的备份。",
+				cleanupDescription: "ProfileDeck 保留了额外的自动备份。请删除不再需要的备份。",
 				kind: { manual: "手动", automatic: "自动" },
 				table: { backup: "备份", created: "创建时间", size: "大小" },
 				restore: {

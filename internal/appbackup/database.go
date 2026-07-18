@@ -15,18 +15,16 @@ func validateDatabase(ctx context.Context, path string, requireCurrentSchema boo
 		return err
 	}
 	defer db.Close()
-	if err := db.QuickCheck(ctx); err != nil {
-		return err
+	scope := store.IntegrityAppliedBaseline
+	if requireCurrentSchema {
+		scope = store.IntegrityCurrentBaseline
 	}
-	if !requireCurrentSchema {
-		return nil
-	}
-	status, err := db.Status(ctx)
+	report, err := db.InspectIntegrity(ctx, scope)
 	if err != nil {
 		return err
 	}
-	if !status.SchemaHealthy {
-		return errors.New("application database schema is unhealthy")
+	if !report.Healthy {
+		return errors.New("application database integrity validation failed")
 	}
 	return nil
 }
@@ -37,14 +35,15 @@ func prepareDatabaseForRestore(ctx context.Context, path string, applyRestoreRes
 		return 0, apperror.New(apperror.BackupInvalid, "application backup database could not be opened")
 	}
 	defer db.Close()
-	if err := db.QuickCheck(ctx); err != nil {
-		return 0, apperror.New(apperror.BackupInvalid, "application backup database is damaged")
-	}
-	if err := db.CheckMigrationCompatibility(ctx); err != nil {
+	baseline, err := db.InspectIntegrity(ctx, store.IntegrityAppliedBaseline)
+	if err != nil {
 		if errors.Is(err, store.ErrUnsupportedSchema) {
 			return 0, unsupportedBackupSchemaError()
 		}
-		return 0, apperror.New(apperror.BackupInvalid, "application backup database schema could not be inspected")
+		return 0, apperror.New(apperror.BackupInvalid, "application backup database could not be inspected")
+	}
+	if !baseline.Healthy {
+		return 0, apperror.New(apperror.BackupInvalid, "application backup database is invalid")
 	}
 	migration, err := db.Migrate(ctx)
 	if err != nil {
@@ -53,16 +52,17 @@ func prepareDatabaseForRestore(ctx context.Context, path string, applyRestoreRes
 		}
 		return 0, apperror.New(apperror.BackupInvalid, "application backup database could not be upgraded")
 	}
-	if err := db.QuickCheck(ctx); err != nil {
-		return 0, apperror.New(apperror.BackupInvalid, "application backup database is damaged")
-	}
-	status, err := db.Status(ctx)
-	if err != nil || !status.SchemaHealthy {
-		return 0, apperror.New(apperror.BackupInvalid, "application backup database schema is invalid")
+	current, err := db.InspectIntegrity(ctx, store.IntegrityCurrentBaseline)
+	if err != nil || !current.Healthy {
+		return 0, apperror.New(apperror.BackupInvalid, "application backup database is invalid")
 	}
 	if applyRestoreReset {
 		if err := db.PrepareForApplicationRestore(ctx); err != nil {
 			return 0, apperror.New(apperror.RestoreFailed, "restored application state could not be prepared")
+		}
+		final, err := db.InspectIntegrity(ctx, store.IntegrityCurrentBaseline)
+		if err != nil || !final.Healthy {
+			return 0, apperror.New(apperror.BackupInvalid, "application backup database is invalid")
 		}
 	}
 	if err := db.Checkpoint(ctx); err != nil {
@@ -79,10 +79,11 @@ func unsupportedBackupSchemaError() *apperror.Error {
 }
 
 func currentDatabaseHealthy(ctx context.Context, stores store.Factory) bool {
-	db, err := stores.OpenHealthy(ctx, true)
+	db, err := stores.Open(ctx, true)
 	if err != nil {
 		return false
 	}
 	defer db.Close()
-	return db.QuickCheck(ctx) == nil
+	report, err := db.InspectIntegrity(ctx, store.IntegrityCurrentBaseline)
+	return err == nil && report.Healthy
 }

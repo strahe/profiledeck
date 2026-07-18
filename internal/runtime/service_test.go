@@ -31,55 +31,6 @@ func TestStatusBeforeInitDoesNotCreateRuntime(t *testing.T) {
 	}
 }
 
-func TestInitCreatesRuntimeAndIsIdempotent(t *testing.T) {
-	ctx := context.Background()
-	service, err := NewService(t.TempDir())
-	if err != nil {
-		t.Fatalf("create runtime service: %v", err)
-	}
-	first, err := service.Init(ctx)
-	if err != nil {
-		t.Fatalf("initialize runtime: %v", err)
-	}
-	if !first.Initialized || !first.SchemaHealthy || first.MigrationsApplied != 3 {
-		t.Fatalf("unexpected first init result: %#v", first)
-	}
-	for _, path := range []string{
-		first.RuntimeRoot,
-		filepath.Join(first.RuntimeRoot, "backups"),
-		filepath.Join(first.RuntimeRoot, "recovery"),
-		filepath.Join(first.RuntimeRoot, "exports"),
-		filepath.Join(first.RuntimeRoot, "logs"),
-		filepath.Join(first.RuntimeRoot, "locks"),
-	} {
-		info, err := os.Stat(path)
-		if err != nil || !info.IsDir() {
-			t.Fatalf("runtime directory %s is invalid: info=%#v err=%v", path, info, err)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(first.RuntimeRoot, "updates")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy update backup directory should not exist: %v", err)
-	}
-	if info, err := os.Stat(first.DatabasePath); err != nil || info.IsDir() {
-		t.Fatalf("runtime database is invalid: info=%#v err=%v", info, err)
-	}
-
-	second, err := service.Init(ctx)
-	if err != nil {
-		t.Fatalf("initialize runtime again: %v", err)
-	}
-	if second.MigrationsApplied != 0 {
-		t.Fatalf("second init applied migrations: %#v", second)
-	}
-	status, err := service.Status(ctx)
-	if err != nil {
-		t.Fatalf("status after init: %v", err)
-	}
-	if !status.Initialized || !status.SchemaHealthy || status.PendingOperations != 0 || status.FailedOperations != 0 {
-		t.Fatalf("unexpected initialized status: %#v", status)
-	}
-}
-
 func TestStatusHandlesMissingAndCorruptSchema(t *testing.T) {
 	ctx := context.Background()
 
@@ -126,18 +77,28 @@ func TestStatusHandlesMissingAndCorruptSchema(t *testing.T) {
 	})
 }
 
-func TestInitAndStatusRejectUnsupportedSchema(t *testing.T) {
+func TestStatusRejectsUnsupportedSchema(t *testing.T) {
 	ctx := context.Background()
 	service, err := NewService(t.TempDir())
 	if err != nil {
 		t.Fatalf("create runtime service: %v", err)
 	}
-	initialized, err := service.Init(ctx)
+	if err := service.EnsureDirectories(); err != nil {
+		t.Fatalf("prepare runtime directories: %v", err)
+	}
+	db, err := service.StoreFactory().Open(ctx, false)
 	if err != nil {
-		t.Fatalf("initialize runtime: %v", err)
+		t.Fatalf("open runtime database: %v", err)
+	}
+	if _, err := db.Migrate(ctx); err != nil {
+		_ = db.Close()
+		t.Fatalf("initialize runtime database: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close runtime database: %v", err)
 	}
 
-	sqlDB, err := sql.Open("sqlite", initialized.DatabasePath)
+	sqlDB, err := sql.Open("sqlite", service.Paths().Database)
 	if err != nil {
 		t.Fatalf("open runtime database: %v", err)
 	}
@@ -151,8 +112,6 @@ func TestInitAndStatusRejectUnsupportedSchema(t *testing.T) {
 		t.Fatalf("insert unsupported migration: %v", err)
 	}
 
-	_, initErr := service.Init(ctx)
-	assertUnsupportedSchemaError(t, initErr, unknownName)
 	_, statusErr := service.Status(ctx)
 	assertUnsupportedSchemaError(t, statusErr, unknownName)
 }

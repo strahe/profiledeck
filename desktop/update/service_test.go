@@ -450,7 +450,7 @@ func newUpdateTestApplication(t *testing.T) *coreapp.Application {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := application.Runtime().Init(context.Background()); err != nil {
+	if _, err := application.Initialize(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(application.Close)

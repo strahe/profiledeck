@@ -51,7 +51,9 @@ profiledeck backup show <backup-id>
 profiledeck backup export <backup-id> --output <private-file>
 ```
 
-Automatic backups are enabled by default. Desktop and Tray create one when the newest automatic backup is more than 24 hours old, and also before an update restart or a healthy-database restore. Scheduled, pre-update, and pre-restore backups share a limit of ten; manual backups remain until you delete them.
+When a newer ProfileDeck version needs to update existing local data, it first verifies the data and creates an encrypted automatic backup. If verification or backup creation fails, ProfileDeck stops before updating the data. If the update later fails, ProfileDeck stops and keeps the encrypted backup for restore. Close other ProfileDeck windows and retry; if the data remains unavailable, use the Desktop recovery screen to restore a known-good application backup.
+
+Automatic backups are enabled by default. Desktop and Tray create one when the newest automatic backup is more than 24 hours old, and also before an update restart, a healthy-database restore, or a local-data update. ProfileDeck keeps up to ten automatic backups in total and up to three local-data update backups within that total. Manual backups remain until you delete them.
 
 Backup files are encrypted with the recovery key stored in your system credential store. Export that key separately before moving a backup to another computer:
 

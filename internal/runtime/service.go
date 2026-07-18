@@ -81,51 +81,15 @@ func (service *Service) StoreFactory() store.Factory {
 	return service.stores
 }
 
-func (service *Service) Init(ctx context.Context) (InitResult, error) {
+func (service *Service) EnsureDirectories() error {
 	if err := createDirs(service.paths); err != nil {
-		return InitResult{}, apperror.Wrap(apperror.RuntimeInitFailed, "failed to initialize runtime directories", err)
+		return apperror.Wrap(apperror.RuntimeInitFailed, "failed to initialize runtime directories", err)
 	}
-	lease, closeLease, err := service.leaseForOperation()
-	if err != nil {
-		return InitResult{}, err
-	}
-	if closeLease {
-		defer lease.Close()
-	}
-	if store.DatabaseSwapPending(service.paths.Database) {
-		if err := lease.RunExclusive(ctx, "startup-restore-reconcile", func(ctx context.Context) error {
-			return store.ReconcileDatabaseSwap(ctx, service.paths.Database)
-		}); err != nil {
-			return InitResult{}, apperror.Wrap(apperror.RestoreFailed, "failed to resolve an interrupted application restore", err)
-		}
-	}
-	db, err := service.stores.Open(ctx, false)
-	if err != nil {
-		return InitResult{}, err
-	}
-	defer db.Close()
-	migrationResult, err := db.Migrate(ctx)
-	if err != nil {
-		if errors.Is(err, store.ErrUnsupportedSchema) {
-			return InitResult{}, unsupportedSchemaError()
-		}
-		return InitResult{}, apperror.Wrap(apperror.StoreMigrationFailed, "failed to run database migrations", err)
-	}
+	return nil
+}
+
+func (service *Service) SecureDatabaseBestEffort() {
 	chmodBestEffort(service.paths.Database, 0o600)
-	status, err := db.Status(ctx)
-	if err != nil {
-		if errors.Is(err, store.ErrUnsupportedSchema) {
-			return InitResult{}, unsupportedSchemaError()
-		}
-		return InitResult{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to inspect application database", err)
-	}
-	if !status.SchemaHealthy {
-		return InitResult{}, apperror.New(apperror.StoreSchemaInvalid, "application database schema is not healthy")
-	}
-	return InitResult{
-		ConfigDir: service.configDir, RuntimeRoot: service.paths.Root, DatabasePath: service.paths.Database,
-		Initialized: true, SchemaHealthy: true, MigrationsApplied: migrationResult.Applied,
-	}, nil
 }
 
 func (service *Service) Status(ctx context.Context) (StatusResult, error) {
@@ -154,6 +118,9 @@ func (service *Service) Status(ctx context.Context) (StatusResult, error) {
 	if err != nil {
 		if errors.Is(err, store.ErrUnsupportedSchema) {
 			return StatusResult{}, unsupportedSchemaError()
+		}
+		if errors.Is(err, store.ErrInvalidMigrationHistory) {
+			return StatusResult{}, apperror.New(apperror.StoreSchemaInvalid, "ProfileDeck local data is not in a valid state; run profiledeck doctor or restore a known-good application backup")
 		}
 		return StatusResult{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to inspect application database", err)
 	}

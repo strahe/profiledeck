@@ -159,10 +159,15 @@ func downInitialSchema(ctx context.Context, db *bun.DB) error {
 }
 
 func execStatements(ctx context.Context, db *bun.DB, statements []string) error {
-	for i, statement := range statements {
-		if _, err := db.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("statement %d: %w", i+1, err)
+	// Bun records the migration marker after this callback returns. Keep every
+	// callback atomic and replay-safe so an interruption between those commits
+	// can rerun the complete migration without preserving a partial baseline.
+	return db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		for i, statement := range statements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("statement %d: %w", i+1, err)
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }

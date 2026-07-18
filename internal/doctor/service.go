@@ -248,7 +248,7 @@ func inspectDoctorDatabase(ctx context.Context, stores store.Factory) (doctorDat
 		}}
 	}
 
-	status, err := db.Status(ctx)
+	report, err := db.InspectIntegrity(ctx, store.IntegrityAppliedBaseline)
 	if err != nil {
 		_ = db.Close()
 		if errors.Is(err, store.ErrUnsupportedSchema) {
@@ -258,6 +258,13 @@ func inspectDoctorDatabase(ctx context.Context, stores store.Factory) (doctorDat
 				Message: "this ProfileDeck version cannot open the existing local data; update ProfileDeck and try again",
 			}}
 		}
+		if errors.Is(err, store.ErrInvalidMigrationHistory) {
+			return doctorDatabaseState{}, nil, []Finding{{
+				ID:      "database_schema_unhealthy",
+				Level:   LevelError,
+				Message: "application database structure is invalid",
+			}}
+		}
 		return doctorDatabaseState{}, nil, []Finding{{
 			ID:      "database_status_failed",
 			Level:   LevelError,
@@ -265,13 +272,29 @@ func inspectDoctorDatabase(ctx context.Context, stores store.Factory) (doctorDat
 			Details: map[string]any{"error": err.Error()},
 		}}
 	}
-	if !status.SchemaHealthy {
+	if !report.Healthy {
+		_ = db.Close()
+		return doctorDatabaseState{}, nil, integrityFindings(report)
+	}
+	if !report.Migration.Current {
 		_ = db.Close()
 		return doctorDatabaseState{}, nil, []Finding{{
-			ID:      "database_schema_unhealthy",
-			Level:   LevelError,
-			Message: "application database schema is not healthy",
+			ID:      "database_upgrade_required",
+			Level:   LevelWarning,
+			Message: "ProfileDeck local data must be updated before other database checks can run",
 		}}
+	}
+	report, err = db.InspectIntegrity(ctx, store.IntegrityCurrentBaseline)
+	if err != nil || !report.Healthy {
+		_ = db.Close()
+		if err != nil {
+			return doctorDatabaseState{}, nil, []Finding{{
+				ID:      "database_status_failed",
+				Level:   LevelError,
+				Message: "failed to inspect application database",
+			}}
+		}
+		return doctorDatabaseState{}, nil, integrityFindings(report)
 	}
 
 	operations, err := db.ListIncompleteOperations(ctx)
@@ -290,6 +313,40 @@ func inspectDoctorDatabase(ctx context.Context, stores store.Factory) (doctorDat
 		Level:   LevelOK,
 		Message: "application database is healthy",
 	}}
+}
+
+func integrityFindings(report store.IntegrityReport) []Finding {
+	findings := make([]Finding, 0, len(report.Issues))
+	for _, issue := range report.Issues {
+		finding := Finding{Level: LevelError, Details: map[string]any{"count": issue.Count}}
+		switch issue.Kind {
+		case store.IntegrityIssueQuickCheck:
+			finding.ID = "database_quick_check_failed"
+			finding.Message = "local application data is damaged"
+		case store.IntegrityIssueForeignKeys:
+			finding.ID = "database_foreign_key_check_failed"
+			finding.Message = "local application data contains broken relationships"
+		case store.IntegrityIssueSchema:
+			finding.ID = "database_schema_unhealthy"
+			finding.Message = "application database structure is not healthy"
+		case store.IntegrityIssueJSON:
+			finding.ID = "database_json_invalid"
+			finding.Message = "local application data contains invalid structured values"
+		case store.IntegrityIssueReferences:
+			finding.ID = "database_references_invalid"
+			finding.Message = "local application data contains invalid references"
+		default:
+			continue
+		}
+		findings = append(findings, finding)
+	}
+	if len(findings) == 0 {
+		return []Finding{{
+			ID: "database_schema_unhealthy", Level: LevelError,
+			Message: "application database integrity could not be verified",
+		}}
+	}
+	return findings
 }
 
 func (service *Service) inspectSensitivePathPermissions(ctx context.Context, paths runtime.Paths, dbState doctorDatabaseState) []Finding {

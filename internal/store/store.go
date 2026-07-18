@@ -48,7 +48,11 @@ const (
 	maxProviderConfigSetPayloadBytes  = 16 * 1024 * 1024
 )
 
-var ErrUnsupportedSchema = errors.New("application database schema contains unknown migrations")
+var (
+	ErrUnsupportedSchema       = errors.New("application database schema contains unknown migrations")
+	ErrInvalidMigrationHistory = errors.New("application database migration history is invalid")
+	ErrQuickCheckFailed        = errors.New("sqlite quick check failed")
+)
 
 var (
 	ErrAlreadyExists = errors.New("already exists")
@@ -917,8 +921,16 @@ func migrateWithRetry(
 func (s *Store) migrateOnce(ctx context.Context) (MigrationResult, error) {
 	// Older Bun clients ignore applied migrations that are absent from their
 	// registry, so reject them before Bun initializes or changes the schema.
-	if err := s.CheckMigrationCompatibility(ctx); err != nil {
+	state, err := s.MigrationState(ctx)
+	if err != nil {
 		return MigrationResult{}, err
+	}
+	if !state.HasMigrationTable {
+		// Establish Bun's infrastructure as one baseline. This prevents concurrent
+		// fresh initialization from exposing the gaps between Bun's Init statements.
+		if err := s.initializeMigrationInfrastructure(ctx); err != nil {
+			return MigrationResult{}, err
+		}
 	}
 	migrator := migrate.NewMigrator(
 		s.db,
@@ -936,6 +948,17 @@ func (s *Store) migrateOnce(ctx context.Context) (MigrationResult, error) {
 	return MigrationResult{Applied: len(group.Migrations)}, nil
 }
 
+func (s *Store) initializeMigrationInfrastructure(ctx context.Context) error {
+	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		for index, statement := range migrationInfrastructureStatements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("initialize migration infrastructure statement %d: %w", index+1, err)
+			}
+		}
+		return nil
+	})
+}
+
 func waitForMigrationRetry(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -948,8 +971,12 @@ func waitForMigrationRetry(ctx context.Context, delay time.Duration) error {
 }
 
 func (s *Store) Status(ctx context.Context) (Status, error) {
-	if err := s.CheckMigrationCompatibility(ctx); err != nil {
+	state, err := s.MigrationState(ctx)
+	if err != nil {
 		return Status{}, err
+	}
+	if !state.Current {
+		return Status{SchemaHealthy: false}, nil
 	}
 	healthy, err := s.schemaHealthy(ctx)
 	if err != nil {
@@ -980,7 +1007,7 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 func (s *Store) QuickCheck(ctx context.Context) error {
 	rows, err := s.executor().QueryContext(ctx, "PRAGMA quick_check")
 	if err != nil {
-		return err
+		return normalizeQuickCheckError(err)
 	}
 	defer rows.Close()
 	results := 0
@@ -988,7 +1015,7 @@ func (s *Store) QuickCheck(ctx context.Context) error {
 	for rows.Next() {
 		var result string
 		if err := rows.Scan(&result); err != nil {
-			return err
+			return normalizeQuickCheckError(err)
 		}
 		results++
 		if result != "ok" {
@@ -996,41 +1023,19 @@ func (s *Store) QuickCheck(ctx context.Context) error {
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return normalizeQuickCheckError(err)
 	}
 	if results != 1 || !healthy {
-		return errors.New("sqlite quick check failed")
+		return ErrQuickCheckFailed
 	}
 	return nil
 }
 
-// CheckMigrationCompatibility rejects applied migrations that are unknown to
-// this ProfileDeck version before the database is read or migrated.
+// CheckMigrationCompatibility rejects unknown or invalid migration history
+// before application data is read or migrated.
 func (s *Store) CheckMigrationCompatibility(ctx context.Context) error {
-	exists, err := s.objectExists(ctx, "table", "bun_migrations")
-	if err != nil || !exists {
-		return err
-	}
-	registered := migrations.Migrations.Sorted()
-	known := make(map[string]struct{}, len(registered))
-	for _, migration := range registered {
-		known[migration.Name] = struct{}{}
-	}
-	rows, err := s.executor().QueryContext(ctx, `SELECT name FROM bun_migrations`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return err
-		}
-		if _, ok := known[name]; !ok {
-			return ErrUnsupportedSchema
-		}
-	}
-	return rows.Err()
+	_, err := s.MigrationState(ctx)
+	return err
 }
 
 // Checkpoint folds committed WAL pages into the database before a database
@@ -3453,45 +3458,7 @@ func (s *Store) CountProfileTargetReferences(ctx context.Context, profileID stri
 }
 
 func (s *Store) schemaHealthy(ctx context.Context) (bool, error) {
-	ok, err := s.objectExists(ctx, "table", "bun_migrations")
-	if err != nil {
-		return false, err
-	}
-	if !ok {
-		return false, nil
-	}
-
-	for _, spec := range initialTableSpecs {
-		ok, err := s.tableSchemaHealthy(ctx, spec)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			return false, nil
-		}
-	}
-
-	for _, index := range initialIndexSpecs {
-		ok, err := s.indexSchemaHealthy(ctx, index)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			return false, nil
-		}
-	}
-
-	for _, trigger := range initialTriggerSpecs {
-		ok, err := s.triggerSchemaHealthy(ctx, trigger)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			return false, nil
-		}
-	}
-
-	return true, nil
+	return s.schemaHealthyForApplied(ctx, len(schemaContracts))
 }
 
 func (s *Store) indexSchemaHealthy(ctx context.Context, spec indexSpec) (bool, error) {
@@ -4044,6 +4011,18 @@ func isSQLiteBusyError(err error) bool {
 	}
 	code := sqliteErr.Code() & 0xff
 	return code == sqlite3.SQLITE_BUSY || code == sqlite3.SQLITE_LOCKED
+}
+
+func normalizeQuickCheckError(err error) error {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return err
+	}
+	code := sqliteErr.Code() & 0xff
+	if code == sqlite3.SQLITE_CORRUPT || code == sqlite3.SQLITE_NOTADB {
+		return ErrQuickCheckFailed
+	}
+	return err
 }
 
 func profileTargetConstraintError(err error) error {

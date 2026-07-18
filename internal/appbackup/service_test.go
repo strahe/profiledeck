@@ -176,6 +176,137 @@ func TestCreateUsesCompactBackupIDsAndAddsSuffixOnlyForCollision(t *testing.T) {
 	}
 }
 
+func TestBeforeMigrationBackupIsEncryptedDecryptableAndRetainedSeparately(t *testing.T) {
+	ctx := context.Background()
+	service, paths, keys := newTestService(t)
+	manual, err := service.Create(ctx, CreateRequest{Kind: KindManual, Reason: ReasonManual})
+	if err != nil {
+		t.Fatalf("create manual backup: %v", err)
+	}
+	base := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	var newest BackupDetail
+	for index := range 5 {
+		service.now = func() time.Time { return base.Add(time.Duration(index) * time.Hour) }
+		newest, err = service.Create(ctx, CreateRequest{Kind: KindAutomatic, Reason: ReasonBeforeMigration})
+		if err != nil {
+			t.Fatalf("create before-migration backup %d: %v", index, err)
+		}
+	}
+	identity, err := age.ParseX25519Identity(keys.value)
+	if err != nil {
+		t.Fatalf("parse test recovery key: %v", err)
+	}
+	migrationBackups, err := listBeforeMigrationBackups(ctx, paths.Backups, identity)
+	if err != nil {
+		t.Fatalf("list before-migration backups: %v", err)
+	}
+	if len(migrationBackups) != migrationRetention {
+		t.Fatalf("before-migration backups = %d, want %d", len(migrationBackups), migrationRetention)
+	}
+	if _, err := os.Stat(filepath.Join(paths.Backups, manual.ID+Extension)); err != nil {
+		t.Fatalf("manual backup was removed: %v", err)
+	}
+
+	extracted := filepath.Join(t.TempDir(), "before-migration.db")
+	inspected, err := inspectArchive(ctx, filepath.Join(paths.Backups, newest.ID+Extension), identity, extracted)
+	if err != nil {
+		t.Fatalf("decrypt before-migration backup: %v", err)
+	}
+	if inspected.Manifest.Reason != ReasonBeforeMigration {
+		t.Fatalf("before-migration manifest = %#v", inspected.Manifest)
+	}
+	if err := validateDatabase(ctx, extracted, false); err != nil {
+		t.Fatalf("decrypted database failed applied-baseline validation: %v", err)
+	}
+}
+
+func TestCreateRejectsIntegrityDefectsWithoutPublishing(t *testing.T) {
+	for _, defect := range []string{"quick", "foreign_keys", "schema", "json", "references"} {
+		t.Run(defect, func(t *testing.T) {
+			ctx := context.Background()
+			service, paths, _ := newTestService(t)
+			applyDatabaseIntegrityDefect(t, paths.Database, defect)
+
+			_, err := service.Create(ctx, CreateRequest{Kind: KindManual, Reason: ReasonManual})
+			if err == nil {
+				t.Fatal("backup unexpectedly accepted invalid database")
+			}
+			if strings.Contains(err.Error(), "SECRET_INTEGRITY_SENTINEL") {
+				t.Fatalf("backup error exposed stored data: %v", err)
+			}
+			entries, readErr := os.ReadDir(paths.Backups)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("invalid database published backups: %v", entryNames(entries))
+			}
+		})
+	}
+}
+
+func TestRestorePreviewRejectsIntegrityDefectsWithoutChangingCurrentDatabase(t *testing.T) {
+	for _, defect := range []string{"quick", "foreign_keys", "schema", "json", "references"} {
+		t.Run(defect, func(t *testing.T) {
+			ctx := context.Background()
+			service, paths, _ := newTestService(t)
+			setTestSetting(t, paths, "restore.guard", `"current"`)
+			candidate := filepath.Join(t.TempDir(), "candidate.db")
+			if err := store.NewFactory(paths.Database).CreateSnapshot(ctx, candidate); err != nil {
+				t.Fatalf("create restore candidate: %v", err)
+			}
+			applyDatabaseIntegrityDefect(t, candidate, defect)
+			identity, err := service.loadOrCreateIdentity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			createdAt := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+			id := formatBackupID(KindManual, createdAt, 1)
+			if err := writeArchive(ctx, candidate, filepath.Join(paths.Backups, id+Extension), archiveManifest{
+				FormatVersion: formatVersion, BackupID: id, Reason: ReasonManual,
+				CreatedAtUnixMS: createdAt.UnixMilli(),
+			}, identity.Recipient()); err != nil {
+				t.Fatalf("write invalid restore candidate: %v", err)
+			}
+
+			_, err = service.PreviewRestore(ctx, RestoreSource{BackupID: id})
+			assertAppErrorCode(t, err, apperror.BackupInvalid)
+			if strings.Contains(err.Error(), "SECRET_INTEGRITY_SENTINEL") {
+				t.Fatalf("restore error exposed stored data: %v", err)
+			}
+			assertSettingValue(t, paths, "restore.guard", `"current"`)
+		})
+	}
+}
+
+func TestListRequestsCleanupWhenBeforeMigrationRetentionIsExceeded(t *testing.T) {
+	ctx := context.Background()
+	service, paths, _ := newTestService(t)
+	identity, err := service.loadOrCreateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	for index := range migrationRetention + 1 {
+		createdAt := base.Add(time.Duration(index) * time.Hour)
+		id := formatBackupID(KindAutomatic, createdAt, 1)
+		if err := writeArchive(ctx, paths.Database, filepath.Join(paths.Backups, id+Extension), archiveManifest{
+			FormatVersion: formatVersion, BackupID: id, Reason: ReasonBeforeMigration,
+			CreatedAtUnixMS: createdAt.UnixMilli(),
+		}, identity.Recipient()); err != nil {
+			t.Fatalf("write before-migration archive %d: %v", index, err)
+		}
+	}
+
+	listed, err := service.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Backups) != migrationRetention+1 || !listed.AutomaticCleanupRequired {
+		t.Fatalf("list result = %#v", listed)
+	}
+}
+
 func TestInspectRejectsWrongKeyTamperingAndTruncation(t *testing.T) {
 	ctx := context.Background()
 	service, paths, keys := newTestService(t)
@@ -454,6 +585,16 @@ func TestRestoreResetsRuntimeStateAndPreservesExternalFiles(t *testing.T) {
 	ctx := context.Background()
 	service, paths, _ := newTestService(t)
 	db := openHealthyStore(t, paths)
+	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
+		ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateProfile(ctx, store.CreateProfileParams{
+		ID: "before-profile", Name: "Before", MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.UpsertSetting(ctx, store.UpsertSettingParams{Key: "restore.value", ValueJSON: `"before"`}); err != nil {
 		t.Fatal(err)
 	}
@@ -707,10 +848,21 @@ func newTestService(t *testing.T) (*Service, runtime.Paths, *memoryKeyStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtimeService.Init(context.Background()); err != nil {
+	if err := runtimeService.EnsureDirectories(); err != nil {
 		t.Fatal(err)
 	}
 	paths := runtimeService.Paths()
+	db, err := store.NewFactory(paths.Database).Open(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Migrate(context.Background()); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
 	keys := &memoryKeyStore{}
 	return newService(paths, store.NewFactory(paths.Database), keys, directExclusiveRunner{}), paths, keys
 }
@@ -792,5 +944,74 @@ func assertAppErrorCode(t *testing.T, err error, code apperror.Code) {
 	var appErr *apperror.Error
 	if !errors.As(err, &appErr) || appErr.Code != code {
 		t.Fatalf("error = %v, want code %s", err, code)
+	}
+}
+
+func applyDatabaseIntegrityDefect(t *testing.T, path, defect string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corruptRootPage, pageSize int64
+	switch defect {
+	case "quick":
+		if _, err := db.Exec(`CREATE TABLE corruption_probe (value BLOB)`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO corruption_probe (value) VALUES (zeroblob(262144))`); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRow(`SELECT rootpage FROM sqlite_master WHERE name = 'corruption_probe'`).Scan(&corruptRootPage); err != nil {
+			t.Fatal(err)
+		}
+	case "foreign_keys":
+		if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO profile_credential_bindings
+			(profile_id, provider_id, slot_id, credential_id, created_at_unix_ms, updated_at_unix_ms)
+			VALUES ('missing-profile', 'missing-provider', 'auth', 'missing-credential', 1, 1)`); err != nil {
+			t.Fatal(err)
+		}
+	case "schema":
+		if _, err := db.Exec(`DROP INDEX idx_usage_events_model`); err != nil {
+			t.Fatal(err)
+		}
+	case "json":
+		if _, err := db.Exec(`INSERT INTO settings (key, value_json, updated_at_unix_ms)
+			VALUES ('invalid-json', '{"token":"SECRET_INTEGRITY_SENTINEL"', 1)`); err != nil {
+			t.Fatal(err)
+		}
+	case "references":
+		if _, err := db.Exec(`INSERT INTO provider_profile_settings
+			(profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms)
+			VALUES ('missing-profile', 'missing-provider', 0, 0, 1)`); err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatalf("unknown database defect %q", defect)
+	}
+	if _, err := db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if corruptRootPage > 0 {
+		file, err := os.OpenFile(path, os.O_RDWR, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.WriteAt(make([]byte, pageSize), (corruptRootPage-1)*pageSize); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

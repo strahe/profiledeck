@@ -189,7 +189,7 @@ func TestWriteBackupListReportsIncompleteAutomaticCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected backup list output to succeed, got %v", err)
 	}
-	if !strings.Contains(output.String(), "More than 10 automatic backups") {
+	if !strings.Contains(output.String(), "ProfileDeck kept extra automatic backups") {
 		t.Fatalf("backup cleanup warning is missing: %q", output.String())
 	}
 }

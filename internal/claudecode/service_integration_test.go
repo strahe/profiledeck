@@ -9,6 +9,7 @@ import (
 
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/bootstrap"
 	claudeadapter "github.com/strahe/profiledeck/internal/claudecode/adapter"
 	claudekeychain "github.com/strahe/profiledeck/internal/claudecode/keychain"
 	"github.com/strahe/profiledeck/internal/doctor"
@@ -96,7 +97,7 @@ func initClaudeCodeTestRuntime(ctx context.Context, configDir string) (profilesr
 	if err != nil {
 		return profilesruntime.InitResult{}, err
 	}
-	return runtimeService.Init(ctx)
+	return bootstrap.NewService(runtimeService, nil, nil).Initialize(ctx)
 }
 
 func openHealthyStore(ctx context.Context, configDir string, readOnly bool) (*store.Store, error) {

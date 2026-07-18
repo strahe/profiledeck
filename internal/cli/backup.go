@@ -318,7 +318,7 @@ func writeBackupList(w io.Writer, result appbackup.ListResult) error {
 		}
 	}
 	if result.AutomaticCleanupRequired {
-		_, err := fmt.Fprintln(w, "warning: More than 10 automatic backups are stored. Delete backups you no longer need.")
+		_, err := fmt.Fprintln(w, "warning: ProfileDeck kept extra automatic backups. Delete backups you no longer need.")
 		return err
 	}
 	return nil

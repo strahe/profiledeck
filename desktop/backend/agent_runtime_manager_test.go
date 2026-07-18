@@ -79,7 +79,7 @@ func TestAgentRuntimeManagerReconcilesDesktopPreferenceChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create Application: %v", err)
 	}
-	if _, err := application.Runtime().Init(ctx); err != nil {
+	if _, err := application.Initialize(ctx); err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
 
@@ -117,7 +117,7 @@ func TestAgentRuntimeManagerSerializesActivationWithDisable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create Application: %v", err)
 	}
-	if _, err := application.Runtime().Init(ctx); err != nil {
+	if _, err := application.Initialize(ctx); err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
 

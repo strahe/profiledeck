@@ -64,7 +64,7 @@ func TestAppContainsOnlyCompositionAndBuildInfoAPI(t *testing.T) {
 	allowedApplicationMethods := map[string]struct{}{
 		"Runtime": {}, "Backups": {}, "Agents": {}, "Providers": {}, "Profiles": {}, "Targets": {}, "Switching": {},
 		"Doctor": {}, "Usage": {}, "Settings": {}, "Codex": {}, "Antigravity": {}, "ClaudeCode": {},
-		"Close": {},
+		"Initialize": {}, "Close": {},
 	}
 	err := walkProductionGo(root, func(path string, file *ast.File) error {
 		for _, declaration := range file.Decls {
@@ -84,7 +84,17 @@ func TestAppContainsOnlyCompositionAndBuildInfoAPI(t *testing.T) {
 			if _, allowed := allowedApplicationMethods[function.Name.Name]; !allowed {
 				return boundaryFailure(path, "Application declares use-case method "+function.Name.Name)
 			}
-			if function.Type.Params != nil && len(function.Type.Params.List) != 0 {
+			parameterCount := 0
+			if function.Type.Params != nil {
+				parameterCount = len(function.Type.Params.List)
+			}
+			if function.Name.Name == "Initialize" {
+				if parameterCount != 1 {
+					return boundaryFailure(path, "Application Initialize must accept one context parameter")
+				}
+				continue
+			}
+			if parameterCount != 0 {
 				return boundaryFailure(path, "Application accessor accepts arguments: "+function.Name.Name)
 			}
 		}

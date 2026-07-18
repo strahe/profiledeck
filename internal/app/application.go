@@ -9,6 +9,7 @@ import (
 	"github.com/strahe/profiledeck/internal/antigravity"
 	agyadapter "github.com/strahe/profiledeck/internal/antigravity/adapter"
 	"github.com/strahe/profiledeck/internal/appbackup"
+	"github.com/strahe/profiledeck/internal/bootstrap"
 	"github.com/strahe/profiledeck/internal/claudecode"
 	claudeadapter "github.com/strahe/profiledeck/internal/claudecode/adapter"
 	claudetarget "github.com/strahe/profiledeck/internal/claudecode/target"
@@ -49,6 +50,7 @@ type Application struct {
 	runtime     *runtimeservice.Service
 	dataLease   *runtimeservice.DataLease
 	backups     *appbackup.Service
+	bootstrap   *bootstrap.Service
 	agents      *agent.Service
 	providers   *provider.Service
 	profiles    *profile.Service
@@ -132,8 +134,10 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 		codexService.SensitivePaths,
 	)
 
+	backupService := appbackup.NewService(runtimeService.Paths(), stores, dataLease)
 	return &Application{
-		runtime: runtimeService, dataLease: dataLease, backups: appbackup.NewService(runtimeService.Paths(), stores, dataLease),
+		runtime: runtimeService, dataLease: dataLease, backups: backupService,
+		bootstrap: bootstrap.NewService(runtimeService, backupService, dataLease),
 		agents:    agentService,
 		providers: provider.NewService(stores, switchingService, agentService, dependencies.agents),
 		profiles:  profile.NewService(stores, switchingService),
@@ -172,6 +176,10 @@ func (application *Application) Settings() *settings.Service       { return appl
 func (application *Application) Codex() *codex.Service             { return application.codex }
 func (application *Application) Antigravity() *antigravity.Service { return application.antigravity }
 func (application *Application) ClaudeCode() *claudecode.Service   { return application.claudeCode }
+
+func (application *Application) Initialize(ctx context.Context) (runtimeservice.InitResult, error) {
+	return application.bootstrap.Initialize(ctx)
+}
 
 func (application *Application) Close() {
 	if application == nil || application.dataLease == nil {

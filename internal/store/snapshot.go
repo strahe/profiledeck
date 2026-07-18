@@ -23,6 +23,16 @@ type onlineBackuper interface {
 // CreateSnapshot uses SQLite's online backup API so the copy represents one
 // consistent database state even while the Desktop process is serving writes.
 func (factory Factory) CreateSnapshot(ctx context.Context, destination string) error {
+	return factory.createSnapshot(ctx, destination, false)
+}
+
+// CreateCompatibleSnapshot captures a database that satisfies its applied
+// migration baseline, including an older baseline awaiting an upgrade.
+func (factory Factory) CreateCompatibleSnapshot(ctx context.Context, destination string) error {
+	return factory.createSnapshot(ctx, destination, true)
+}
+
+func (factory Factory) createSnapshot(ctx context.Context, destination string, compatible bool) error {
 	destination = filepath.Clean(destination)
 	if destination == "." || destination == string(filepath.Separator) {
 		return errors.New("snapshot destination is required")
@@ -54,7 +64,7 @@ func (factory Factory) CreateSnapshot(ctx context.Context, destination string) e
 		return fmt.Errorf("secure snapshot file: %w", err)
 	}
 
-	source, err := factory.openSnapshotSource(ctx)
+	source, err := factory.openSnapshotSource(ctx, compatible)
 	if err != nil {
 		return err
 	}
@@ -108,12 +118,29 @@ func (factory Factory) CreateSnapshot(ctx context.Context, destination string) e
 	return nil
 }
 
-func (factory Factory) openSnapshotSource(ctx context.Context) (*Store, error) {
+func (factory Factory) openSnapshotSource(ctx context.Context, compatible bool) (*Store, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		source, err := factory.OpenHealthy(ctx, true)
+		var source *Store
+		var err error
+		if compatible {
+			source, err = factory.Open(ctx, true)
+			if err == nil {
+				var report IntegrityReport
+				report, err = source.InspectIntegrity(ctx, IntegrityAppliedBaseline)
+				if err == nil && !report.Healthy {
+					err = errors.New("application database does not satisfy its applied integrity baseline")
+				}
+				if err != nil {
+					_ = source.Close()
+					source = nil
+				}
+			}
+		} else {
+			source, err = factory.OpenHealthy(ctx, true)
+		}
 		if err == nil {
 			return source, nil
 		}

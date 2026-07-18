@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/bootstrap"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/profile"
@@ -45,7 +46,7 @@ func TestProfileTargetAppCRUDValidationAndRedaction(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	environment := newProfileTargetTestEnvironment(t, configDir)
-	if _, err := environment.runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 
@@ -259,7 +260,7 @@ func TestProfileTargetPathOwnershipAllowsSharedLogicalTarget(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	environment := newProfileTargetTestEnvironment(t, configDir)
-	if _, err := environment.runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	createGenericProviderAndProfile(t, ctx, configDir, true)
@@ -342,7 +343,7 @@ func TestGenericTargetsCannotClaimManagedCodexPaths(t *testing.T) {
 		configDir := t.TempDir()
 		codexDir := t.TempDir()
 		environment := newProfileTargetTestEnvironment(t, configDir)
-		if _, err := environment.runtime.Init(ctx); err != nil {
+		if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 			t.Fatalf("expected init to succeed, got %v", err)
 		}
 		home, err := codexconfig.ResolveHome(codexDir)
@@ -383,7 +384,7 @@ func TestGenericTargetsCannotClaimManagedCodexPaths(t *testing.T) {
 		configDir := t.TempDir()
 		codexDir := t.TempDir()
 		environment := newProfileTargetTestEnvironment(t, configDir)
-		if _, err := environment.runtime.Init(ctx); err != nil {
+		if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 			t.Fatalf("expected init to succeed, got %v", err)
 		}
 		createGenericProviderAndProfile(t, ctx, configDir, true)
@@ -411,7 +412,7 @@ func TestProfileTargetPathNormalizationPreventsOwnershipBypass(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	environment := newProfileTargetTestEnvironment(t, configDir)
-	if _, err := environment.runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	createGenericProviderAndProfile(t, ctx, configDir, true)
@@ -470,7 +471,7 @@ func TestBuildPlanUsesBoundedPreviewForLargeTargets(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	environment := newProfileTargetTestEnvironment(t, configDir)
-	if _, err := environment.runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	createGenericProviderAndProfile(t, ctx, configDir, true)
@@ -519,7 +520,7 @@ func TestBuildPlanRejectsOversizedMergeTargets(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	environment := newProfileTargetTestEnvironment(t, configDir)
-	if _, err := environment.runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	createGenericProviderAndProfile(t, ctx, configDir, true)
@@ -548,7 +549,7 @@ func TestBuildPlanRejectsOversizedReplaceFileTargets(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	environment := newProfileTargetTestEnvironment(t, configDir)
-	if _, err := environment.runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	createGenericProviderAndProfile(t, ctx, configDir, true)
@@ -578,7 +579,7 @@ func TestBuildPlanRejectsOversizedDesiredContent(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	environment := newProfileTargetTestEnvironment(t, configDir)
-	if _, err := environment.runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	createGenericProviderAndProfile(t, ctx, configDir, true)
@@ -603,7 +604,7 @@ func TestBuildPlanReadOnlyOperationsAndRedaction(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	environment := newProfileTargetTestEnvironment(t, configDir)
-	initResult, err := environment.runtime.Init(ctx)
+	initResult, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx)
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
@@ -766,7 +767,7 @@ func TestBuildPlanErrorsAndSymlinkHandling(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	environment := newProfileTargetTestEnvironment(t, configDir)
-	if _, err := environment.runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 

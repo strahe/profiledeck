@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/bootstrap"
 	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
 )
 
@@ -170,7 +171,7 @@ func newTestService(t *testing.T, ctx context.Context, configDir string) *Servic
 	if err != nil {
 		t.Fatalf("expected runtime service, got %v", err)
 	}
-	if _, err := runtimeService.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(runtimeService, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	return NewService(runtimeService.StoreFactory())

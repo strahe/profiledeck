@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/agent"
+	"github.com/strahe/profiledeck/internal/bootstrap"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/provider"
@@ -54,7 +55,7 @@ func initSwitchingTestRuntime(ctx context.Context, configDir string) (profilesru
 	if err != nil {
 		return profilesruntime.InitResult{}, err
 	}
-	return runtimeService.Init(ctx)
+	return bootstrap.NewService(runtimeService, nil, nil).Initialize(ctx)
 }
 
 func openHealthyStore(ctx context.Context, configDir string, readOnly bool) (*store.Store, error) {

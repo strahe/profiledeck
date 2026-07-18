@@ -25,16 +25,18 @@ import (
 )
 
 const (
-	Extension           = ".profiledeck-backup"
-	KindManual          = "manual"
-	KindAutomatic       = "automatic"
-	ReasonManual        = "manual"
-	ReasonScheduled     = "scheduled"
-	ReasonBeforeUpdate  = "before_update"
-	ReasonBeforeRestore = "before_restore"
+	Extension             = ".profiledeck-backup"
+	KindManual            = "manual"
+	KindAutomatic         = "automatic"
+	ReasonManual          = "manual"
+	ReasonScheduled       = "scheduled"
+	ReasonBeforeUpdate    = "before_update"
+	ReasonBeforeRestore   = "before_restore"
+	ReasonBeforeMigration = "before_migration"
 
 	formatVersion          = 1
 	automaticRetention     = 10
+	migrationRetention     = 3
 	backupTimeLayout       = "20060102-150405Z"
 	maxBackupIDSequence    = 9999
 	keyringService         = "ProfileDeck"
@@ -183,10 +185,16 @@ func (service *Service) create(ctx context.Context, req CreateRequest) (BackupDe
 	// reserved for encrypted, publishable application backup files.
 	snapshotPath := filepath.Join(service.paths.Root, "."+id+".snapshot.db")
 	defer func() { _ = os.Remove(snapshotPath) }()
-	if err := service.stores.CreateSnapshot(ctx, snapshotPath); err != nil {
+	createSnapshot := service.stores.CreateSnapshot
+	requireCurrentSchema := true
+	if reason == ReasonBeforeMigration {
+		createSnapshot = service.stores.CreateCompatibleSnapshot
+		requireCurrentSchema = false
+	}
+	if err := createSnapshot(ctx, snapshotPath); err != nil {
 		return BackupDetail{}, apperror.Wrap(apperror.BackupFailed, "failed to create application database snapshot", err)
 	}
-	if err := validateDatabase(ctx, snapshotPath, true); err != nil {
+	if err := validateDatabase(ctx, snapshotPath, requireCurrentSchema); err != nil {
 		return BackupDetail{}, apperror.Wrap(apperror.BackupInvalid, "application database snapshot is invalid", err)
 	}
 
@@ -203,7 +211,7 @@ func (service *Service) create(ctx context.Context, req CreateRequest) (BackupDe
 	if kind == KindAutomatic {
 		// Once the encrypted archive is durably published, retention is best-effort:
 		// cleanup must not turn a successful backup into a reported failure.
-		service.cleanupAutomaticBackups()
+		service.cleanupAutomaticBackups(ctx)
 	}
 	info, err := os.Stat(finalPath)
 	if err != nil {
@@ -223,7 +231,7 @@ func (service *Service) List(ctx context.Context) (ListResult, error) {
 	return service.list(ctx)
 }
 
-func (service *Service) list(_ context.Context) (ListResult, error) {
+func (service *Service) list(ctx context.Context) (ListResult, error) {
 	entries, err := os.ReadDir(service.paths.Backups)
 	if errors.Is(err, os.ErrNotExist) {
 		return ListResult{Backups: []BackupSummary{}}, nil
@@ -259,17 +267,31 @@ func (service *Service) list(_ context.Context) (ListResult, error) {
 		}
 		return backups[i].CreatedAtUnixMS > backups[j].CreatedAtUnixMS
 	})
-	return ListResult{
-		Backups: backups, AutomaticCleanupRequired: automaticCount > automaticRetention,
-	}, nil
+	cleanupRequired := automaticCount > automaticRetention
+	if !cleanupRequired && automaticCount > migrationRetention {
+		if identity, err := service.loadIdentity(); err == nil {
+			if migrationBackups, err := listBeforeMigrationBackups(ctx, service.paths.Backups, identity); err == nil {
+				cleanupRequired = len(migrationBackups) > migrationRetention
+			}
+		}
+	}
+	return ListResult{Backups: backups, AutomaticCleanupRequired: cleanupRequired}, nil
 }
 
-func (service *Service) cleanupAutomaticBackups() {
+func (service *Service) cleanupAutomaticBackups(ctx context.Context) {
+	var cleanupErr error
+	identity, err := service.loadIdentity()
+	if err != nil {
+		cleanupErr = err
+	} else {
+		cleanupErr = retainBeforeMigrationBackups(ctx, service.paths.Backups, identity, migrationRetention)
+	}
 	retain := service.retain
 	if retain == nil {
 		retain = retainAutomaticBackups
 	}
-	if err := retain(service.paths.Backups, automaticRetention); err != nil {
+	cleanupErr = errors.Join(cleanupErr, retain(service.paths.Backups, automaticRetention))
+	if cleanupErr != nil {
 		// Do not include the raw filesystem error: runtime paths are private output.
 		log.Print("profiledeck: automatic backup cleanup incomplete")
 	}
@@ -507,7 +529,7 @@ func normalizeCreateRequest(req CreateRequest) (string, string, error) {
 	if kind == KindManual && reason != ReasonManual {
 		return "", "", apperror.New(apperror.BackupInvalid, "manual application backup reason is invalid")
 	}
-	if kind == KindAutomatic && reason != ReasonScheduled && reason != ReasonBeforeUpdate && reason != ReasonBeforeRestore {
+	if kind == KindAutomatic && reason != ReasonScheduled && reason != ReasonBeforeUpdate && reason != ReasonBeforeRestore && reason != ReasonBeforeMigration {
 		return "", "", apperror.New(apperror.BackupInvalid, "automatic application backup reason is invalid")
 	}
 	return kind, reason, nil

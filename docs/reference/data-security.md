@@ -35,7 +35,9 @@ Claude Code support is separate from Claude Desktop. ProfileDeck does not read o
 
 ## Understand application backups and operation recovery
 
-Application backups contain the complete ProfileDeck database and are encrypted before they are published in `backups/`. Manual backups remain until you delete them. Automatic backups run every 24 hours and before update restart or database restore; the latest ten automatic backups are retained together.
+Application backups contain the complete ProfileDeck database and are encrypted before they are published in `backups/`. ProfileDeck also creates an encrypted backup before updating existing local data to a newer format. If verification or backup creation fails, ProfileDeck stops before updating the data. If the update later fails, startup stops and keeps the encrypted backup available from the recovery screen.
+
+Manual backups remain until you delete them. Automatic backups run every 24 hours and before update restart, database restore, or a local-data update. ProfileDeck keeps up to ten automatic backups in total and up to three local-data update backups within that total.
 
 The private X25519 recovery key is stored in the operating system credential store. ProfileDeck does not store it inside a backup. Export the key separately before moving backups to another system, and remember that replacing the current key does not re-encrypt existing files.
 

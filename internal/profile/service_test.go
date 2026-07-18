@@ -10,6 +10,7 @@ import (
 
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/bootstrap"
 	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/switching"
 	switchplan "github.com/strahe/profiledeck/internal/switching/plan"
@@ -64,7 +65,7 @@ func TestServiceRequiresHealthyInitializedStore(t *testing.T) {
 func TestServiceAcceptsNonCredentialTokenMetadata(t *testing.T) {
 	ctx := context.Background()
 	environment := newProfileTestEnvironment(t, t.TempDir())
-	if _, err := environment.runtime.Init(ctx); err != nil {
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
 	metadata := `{"max_tokens":100,"nested":{"token_budget":1000}}`
@@ -82,7 +83,7 @@ func TestServiceAcceptsNonCredentialTokenMetadata(t *testing.T) {
 func TestDeleteRequiresConfirmationAndRejectsReferencedProfile(t *testing.T) {
 	ctx := context.Background()
 	environment := newProfileTestEnvironment(t, t.TempDir())
-	initResult, err := environment.runtime.Init(ctx)
+	initResult, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx)
 	if err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}

@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	bunmigrate "github.com/uptrace/bun/migrate"
+
 	"github.com/strahe/profiledeck/internal/apperror"
 	storemigrations "github.com/strahe/profiledeck/internal/store/migrations"
 )
@@ -40,6 +42,7 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 
 	for _, table := range []string{
 		"bun_migrations",
+		"bun_migration_locks",
 		"providers",
 		"profiles",
 		"provider_profile_settings",
@@ -56,6 +59,7 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 	}
 
 	for _, index := range []string{
+		"bun_migrations_name_unique",
 		"idx_providers_adapter_id",
 		"idx_providers_enabled",
 		"idx_provider_profile_settings_provider_id",
@@ -148,6 +152,243 @@ func TestMigrationCompatibilityAcceptsKnownSchemas(t *testing.T) {
 	})
 }
 
+func TestMigrationIntegrityContractRegistryUsesFilenameDerivedSemanticKeys(t *testing.T) {
+	registered := storemigrations.Migrations.Sorted()
+	for index := range registered {
+		registered[index].Name = fmt.Sprintf("9%013d", index)
+	}
+	if err := validateMigrationIntegrityContractRegistry(registered); err != nil {
+		t.Fatalf("filename-derived migration keys should not depend on numeric names: %v", err)
+	}
+
+	duplicate := append(bunmigrate.MigrationSlice(nil), registered...)
+	duplicate[1].Comment = duplicate[0].Comment
+	if err := validateMigrationIntegrityContractRegistry(duplicate); err == nil {
+		t.Fatal("duplicate filename-derived migration key was accepted")
+	}
+}
+
+func TestMigrationStateRejectsNonContiguousKnownHistory(t *testing.T) {
+	ctx := context.Background()
+	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
+	defer closeTestStore(t, db)
+	createTestMigrationTable(t, ctx, db)
+	registered := storemigrations.Migrations.Sorted()
+	if len(registered) < 3 {
+		t.Fatalf("registered migrations = %d, want at least 3", len(registered))
+	}
+	insertTestMigration(t, ctx, db, registered[0].Name)
+	insertTestMigration(t, ctx, db, registered[2].Name)
+
+	if _, err := db.MigrationState(ctx); !errors.Is(err, ErrInvalidMigrationHistory) {
+		t.Fatalf("MigrationState() error = %v, want ErrInvalidMigrationHistory", err)
+	}
+}
+
+func TestMigrationStateRejectsMalformedInfrastructureBeforeSchemaWrites(t *testing.T) {
+	ctx := context.Background()
+	db := migratedTestStore(t, ctx)
+	defer closeTestStore(t, db)
+	if _, err := db.db.DB.ExecContext(ctx, `DROP TABLE bun_migration_locks`); err != nil {
+		t.Fatal(err)
+	}
+	var schemaVersionBefore int
+	if err := db.db.DB.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&schemaVersionBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.Migrate(ctx); !errors.Is(err, ErrInvalidMigrationHistory) {
+		t.Fatalf("Migrate() error = %v, want ErrInvalidMigrationHistory", err)
+	}
+	var schemaVersionAfter int
+	if err := db.db.DB.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&schemaVersionAfter); err != nil {
+		t.Fatal(err)
+	}
+	if schemaVersionAfter != schemaVersionBefore {
+		t.Fatalf("malformed migration infrastructure changed schema: before=%d after=%d", schemaVersionBefore, schemaVersionAfter)
+	}
+}
+
+func TestMigrateReplaysCommittedSchemaWhenMarkerIsMissing(t *testing.T) {
+	ctx := context.Background()
+	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
+	defer closeTestStore(t, db)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("initialize database: %v", err)
+	}
+	if _, err := db.UpsertSetting(ctx, UpsertSettingParams{Key: "marker-gap", ValueJSON: `{"kept":true}`}); err != nil {
+		t.Fatalf("create business data: %v", err)
+	}
+	registered := storemigrations.Migrations.Sorted()
+	last := registered[len(registered)-1].Name
+	if _, err := db.db.DB.ExecContext(ctx, `DELETE FROM bun_migrations WHERE name = ?`, last); err != nil {
+		t.Fatalf("remove final migration marker: %v", err)
+	}
+
+	baseline, err := db.InspectIntegrity(ctx, IntegrityAppliedBaseline)
+	if err != nil || !baseline.Healthy || baseline.Migration.Pending != 1 {
+		t.Fatalf("marker-gap baseline = %#v, err = %v", baseline, err)
+	}
+	result, err := db.Migrate(ctx)
+	if err != nil || result.Applied != 1 {
+		t.Fatalf("replay marker gap = %#v, err = %v", result, err)
+	}
+	setting, err := db.GetSetting(ctx, "marker-gap")
+	if err != nil || setting.ValueJSON != `{"kept":true}` {
+		t.Fatalf("business data after replay = %#v, err = %v", setting, err)
+	}
+	state, err := db.MigrationState(ctx)
+	if err != nil || !state.Current || state.Applied != len(registered) {
+		t.Fatalf("migration state after replay = %#v, err = %v", state, err)
+	}
+}
+
+func TestInspectIntegrityClassifiesVersionedFailuresWithoutStoredValues(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("schema", func(t *testing.T) {
+		db := migratedTestStore(t, ctx)
+		defer closeTestStore(t, db)
+		if _, err := db.db.DB.ExecContext(ctx, `DROP INDEX idx_usage_events_model`); err != nil {
+			t.Fatal(err)
+		}
+		assertIntegrityIssue(t, ctx, db, IntegrityIssueSchema)
+	})
+
+	t.Run("json", func(t *testing.T) {
+		db := migratedTestStore(t, ctx)
+		defer closeTestStore(t, db)
+		secret := `{"token":"SECRET_INTEGRITY_SENTINEL"`
+		if _, err := db.db.DB.ExecContext(ctx, `INSERT INTO settings (key, value_json, updated_at_unix_ms) VALUES ('invalid-json', ?, 1)`, secret); err != nil {
+			t.Fatal(err)
+		}
+		report := assertIntegrityIssue(t, ctx, db, IntegrityIssueJSON)
+		encoded, err := json.Marshal(report)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "SECRET_INTEGRITY_SENTINEL") {
+			t.Fatalf("integrity report exposed stored data: %s", encoded)
+		}
+	})
+
+	t.Run("references", func(t *testing.T) {
+		db := migratedTestStore(t, ctx)
+		defer closeTestStore(t, db)
+		if _, err := db.db.DB.ExecContext(ctx, `
+			INSERT INTO provider_profile_settings
+				(profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms)
+			VALUES ('missing-profile', 'missing-provider', 0, 0, 1)
+		`); err != nil {
+			t.Fatal(err)
+		}
+		assertIntegrityIssue(t, ctx, db, IntegrityIssueReferences)
+	})
+
+	t.Run("active state scope", func(t *testing.T) {
+		db := migratedTestStore(t, ctx)
+		defer closeTestStore(t, db)
+		if _, err := db.db.DB.ExecContext(ctx, `
+			INSERT INTO active_states
+				(scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms)
+			VALUES ('unknown', 'unknown', '', '', 1)
+		`); err != nil {
+			t.Fatal(err)
+		}
+		assertIntegrityIssue(t, ctx, db, IntegrityIssueReferences)
+	})
+
+	t.Run("foreign keys", func(t *testing.T) {
+		db := migratedTestStore(t, ctx)
+		defer closeTestStore(t, db)
+		if _, err := db.db.DB.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.db.DB.ExecContext(ctx, `
+			INSERT INTO profile_credential_bindings
+				(profile_id, provider_id, slot_id, credential_id, created_at_unix_ms, updated_at_unix_ms)
+			VALUES ('missing-profile', 'missing-provider', 'auth', 'missing-credential', 1, 1)
+		`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.db.DB.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+			t.Fatal(err)
+		}
+		assertIntegrityIssue(t, ctx, db, IntegrityIssueForeignKeys)
+	})
+
+	t.Run("historical and usage references are allowed", func(t *testing.T) {
+		db := migratedTestStore(t, ctx)
+		defer closeTestStore(t, db)
+		if _, err := db.db.DB.ExecContext(ctx, `
+			INSERT INTO operations
+				(id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+			VALUES ('historical', 'maintenance', 'applied', 'deleted-profile', '{}', 1, 1)
+		`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.db.DB.ExecContext(ctx, `
+			INSERT INTO usage_events
+				(id, provider_id, source, source_key, cost_status, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+			VALUES ('usage', 'unmanaged-provider', 'test', 'source', 'unknown', '{}', 1, 1)
+		`); err != nil {
+			t.Fatal(err)
+		}
+		report, err := db.InspectIntegrity(ctx, IntegrityCurrentBaseline)
+		if err != nil || !report.Healthy {
+			t.Fatalf("allowed historical references failed integrity: report=%#v err=%v", report, err)
+		}
+	})
+}
+
+func TestInspectIntegrityClassifiesSQLiteCorruption(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "profiledeck.db")
+	db := openTestStore(t, ctx, path, false)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.DB.ExecContext(ctx, `CREATE TABLE corruption_probe (value BLOB)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.DB.ExecContext(ctx, `INSERT INTO corruption_probe (value) VALUES (zeroblob(262144))`); err != nil {
+		t.Fatal(err)
+	}
+	var pageSize, rootPage int64
+	if err := db.db.DB.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&pageSize); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.db.DB.QueryRowContext(ctx, `SELECT rootpage FROM sqlite_master WHERE name = 'corruption_probe'`).Scan(&rootPage); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(ctx); err != nil {
+		t.Fatal(err)
+	}
+	closeTestStore(t, db)
+
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt(make([]byte, pageSize), (rootPage-1)*pageSize); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db = openTestStore(t, ctx, path, true)
+	defer closeTestStore(t, db)
+	report, err := db.InspectIntegrity(ctx, IntegrityCurrentBaseline)
+	if err != nil {
+		t.Fatalf("InspectIntegrity() corruption error = %v", err)
+	}
+	if report.Healthy || len(report.Issues) != 1 || report.Issues[0].Kind != IntegrityIssueQuickCheck {
+		t.Fatalf("InspectIntegrity() corruption report = %#v", report)
+	}
+}
+
 func TestUnsupportedMigrationStopsStatusAndMigrateBeforeSchemaWrites(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
@@ -184,7 +425,7 @@ func TestUnsupportedMigrationStopsStatusAndMigrateBeforeSchemaWrites(t *testing.
 	if migrationCount != 1 {
 		t.Fatalf("migration count after rejection = %d, want 1", migrationCount)
 	}
-	for _, table := range []string{"bun_migration_locks", "providers"} {
+	for _, table := range []string{"providers"} {
 		exists, err := db.objectExists(ctx, "table", table)
 		if err != nil {
 			t.Fatalf("inspect %s after rejection: %v", table, err)
@@ -2313,56 +2554,11 @@ func TestDriftedSchemaIsUnhealthy(t *testing.T) {
 	db := openTestStore(t, ctx, dbPath, false)
 	defer closeTestStore(t, db)
 
-	for _, statement := range []string{
-		`CREATE TABLE bun_migrations (id INTEGER PRIMARY KEY, name TEXT)`,
-		`CREATE TABLE providers (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			adapter_id TEXT NOT NULL,
-			enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
-			created_at_unix_ms INTEGER NOT NULL,
-			updated_at_unix_ms INTEGER NOT NULL
-		)`,
-		`CREATE INDEX idx_providers_adapter_id ON providers(adapter_id)`,
-		`CREATE INDEX idx_providers_enabled ON providers(enabled)`,
-		`CREATE TABLE profiles (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			description TEXT NOT NULL DEFAULT '',
-			metadata_json TEXT NOT NULL DEFAULT '{}',
-			created_at_unix_ms INTEGER NOT NULL,
-			updated_at_unix_ms INTEGER NOT NULL
-		)`,
-		`CREATE TABLE settings (
-			key TEXT PRIMARY KEY,
-			value_json TEXT NOT NULL,
-			updated_at_unix_ms INTEGER NOT NULL
-		)`,
-		`CREATE TABLE active_states (
-			scope_type TEXT NOT NULL,
-			scope_id TEXT NOT NULL,
-			profile_id TEXT NOT NULL DEFAULT '',
-			operation_id TEXT NOT NULL DEFAULT '',
-			updated_at_unix_ms INTEGER NOT NULL,
-			PRIMARY KEY (scope_type, scope_id)
-		)`,
-		`CREATE TABLE operations (
-			id TEXT PRIMARY KEY,
-			operation_type TEXT NOT NULL CHECK (operation_type IN ('switch', 'recovery', 'import', 'maintenance')),
-			status TEXT NOT NULL CHECK (status IN ('pending', 'failed', 'applied')),
-			profile_id TEXT NOT NULL DEFAULT '',
-			metadata_json TEXT NOT NULL DEFAULT '{}',
-			error_code TEXT NOT NULL DEFAULT '',
-			error_message TEXT NOT NULL DEFAULT '',
-			created_at_unix_ms INTEGER NOT NULL,
-			updated_at_unix_ms INTEGER NOT NULL
-		)`,
-		`CREATE INDEX idx_operations_status ON operations(status)`,
-		`CREATE INDEX idx_operations_operation_type ON operations(operation_type)`,
-	} {
-		if _, err := db.db.DB.ExecContext(ctx, statement); err != nil {
-			t.Fatalf("expected drifted schema setup to succeed, got %v", err)
-		}
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("expected migrations to succeed, got %v", err)
+	}
+	if _, err := db.db.DB.ExecContext(ctx, `ALTER TABLE providers DROP COLUMN metadata_json`); err != nil {
+		t.Fatalf("expected drifted schema setup to succeed, got %v", err)
 	}
 
 	status, err := db.Status(ctx)
@@ -2508,6 +2704,34 @@ func openTestStore(t *testing.T, ctx context.Context, dbPath string, readOnly bo
 	return db
 }
 
+func migratedTestStore(t *testing.T, ctx context.Context) *Store {
+	t.Helper()
+	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
+	if _, err := db.Migrate(ctx); err != nil {
+		_ = db.Close()
+		t.Fatalf("migrate test store: %v", err)
+	}
+	return db
+}
+
+func assertIntegrityIssue(t *testing.T, ctx context.Context, db *Store, kind string) IntegrityReport {
+	t.Helper()
+	report, err := db.InspectIntegrity(ctx, IntegrityCurrentBaseline)
+	if err != nil {
+		t.Fatalf("InspectIntegrity() error = %v", err)
+	}
+	if report.Healthy {
+		t.Fatalf("InspectIntegrity() report unexpectedly healthy: %#v", report)
+	}
+	for _, issue := range report.Issues {
+		if issue.Kind == kind && issue.Count > 0 {
+			return report
+		}
+	}
+	t.Fatalf("InspectIntegrity() issues = %#v, want %q", report.Issues, kind)
+	return IntegrityReport{}
+}
+
 func closeTestStore(t *testing.T, db *Store) {
 	t.Helper()
 
@@ -2530,14 +2754,23 @@ func assertSQLiteObjectExists(t *testing.T, ctx context.Context, db *Store, obje
 
 func createTestMigrationTable(t *testing.T, ctx context.Context, db *Store) {
 	t.Helper()
-	_, err := db.db.DB.ExecContext(ctx, `CREATE TABLE bun_migrations (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT NOT NULL,
-		group_id INTEGER NOT NULL,
-		migrated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-	)`)
-	if err != nil {
-		t.Fatalf("create migration table: %v", err)
+	for _, statement := range []string{
+		`CREATE TABLE bun_migrations (
+			"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+			"name" VARCHAR,
+			"group_id" INTEGER,
+			"migrated_at" TIMESTAMP NOT NULL DEFAULT current_timestamp
+		)`,
+		`CREATE UNIQUE INDEX "bun_migrations_name_unique" ON bun_migrations ("name")`,
+		`CREATE TABLE bun_migration_locks (
+			"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+			"table_name" VARCHAR,
+			UNIQUE ("table_name")
+		)`,
+	} {
+		if _, err := db.db.DB.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("create migration infrastructure: %v", err)
+		}
 	}
 }
 
