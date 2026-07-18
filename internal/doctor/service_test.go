@@ -2,6 +2,7 @@ package doctor_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/codex"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
@@ -18,6 +20,7 @@ import (
 	"github.com/strahe/profiledeck/internal/doctor"
 	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/provider"
+	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/switching"
 	"github.com/strahe/profiledeck/internal/targetfs"
@@ -64,6 +67,66 @@ func TestDoctorHealthyDatabaseReportsOK(t *testing.T) {
 	}
 	if result.OverallLevel != doctor.LevelOK || len(result.Operations) != 0 || result.Lock.Exists {
 		t.Fatalf("expected clean doctor result, got %#v", result)
+	}
+}
+
+func TestDoctorRejectsUnsupportedSchemaBeforeDatabaseChecks(t *testing.T) {
+	ctx := context.Background()
+	runtimeService, err := profilesruntime.NewService(t.TempDir())
+	if err != nil {
+		t.Fatalf("create runtime service: %v", err)
+	}
+	initialized, err := runtimeService.Init(ctx)
+	if err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+
+	sqlDB, err := sql.Open("sqlite", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open runtime database: %v", err)
+	}
+	unknownName := "209912310001"
+	_, insertErr := sqlDB.ExecContext(ctx, `
+		INSERT INTO bun_migrations (name, group_id, migrated_at)
+		VALUES (?, 99, CURRENT_TIMESTAMP)
+	`, unknownName)
+	closeErr := sqlDB.Close()
+	if err := errors.Join(insertErr, closeErr); err != nil {
+		t.Fatalf("insert unsupported migration: %v", err)
+	}
+
+	providerChecks := 0
+	service := doctor.NewService(runtimeService, nil, []doctor.ProviderCheck{{
+		AgentID: agent.Codex,
+		Check: func(context.Context, *store.Store) ([]doctor.Finding, error) {
+			providerChecks++
+			return nil, nil
+		},
+	}}, nil, nil)
+	result, err := service.Run(ctx)
+	if err != nil {
+		t.Fatalf("run Doctor for unsupported schema: %v", err)
+	}
+	if result.OverallLevel != doctor.LevelError {
+		t.Fatalf("overall level = %q, want %q", result.OverallLevel, doctor.LevelError)
+	}
+	if providerChecks != 0 {
+		t.Fatalf("provider checks = %d, want 0", providerChecks)
+	}
+	foundUnsupported := false
+	for _, finding := range result.Findings {
+		if finding.ID == "database_healthy" {
+			t.Fatalf("unsupported database was reported healthy: %#v", result.Findings)
+		}
+		if finding.ID == "database_schema_unsupported" {
+			foundUnsupported = true
+			if strings.Contains(finding.Message, unknownName) {
+				t.Fatalf("Doctor exposed migration name: %#v", finding)
+			}
+		}
+	}
+	if !foundUnsupported {
+		t.Fatalf("missing database_schema_unsupported finding: %#v", result.Findings)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -575,7 +576,7 @@ func TestRestoreCanReplaceDamagedCurrentDatabaseWithoutSafetyBackup(t *testing.T
 	}
 }
 
-func TestPreviewMigratesOldSchemaAndRejectsFutureSchema(t *testing.T) {
+func TestRestorePreparationMigratesOldSchemaAndRejectsUnsupportedSchema(t *testing.T) {
 	ctx := context.Background()
 	service, paths, keys := newTestService(t)
 	identity, err := age.GenerateX25519Identity()
@@ -608,8 +609,8 @@ func TestPreviewMigratesOldSchemaAndRejectsFutureSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, insertErr := sqlDB.ExecContext(ctx, `
-		INSERT INTO bun_migrations (id, name, group_id, migrated_at)
-		VALUES (999999999999, 'future_schema', 999, CURRENT_TIMESTAMP)
+		INSERT INTO bun_migrations (name, group_id, migrated_at)
+		VALUES ('209912310001', 999, CURRENT_TIMESTAMP)
 	`)
 	closeErr := sqlDB.Close()
 	if err := errors.Join(insertErr, closeErr); err != nil {
@@ -617,7 +618,15 @@ func TestPreviewMigratesOldSchemaAndRejectsFutureSchema(t *testing.T) {
 	}
 	futureArchive := writeTestArchive(t, futureDatabasePath, identity, KindManual, ReasonManual)
 	_, err = service.PreviewRestore(ctx, RestoreSource{FilePath: futureArchive})
-	assertAppErrorCode(t, err, apperror.BackupInvalid)
+	assertAppErrorCode(t, err, apperror.BackupSchemaUnsupported)
+	archiveContent, err := os.ReadFile(futureArchive)
+	if err != nil {
+		t.Fatalf("read future archive: %v", err)
+	}
+	_, err = service.Restore(ctx, RestoreRequest{
+		Source: RestoreSource{FilePath: futureArchive}, ExpectedFingerprint: fmt.Sprintf("%x", sha256.Sum256(archiveContent)), Confirm: true,
+	})
+	assertAppErrorCode(t, err, apperror.BackupSchemaUnsupported)
 }
 
 func TestRestoreRefusesExclusiveLockConflictAndCanRetry(t *testing.T) {

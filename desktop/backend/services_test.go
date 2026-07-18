@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -98,6 +99,60 @@ func TestDashboardKeepsRecoveryAvailableWhenDatabaseIsDamaged(t *testing.T) {
 	}
 	if result.Status.SchemaHealthy {
 		t.Fatalf("damaged database was reported healthy: %#v", result.Status)
+	}
+}
+
+func TestDashboardReportsUnsupportedSchemaAndKeepsDoctorAvailable(t *testing.T) {
+	ctx := context.Background()
+	env := Environment{ConfigDir: t.TempDir()}
+	application := newBackendTestApplication(t, env)
+	if err := Bootstrap(ctx, application); err != nil {
+		t.Fatalf("bootstrap current database: %v", err)
+	}
+
+	sqlDB, err := sql.Open("sqlite", application.Runtime().Paths().Database)
+	if err != nil {
+		t.Fatalf("open Desktop database: %v", err)
+	}
+	unknownName := "209912310001"
+	_, insertErr := sqlDB.ExecContext(ctx, `
+		INSERT INTO bun_migrations (name, group_id, migrated_at)
+		VALUES (?, 99, CURRENT_TIMESTAMP)
+	`, unknownName)
+	closeErr := sqlDB.Close()
+	if err := errors.Join(insertErr, closeErr); err != nil {
+		t.Fatalf("insert unsupported migration: %v", err)
+	}
+
+	startupErr := Bootstrap(ctx, application)
+	var appErr *apperror.Error
+	if !errors.As(startupErr, &appErr) || appErr.Code != apperror.StoreSchemaUnsupported {
+		t.Fatalf("Desktop bootstrap error = %v, want %s", startupErr, apperror.StoreSchemaUnsupported)
+	}
+	services := NewServices(application, app.DefaultInfo(), env, startupErr)
+	dashboard, err := services.App.Dashboard(ctx)
+	if err != nil {
+		t.Fatalf("load Dashboard after startup rejection: %v", err)
+	}
+	if dashboard.StartupError == nil || dashboard.StartupError.Code != string(apperror.StoreSchemaUnsupported) {
+		t.Fatalf("Dashboard startup error = %#v, want %s", dashboard.StartupError, apperror.StoreSchemaUnsupported)
+	}
+	if strings.Contains(dashboard.StartupError.Message, unknownName) {
+		t.Fatalf("Dashboard exposed migration name: %#v", dashboard.StartupError)
+	}
+
+	doctorResult, err := services.Doctor.Run(ctx)
+	if err != nil {
+		t.Fatalf("run Desktop Doctor after startup rejection: %v", err)
+	}
+	foundUnsupported := false
+	for _, finding := range doctorResult.Findings {
+		if finding.ID == "database_schema_unsupported" {
+			foundUnsupported = true
+		}
+	}
+	if !foundUnsupported {
+		t.Fatalf("Desktop Doctor missing unsupported-schema finding: %#v", doctorResult.Findings)
 	}
 }
 

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 
@@ -66,6 +67,9 @@ func (factory Factory) OpenHealthy(ctx context.Context, readOnly bool) (*Store, 
 	status, err := db.Status(ctx)
 	if err != nil {
 		_ = db.Close()
+		if errors.Is(err, ErrUnsupportedSchema) {
+			return nil, apperror.New(apperror.StoreSchemaUnsupported, "this ProfileDeck version cannot open the existing local data; update ProfileDeck and try again")
+		}
 		return nil, apperror.Wrap(apperror.StoreStatusFailed, "failed to inspect application database", err)
 	}
 	if !status.SchemaHealthy {

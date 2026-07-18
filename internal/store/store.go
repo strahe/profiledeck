@@ -28,7 +28,6 @@ const (
 	sqliteBusyTimeout            = 5 * time.Second
 	sqliteMigrationMaxAttempts   = 3
 	sqliteMigrationRetryBaseWait = 25 * time.Millisecond
-	currentMigrationID           = int64(202607060001)
 
 	OperationTypeSwitch      = "switch"
 	OperationTypeRecovery    = "recovery"
@@ -49,7 +48,7 @@ const (
 	maxProviderConfigSetPayloadBytes  = 16 * 1024 * 1024
 )
 
-var ErrFutureSchema = errors.New("application database schema is newer than this ProfileDeck version")
+var ErrUnsupportedSchema = errors.New("application database schema contains unknown migrations")
 
 var (
 	ErrAlreadyExists = errors.New("already exists")
@@ -916,6 +915,11 @@ func migrateWithRetry(
 }
 
 func (s *Store) migrateOnce(ctx context.Context) (MigrationResult, error) {
+	// Older Bun clients ignore applied migrations that are absent from their
+	// registry, so reject them before Bun initializes or changes the schema.
+	if err := s.CheckMigrationCompatibility(ctx); err != nil {
+		return MigrationResult{}, err
+	}
 	migrator := migrate.NewMigrator(
 		s.db,
 		migrations.Migrations,
@@ -944,6 +948,9 @@ func waitForMigrationRetry(ctx context.Context, delay time.Duration) error {
 }
 
 func (s *Store) Status(ctx context.Context) (Status, error) {
+	if err := s.CheckMigrationCompatibility(ctx); err != nil {
+		return Status{}, err
+	}
 	healthy, err := s.schemaHealthy(ctx)
 	if err != nil {
 		return Status{}, err
@@ -997,24 +1004,33 @@ func (s *Store) QuickCheck(ctx context.Context) error {
 	return nil
 }
 
-// CheckMigrationCompatibility rejects databases created by a newer
-// ProfileDeck before any migration is attempted.
+// CheckMigrationCompatibility rejects applied migrations that are unknown to
+// this ProfileDeck version before the database is read or migrated.
 func (s *Store) CheckMigrationCompatibility(ctx context.Context) error {
 	exists, err := s.objectExists(ctx, "table", "bun_migrations")
 	if err != nil || !exists {
 		return err
 	}
-	var latest int64
-	if err := s.executor().QueryRowContext(
-		ctx,
-		`SELECT COALESCE(MAX(id), 0) FROM bun_migrations`,
-	).Scan(&latest); err != nil {
+	registered := migrations.Migrations.Sorted()
+	known := make(map[string]struct{}, len(registered))
+	for _, migration := range registered {
+		known[migration.Name] = struct{}{}
+	}
+	rows, err := s.executor().QueryContext(ctx, `SELECT name FROM bun_migrations`)
+	if err != nil {
 		return err
 	}
-	if latest > currentMigrationID {
-		return ErrFutureSchema
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		if _, ok := known[name]; !ok {
+			return ErrUnsupportedSchema
+		}
 	}
-	return nil
+	return rows.Err()
 }
 
 // Checkpoint folds committed WAL pages into the database before a database

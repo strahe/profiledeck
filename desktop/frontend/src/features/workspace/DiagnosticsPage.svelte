@@ -50,6 +50,7 @@
 		database_open_failed: "databaseUnavailable",
 		database_status_failed: "databaseUnavailable",
 		database_schema_unhealthy: "databaseUnavailable",
+		database_schema_unsupported: "databaseVersionUnsupported",
 		operation_list_failed: "operationCheckFailed",
 		codex_provider_check_failed: "codexSetupUnavailable",
 		codex_preset_v2_invalid: "codexSetupUnavailable",

@@ -251,6 +251,13 @@ func inspectDoctorDatabase(ctx context.Context, stores store.Factory) (doctorDat
 	status, err := db.Status(ctx)
 	if err != nil {
 		_ = db.Close()
+		if errors.Is(err, store.ErrUnsupportedSchema) {
+			return doctorDatabaseState{}, nil, []Finding{{
+				ID:      "database_schema_unsupported",
+				Level:   LevelError,
+				Message: "this ProfileDeck version cannot open the existing local data; update ProfileDeck and try again",
+			}}
+		}
 		return doctorDatabaseState{}, nil, []Finding{{
 			ID:      "database_status_failed",
 			Level:   LevelError,

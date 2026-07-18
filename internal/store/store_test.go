@@ -14,6 +14,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/strahe/profiledeck/internal/apperror"
+	storemigrations "github.com/strahe/profiledeck/internal/store/migrations"
 )
 
 func testPayloadSHA256(payload string) string {
@@ -102,6 +105,106 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	}
 	if result.Applied != 0 {
 		t.Fatalf("expected no migrations to apply on second run, got %d", result.Applied)
+	}
+}
+
+func TestMigrationCompatibilityAcceptsKnownSchemas(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("missing migration table", func(t *testing.T) {
+		db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
+		defer closeTestStore(t, db)
+
+		if err := db.CheckMigrationCompatibility(ctx); err != nil {
+			t.Fatalf("expected a new database to be compatible, got %v", err)
+		}
+	})
+
+	t.Run("current migrations", func(t *testing.T) {
+		db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
+		defer closeTestStore(t, db)
+		if _, err := db.Migrate(ctx); err != nil {
+			t.Fatalf("migrate current database: %v", err)
+		}
+
+		if err := db.CheckMigrationCompatibility(ctx); err != nil {
+			t.Fatalf("expected the current database to be compatible, got %v", err)
+		}
+	})
+
+	t.Run("known migration prefix", func(t *testing.T) {
+		db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
+		defer closeTestStore(t, db)
+		createTestMigrationTable(t, ctx, db)
+		registered := storemigrations.Migrations.Sorted()
+		if len(registered) == 0 {
+			t.Fatal("expected registered migrations")
+		}
+		insertTestMigration(t, ctx, db, registered[0].Name)
+
+		if err := db.CheckMigrationCompatibility(ctx); err != nil {
+			t.Fatalf("expected an older migration prefix to be compatible, got %v", err)
+		}
+	})
+}
+
+func TestUnsupportedMigrationStopsStatusAndMigrateBeforeSchemaWrites(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+	createTestMigrationTable(t, ctx, db)
+	unknownName := "209912310001"
+	id := insertTestMigration(t, ctx, db, unknownName)
+	if id != 1 {
+		t.Fatalf("future migration id = %d, want normal auto-generated id 1", id)
+	}
+
+	var schemaVersionBefore int
+	if err := db.db.DB.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&schemaVersionBefore); err != nil {
+		t.Fatalf("read schema version before rejection: %v", err)
+	}
+	if _, err := db.Status(ctx); !errors.Is(err, ErrUnsupportedSchema) {
+		t.Fatalf("Status() error = %v, want ErrUnsupportedSchema", err)
+	}
+	if _, err := db.Migrate(ctx); !errors.Is(err, ErrUnsupportedSchema) {
+		t.Fatalf("Migrate() error = %v, want ErrUnsupportedSchema", err)
+	}
+
+	var schemaVersionAfter, migrationCount int
+	if err := db.db.DB.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&schemaVersionAfter); err != nil {
+		t.Fatalf("read schema version after rejection: %v", err)
+	}
+	if schemaVersionAfter != schemaVersionBefore {
+		t.Fatalf("schema version changed after rejection: before=%d after=%d", schemaVersionBefore, schemaVersionAfter)
+	}
+	if err := db.db.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM bun_migrations`).Scan(&migrationCount); err != nil {
+		t.Fatalf("count migrations after rejection: %v", err)
+	}
+	if migrationCount != 1 {
+		t.Fatalf("migration count after rejection = %d, want 1", migrationCount)
+	}
+	for _, table := range []string{"bun_migration_locks", "providers"} {
+		exists, err := db.objectExists(ctx, "table", table)
+		if err != nil {
+			t.Fatalf("inspect %s after rejection: %v", table, err)
+		}
+		if exists {
+			t.Fatalf("unexpected table %s created after rejection", table)
+		}
+	}
+
+	opened, err := NewFactory(dbPath).OpenHealthy(ctx, true)
+	if opened != nil {
+		_ = opened.Close()
+		t.Fatal("OpenHealthy() returned a Store for an unsupported schema")
+	}
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.Code != apperror.StoreSchemaUnsupported {
+		t.Fatalf("OpenHealthy() error = %v, want %s", err, apperror.StoreSchemaUnsupported)
+	}
+	if strings.Contains(err.Error(), unknownName) {
+		t.Fatalf("OpenHealthy() exposed migration name: %v", err)
 	}
 }
 
@@ -2423,6 +2526,35 @@ func assertSQLiteObjectExists(t *testing.T, ctx context.Context, db *Store, obje
 	if !exists {
 		t.Fatalf("expected %s %s to exist", objectType, name)
 	}
+}
+
+func createTestMigrationTable(t *testing.T, ctx context.Context, db *Store) {
+	t.Helper()
+	_, err := db.db.DB.ExecContext(ctx, `CREATE TABLE bun_migrations (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT NOT NULL,
+		group_id INTEGER NOT NULL,
+		migrated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`)
+	if err != nil {
+		t.Fatalf("create migration table: %v", err)
+	}
+}
+
+func insertTestMigration(t *testing.T, ctx context.Context, db *Store, name string) int64 {
+	t.Helper()
+	result, err := db.db.DB.ExecContext(ctx, `
+		INSERT INTO bun_migrations (name, group_id, migrated_at)
+		VALUES (?, 1, CURRENT_TIMESTAMP)
+	`, name)
+	if err != nil {
+		t.Fatalf("insert migration %q: %v", name, err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		t.Fatalf("read migration id for %q: %v", name, err)
+	}
+	return id
 }
 
 func assertConcurrentProviderCreate(t *testing.T, ctx context.Context, dbPath string) {

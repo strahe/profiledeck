@@ -106,11 +106,17 @@ func (service *Service) Init(ctx context.Context) (InitResult, error) {
 	defer db.Close()
 	migrationResult, err := db.Migrate(ctx)
 	if err != nil {
+		if errors.Is(err, store.ErrUnsupportedSchema) {
+			return InitResult{}, unsupportedSchemaError()
+		}
 		return InitResult{}, apperror.Wrap(apperror.StoreMigrationFailed, "failed to run database migrations", err)
 	}
 	chmodBestEffort(service.paths.Database, 0o600)
 	status, err := db.Status(ctx)
 	if err != nil {
+		if errors.Is(err, store.ErrUnsupportedSchema) {
+			return InitResult{}, unsupportedSchemaError()
+		}
 		return InitResult{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to inspect application database", err)
 	}
 	if !status.SchemaHealthy {
@@ -146,6 +152,9 @@ func (service *Service) Status(ctx context.Context) (StatusResult, error) {
 	defer db.Close()
 	status, err := db.Status(ctx)
 	if err != nil {
+		if errors.Is(err, store.ErrUnsupportedSchema) {
+			return StatusResult{}, unsupportedSchemaError()
+		}
 		return StatusResult{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to inspect application database", err)
 	}
 	result.Initialized = true
@@ -153,6 +162,10 @@ func (service *Service) Status(ctx context.Context) (StatusResult, error) {
 	result.PendingOperations = status.PendingOperations
 	result.FailedOperations = status.FailedOperations
 	return result, nil
+}
+
+func unsupportedSchemaError() *apperror.Error {
+	return apperror.New(apperror.StoreSchemaUnsupported, "this ProfileDeck version cannot open the existing local data; update ProfileDeck and try again")
 }
 
 func (service *Service) leaseForOperation() (*DataLease, bool, error) {

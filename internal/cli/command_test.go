@@ -447,6 +447,49 @@ func TestInitTwiceAndStatusJSONAfterInit(t *testing.T) {
 	}
 }
 
+func TestCLIRejectsUnsupportedSchemaAndKeepsDoctorAvailable(t *testing.T) {
+	configDir := t.TempDir()
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("initialize CLI runtime: %v", err)
+	}
+	databasePath := filepath.Join(configDir, "profiledeck", "profiledeck.db")
+	sqlDB, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatalf("open CLI database: %v", err)
+	}
+	unknownName := "209912310001"
+	_, insertErr := sqlDB.Exec(`
+		INSERT INTO bun_migrations (name, group_id, migrated_at)
+		VALUES (?, 99, CURRENT_TIMESTAMP)
+	`, unknownName)
+	closeErr := sqlDB.Close()
+	if err := errors.Join(insertErr, closeErr); err != nil {
+		t.Fatalf("insert unsupported migration: %v", err)
+	}
+
+	_, err = runCLI(t, "--config-dir", configDir, "init", "--json")
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.Code != apperror.StoreSchemaUnsupported {
+		t.Fatalf("CLI init error = %v, want %s", err, apperror.StoreSchemaUnsupported)
+	}
+	if strings.Contains(err.Error(), unknownName) {
+		t.Fatalf("CLI init exposed migration name: %v", err)
+	}
+
+	doctorOutput, err := runCLI(t, "--config-dir", configDir, "doctor")
+	if err != nil {
+		t.Fatalf("run CLI Doctor after startup rejection: %v", err)
+	}
+	for _, expected := range []string{"database_schema_unsupported", "update ProfileDeck"} {
+		if !strings.Contains(doctorOutput, expected) {
+			t.Fatalf("Doctor output missing %q: %q", expected, doctorOutput)
+		}
+	}
+	if strings.Contains(doctorOutput, unknownName) {
+		t.Fatalf("CLI Doctor exposed migration name: %q", doctorOutput)
+	}
+}
+
 func TestUsageSyncCodexAndSummaryJSON(t *testing.T) {
 	configDir := t.TempDir()
 	codexDir := t.TempDir()

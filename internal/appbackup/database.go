@@ -41,13 +41,16 @@ func prepareDatabaseForRestore(ctx context.Context, path string, applyRestoreRes
 		return 0, apperror.New(apperror.BackupInvalid, "application backup database is damaged")
 	}
 	if err := db.CheckMigrationCompatibility(ctx); err != nil {
-		if errors.Is(err, store.ErrFutureSchema) {
-			return 0, apperror.New(apperror.BackupInvalid, "application backup was created by a newer ProfileDeck version")
+		if errors.Is(err, store.ErrUnsupportedSchema) {
+			return 0, unsupportedBackupSchemaError()
 		}
 		return 0, apperror.New(apperror.BackupInvalid, "application backup database schema could not be inspected")
 	}
 	migration, err := db.Migrate(ctx)
 	if err != nil {
+		if errors.Is(err, store.ErrUnsupportedSchema) {
+			return 0, unsupportedBackupSchemaError()
+		}
 		return 0, apperror.New(apperror.BackupInvalid, "application backup database could not be upgraded")
 	}
 	if err := db.QuickCheck(ctx); err != nil {
@@ -69,6 +72,10 @@ func prepareDatabaseForRestore(ctx context.Context, path string, applyRestoreRes
 		return 0, apperror.New(apperror.RestoreFailed, "restored application database could not be secured")
 	}
 	return migration.Applied, nil
+}
+
+func unsupportedBackupSchemaError() *apperror.Error {
+	return apperror.New(apperror.BackupSchemaUnsupported, "this ProfileDeck version cannot open the selected backup; update ProfileDeck and try again")
 }
 
 func currentDatabaseHealthy(ctx context.Context, stores store.Factory) bool {
