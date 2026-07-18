@@ -102,6 +102,8 @@ tasks:
 
   release:
     desc: Build, sign, notarize, package, and verify a macOS release
+    env:
+      PROFILEDECK_RELEASE_SIGN_IDENTITY: '{{.RELEASE_SIGN_IDENTITY}}'
     cmds:
       - >-
         go run ./scripts/releasetool preflight
@@ -109,7 +111,7 @@ tasks:
         --build-number "{{.BUILD_NUMBER}}"
         --platform "{{.RELEASE_PLATFORM}}"
         --releases-dir "{{.RELEASES_DIR}}"
-        --identity "{{.RELEASE_SIGN_IDENTITY}}"
+        --identity "$PROFILEDECK_RELEASE_SIGN_IDENTITY"
         --notary-profile "{{.NOTARY_PROFILE}}"
         --keychain "{{.RELEASE_KEYCHAIN}}"
       - >-
@@ -137,14 +139,14 @@ tasks:
       - >-
         codesign
         --force
-        --sign "{{.RELEASE_SIGN_IDENTITY}}"
+        --sign "$PROFILEDECK_RELEASE_SIGN_IDENTITY"
         --options runtime
         --timestamp
         "{{.RELEASE_APP_PATH}}/Contents/MacOS/{{.APP_NAME}}"
       - >-
         codesign
         --force
-        --sign "{{.RELEASE_SIGN_IDENTITY}}"
+        --sign "$PROFILEDECK_RELEASE_SIGN_IDENTITY"
         --options runtime
         --timestamp
         "{{.RELEASE_APP_PATH}}"
@@ -176,7 +178,7 @@ tasks:
       - >-
         codesign
         --force
-        --sign "{{.RELEASE_SIGN_IDENTITY}}"
+        --sign "$PROFILEDECK_RELEASE_SIGN_IDENTITY"
         --timestamp
         "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
       - codesign --verify --verbose=2 "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
@@ -224,7 +226,7 @@ tasks:
       RELEASE_SIGN_IDENTITY:
         sh: >-
           go run ./scripts/releasetool identity
-          --requested "{{.SIGN_IDENTITY}}"
+          --requested "$PROFILEDECK_RELEASE_SIGN_IDENTITY"
           --keychain "{{.RELEASE_KEYCHAIN}}"
 
   run:

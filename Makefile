@@ -83,6 +83,10 @@ desktop-taskfile-check:
 	$(WAILS3) task darwin:build:universal VERSION=0.1.0-beta.1 COMMIT=0123456789abcdef0123456789abcdef01234567 BUILD_DATE=2026-07-16T00:00:00Z -dry >/dev/null
 	! $(WAILS3) task darwin:package:universal VERSION=0.1.0-beta.1 BUILD_NUMBER=1 COMMIT=0123456789abcdef0123456789abcdef01234567 BUILD_DATE=2026-07-16T00:00:00Z -dry >/dev/null 2>&1
 	$(WAILS3) task darwin:package:universal APP_PATH=.task/taskfile-check/ProfileDeck.app VERSION=0.1.0-beta.1 BUILD_NUMBER=1 COMMIT=0123456789abcdef0123456789abcdef01234567 BUILD_DATE=2026-07-16T00:00:00Z -dry >/dev/null
+	@output="$$(PROFILEDECK_RELEASE_SIGN_IDENTITY=profiledeck-signing-identity-privacy-probe $(WAILS3) task darwin:release VERSION=0.1.0-beta.1 BUILD_NUMBER=1 RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567 -dry 2>&1 || true)"; \
+	case "$$output" in *profiledeck-signing-identity-privacy-probe*) echo "release task output exposed the signing identity"; exit 1;; esac
+	@output="$$(PROFILEDECK_RELEASE_SIGN_IDENTITY= $(MAKE) -n release-build-macos VERSION=0.1.0-beta.1 BUILD_NUMBER=1 RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567 SIGN_IDENTITY=profiledeck-signing-identity-privacy-probe 2>&1)"; \
+	case "$$output" in *profiledeck-signing-identity-privacy-probe*) echo "release Make output exposed the signing identity"; exit 1;; esac
 
 desktop-frontend-install:
 	$(WAILS3) task common:frontend:install
@@ -107,8 +111,9 @@ release-github-check:
 
 release-build: release-build-macos
 
+release-build-macos: export PROFILEDECK_RELEASE_SIGN_IDENTITY := $(or $(PROFILEDECK_RELEASE_SIGN_IDENTITY),$(SIGN_IDENTITY))
 release-build-macos:
-	$(WAILS3) task darwin:release VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_COMMIT="$(RELEASE_COMMIT)" SIGN_IDENTITY="$(SIGN_IDENTITY)" RELEASE_KEYCHAIN="$(RELEASE_KEYCHAIN)" RELEASES_DIR="$(RELEASES_DIR)"
+	$(WAILS3) task darwin:release VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_COMMIT="$(RELEASE_COMMIT)" RELEASE_KEYCHAIN="$(RELEASE_KEYCHAIN)" RELEASES_DIR="$(RELEASES_DIR)"
 
 release-assemble:
 	go run ./scripts/releasetool assemble --version "$(VERSION)" --build-number "$(BUILD_NUMBER)" --commit "$(RELEASE_COMMIT)" --platforms "$(RELEASE_PLATFORMS)" --releases-dir "$(RELEASES_DIR)"
@@ -155,8 +160,9 @@ ci-core-check: $(CI_GOLANGCI_LINT)
 ci-desktop-check: $(CI_GOLANGCI_LINT) $(CI_WAILS3)
 	$(MAKE) desktop-check GOLANGCI_LINT=$(abspath $(CI_GOLANGCI_LINT)) WAILS3=$(abspath $(CI_WAILS3))
 
+ci-release-build-macos: export PROFILEDECK_RELEASE_SIGN_IDENTITY := $(or $(PROFILEDECK_RELEASE_SIGN_IDENTITY),$(SIGN_IDENTITY))
 ci-release-build-macos: $(CI_WAILS3)
-	$(MAKE) release-build-macos VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_COMMIT="$(RELEASE_COMMIT)" SIGN_IDENTITY="$(SIGN_IDENTITY)" RELEASE_KEYCHAIN="$(RELEASE_KEYCHAIN)" RELEASES_DIR="$(RELEASES_DIR)" WAILS3=$(abspath $(CI_WAILS3))
+	$(MAKE) release-build-macos VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_COMMIT="$(RELEASE_COMMIT)" RELEASE_KEYCHAIN="$(RELEASE_KEYCHAIN)" RELEASES_DIR="$(RELEASES_DIR)" WAILS3=$(abspath $(CI_WAILS3))
 
 ci-release-assemble:
 	$(MAKE) release-assemble VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_COMMIT="$(RELEASE_COMMIT)" RELEASE_PLATFORMS="$(RELEASE_PLATFORMS)" RELEASES_DIR="$(RELEASES_DIR)"

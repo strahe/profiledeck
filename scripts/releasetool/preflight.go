@@ -39,7 +39,7 @@ func discoverIdentity(
 	}
 	output, err := runner.run(ctx, "security", args...)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("could not inspect Developer ID signing identities")
 	}
 	identities := parseDeveloperIDIdentities(string(output))
 	if requested != "" {
@@ -140,7 +140,9 @@ func preflight(
 	notaryArgs := []string{"notarytool", "history"}
 	notaryArgs = append(notaryArgs, notaryCredentialArgs(notaryProfile, keychain)...)
 	if _, err := runner.run(ctx, "xcrun", notaryArgs...); err != nil {
-		return fmt.Errorf("validate notary profile %q: %w", notaryProfile, err)
+		return fmt.Errorf(
+			"could not validate the notary profile; verify the profile and Keychain configuration",
+		)
 	}
 	targets, err := runner.run(ctx, "go", "tool", "dist", "list")
 	if err != nil {
@@ -153,11 +155,9 @@ func preflight(
 		}
 	}
 	fmt.Printf(
-		"Release preflight passed: %s (build %d), %s, notary profile %s\n",
+		"Release preflight passed for %s (build %d); signing and notarization credentials are ready.\n",
 		version,
 		buildNumber,
-		identity,
-		notaryProfile,
 	)
 	return nil
 }

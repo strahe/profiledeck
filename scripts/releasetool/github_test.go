@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateDraftReleaseSupportsSafeResume(t *testing.T) {
@@ -45,6 +46,9 @@ func TestValidateResumableDraftReleaseRejectsUnsafeState(t *testing.T) {
 	specs := testMacOSSpecs(t, version)
 	valid := githubRelease{ID: 42, IsDraft: true, TagName: version.tag()}
 	tests := map[string]githubRelease{
+		"missing release ID": {
+			IsDraft: true, TagName: version.tag(),
+		},
 		"published": {
 			ID: 42, TagName: version.tag(),
 		},
@@ -76,6 +80,287 @@ func TestValidateResumableDraftReleaseRejectsUnsafeState(t *testing.T) {
 			t.Parallel()
 			if err := validateResumableDraftRelease(release, version, specs); err == nil {
 				t.Fatal("unsafe Draft Release state was accepted")
+			}
+		})
+	}
+}
+
+func TestWaitForDraftVisibilityRetriesOnlyMissingRelease(t *testing.T) {
+	t.Parallel()
+	const repository = "example/project"
+	version, _ := parseReleaseVersion("1.2.3-beta.4")
+	specs := testMacOSSpecs(t, version)
+	releasePage := fmt.Sprintf(
+		`[[{"id":42,"draft":true,"prerelease":true,"tag_name":%q,"assets":[]}]]`,
+		version.tag(),
+	)
+	key := githubReleasePagesKey(repository)
+	runner := &scriptedCommandRunner{results: map[string][]scriptedCommandResult{
+		key: {
+			{output: []byte(`[[]]`)},
+			{output: []byte(releasePage)},
+		},
+	}}
+	var delays []time.Duration
+	release, err := waitForDraftVisibility(
+		context.Background(),
+		runner,
+		repository,
+		version,
+		specs,
+		func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.ID != 42 {
+		t.Fatalf("release ID = %d", release.ID)
+	}
+	if got := fmt.Sprint(delays); got != "[0s 1s]" {
+		t.Fatalf("poll delays = %s", got)
+	}
+}
+
+func TestWaitForDraftVisibilityTimesOutWithoutRetryingUnsafeState(t *testing.T) {
+	t.Parallel()
+	const repository = "example/project"
+	version, _ := parseReleaseVersion("1.2.3")
+	specs := testMacOSSpecs(t, version)
+	key := githubReleasePagesKey(repository)
+	missing := make([]scriptedCommandResult, len(githubConvergenceDelays))
+	for index := range missing {
+		missing[index] = scriptedCommandResult{output: []byte(`[[]]`)}
+	}
+	runner := &scriptedCommandRunner{results: map[string][]scriptedCommandResult{key: missing}}
+	var delays []time.Duration
+	_, err := waitForDraftVisibility(
+		context.Background(),
+		runner,
+		repository,
+		version,
+		specs,
+		func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "within 30 seconds") {
+		t.Fatalf("timeout error = %v", err)
+	}
+	if got := fmt.Sprint(delays); got != "[0s 1s 2s 4s 8s 15s]" {
+		t.Fatalf("poll delays = %s", got)
+	}
+
+	unsafePage := fmt.Sprintf(
+		`[[{"id":42,"draft":false,"tag_name":%q,"assets":[]}]]`,
+		version.tag(),
+	)
+	runner = &scriptedCommandRunner{results: map[string][]scriptedCommandResult{
+		key: {{output: []byte(unsafePage)}},
+	}}
+	delays = nil
+	_, err = waitForDraftVisibility(
+		context.Background(),
+		runner,
+		repository,
+		version,
+		specs,
+		func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "not a Draft Release") {
+		t.Fatalf("unsafe state error = %v", err)
+	}
+	if got := fmt.Sprint(delays); got != "[0s]" {
+		t.Fatalf("unsafe state was retried: %s", got)
+	}
+}
+
+func TestWaitForDraftVisibilityDoesNotRetryGitHubErrors(t *testing.T) {
+	t.Parallel()
+	const repository = "example/project"
+	version, _ := parseReleaseVersion("1.2.3")
+	specs := testMacOSSpecs(t, version)
+	key := githubReleasePagesKey(repository)
+	for name, result := range map[string]scriptedCommandResult{
+		"API failure":  {err: errors.New("request failed")},
+		"invalid JSON": {output: []byte(`not-json`)},
+	} {
+		result := result
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner := &scriptedCommandRunner{results: map[string][]scriptedCommandResult{
+				key: {result},
+			}}
+			var delays []time.Duration
+			_, err := waitForDraftVisibility(
+				context.Background(),
+				runner,
+				repository,
+				version,
+				specs,
+				func(_ context.Context, delay time.Duration) error {
+					delays = append(delays, delay)
+					return nil
+				},
+			)
+			if err == nil {
+				t.Fatal("GitHub error was ignored")
+			}
+			if got := fmt.Sprint(delays); got != "[0s]" {
+				t.Fatalf("GitHub error was retried: %s", got)
+			}
+		})
+	}
+}
+
+func TestWaitForDraftAssetsAcceptsOnlyAValidConvergingSubset(t *testing.T) {
+	t.Parallel()
+	const repository = "example/project"
+	version, _ := parseReleaseVersion("1.2.3")
+	specs := testMacOSSpecs(t, version)
+	partial := fmt.Sprintf(
+		`{"id":42,"draft":true,"tag_name":%q,"assets":[{"id":1,"name":%q}]}`,
+		version.tag(),
+		updaterZIPName(version),
+	)
+	complete := fmt.Sprintf(
+		`{"id":42,"draft":true,"tag_name":%q,"assets":[{"id":1,"name":%q},{"id":2,"name":%q},{"id":3,"name":"SHA256SUMS"}]}`,
+		version.tag(),
+		updaterZIPName(version),
+		installerDMGName(version),
+	)
+	key := commandKey("gh", "api", "repos/"+repository+"/releases/42")
+	runner := &scriptedCommandRunner{results: map[string][]scriptedCommandResult{
+		key: {
+			{output: []byte(partial)},
+			{output: []byte(complete)},
+		},
+	}}
+	var delays []time.Duration
+	release, err := waitForDraftAssets(
+		context.Background(),
+		runner,
+		repository,
+		42,
+		version,
+		specs,
+		func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(release.Assets) != 3 || fmt.Sprint(delays) != "[0s 1s]" {
+		t.Fatalf("release = %#v, delays = %v", release, delays)
+	}
+
+	unexpected := fmt.Sprintf(
+		`{"id":42,"draft":true,"tag_name":%q,"assets":[{"id":9,"name":"unexpected.txt"}]}`,
+		version.tag(),
+	)
+	runner = &scriptedCommandRunner{results: map[string][]scriptedCommandResult{
+		key: {{output: []byte(unexpected)}},
+	}}
+	delays = nil
+	_, err = waitForDraftAssets(
+		context.Background(),
+		runner,
+		repository,
+		42,
+		version,
+		specs,
+		func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "unexpected asset") {
+		t.Fatalf("unexpected asset error = %v", err)
+	}
+	if got := fmt.Sprint(delays); got != "[0s]" {
+		t.Fatalf("unsafe assets were retried: %s", got)
+	}
+}
+
+func TestWaitForDraftAssetsTimesOutOnAStaleValidSubset(t *testing.T) {
+	t.Parallel()
+	const repository = "example/project"
+	version, _ := parseReleaseVersion("1.2.3")
+	specs := testMacOSSpecs(t, version)
+	partial := fmt.Sprintf(
+		`{"id":42,"draft":true,"tag_name":%q,"assets":[{"id":1,"name":%q}]}`,
+		version.tag(),
+		updaterZIPName(version),
+	)
+	key := commandKey("gh", "api", "repos/"+repository+"/releases/42")
+	results := make([]scriptedCommandResult, len(githubConvergenceDelays))
+	for index := range results {
+		results[index] = scriptedCommandResult{output: []byte(partial)}
+	}
+	runner := &scriptedCommandRunner{results: map[string][]scriptedCommandResult{key: results}}
+	var delays []time.Duration
+	_, err := waitForDraftAssets(
+		context.Background(),
+		runner,
+		repository,
+		42,
+		version,
+		specs,
+		func(_ context.Context, delay time.Duration) error {
+			delays = append(delays, delay)
+			return nil
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "all assets") {
+		t.Fatalf("asset timeout error = %v", err)
+	}
+	if got := fmt.Sprint(delays); got != "[0s 1s 2s 4s 8s 15s]" {
+		t.Fatalf("asset poll delays = %s", got)
+	}
+}
+
+func TestWaitForDraftAssetsDoesNotRetryGitHubErrors(t *testing.T) {
+	t.Parallel()
+	const repository = "example/project"
+	version, _ := parseReleaseVersion("1.2.3")
+	specs := testMacOSSpecs(t, version)
+	key := commandKey("gh", "api", "repos/"+repository+"/releases/42")
+	for name, result := range map[string]scriptedCommandResult{
+		"API failure":  {err: errors.New("request failed")},
+		"invalid JSON": {output: []byte(`not-json`)},
+	} {
+		result := result
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner := &scriptedCommandRunner{results: map[string][]scriptedCommandResult{
+				key: {result},
+			}}
+			var delays []time.Duration
+			_, err := waitForDraftAssets(
+				context.Background(),
+				runner,
+				repository,
+				42,
+				version,
+				specs,
+				func(_ context.Context, delay time.Duration) error {
+					delays = append(delays, delay)
+					return nil
+				},
+			)
+			if err == nil {
+				t.Fatal("GitHub error was ignored")
+			}
+			if got := fmt.Sprint(delays); got != "[0s]" {
+				t.Fatalf("GitHub error was retried: %s", got)
 			}
 		})
 	}
@@ -462,18 +747,20 @@ func TestCreateDraftReleaseResumesPartialDraftAndVerifiesRemoteAssets(t *testing
 		t.Fatal(err)
 	}
 
-	partialPage := fmt.Sprintf(
-		`[[{"id":42,"draft":true,"tag_name":%q,"html_url":"https://example.invalid/draft","assets":[{"id":1,"name":%q}]}]]`,
+	partialRelease := fmt.Sprintf(
+		`{"id":42,"draft":true,"tag_name":%q,"html_url":"https://example.invalid/draft","assets":[{"id":1,"name":%q}]}`,
 		version.tag(),
 		updaterZIPName(version),
 	)
-	completePage := fmt.Sprintf(
-		`[[{"id":42,"draft":true,"tag_name":%q,"html_url":"https://example.invalid/draft","assets":[{"id":1,"name":%q},{"id":2,"name":%q},{"id":3,"name":"SHA256SUMS"}]}]]`,
+	completeRelease := fmt.Sprintf(
+		`{"id":42,"draft":true,"tag_name":%q,"html_url":"https://example.invalid/draft","assets":[{"id":1,"name":%q},{"id":2,"name":%q},{"id":3,"name":"SHA256SUMS"}]}`,
 		version.tag(),
 		updaterZIPName(version),
 		installerDMGName(version),
 	)
+	partialPage := "[[" + partialRelease + "]]"
 	releasePagesKey := githubReleasePagesKey(repository)
+	releaseByIDKey := commandKey("gh", "api", "repos/"+repository+"/releases/42")
 	tagKey := commandKey("gh", "api", "repos/"+repository+"/git/ref/tags/"+version.tag())
 	runner := &scriptedCommandRunner{results: map[string][]scriptedCommandResult{
 		commandKey("gh", "auth", "status"): {{output: nil}},
@@ -498,9 +785,11 @@ func TestCreateDraftReleaseResumesPartialDraftAndVerifiesRemoteAssets(t *testing
 		releasePagesKey: {
 			{output: []byte(partialPage)},
 			{output: []byte(partialPage)},
-			{output: []byte(completePage)},
-			{output: []byte(completePage)},
-			{output: []byte(completePage)},
+		},
+		releaseByIDKey: {
+			{output: []byte(partialRelease)},
+			{output: []byte(completeRelease)},
+			{output: []byte(completeRelease)},
 		},
 		tagKey: {
 			{output: tagReference("commit", testReleaseCommit)},

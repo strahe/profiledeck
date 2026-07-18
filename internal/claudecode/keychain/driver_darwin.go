@@ -3,27 +3,11 @@
 package keychain
 
 /*
-#cgo LDFLAGS: -framework CoreFoundation -framework Security
+#cgo LDFLAGS: -framework CoreFoundation -framework Security -framework LocalAuthentication
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
 #include <stdlib.h>
-
-static OSStatus pd_begin_interaction_policy(int allowInteraction, Boolean *previous, int *changed) {
-	*changed = 0;
-	if (allowInteraction) return errSecSuccess;
-	OSStatus status = SecKeychainGetUserInteractionAllowed(previous);
-	if (status != errSecSuccess || !*previous) return status;
-	status = SecKeychainSetUserInteractionAllowed(false);
-	if (status == errSecSuccess) *changed = 1;
-	return status;
-}
-
-static OSStatus pd_finish_interaction_policy(Boolean previous, int changed, OSStatus operationStatus) {
-	if (!changed) return operationStatus;
-	OSStatus restoreStatus = SecKeychainSetUserInteractionAllowed(previous);
-	if (operationStatus != errSecSuccess) return operationStatus;
-	return restoreStatus;
-}
+#include "authentication_context_darwin.h"
 
 static CFMutableDictionaryRef pd_dictionary(void) {
 	return CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
@@ -43,26 +27,20 @@ static CFMutableDictionaryRef pd_find_query(CFStringRef service, CFStringRef acc
 	CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitAll);
 	CFDictionarySetValue(query, kSecReturnAttributes, kCFBooleanTrue);
 	CFDictionarySetValue(query, kSecReturnPersistentRef, kCFBooleanTrue);
-	if (!allowInteraction) {
-		CFDictionarySetValue(query, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail);
-	}
+	pd_apply_interaction_policy(query, allowInteraction);
 	// Password discovery must not combine MatchLimitAll with ReturnData.
 	return query;
 }
 
 static OSStatus pd_find(const char *service, const char *account, int allowInteraction, CFTypeRef *result) {
-	Boolean previousInteraction = true;
-	int interactionChanged = 0;
-	OSStatus status = pd_begin_interaction_policy(allowInteraction, &previousInteraction, &interactionChanged);
-	if (status != errSecSuccess) return status;
 	CFStringRef serviceValue = pd_string(service);
 	CFStringRef accountValue = pd_string(account);
 	CFMutableDictionaryRef query = pd_find_query(serviceValue, accountValue, allowInteraction);
-	status = SecItemCopyMatching(query, result);
+	OSStatus status = SecItemCopyMatching(query, result);
 	CFRelease(accountValue);
 	CFRelease(serviceValue);
 	CFRelease(query);
-	return pd_finish_interaction_policy(previousInteraction, interactionChanged, status);
+	return status;
 }
 
 static CFIndex pd_array_count(CFTypeRef value) {
@@ -119,13 +97,11 @@ static CFMutableDictionaryRef pd_resolve_query(CFArrayRef persistentList, int al
 	CFDictionarySetValue(query, kSecMatchItemList, persistentList);
 	CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne);
 	CFDictionarySetValue(query, kSecReturnRef, kCFBooleanTrue);
-	if (!allowInteraction) {
-		CFDictionarySetValue(query, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail);
-	}
+	pd_apply_interaction_policy(query, allowInteraction);
 	return query;
 }
 
-static SecKeychainItemRef pd_resolve(CFDataRef persistent, int allowInteraction, OSStatus *status) {
+static CFTypeRef pd_resolve(CFDataRef persistent, int allowInteraction, OSStatus *status) {
 	const void *references[] = { persistent };
 	CFArrayRef persistentList = CFArrayCreate(kCFAllocatorDefault, references, 1, &kCFTypeArrayCallBacks);
 	CFMutableDictionaryRef query = pd_resolve_query(persistentList, allowInteraction);
@@ -134,12 +110,11 @@ static SecKeychainItemRef pd_resolve(CFDataRef persistent, int allowInteraction,
 	CFRelease(query);
 	CFRelease(persistentList);
 	if (*status != errSecSuccess) return NULL;
-	if (result == NULL || CFGetTypeID(result) != SecKeychainItemGetTypeID()) {
-		if (result != NULL) CFRelease(result);
+	if (result == NULL) {
 		*status = errSecInvalidItemRef;
 		return NULL;
 	}
-	return (SecKeychainItemRef)result;
+	return result;
 }
 
 static CFMutableDictionaryRef pd_read_query(CFArrayRef itemList, int allowInteraction) {
@@ -149,10 +124,8 @@ static CFMutableDictionaryRef pd_read_query(CFArrayRef itemList, int allowIntera
 	CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitOne);
 	CFDictionarySetValue(query, kSecReturnAttributes, kCFBooleanTrue);
 	CFDictionarySetValue(query, kSecReturnData, kCFBooleanTrue);
-	if (!allowInteraction) {
-		// Passive detection must never trigger a Keychain authorization dialog.
-		CFDictionarySetValue(query, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail);
-	}
+	// Passive detection must never trigger a Keychain authorization dialog.
+	pd_apply_interaction_policy(query, allowInteraction);
 	return query;
 }
 
@@ -170,15 +143,12 @@ static CFMutableDictionaryRef pd_update_values(CFDataRef data) {
 }
 
 static OSStatus pd_read(const UInt8 *bytes, CFIndex length, int allowInteraction, CFTypeRef *result) {
-	Boolean previousInteraction = true;
-	int interactionChanged = 0;
-	OSStatus status = pd_begin_interaction_policy(allowInteraction, &previousInteraction, &interactionChanged);
-	if (status != errSecSuccess) return status;
 	CFDataRef persistent = CFDataCreate(kCFAllocatorDefault, bytes, length);
-	SecKeychainItemRef item = pd_resolve(persistent, allowInteraction, &status);
+	OSStatus status = errSecSuccess;
+	CFTypeRef item = pd_resolve(persistent, allowInteraction, &status);
 	CFRelease(persistent);
 	if (status != errSecSuccess) {
-		return pd_finish_interaction_policy(previousInteraction, interactionChanged, status);
+		return status;
 	}
 	const void *items[] = { item };
 	CFArrayRef itemList = CFArrayCreate(kCFAllocatorDefault, items, 1, &kCFTypeArrayCallBacks);
@@ -187,14 +157,14 @@ static OSStatus pd_read(const UInt8 *bytes, CFIndex length, int allowInteraction
 	CFRelease(query);
 	CFRelease(itemList);
 	CFRelease(item);
-	return pd_finish_interaction_policy(previousInteraction, interactionChanged, status);
+	return status;
 }
 
 static OSStatus pd_update(const UInt8 *referenceBytes, CFIndex referenceLength,
 	const UInt8 *dataBytes, CFIndex dataLength) {
 	CFDataRef persistent = CFDataCreate(kCFAllocatorDefault, referenceBytes, referenceLength);
 	OSStatus status = errSecSuccess;
-	SecKeychainItemRef item = pd_resolve(persistent, 1, &status);
+	CFTypeRef item = pd_resolve(persistent, 1, &status);
 	CFRelease(persistent);
 	if (status != errSecSuccess) return status;
 	const void *items[] = { item };
@@ -228,6 +198,7 @@ static int pd_find_query_contract(void) {
 		&& pd_dictionary_value_is(query, kSecMatchLimit, kSecMatchLimitAll)
 		&& pd_dictionary_value_is(query, kSecReturnAttributes, kCFBooleanTrue)
 		&& pd_dictionary_value_is(query, kSecReturnPersistentRef, kCFBooleanTrue)
+		&& !CFDictionaryContainsKey(query, kSecUseAuthenticationContext)
 		&& !CFDictionaryContainsKey(query, kSecReturnData);
 	CFRelease(query);
 	CFRelease(account);
@@ -240,7 +211,8 @@ static int pd_passive_find_query_contract(void) {
 	CFStringRef account = pd_string("account");
 	CFMutableDictionaryRef query = pd_find_query(service, account, 0);
 	int valid = CFDictionaryGetCount(query) == 8
-		&& pd_dictionary_value_is(query, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail)
+		&& pd_query_uses_authentication_context(query)
+		&& !CFDictionaryContainsKey(query, kSecUseAuthenticationUI)
 		&& !CFDictionaryContainsKey(query, kSecReturnData);
 	CFRelease(query);
 	CFRelease(account);
@@ -258,6 +230,7 @@ static int pd_read_query_contract(void) {
 		&& pd_dictionary_value_is(query, kSecMatchLimit, kSecMatchLimitOne)
 		&& pd_dictionary_value_is(query, kSecReturnAttributes, kCFBooleanTrue)
 		&& pd_dictionary_value_is(query, kSecReturnData, kCFBooleanTrue)
+		&& !CFDictionaryContainsKey(query, kSecUseAuthenticationContext)
 		&& !CFDictionaryContainsKey(query, kSecReturnPersistentRef);
 	CFRelease(query);
 	CFRelease(itemList);
@@ -274,7 +247,8 @@ static int pd_passive_read_query_contract(void) {
 		&& pd_dictionary_value_is(query, kSecMatchLimit, kSecMatchLimitOne)
 		&& pd_dictionary_value_is(query, kSecReturnAttributes, kCFBooleanTrue)
 		&& pd_dictionary_value_is(query, kSecReturnData, kCFBooleanTrue)
-		&& pd_dictionary_value_is(query, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail);
+		&& pd_query_uses_authentication_context(query)
+		&& !CFDictionaryContainsKey(query, kSecUseAuthenticationUI);
 	CFRelease(query);
 	CFRelease(itemList);
 	return valid;
@@ -289,6 +263,7 @@ static int pd_resolve_query_contract(void) {
 		&& pd_dictionary_value_is(query, kSecMatchItemList, persistentList)
 		&& pd_dictionary_value_is(query, kSecMatchLimit, kSecMatchLimitOne)
 		&& pd_dictionary_value_is(query, kSecReturnRef, kCFBooleanTrue)
+		&& !CFDictionaryContainsKey(query, kSecUseAuthenticationContext)
 		&& !CFDictionaryContainsKey(query, kSecReturnData);
 	CFRelease(query);
 	CFRelease(persistentList);
@@ -300,7 +275,8 @@ static int pd_passive_resolve_query_contract(void) {
 	CFArrayRef persistentList = CFArrayCreate(kCFAllocatorDefault, items, 1, &kCFTypeArrayCallBacks);
 	CFMutableDictionaryRef query = pd_resolve_query(persistentList, 0);
 	int valid = CFDictionaryGetCount(query) == 5
-		&& pd_dictionary_value_is(query, kSecUseAuthenticationUI, kSecUseAuthenticationUIFail)
+		&& pd_query_uses_authentication_context(query)
+		&& !CFDictionaryContainsKey(query, kSecUseAuthenticationUI)
 		&& !CFDictionaryContainsKey(query, kSecReturnData);
 	CFRelease(query);
 	CFRelease(persistentList);
@@ -349,8 +325,8 @@ import (
 
 type securityDriver struct{}
 
-// SecKeychainSetUserInteractionAllowed is process-wide for legacy login
-// Keychain items, so every native driver call shares one serialization point.
+// Preserve the driver's existing native call ordering while passive and
+// interactive Keychain operations use separate authentication policies.
 var driverInteractionMu sync.Mutex
 
 type nativeDriverQueryContract struct {

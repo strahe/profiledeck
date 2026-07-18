@@ -10,9 +10,21 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 var repositoryPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+var githubConvergenceDelays = []time.Duration{
+	0,
+	time.Second,
+	2 * time.Second,
+	4 * time.Second,
+	8 * time.Second,
+	15 * time.Second,
+}
+
+type convergenceWaiter func(context.Context, time.Duration) error
 
 type githubAsset struct {
 	ID   int64  `json:"id"`
@@ -44,6 +56,17 @@ type githubTagReference struct {
 	} `json:"object"`
 }
 
+func convertGitHubAPIRelease(release githubAPIRelease) githubRelease {
+	return githubRelease{
+		ID:           release.ID,
+		IsDraft:      release.Draft,
+		IsPrerelease: release.Prerelease,
+		TagName:      release.TagName,
+		URL:          release.HTMLURL,
+		Assets:       release.Assets,
+	}
+}
+
 func validateRepository(repository string) error {
 	if !repositoryPattern.MatchString(repository) {
 		return fmt.Errorf("release repository must use the owner/repository form")
@@ -63,17 +86,18 @@ func parseGitHubReleasePages(content []byte) ([]githubRelease, error) {
 	var releases []githubRelease
 	for _, page := range pages {
 		for _, release := range page {
-			releases = append(releases, githubRelease{
-				ID:           release.ID,
-				IsDraft:      release.Draft,
-				IsPrerelease: release.Prerelease,
-				TagName:      release.TagName,
-				URL:          release.HTMLURL,
-				Assets:       release.Assets,
-			})
+			releases = append(releases, convertGitHubAPIRelease(release))
 		}
 	}
 	return releases, nil
+}
+
+func parseGitHubRelease(content []byte) (githubRelease, error) {
+	var release githubAPIRelease
+	if err := json.Unmarshal(content, &release); err != nil {
+		return githubRelease{}, fmt.Errorf("decode GitHub Release: %w", err)
+	}
+	return convertGitHubAPIRelease(release), nil
 }
 
 func listGitHubReleases(
@@ -149,6 +173,9 @@ func validateResumableDraftRelease(
 	version releaseVersion,
 	specs []releaseAssetSpec,
 ) error {
+	if release.ID <= 0 {
+		return fmt.Errorf("draft Release %s is missing its API ID", version.tag())
+	}
 	if !release.IsDraft {
 		return fmt.Errorf("%s is not a Draft Release", version.tag())
 	}
@@ -178,6 +205,110 @@ func validateResumableDraftRelease(
 	return nil
 }
 
+func waitForConvergence(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func loadGitHubReleaseByID(
+	ctx context.Context,
+	runner commandRunner,
+	repository string,
+	releaseID int64,
+) (githubRelease, error) {
+	if releaseID <= 0 {
+		return githubRelease{}, fmt.Errorf("GitHub Release API ID is required")
+	}
+	output, err := runner.run(
+		ctx,
+		"gh",
+		"api",
+		fmt.Sprintf("repos/%s/releases/%d", repository, releaseID),
+	)
+	if err != nil {
+		return githubRelease{}, err
+	}
+	release, err := parseGitHubRelease(output)
+	if err != nil {
+		return githubRelease{}, err
+	}
+	if release.ID != releaseID {
+		return githubRelease{}, fmt.Errorf("GitHub returned an unexpected Release API ID")
+	}
+	return release, nil
+}
+
+func waitForDraftVisibility(
+	ctx context.Context,
+	runner commandRunner,
+	repository string,
+	version releaseVersion,
+	specs []releaseAssetSpec,
+	wait convergenceWaiter,
+) (githubRelease, error) {
+	for _, delay := range githubConvergenceDelays {
+		if err := wait(ctx, delay); err != nil {
+			return githubRelease{}, err
+		}
+		release, found, err := findGitHubRelease(ctx, runner, repository, version.tag())
+		if err != nil {
+			return githubRelease{}, err
+		}
+		if !found {
+			continue
+		}
+		if err := validateResumableDraftRelease(release, version, specs); err != nil {
+			return githubRelease{}, err
+		}
+		return release, nil
+	}
+	return githubRelease{}, fmt.Errorf(
+		"GitHub did not show Draft Release %s within 30 seconds; rerun this workflow",
+		version.tag(),
+	)
+}
+
+func waitForDraftAssets(
+	ctx context.Context,
+	runner commandRunner,
+	repository string,
+	releaseID int64,
+	version releaseVersion,
+	specs []releaseAssetSpec,
+	wait convergenceWaiter,
+) (githubRelease, error) {
+	for _, delay := range githubConvergenceDelays {
+		if err := wait(ctx, delay); err != nil {
+			return githubRelease{}, err
+		}
+		release, err := loadGitHubReleaseByID(ctx, runner, repository, releaseID)
+		if err != nil {
+			return githubRelease{}, err
+		}
+		if err := validateResumableDraftRelease(release, version, specs); err != nil {
+			return githubRelease{}, err
+		}
+		// A valid subset can be a stale read after upload. Any other visible
+		// state was rejected above because it cannot be repaired safely.
+		if err := validateRemoteAssetNames(release, specs); err == nil {
+			return release, nil
+		}
+	}
+	return githubRelease{}, fmt.Errorf(
+		"GitHub did not show all assets for Draft Release %s within 30 seconds; rerun this workflow",
+		version.tag(),
+	)
+}
+
 func validateDraftRelease(
 	release githubRelease,
 	version releaseVersion,
@@ -187,22 +318,6 @@ func validateDraftRelease(
 		return err
 	}
 	return validateRemoteAssetNames(release, specs)
-}
-
-func loadGitHubRelease(
-	ctx context.Context,
-	runner commandRunner,
-	repository string,
-	tag string,
-) (githubRelease, error) {
-	release, found, err := findGitHubRelease(ctx, runner, repository, tag)
-	if err != nil {
-		return githubRelease{}, err
-	}
-	if !found {
-		return githubRelease{}, fmt.Errorf("GitHub Release %s was not found in %s", tag, repository)
-	}
-	return release, nil
 }
 
 func ensureCommitExists(
@@ -473,14 +588,11 @@ func verifyRemoteAssets(
 	ctx context.Context,
 	runner commandRunner,
 	repository string,
+	release githubRelease,
 	version releaseVersion,
 	localDirectory string,
 	specs []releaseAssetSpec,
 ) error {
-	release, err := loadGitHubRelease(ctx, runner, repository, version.tag())
-	if err != nil {
-		return err
-	}
 	if err := validateDraftRelease(release, version, specs); err != nil {
 		return err
 	}
@@ -515,7 +627,7 @@ func verifyRemoteAssets(
 	if _, err := verifyChecksums(downloadDirectory, specs); err != nil {
 		return fmt.Errorf("verify downloaded release assets: %w", err)
 	}
-	finalRelease, err := loadGitHubRelease(ctx, runner, repository, version.tag())
+	finalRelease, err := loadGitHubReleaseByID(ctx, runner, repository, release.ID)
 	if err != nil {
 		return err
 	}
@@ -530,6 +642,28 @@ func createDraftRelease(
 	directory string,
 	metadata releaseBundleMetadata,
 	definitions []releasePlatformDefinition,
+) (githubRelease, error) {
+	return createDraftReleaseWithWaiter(
+		ctx,
+		runner,
+		repository,
+		version,
+		directory,
+		metadata,
+		definitions,
+		waitForConvergence,
+	)
+}
+
+func createDraftReleaseWithWaiter(
+	ctx context.Context,
+	runner commandRunner,
+	repository string,
+	version releaseVersion,
+	directory string,
+	metadata releaseBundleMetadata,
+	definitions []releasePlatformDefinition,
+	wait convergenceWaiter,
 ) (githubRelease, error) {
 	// The verified aggregate manifest is the publication allowlist for release assets.
 	specs, err := bundleAssetSpecs(metadata, definitions)
@@ -557,10 +691,23 @@ func createDraftRelease(
 		if _, err := runner.run(ctx, "gh", draftReleaseArgs(repository, version)...); err != nil {
 			return githubRelease{}, err
 		}
-		release, err = loadGitHubRelease(ctx, runner, repository, version.tag())
+		release, err = waitForDraftVisibility(
+			ctx,
+			runner,
+			repository,
+			version,
+			specs,
+			wait,
+		)
 		if err != nil {
 			return githubRelease{}, err
 		}
+	}
+	// Once a Draft has an API ID, stop relying on the eventually consistent
+	// collection response for its mutable asset state.
+	release, err = loadGitHubReleaseByID(ctx, runner, repository, release.ID)
+	if err != nil {
+		return githubRelease{}, err
 	}
 	if err := validateResumableDraftRelease(release, version, specs); err != nil {
 		return githubRelease{}, err
@@ -585,14 +732,19 @@ func createDraftRelease(
 	); err != nil {
 		return githubRelease{}, err
 	}
-	release, err = loadGitHubRelease(ctx, runner, repository, version.tag())
+	release, err = waitForDraftAssets(
+		ctx,
+		runner,
+		repository,
+		release.ID,
+		version,
+		specs,
+		wait,
+	)
 	if err != nil {
 		return githubRelease{}, err
 	}
-	if err := validateDraftRelease(release, version, specs); err != nil {
-		return githubRelease{}, err
-	}
-	if err := verifyRemoteAssets(ctx, runner, repository, version, directory, specs); err != nil {
+	if err := verifyRemoteAssets(ctx, runner, repository, release, version, directory, specs); err != nil {
 		return githubRelease{}, err
 	}
 	if err := ensureTagMatchesCommit(ctx, runner, repository, version.tag(), metadata.Commit); err != nil {
