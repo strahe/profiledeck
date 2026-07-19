@@ -46,22 +46,22 @@
 		translate,
 		type DesktopLanguage,
 	} from "$lib/i18n";
-	import AntigravityProfiles from "../profiles/AntigravityProfiles.svelte";
 	import { AntigravityQuotaReadPolicy } from "../profiles/antigravity-quota-policy.js";
 	import { AntigravityQuotaController } from "../profiles/antigravity-quota.svelte.js";
 	import { CodexStartupQuotaReadCoordinator } from "../profiles/codex-quota-policy.js";
-	import CodexProfiles from "../profiles/CodexProfiles.svelte";
-	import ClaudeCodeProfiles from "../profiles/ClaudeCodeProfiles.svelte";
-	import type { AntigravityProfileRoute, ClaudeCodeProfileRoute, CodexProfileRoute, ProfileUseRequest } from "../profiles/types";
-	import CodexSettings from "../settings/CodexSettings.svelte";
+	import type { ProfileUseRequest } from "../profiles/types";
 	import { provideCodexRuntime } from "../settings/codex-runtime.svelte.js";
-	import UsagePage from "../usage/UsagePage.svelte";
-	import DiagnosticsPage from "./DiagnosticsPage.svelte";
-	import GlobalSettings from "./GlobalSettings.svelte";
+	import WorkspaceViewStatus from "./WorkspaceViewStatus.svelte";
 	import { selectLatestUpdateStatus } from "./update-status-policy.js";
+	import {
+		agentForWorkspace,
+		agentHome,
+		isAgentWorkspace,
+		parseWorkspaceRoute,
+		type AgentID,
+		type WorkspaceView,
+	} from "./workspace-route-policy";
 
-	type WorkspaceView = "profiles" | "antigravity-profiles" | "claude-code-profiles" | "usage" | "codex-settings" | "settings" | "diagnostics";
-	type AgentID = "codex" | "antigravity" | "claude-code";
 	type Appearance = "system" | "light" | "dark";
 	type Platform = "macos" | "windows" | "linux";
 	type GlobalSettingsTab = "general" | "backups";
@@ -86,14 +86,6 @@
 		error?: DesktopError | null;
 	};
 
-	type WorkspaceRoute = {
-		view: WorkspaceView;
-		codexProfile: CodexProfileRoute;
-		antigravityProfile: AntigravityProfileRoute;
-		claudeCodeProfile: ClaudeCodeProfileRoute;
-		valid: boolean;
-	};
-
 	const codexProviderID = "codex";
 	const antigravityProviderID = "antigravity";
 	const claudeCodeProviderID = "claude-code";
@@ -102,6 +94,13 @@
 		{ id: "antigravity", name: "Antigravity", icon: OrbitIcon },
 		{ id: "claude-code", name: "Claude Code", icon: BotIcon },
 	];
+	const loadCodexProfiles = () => import("../profiles/CodexProfiles.svelte");
+	const loadAntigravityProfiles = () => import("../profiles/AntigravityProfiles.svelte");
+	const loadClaudeCodeProfiles = () => import("../profiles/ClaudeCodeProfiles.svelte");
+	const loadUsagePage = () => import("../usage/UsagePage.svelte");
+	const loadCodexSettings = () => import("../settings/CodexSettings.svelte");
+	const loadGlobalSettings = () => import("./GlobalSettings.svelte");
+	const loadDiagnosticsPage = () => import("./DiagnosticsPage.svelte");
 	const inFlight = new Map<string, CancellablePromise<unknown>>();
 
 	let platform = $state<Platform>(detectPlatform());
@@ -169,7 +168,7 @@
 	const antigravityQuotaReadPolicy = new AntigravityQuotaReadPolicy();
 	let workspaceRoute = $derived(parseWorkspaceRoute(currentPath));
 	let agentWorkspace = $derived(isAgentWorkspace(workspaceRoute.view));
-	let selectedAgent = $derived<AgentID | null>(workspaceRoute.view === "antigravity-profiles" ? "antigravity" : workspaceRoute.view === "claude-code-profiles" ? "claude-code" : agentWorkspace ? "codex" : null);
+	let selectedAgent = $derived<AgentID | null>(agentForWorkspace(workspaceRoute.view));
 	let agentWorkspaceReady = $derived(!agentWorkspace || (dashboard !== null && dashboard.status.initialized && dashboard.status.schema_healthy && selectedAgent !== null && isAgentEnabled(selectedAgent)));
 	let enabledAgents = $derived.by(() => {
 		const states = dashboard?.agents;
@@ -729,77 +728,12 @@
 		return states?.some((state) => String(state.manifest.id) === id && state.enabled) ?? false;
 	}
 
-	function parseWorkspaceRoute(path: string): WorkspaceRoute {
-		const codexList: CodexProfileRoute = { kind: "list", profileID: "" };
-		const antigravityList: AntigravityProfileRoute = { kind: "list", profileID: "" };
-		const claudeCodeList: ClaudeCodeProfileRoute = { kind: "list", profileID: "" };
-		const build = (view: WorkspaceView, codexProfile: CodexProfileRoute = codexList, antigravityProfile: AntigravityProfileRoute = antigravityList, claudeCodeProfile: ClaudeCodeProfileRoute = claudeCodeList): WorkspaceRoute => ({ view, codexProfile, antigravityProfile, claudeCodeProfile, valid: true });
-		const list = (): WorkspaceRoute => build("profiles");
-		if (path === "/" || path === "/codex/profiles") return list();
-		if (path === "/codex/config-sets") return build("profiles", { kind: "config-sets", profileID: "" });
-		if (path === "/codex/profiles/new") return build("profiles", { kind: "new", profileID: "" });
-		const fork = path.match(/^\/codex\/profiles\/([^/]+)\/fork$/);
-		if (fork) {
-			const profileID = decodeRouteID(fork[1]);
-			return profileID ? build("profiles", { kind: "fork", profileID }) : { ...list(), valid: false };
-		}
-		const detail = path.match(/^\/codex\/profiles\/([^/]+)$/);
-		if (detail) {
-			const profileID = decodeRouteID(detail[1]);
-			return profileID ? build("profiles", { kind: "detail", profileID }) : { ...list(), valid: false };
-		}
-		if (path === "/antigravity/profiles") return build("antigravity-profiles");
-		if (path === "/antigravity/profiles/new") return build("antigravity-profiles", codexList, { kind: "new", profileID: "" });
-		const antigravityDetail = path.match(/^\/antigravity\/profiles\/([^/]+)$/);
-		if (antigravityDetail) {
-			const profileID = decodeRouteID(antigravityDetail[1]);
-			return profileID ? build("antigravity-profiles", codexList, { kind: "detail", profileID }) : { ...build("antigravity-profiles"), valid: false };
-		}
-		if (path === "/claude-code/profiles") return build("claude-code-profiles");
-		if (path === "/claude-code/profiles/new") return build("claude-code-profiles", codexList, antigravityList, { kind: "new", profileID: "" });
-		const claudeCodeDetail = path.match(/^\/claude-code\/profiles\/([^/]+)$/);
-		if (claudeCodeDetail) {
-			const profileID = decodeRouteID(claudeCodeDetail[1]);
-			return profileID ? build("claude-code-profiles", codexList, antigravityList, { kind: "detail", profileID }) : { ...build("claude-code-profiles"), valid: false };
-		}
-		if (path === "/codex/usage") return build("usage");
-		if (path === "/codex/settings") return build("codex-settings");
-		if (path === "/settings") return build("settings");
-		if (path === "/diagnostics" || path === "/codex/health") return build("diagnostics");
-		return { ...list(), valid: false };
-	}
-
-	function decodeRouteID(value: string): string | null {
-		try {
-			const decoded = decodeURIComponent(value);
-			return decoded.length <= 80 && /^[a-z0-9][a-z0-9._-]*$/.test(decoded) ? decoded : null;
-		} catch {
-			return null;
-		}
-	}
-
 	function isNavActive(view: WorkspaceView): boolean {
 		return workspaceRoute.view === view;
 	}
 
-	function isAgentWorkspace(view: WorkspaceView): boolean {
-		return view === "profiles" || view === "antigravity-profiles" || view === "claude-code-profiles" || view === "usage" || view === "codex-settings";
-	}
-
 	function selectAgent(agentID: AgentID) {
 		if (isAgentEnabled(agentID)) void push(agentHome(agentID));
-	}
-
-	function agentForWorkspace(view: WorkspaceView): AgentID | null {
-		if (view === "antigravity-profiles") return "antigravity";
-		if (view === "claude-code-profiles") return "claude-code";
-		return view === "profiles" || view === "usage" || view === "codex-settings" ? "codex" : null;
-	}
-
-	function agentHome(agentID: AgentID): string {
-		if (agentID === "antigravity") return "/antigravity/profiles";
-		if (agentID === "claude-code") return "/claude-code/profiles";
-		return "/codex/profiles";
 	}
 
 	function isAgentEnabled(agentID: AgentID): boolean {
@@ -1099,94 +1033,136 @@
 				{#if !agentWorkspaceReady}
 					{#if loading}<div class="grid h-full place-items-center"><Spinner /></div>{/if}
 				{:else if workspaceRoute.view === "profiles"}
-					<CodexProfiles
-						route={workspaceRoute.codexProfile}
-						profiles={codexProfileSummaries}
-						dashboardConfigSets={codexConfigSets}
-						{detectResult}
-						{detectError}
-						activeProfileID={codexActiveProfileID}
-						{loadingProfiles}
-						{profileError}
-						{useRequest}
-						{refreshDetect}
-						refreshProfiles={refreshCodexProfiles}
-						{cancelDetect}
-						onUseRequestHandled={(sequence) => { if (useRequest?.sequence === sequence) useRequest = null; }}
-						{showError}
-						{showNotice}
-					/>
+					{#await loadCodexProfiles()}
+						<WorkspaceViewStatus state="loading" />
+					{:then { default: CodexProfiles }}
+						<CodexProfiles
+							route={workspaceRoute.codexProfile}
+							profiles={codexProfileSummaries}
+							dashboardConfigSets={codexConfigSets}
+							{detectResult}
+							{detectError}
+							activeProfileID={codexActiveProfileID}
+							{loadingProfiles}
+							{profileError}
+							{useRequest}
+							{refreshDetect}
+							refreshProfiles={refreshCodexProfiles}
+							{cancelDetect}
+							onUseRequestHandled={(sequence) => { if (useRequest?.sequence === sequence) useRequest = null; }}
+							{showError}
+							{showNotice}
+						/>
+					{:catch}
+						<WorkspaceViewStatus state="error" />
+					{/await}
 				{:else if workspaceRoute.view === "antigravity-profiles"}
-					<AntigravityProfiles
-						route={workspaceRoute.antigravityProfile}
-						profiles={antigravityProfileSummaries}
-						detectResult={antigravityDetectResult}
-						detectError={antigravityDetectError}
-						activeProfileID={antigravityActiveProfileID}
-						loadingProfiles={loadingAntigravityProfiles}
-						profileError={antigravityProfileError}
-						useRequest={antigravityUseRequest}
-						refreshDetect={refreshAntigravityDetect}
-						refreshProfiles={refreshAntigravityProfiles}
-						quotaForSummary={(summary) => antigravityQuota.quotaForSummary(summary)}
-						quotaCheckForSummary={(summary) => antigravityQuota.checkForSummary(summary)}
-						quotaLoading={(profileID) => antigravityQuota.isLoading(profileID)}
-						refreshQuota={(profileID) => antigravityQuota.readQuota(profileID)}
-						onUseRequestHandled={(sequence) => { if (antigravityUseRequest?.sequence === sequence) antigravityUseRequest = null; }}
-						{showError}
-						{showNotice}
-					/>
+					{#await loadAntigravityProfiles()}
+						<WorkspaceViewStatus state="loading" />
+					{:then { default: AntigravityProfiles }}
+						<AntigravityProfiles
+							route={workspaceRoute.antigravityProfile}
+							profiles={antigravityProfileSummaries}
+							detectResult={antigravityDetectResult}
+							detectError={antigravityDetectError}
+							activeProfileID={antigravityActiveProfileID}
+							loadingProfiles={loadingAntigravityProfiles}
+							profileError={antigravityProfileError}
+							useRequest={antigravityUseRequest}
+							refreshDetect={refreshAntigravityDetect}
+							refreshProfiles={refreshAntigravityProfiles}
+							quotaForSummary={(summary) => antigravityQuota.quotaForSummary(summary)}
+							quotaCheckForSummary={(summary) => antigravityQuota.checkForSummary(summary)}
+							quotaLoading={(profileID) => antigravityQuota.isLoading(profileID)}
+							refreshQuota={(profileID) => antigravityQuota.readQuota(profileID)}
+							onUseRequestHandled={(sequence) => { if (antigravityUseRequest?.sequence === sequence) antigravityUseRequest = null; }}
+							{showError}
+							{showNotice}
+						/>
+					{:catch}
+						<WorkspaceViewStatus state="error" />
+					{/await}
 				{:else if workspaceRoute.view === "claude-code-profiles"}
-					<ClaudeCodeProfiles
-						route={workspaceRoute.claudeCodeProfile}
-						profiles={claudeCodeProfileSummaries}
-						detectResult={claudeCodeDetectResult}
-						detectError={claudeCodeDetectError}
-						activeProfileID={claudeCodeActiveProfileID}
-						loadingProfiles={loadingClaudeCodeProfiles}
-						profileError={claudeCodeProfileError}
-						useRequest={claudeCodeUseRequest}
-						refreshDetect={refreshClaudeCodeDetect}
-						authorizeKeychain={authorizeClaudeCodeKeychain}
-						refreshProfiles={refreshClaudeCodeProfiles}
-						onUseRequestHandled={(sequence) => { if (claudeCodeUseRequest?.sequence === sequence) claudeCodeUseRequest = null; }}
-						{showError}
-						{showNotice}
-					/>
+					{#await loadClaudeCodeProfiles()}
+						<WorkspaceViewStatus state="loading" />
+					{:then { default: ClaudeCodeProfiles }}
+						<ClaudeCodeProfiles
+							route={workspaceRoute.claudeCodeProfile}
+							profiles={claudeCodeProfileSummaries}
+							detectResult={claudeCodeDetectResult}
+							detectError={claudeCodeDetectError}
+							activeProfileID={claudeCodeActiveProfileID}
+							loadingProfiles={loadingClaudeCodeProfiles}
+							profileError={claudeCodeProfileError}
+							useRequest={claudeCodeUseRequest}
+							refreshDetect={refreshClaudeCodeDetect}
+							authorizeKeychain={authorizeClaudeCodeKeychain}
+							refreshProfiles={refreshClaudeCodeProfiles}
+							onUseRequestHandled={(sequence) => { if (claudeCodeUseRequest?.sequence === sequence) claudeCodeUseRequest = null; }}
+							{showError}
+							{showNotice}
+						/>
+					{:catch}
+						<WorkspaceViewStatus state="error" />
+					{/await}
 				{:else if workspaceRoute.view === "usage"}
-					<UsagePage {showError} />
+					{#await loadUsagePage()}
+						<WorkspaceViewStatus state="loading" />
+					{:then { default: UsagePage }}
+						<UsagePage {showError} />
+					{:catch}
+						<WorkspaceViewStatus state="error" />
+					{/await}
 				{:else if workspaceRoute.view === "codex-settings"}
-					<CodexSettings />
+					{#await loadCodexSettings()}
+						<WorkspaceViewStatus state="loading" />
+					{:then { default: CodexSettings }}
+						<CodexSettings />
+					{:catch}
+						<WorkspaceViewStatus state="error" />
+					{/await}
 				{:else if workspaceRoute.view === "settings"}
-					<GlobalSettings
-						section={globalSettingsTab}
-						language={languagePreference}
-						{appearance}
-						{languageBusy}
-						{appearanceBusy}
-						{updateStatus}
-						{updateBusy}
-						onLanguageChange={changeLanguage}
-						onAppearanceChange={changeAppearance}
-						onChannelChange={changeUpdateChannel}
-						onAutomaticChange={changeAutomaticUpdates}
-						onCheckForUpdates={checkForUpdates}
-						onRestart={restartWithUpdate}
-						{automaticBackups}
-						databaseHealthy={dashboard?.status.schema_healthy ?? false}
-						onAutomaticBackupsChange={(enabled) => { automaticBackups = enabled; }}
-					/>
+					{#await loadGlobalSettings()}
+						<WorkspaceViewStatus state="loading" />
+					{:then { default: GlobalSettings }}
+						<GlobalSettings
+							section={globalSettingsTab}
+							language={languagePreference}
+							{appearance}
+							{languageBusy}
+							{appearanceBusy}
+							{updateStatus}
+							{updateBusy}
+							onLanguageChange={changeLanguage}
+							onAppearanceChange={changeAppearance}
+							onChannelChange={changeUpdateChannel}
+							onAutomaticChange={changeAutomaticUpdates}
+							onCheckForUpdates={checkForUpdates}
+							onRestart={restartWithUpdate}
+							{automaticBackups}
+							databaseHealthy={dashboard?.status.schema_healthy ?? false}
+							onAutomaticBackupsChange={(enabled) => { automaticBackups = enabled; }}
+						/>
+					{:catch}
+						<WorkspaceViewStatus state="error" />
+					{/await}
 				{:else}
-					<DiagnosticsPage
-						doctor={doctorResult}
-						loading={actionBusy === "doctor"}
-						error={doctorError || dashboardError}
-						{actionBusy}
-						onRecheck={runDoctor}
-						onRepair={repairLock}
-						onRetryCleanup={retryRecoveryCleanup}
-						onRecover={recoverOperation}
-					/>
+					{#await loadDiagnosticsPage()}
+						<WorkspaceViewStatus state="loading" />
+					{:then { default: DiagnosticsPage }}
+						<DiagnosticsPage
+							doctor={doctorResult}
+							loading={actionBusy === "doctor"}
+							error={doctorError || dashboardError}
+							{actionBusy}
+							onRecheck={runDoctor}
+							onRepair={repairLock}
+							onRetryCleanup={retryRecoveryCleanup}
+							onRecover={recoverOperation}
+						/>
+					{:catch}
+						<WorkspaceViewStatus state="error" />
+					{/await}
 				{/if}
 			</div>
 		</Sidebar.Inset>

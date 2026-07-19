@@ -15,10 +15,16 @@ GOLANGCI_LINT ?= golangci-lint
 WAILS3 ?= wails3
 GOLANGCI_LINT_VERSION := v2.12.2
 WAILS3_VERSION := v3.0.0-alpha2.115
+GOVULNCHECK_VERSION := v1.6.0
+ACTIONLINT_VERSION := v1.7.12
 CI_GOLANGCI_LINT_DIR := $(TOOLS_DIR)/golangci-lint/$(GOLANGCI_LINT_VERSION)
 CI_GOLANGCI_LINT := $(CI_GOLANGCI_LINT_DIR)/golangci-lint
 CI_WAILS3_DIR := $(TOOLS_DIR)/wails3/$(WAILS3_VERSION)
 CI_WAILS3 := $(CI_WAILS3_DIR)/wails3
+GOVULNCHECK_DIR := $(TOOLS_DIR)/govulncheck/$(GOVULNCHECK_VERSION)
+GOVULNCHECK := $(GOVULNCHECK_DIR)/govulncheck
+ACTIONLINT_DIR := $(TOOLS_DIR)/actionlint/$(ACTIONLINT_VERSION)
+ACTIONLINT := $(ACTIONLINT_DIR)/actionlint
 DESKTOP_GOOS ?= $(or $(GOOS),$(shell go env GOOS))
 DESKTOP_GOARCH ?= $(or $(GOARCH),$(shell go env GOARCH))
 DESKTOP_GO_ENV := GOOS=$(DESKTOP_GOOS) GOARCH=$(DESKTOP_GOARCH)
@@ -33,7 +39,7 @@ SIGN_IDENTITY ?=
 RELEASE_KEYCHAIN ?=
 RELEASES_DIR ?= $(CURDIR)/.task/releases
 
-.PHONY: fmt vet lint lint-core lint-desktop test build core-boundary core-check check clean desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-build release-github-check release-build release-build-macos release-assemble release-draft verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-check ci-core-check ci-desktop-check ci-release-build-macos ci-release-assemble ci-release-draft
+.PHONY: fmt vet lint lint-core lint-desktop test build core-boundary core-check security-check check clean desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-build release-github-check release-build release-build-macos release-assemble release-draft verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-check ci-core-check ci-desktop-check ci-security-check ci-release-build-macos ci-release-assemble ci-release-draft
 
 fmt:
 	$(GOLANGCI_LINT) fmt $(GO_PKGS)
@@ -62,7 +68,13 @@ core-boundary:
 
 core-check: lint-core core-boundary test build
 
-check: core-check desktop-check docs-check
+security-check: $(GOVULNCHECK) $(ACTIONLINT)
+	$(GOVULNCHECK) ./...
+	$(ACTIONLINT) -no-color -shellcheck= -pyflakes=
+	npm --prefix $(DESKTOP_FRONTEND) audit --audit-level=high
+	npm --prefix $(DOCS_DIR) audit --audit-level=high
+
+check: core-check desktop-check docs-check security-check
 
 desktop-bindings:
 	$(WAILS3) task common:bindings
@@ -152,6 +164,14 @@ $(CI_WAILS3):
 	mkdir -p $(CI_WAILS3_DIR)
 	GOBIN=$(abspath $(CI_WAILS3_DIR)) go install github.com/wailsapp/wails/v3/cmd/wails3@$(WAILS3_VERSION)
 
+$(GOVULNCHECK):
+	mkdir -p $(GOVULNCHECK_DIR)
+	GOBIN=$(abspath $(GOVULNCHECK_DIR)) go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+
+$(ACTIONLINT):
+	mkdir -p $(ACTIONLINT_DIR)
+	GOBIN=$(abspath $(ACTIONLINT_DIR)) go install github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
+
 ci-check: $(CI_GOLANGCI_LINT) $(CI_WAILS3)
 	$(MAKE) check GOLANGCI_LINT=$(abspath $(CI_GOLANGCI_LINT)) WAILS3=$(abspath $(CI_WAILS3))
 
@@ -160,6 +180,9 @@ ci-core-check: $(CI_GOLANGCI_LINT)
 
 ci-desktop-check: $(CI_GOLANGCI_LINT) $(CI_WAILS3)
 	$(MAKE) desktop-check GOLANGCI_LINT=$(abspath $(CI_GOLANGCI_LINT)) WAILS3=$(abspath $(CI_WAILS3))
+
+ci-security-check:
+	$(MAKE) security-check
 
 ci-release-build-macos: export PROFILEDECK_RELEASE_SIGN_IDENTITY := $(or $(PROFILEDECK_RELEASE_SIGN_IDENTITY),$(SIGN_IDENTITY))
 ci-release-build-macos: $(CI_WAILS3)

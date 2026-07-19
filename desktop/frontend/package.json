@@ -7,13 +7,13 @@
     "dev": "vite",
     "build:dev": "vite build --minify false --mode development",
     "build": "vite build --mode production",
-    "postbuild": "node ./scripts/ensure-dist-placeholder.cjs",
+    "postbuild": "node ./scripts/check-build-output.mjs && node ./scripts/ensure-dist-placeholder.cjs",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test:unit": "node --test ./tests/*.test.mjs",
+    "test:unit": "vitest run",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@wailsio/runtime": "latest",
+    "@wailsio/runtime": "3.0.0-alpha.97",
     "svelte-i18n": "^4.0.1",
     "svelte-spa-router": "^5.1.1"
   },
@@ -23,9 +23,13 @@
     "@lucide/svelte": "^1.23.0",
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@tailwindcss/vite": "^4.3.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/svelte": "^5.4.2",
+    "@testing-library/user-event": "^14.6.1",
     "@tsconfig/svelte": "^5.0.8",
     "bits-ui": "^2.18.1",
     "clsx": "^2.1.1",
+    "jsdom": "^29.1.1",
     "mode-watcher": "^1.1.0",
     "shadcn-svelte": "^1.3.0",
     "svelte": "^5.46.4",
@@ -37,7 +41,8 @@
     "tslib": "^2.6.2",
     "tw-animate-css": "^1.4.0",
     "typescript": "^5.2.2",
-    "vite": "^8.0.5"
+    "vite": "^8.0.5",
+    "vitest": "^4.1.10"
   },
   "overrides": {
     "svelte-i18n": {

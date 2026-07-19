@@ -12,6 +12,11 @@ const messages = {
 			diagnostics: "Diagnostics",
 			settings: "Settings",
 		},
+		workspaceView: {
+			loadingPage: "Loading page",
+			unavailableTitle: "Unable to open this page",
+			unavailableDescription: "Close and reopen ProfileDeck, then try again.",
+		},
 		status: {
 			current: "Current",
 			warning: "Warning",
@@ -984,6 +989,11 @@ const messages = {
 			agents: "Agents",
 			diagnostics: "诊断",
 			settings: "设置",
+		},
+		workspaceView: {
+			loadingPage: "正在加载页面",
+			unavailableTitle: "无法打开此页面",
+			unavailableDescription: "请关闭并重新打开 ProfileDeck，然后重试。",
 		},
 		status: {
 			current: "当前",

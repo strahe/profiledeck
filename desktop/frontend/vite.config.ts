@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 
 const appIconAssets = resolve('../../build/appicon.icon/Assets');
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       $lib: resolve('./src/lib')
@@ -21,6 +21,7 @@ export default defineConfig({
     }
   },
   build: {
+    manifest: mode === 'production',
     rollupOptions: {
       output: {
         entryFileNames: 'assets/[name]-[hash].js',
@@ -30,4 +31,4 @@ export default defineConfig({
     }
   },
   plugins: [tailwindcss(), svelte(), wails('./bindings')]
-});
+}));
