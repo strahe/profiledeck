@@ -21,6 +21,18 @@ profiledeck doctor repair-lock --yes
 
 Do not repair a lock merely because a switch is taking longer than expected. ProfileDeck refuses recovery while the switch lock is held or when it cannot recognize every affected target safely.
 
+## Retry recovery cleanup
+
+ProfileDeck normally removes temporary operation recovery files after a switch, recovery, or application restore. If that cleanup cannot finish, Diagnostics shows **Temporary recovery files need cleanup**. Saved data, Doctor, and application backups remain available, but Profile switching and application restore pause until cleanup succeeds.
+
+Use **Retry cleanup** in Diagnostics, or run:
+
+```bash
+profiledeck doctor retry-cleanup --yes
+```
+
+Cleanup removes only temporary operation recovery files that do not belong to an unresolved switch. It does not change any tool sign-in or setting. Close other ProfileDeck windows if the retry reports that another operation is running. If the warning remains, keep the data directory private and retry after resolving the reported filesystem problem.
+
 ## Resolve an unfinished switch
 
 Diagnostics may offer one of two actions:
@@ -77,5 +89,7 @@ profiledeck backup restore --file <private-file> --yes
 ProfileDeck verifies the encrypted archive and database before replacing current application data. When the current database is healthy, it first creates an automatic safety backup. A damaged current database can be replaced after confirmation without that safety backup.
 
 Restore clears every current-Profile marker and closes unresolved operations so restored history cannot be mistaken for current external tool state. It does not change any tool-owned file or system login and does not apply a Profile. Desktop restarts after success; from the CLI, restart ProfileDeck and explicitly switch to the Profile you want. CLI restore is refused while Desktop or another ProfileDeck process is using the application data.
+
+After restore commits, ProfileDeck removes obsolete operation recovery files. If that cleanup cannot finish, the restored data remains active and Desktop retries during restart. Switching and another application restore stay paused until cleanup succeeds.
 
 If ProfileDeck cannot open its database at startup, the Desktop recovery screen still lets you import the recovery key, list available backups, and restore one.

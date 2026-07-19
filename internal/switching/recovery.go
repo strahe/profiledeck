@@ -104,6 +104,9 @@ func (service *Service) RecoverOperation(ctx context.Context, req RecoverOperati
 		return RecoverOperationResult{}, err
 	}
 	defer lock.Release()
+	if err := service.reconcileRecoveryCleanupLocked(ctx, db); err != nil {
+		return RecoverOperationResult{}, err
+	}
 	operation, err := db.GetOperation(ctx, operationID)
 	if errors.Is(err, store.ErrNotFound) {
 		return RecoverOperationResult{}, apperror.New(apperror.RecoveryUnsupported, "switch operation not found").WithDetail("operation_id", operationID)
@@ -113,10 +116,10 @@ func (service *Service) RecoverOperation(ctx context.Context, req RecoverOperati
 	}
 	assessment := service.inspectRecoveryFromOperation(ctx, db, service.paths, operation, false)
 	if assessment.Inspection.Status == RecoveryStatusClosable {
-		if err := db.ResolveOperation(ctx, operationID, assessment.ResolutionKind); err != nil {
+		if err := db.ResolveSwitchOperationForCleanup(ctx, operationID, assessment.ResolutionKind); err != nil {
 			return RecoverOperationResult{}, apperror.Wrap(apperror.OperationUpdateFailed, "failed to close incomplete switch operation", err)
 		}
-		cleanupCompleted, _ := removeOperationRecoveryPoint(service.paths, operationID)
+		cleanupResult, cleanupErr := service.cleanup.ReconcileLocked(ctx, db)
 		return RecoverOperationResult{
 			SourceOperationID:        operationID,
 			Action:                   RecoveryActionClose,
@@ -124,7 +127,7 @@ func (service *Service) RecoverOperation(ctx context.Context, req RecoverOperati
 			ProviderID:               assessment.Source.Metadata.ProviderID,
 			ProfileID:                assessment.Source.Metadata.ProfileID,
 			RestoredProfileID:        restoredProfileID(assessment.Source.Metadata.PreviousActive),
-			RecoveryCleanupCompleted: cleanupCompleted,
+			RecoveryCleanupCompleted: cleanupErr == nil && cleanupResult.RecoveryCleanupCompleted,
 		}, nil
 	}
 	if assessment.Inspection.Status != RecoveryStatusRecoverable {
@@ -171,7 +174,7 @@ func (service *Service) RecoverOperation(ctx context.Context, req RecoverOperati
 	}); err != nil {
 		return RecoverOperationResult{}, failRecoveryOperation(ctx, db, recoveryOperationID, appliedMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to complete recovery operation", err))
 	}
-	cleanupCompleted, _ := removeOperationRecoveryPoint(service.paths, source.Operation.ID)
+	cleanupResult, cleanupErr := service.cleanup.ReconcileLocked(ctx, db)
 	return RecoverOperationResult{
 		SourceOperationID:        source.Operation.ID,
 		RecoveryOperationID:      recoveryOperationID,
@@ -181,7 +184,7 @@ func (service *Service) RecoverOperation(ctx context.Context, req RecoverOperati
 		ProfileID:                source.Metadata.ProfileID,
 		RestoredProfileID:        restoredProfileID(source.Metadata.PreviousActive),
 		Counts:                   counts,
-		RecoveryCleanupCompleted: cleanupCompleted,
+		RecoveryCleanupCompleted: cleanupErr == nil && cleanupResult.RecoveryCleanupCompleted,
 	}, nil
 }
 
@@ -342,13 +345,6 @@ func newRecoveryOperationID(now time.Time) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("recovery-%d-%s", now.UnixMilli(), hex.EncodeToString(randomBytes)), nil
-}
-
-func removeOperationRecoveryPoint(paths runtime.Paths, operationID string) (bool, error) {
-	if err := transaction.RemoveRecoveryPoint(paths.Recovery, operationID); err != nil {
-		return false, apperror.New(apperror.BackupFailed, "operation recovery files could not be removed").WithDetail("operation_id", operationID)
-	}
-	return true, nil
 }
 
 func decodeSwitchOperationMetadata(raw string, metadata *switchOperationMetadata) error {

@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -714,6 +715,70 @@ func TestRestoreCanReplaceDamagedCurrentDatabaseWithoutSafetyBackup(t *testing.T
 	setting, err := db.GetSetting(ctx, "restore.value")
 	if err != nil || setting.ValueJSON != `"recoverable"` {
 		t.Fatalf("restored setting = %#v, err = %v", setting, err)
+	}
+}
+
+func TestCommittedRestoreKeepsCleanupRequirementAndBlocksSecondRestore(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("symlink setup is platform-specific")
+	}
+	ctx := context.Background()
+	service, paths, _ := newTestService(t)
+	setTestSetting(t, paths, "restore.value", `"recoverable"`)
+	created, err := service.Create(ctx, CreateRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := service.PreviewRestore(ctx, RestoreSource{BackupID: created.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeDatabaseFiles(paths.Database)
+	if err := os.WriteFile(paths.Database, []byte("damaged database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	sentinel := filepath.Join(outside, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, paths.Recovery); err != nil {
+		t.Fatal(err)
+	}
+	preview, err = service.PreviewRestore(ctx, RestoreSource{BackupID: created.ID})
+	if err != nil || preview.CurrentDatabaseHealthy {
+		t.Fatalf("damaged preview = %#v, %v", preview, err)
+	}
+	request := RestoreRequest{
+		Source: RestoreSource{BackupID: created.ID}, ExpectedFingerprint: preview.Fingerprint, Confirm: true,
+	}
+	result, err := service.Restore(ctx, request)
+	if err != nil {
+		t.Fatalf("first Restore() error = %v", err)
+	}
+	if result.RecoveryCleanupCompleted || !result.RestartRequired || !result.SafetyBackupSkipped {
+		t.Fatalf("first Restore() = %#v", result)
+	}
+	db := openHealthyStore(t, paths)
+	required, stateErr := db.RecoveryCleanupRequired(ctx)
+	_ = db.Close()
+	if stateErr != nil || !required {
+		t.Fatalf("restored cleanup requirement = %t, %v", required, stateErr)
+	}
+
+	_, err = service.Restore(ctx, request)
+	assertAppErrorCode(t, err, apperror.OperationRecoveryCleanupRequired)
+	list, err := service.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, backup := range list.Backups {
+		if backup.Kind == KindAutomatic {
+			t.Fatalf("blocked second restore created safety backup %#v", backup)
+		}
+	}
+	if raw, err := os.ReadFile(sentinel); err != nil || string(raw) != "outside" {
+		t.Fatalf("recovery symlink target changed: %q, %v", raw, err)
 	}
 }
 

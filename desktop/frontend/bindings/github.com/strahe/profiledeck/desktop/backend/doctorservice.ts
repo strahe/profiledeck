@@ -10,6 +10,9 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 import * as doctor$0 from "../../internal/doctor/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as recoverycleanup$0 from "../../internal/recoverycleanup/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as switching$0 from "../../internal/switching/models.js";
 
 export function InspectRecovery(operationID: string): $CancellablePromise<switching$0.RecoveryInspection> {
@@ -22,6 +25,10 @@ export function RecoverOperation(operationID: string, confirm: boolean): $Cancel
 
 export function RepairLock(confirm: boolean): $CancellablePromise<doctor$0.DoctorRepairLockResult> {
     return $Call.ByID(19841452, confirm);
+}
+
+export function RetryRecoveryCleanup(confirm: boolean): $CancellablePromise<recoverycleanup$0.RetryRecoveryCleanupResult> {
+    return $Call.ByID(2318362605, confirm);
 }
 
 export function Run(): $CancellablePromise<doctor$0.DoctorResult> {

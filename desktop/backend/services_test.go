@@ -428,6 +428,61 @@ func TestServicesNotifyDesktopChanges(t *testing.T) {
 	}
 }
 
+func TestRecoveryCleanupRetryNotifiesAndRefreshesDashboardState(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir}, nil)
+	if _, err := services.App.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	orphan := filepath.Join(configDir, "profiledeck", "recovery", "orphan")
+	if err := os.WriteFile(orphan, []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	events := []DesktopChangeEvent{}
+	services.SubscribeChanges(func(event DesktopChangeEvent) { events = append(events, event) })
+	result, err := services.Doctor.RetryRecoveryCleanup(ctx, true)
+	if err != nil || !result.RecoveryCleanupCompleted {
+		t.Fatalf("RetryRecoveryCleanup() = %#v, %v", result, err)
+	}
+	if len(events) != 1 || events[0].Kind != DesktopChangeRecoveryCleanupChanged ||
+		events[0].Status != DesktopChangeStatusSuccess {
+		t.Fatalf("cleanup events = %#v", events)
+	}
+	dashboard, err := services.App.Dashboard(ctx)
+	if err != nil || dashboard.Status.OperationRecoveryCleanupRequired {
+		t.Fatalf("Dashboard() = %#v, %v", dashboard.Status, err)
+	}
+}
+
+func TestRecoveryCleanupRetryFailureNotifiesRestrictedState(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir}, nil)
+	if _, err := services.App.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recoveryRoot := filepath.Join(configDir, "profiledeck", "recovery")
+	if err := os.Remove(recoveryRoot); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, recoveryRoot); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	events := []DesktopChangeEvent{}
+	services.SubscribeChanges(func(event DesktopChangeEvent) { events = append(events, event) })
+	_, err := services.Doctor.RetryRecoveryCleanup(ctx, true)
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.Code != apperror.OperationRecoveryCleanupRequired {
+		t.Fatalf("RetryRecoveryCleanup() error = %v", err)
+	}
+	if len(events) != 1 || events[0].Kind != DesktopChangeRecoveryCleanupChanged ||
+		events[0].Status != DesktopChangeStatusFailure {
+		t.Fatalf("cleanup failure events = %#v", events)
+	}
+}
+
 func TestApplicationBackupMutationsNotifyDesktopChanges(t *testing.T) {
 	keyring.MockInit()
 	t.Cleanup(keyring.MockInit)

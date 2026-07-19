@@ -347,6 +347,22 @@ func (l Lock) Release() {
 	releaseLocalLock(l.localKey, l.shared)
 }
 
+// ReleaseAndRemoveBestEffort is for coordination locks that have no durable
+// operation record. Hash-guarded removal cannot delete a replacement lock.
+func (l Lock) ReleaseAndRemoveBestEffort() {
+	if l.file == nil {
+		return
+	}
+	path := l.file.Name()
+	_, seekErr := l.file.Seek(0, 0)
+	digest := sha256.New()
+	_, readErr := io.Copy(digest, l.file)
+	l.Release()
+	if seekErr == nil && readErr == nil {
+		_ = RemoveStaleLockFile(path, hex.EncodeToString(digest.Sum(nil)))
+	}
+}
+
 func localLockKey(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {

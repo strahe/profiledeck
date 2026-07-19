@@ -44,6 +44,8 @@ const (
 	UsageCostStatusPartial   = "partial"
 	UsageCostStatusUnknown   = "unknown"
 
+	recoveryCleanupStateKey = "recovery.cleanup_required"
+
 	maxProviderCredentialPayloadBytes = 16 * 1024 * 1024
 	maxProviderConfigSetPayloadBytes  = 16 * 1024 * 1024
 )
@@ -51,6 +53,7 @@ const (
 var (
 	ErrUnsupportedSchema       = errors.New("application database schema contains unknown migrations")
 	ErrInvalidMigrationHistory = errors.New("application database migration history is invalid")
+	ErrInvalidSystemState      = errors.New("application database system state is invalid")
 	ErrQuickCheckFailed        = errors.New("sqlite quick check failed")
 )
 
@@ -518,6 +521,55 @@ type Status struct {
 	FailedOperations  int
 }
 
+// Recovery cleanup is a global safety obligation. Keep its persistence behind
+// typed methods so user settings cannot clear or forge this gate.
+func (s *Store) RequireRecoveryCleanup(ctx context.Context) error {
+	if _, err := s.RecoveryCleanupRequired(ctx); err != nil {
+		return err
+	}
+	now := time.Now().UnixMilli()
+	_, err := s.executor().ExecContext(ctx, `
+		INSERT INTO system_state (key, value_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, 'true', ?, ?)
+		ON CONFLICT(key) DO UPDATE SET
+			value_json = 'true',
+			updated_at_unix_ms = excluded.updated_at_unix_ms
+	`, recoveryCleanupStateKey, now, now)
+	return err
+}
+
+func (s *Store) RecoveryCleanupRequired(ctx context.Context) (bool, error) {
+	rows, err := s.executor().QueryContext(ctx, `SELECT key, value_json FROM system_state ORDER BY key`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	required := false
+	for rows.Next() {
+		var key, valueJSON string
+		if err := rows.Scan(&key, &valueJSON); err != nil {
+			return false, err
+		}
+		var value bool
+		if key != recoveryCleanupStateKey || json.Unmarshal([]byte(valueJSON), &value) != nil || !value {
+			return false, ErrInvalidSystemState
+		}
+		required = true
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return required, nil
+}
+
+func (s *Store) ClearRecoveryCleanup(ctx context.Context) error {
+	if _, err := s.RecoveryCleanupRequired(ctx); err != nil {
+		return err
+	}
+	_, err := s.executor().ExecContext(ctx, `DELETE FROM system_state WHERE key = ?`, recoveryCleanupStateKey)
+	return err
+}
+
 type tableSpec struct {
 	name    string
 	columns []columnSpec
@@ -601,6 +653,16 @@ var initialTableSpecs = []tableSpec{
 			{name: "value_json", columnType: "TEXT", notNull: true},
 			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
 		},
+	},
+	{
+		name: "system_state",
+		columns: []columnSpec{
+			{name: "key", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "value_json", columnType: "TEXT", notNull: true},
+			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
+			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
+		},
+		checks: []string{"CHECK (json_valid(value_json))"},
 	},
 	{
 		name: "active_states",
@@ -2638,6 +2700,9 @@ func (s *Store) CompleteSwitchOperation(ctx context.Context, params CompleteSwit
 	if err != nil {
 		return err
 	}
+	if err := txStore.RequireRecoveryCleanup(ctx); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -2656,6 +2721,7 @@ func (s *Store) CompleteRecoveryOperation(ctx context.Context, params CompleteRe
 			_ = tx.Rollback()
 		}
 	}()
+	txStore := &Store{db: s.db, exec: tx, transactional: true}
 
 	now := time.Now().UnixMilli()
 	result, err := tx.ExecContext(
@@ -2729,6 +2795,9 @@ func (s *Store) CompleteRecoveryOperation(ctx context.Context, params CompleteRe
 			return err
 		}
 	}
+	if err := txStore.RequireRecoveryCleanup(ctx); err != nil {
+		return err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return err
@@ -2763,6 +2832,35 @@ func (s *Store) ResolveOperation(ctx context.Context, id, resolutionKind string)
 	return nil
 }
 
+func (s *Store) ResolveSwitchOperationForCleanup(ctx context.Context, id, resolutionKind string) error {
+	if strings.TrimSpace(resolutionKind) == "" {
+		return errors.New("operation resolution kind is required")
+	}
+	return s.WithTransaction(ctx, func(tx *Store) error {
+		now := time.Now().UnixMilli()
+		result, err := tx.executor().ExecContext(
+			ctx,
+			`UPDATE operations
+			SET resolution_kind = ?, resolved_at_unix_ms = ?, updated_at_unix_ms = ?
+			WHERE id = ? AND operation_type = ? AND status IN (?, ?) AND resolved_at_unix_ms = 0`,
+			resolutionKind,
+			now,
+			now,
+			id,
+			OperationTypeSwitch,
+			OperationStatusPending,
+			OperationStatusFailed,
+		)
+		if err != nil {
+			return err
+		}
+		if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+			return ErrNotFound
+		}
+		return tx.RequireRecoveryCleanup(ctx)
+	})
+}
+
 // PrepareForApplicationRestore severs runtime state that cannot be restored
 // without also mutating tool-owned targets.
 func (s *Store) PrepareForApplicationRestore(ctx context.Context) error {
@@ -2781,7 +2879,10 @@ func (s *Store) PrepareForApplicationRestore(ctx context.Context) error {
 			OperationStatusPending,
 			OperationStatusFailed,
 		)
-		return err
+		if err != nil {
+			return err
+		}
+		return tx.RequireRecoveryCleanup(ctx)
 	})
 }
 

@@ -12,9 +12,11 @@ import (
 
 	"github.com/strahe/profiledeck/internal/appbackup"
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/recoverycleanup"
 	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 	storemigrations "github.com/strahe/profiledeck/internal/store/migrations"
+	"github.com/strahe/profiledeck/internal/targetfs"
 )
 
 func TestInitializeCreatesRuntimeWithoutBackupAndIsIdempotent(t *testing.T) {
@@ -30,7 +32,7 @@ func TestInitializeCreatesRuntimeWithoutBackupAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
-	if !first.Initialized || !first.SchemaHealthy || first.MigrationsApplied != 3 {
+	if !first.Initialized || !first.SchemaHealthy || first.MigrationsApplied != 4 {
 		t.Fatalf("unexpected first initialization result: %#v", first)
 	}
 	if backups.calls != 0 {
@@ -72,6 +74,103 @@ func TestInitializeCreatesRuntimeWithoutBackupAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInitializeKeepsCleanupRestrictionNonfatalUntilRetrySucceeds(t *testing.T) {
+	ctx := context.Background()
+	runtimeService := newRuntimeService(t)
+	if err := runtimeService.EnsureDirectories(); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := targetfs.AcquireLock(runtimeService.Paths().Lock, "test-cleanup-blocker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup := recoverycleanup.NewService(runtimeService.Paths())
+	service := NewService(runtimeService, nil, nil, RecoveryCleanupCoordinator{Cleanup: cleanup})
+	result, err := service.Initialize(ctx)
+	if err != nil || !result.Initialized || !result.SchemaHealthy || !result.OperationRecoveryCleanupRequired {
+		t.Fatalf("Initialize() = %#v, %v", result, err)
+	}
+	lock.ReleaseAndRemoveBestEffort()
+
+	result, err = service.Initialize(ctx)
+	if err != nil || result.OperationRecoveryCleanupRequired {
+		t.Fatalf("Initialize() retry = %#v, %v", result, err)
+	}
+}
+
+func TestInitializeDoesNotHideSystemStateDamageFoundDuringCleanupRetry(t *testing.T) {
+	ctx := context.Background()
+	runtimeService := newRuntimeService(t)
+	cleanup := recoverycleanup.NewService(runtimeService.Paths())
+	if _, err := NewService(runtimeService, nil, nil, RecoveryCleanupCoordinator{Cleanup: cleanup}).Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeService.Paths().Recovery, "orphan"), []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	locks := sharedLockRunnerFunc(func(ctx context.Context, _ string, run func(context.Context) error) error {
+		execDatabaseStatements(t, runtimeService.Paths().Database, `
+			INSERT INTO system_state (key, value_json, created_at_unix_ms, updated_at_unix_ms)
+			VALUES ('future.unsupported_state', 'true', 1, 1)
+		`)
+		return run(ctx)
+	})
+
+	_, err := NewService(
+		runtimeService,
+		nil,
+		nil,
+		RecoveryCleanupCoordinator{Cleanup: cleanup, Locks: locks},
+	).Initialize(ctx)
+	assertAppErrorCode(t, err, apperror.StoreSchemaInvalid)
+}
+
+func TestInitializeReportsUnsafeRecoveryRootWithoutFollowingIt(t *testing.T) {
+	ctx := context.Background()
+	runtimeService := newRuntimeService(t)
+	if err := runtimeService.EnsureDirectories(); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	sentinel := filepath.Join(outside, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, runtimeService.Paths().Recovery); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	cleanup := recoverycleanup.NewService(runtimeService.Paths())
+	runtimeService.AttachRecoveryCleanup(cleanup)
+	result, err := NewService(runtimeService, nil, nil).Initialize(ctx)
+	if err != nil || !result.OperationRecoveryCleanupRequired {
+		t.Fatalf("Initialize() = %#v, %v", result, err)
+	}
+	status, err := runtimeService.Status(ctx)
+	if err != nil || !status.OperationRecoveryCleanupRequired {
+		t.Fatalf("Status() = %#v, %v", status, err)
+	}
+	if raw, err := os.ReadFile(sentinel); err != nil || string(raw) != "outside" {
+		t.Fatalf("outside recovery target changed: %q, %v", raw, err)
+	}
+}
+
+func TestStatusDetectsResidualRecoveryEntryWithoutStateKey(t *testing.T) {
+	ctx := context.Background()
+	runtimeService := newRuntimeService(t)
+	cleanup := recoverycleanup.NewService(runtimeService.Paths())
+	runtimeService.AttachRecoveryCleanup(cleanup)
+	if _, err := NewService(runtimeService, nil, nil).Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runtimeService.Paths().Recovery, "orphan"), []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, err := runtimeService.Status(ctx)
+	if err != nil || !status.OperationRecoveryCleanupRequired {
+		t.Fatalf("Status() = %#v, %v", status, err)
+	}
+}
+
 func TestInitializeBacksUpKnownOldBaselineBeforeMigrating(t *testing.T) {
 	ctx := context.Background()
 	runtimeService := newRuntimeService(t)
@@ -94,11 +193,11 @@ func TestInitializeBacksUpKnownOldBaselineBeforeMigrating(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upgrade old baseline: %v", err)
 	}
-	if result.MigrationsApplied != 2 || backups.calls != 1 {
+	if result.MigrationsApplied != 3 || backups.calls != 1 {
 		t.Fatalf("upgrade result = %#v, backups = %d", result, backups.calls)
 	}
 	snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
-	if len(snapshot.markers) != 3 || !snapshot.usageTable || snapshot.setting != `{"kept":true}` {
+	if len(snapshot.markers) != 4 || !snapshot.usageTable || snapshot.setting != `{"kept":true}` {
 		t.Fatalf("database after upgrade = %#v", snapshot)
 	}
 	if _, err := service.Initialize(ctx); err != nil || backups.calls != 1 {
@@ -193,7 +292,7 @@ func TestInitializeRejectsPostMigrationSchemaDriftAndKeepsBackup(t *testing.T) {
 		t.Fatalf("post-migration validation created %d backups", backups.calls)
 	}
 	snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
-	if len(snapshot.markers) != 3 {
+	if len(snapshot.markers) != 4 {
 		t.Fatalf("post-validation failure masked committed migration state: %#v", snapshot)
 	}
 }
@@ -230,6 +329,16 @@ type recordingBackupCreator struct {
 	inspect func(appbackup.CreateRequest)
 }
 
+type sharedLockRunnerFunc func(context.Context, string, func(context.Context) error) error
+
+func (run sharedLockRunnerFunc) RunWithSharedLock(
+	ctx context.Context,
+	owner string,
+	callback func(context.Context) error,
+) error {
+	return run(ctx, owner, callback)
+}
+
 func (creator *recordingBackupCreator) Create(
 	_ context.Context,
 	req appbackup.CreateRequest,
@@ -263,10 +372,11 @@ func createInitialBaseline(t *testing.T, ctx context.Context, runtimeService *ru
 		t.Fatalf("initialize fixture database: %v", err)
 	}
 	registered := storemigrations.Migrations.Sorted()
-	if len(registered) != 3 {
-		t.Fatalf("registered migrations = %d, want 3", len(registered))
+	if len(registered) != 4 {
+		t.Fatalf("registered migrations = %d, want 4", len(registered))
 	}
 	execDatabaseStatements(t, runtimeService.Paths().Database,
+		`DROP TABLE system_state`,
 		`DROP INDEX idx_usage_import_cursors_source`,
 		`DROP TABLE usage_import_cursors`,
 		`DROP INDEX idx_usage_events_provider_cost_model_id`,
@@ -284,7 +394,7 @@ func createInitialBaseline(t *testing.T, ctx context.Context, runtimeService *ru
 		`DROP INDEX idx_profile_targets_provider_id`,
 		`DROP INDEX idx_profile_targets_profile_id`,
 		`DROP TABLE profile_targets`,
-		`DELETE FROM bun_migrations WHERE name IN ('`+registered[1].Name+`', '`+registered[2].Name+`')`,
+		`DELETE FROM bun_migrations WHERE name IN ('`+registered[1].Name+`', '`+registered[2].Name+`', '`+registered[3].Name+`')`,
 	)
 }
 

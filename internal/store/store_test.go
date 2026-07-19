@@ -36,8 +36,8 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
-	if result.Applied != 3 {
-		t.Fatalf("expected 3 migrations to apply, got %d", result.Applied)
+	if result.Applied != 4 {
+		t.Fatalf("expected 4 migrations to apply, got %d", result.Applied)
 	}
 
 	for _, table := range []string{
@@ -54,6 +54,7 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 		"profile_targets",
 		"usage_events",
 		"usage_import_cursors",
+		"system_state",
 	} {
 		assertSQLiteObjectExists(t, ctx, db, "table", table)
 	}
@@ -521,8 +522,8 @@ func TestConcurrentMigrateIsIdempotent(t *testing.T) {
 	if err := db.db.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM bun_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("expected migration count query to succeed, got %v", err)
 	}
-	if migrationCount != 3 {
-		t.Fatalf("expected three migration rows after concurrent migration, got %d", migrationCount)
+	if migrationCount != 4 {
+		t.Fatalf("expected four migration rows after concurrent migration, got %d", migrationCount)
 	}
 }
 
@@ -573,8 +574,60 @@ func TestMigrateRetriesTransientSQLiteBusy(t *testing.T) {
 	if attempts != 2 {
 		t.Fatalf("Migrate() attempts = %d, want 2", attempts)
 	}
-	if result.Applied != 3 {
-		t.Fatalf("Migrate() applied = %d, want 3", result.Applied)
+	if result.Applied != 4 {
+		t.Fatalf("Migrate() applied = %d, want 4", result.Applied)
+	}
+}
+
+func TestSystemStateRegistryAcceptsOnlyTypedRecoveryCleanupKey(t *testing.T) {
+	ctx := context.Background()
+	db := migratedTestStore(t, ctx)
+	defer closeTestStore(t, db)
+
+	if required, err := db.RecoveryCleanupRequired(ctx); err != nil || required {
+		t.Fatalf("initial cleanup state = %t, %v", required, err)
+	}
+	if err := db.RequireRecoveryCleanup(ctx); err != nil {
+		t.Fatalf("RequireRecoveryCleanup() error = %v", err)
+	}
+	if required, err := db.RecoveryCleanupRequired(ctx); err != nil || !required {
+		t.Fatalf("required cleanup state = %t, %v", required, err)
+	}
+	if report, err := db.InspectIntegrity(ctx, IntegrityCurrentBaseline); err != nil || !report.Healthy {
+		t.Fatalf("registered state report = %#v, %v", report, err)
+	}
+	if err := db.ClearRecoveryCleanup(ctx); err != nil {
+		t.Fatalf("ClearRecoveryCleanup() error = %v", err)
+	}
+
+	if _, err := db.db.DB.ExecContext(ctx, `
+		INSERT INTO system_state (key, value_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES ('future.safety_state', 'true', 1, 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.RecoveryCleanupRequired(ctx); !errors.Is(err, ErrInvalidSystemState) {
+		t.Fatalf("RecoveryCleanupRequired() error = %v, want ErrInvalidSystemState", err)
+	}
+	assertIntegrityIssue(t, ctx, db, IntegrityIssueSystemState)
+	if _, err := db.db.DB.ExecContext(ctx, `DELETE FROM system_state`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.DB.ExecContext(ctx, `
+		INSERT INTO system_state (key, value_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, 'false', 1, 1)
+	`, recoveryCleanupStateKey); err != nil {
+		t.Fatal(err)
+	}
+	assertIntegrityIssue(t, ctx, db, IntegrityIssueSystemState)
+	if _, err := db.db.DB.ExecContext(ctx, `DELETE FROM system_state`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.DB.ExecContext(ctx, `
+		INSERT INTO system_state (key, value_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (NULL, 'true', 1, 1)
+	`); err == nil {
+		t.Fatal("system_state accepted a NULL key")
 	}
 }
 
@@ -1808,6 +1861,9 @@ func TestSwitchOperationLifecycle(t *testing.T) {
 	if configSet, err := db.GetProviderConfigSet(ctx, "config-a"); err != nil || configSet.PayloadText != configPayload {
 		t.Fatalf("expected config set update to commit with switch, got %#v err=%v", configSet, err)
 	}
+	if required, err := db.RecoveryCleanupRequired(ctx); err != nil || !required {
+		t.Fatalf("switch completion cleanup state = %t, %v", required, err)
+	}
 
 	if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
 		ID:           "switch-2",
@@ -1900,9 +1956,166 @@ func TestRecoveryOperationAtomicallyResolvesSourceAndRestoresActiveState(t *test
 	if activeState.ProfileID != "profile-a" || activeState.OperationID != "switch-previous" {
 		t.Fatalf("unexpected restored active state: %#v", activeState)
 	}
+	if required, err := db.RecoveryCleanupRequired(ctx); err != nil || !required {
+		t.Fatalf("recovery completion cleanup state = %t, %v", required, err)
+	}
 	incomplete, err := db.ListIncompleteOperations(ctx)
 	if err != nil || len(incomplete) != 0 {
 		t.Fatalf("resolved source remained incomplete: %#v error=%v", incomplete, err)
+	}
+}
+
+func TestSwitchCompletionRollsBackWhenCleanupRegistrationFails(t *testing.T) {
+	ctx := context.Background()
+	db := migratedTestStore(t, ctx)
+	defer closeTestStore(t, db)
+	if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
+		ID: "switch-rollback", ProfileID: "profile-a", MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.DB.ExecContext(ctx, `DROP TABLE system_state`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CompleteSwitchOperation(ctx, CompleteSwitchOperationParams{
+		ID: "switch-rollback", ProfileID: "profile-a", ProviderID: "provider-a", MetadataJSON: `{}`,
+	}); err == nil {
+		t.Fatal("CompleteSwitchOperation() succeeded without cleanup registration")
+	}
+	operation, err := db.GetOperation(ctx, "switch-rollback")
+	if err != nil || operation.Status != OperationStatusPending {
+		t.Fatalf("operation after rollback = %#v, %v", operation, err)
+	}
+	if _, err := db.GetActiveState(ctx, ActiveStateScopeProvider, "provider-a"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("active state committed without cleanup registration: %v", err)
+	}
+}
+
+func TestOtherCleanupRegistrationPointsRollBackAtomically(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("recovery completion", func(t *testing.T) {
+		db := migratedTestStore(t, ctx)
+		defer closeTestStore(t, db)
+		if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
+			ID: "switch-source", ProfileID: "profile-next", MetadataJSON: `{}`,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.CreatePendingRecoveryOperation(ctx, CreateRecoveryOperationParams{
+			ID: "recovery-attempt", ProfileID: "profile-next", MetadataJSON: `{}`,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.db.DB.ExecContext(ctx, `
+			INSERT INTO active_states (scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms)
+			VALUES (?, ?, ?, ?, 1)
+		`, ActiveStateScopeProvider, "provider-a", "profile-before", "switch-before"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.db.DB.ExecContext(ctx, `DROP TABLE system_state`); err != nil {
+			t.Fatal(err)
+		}
+
+		err := db.CompleteRecoveryOperation(ctx, CompleteRecoveryOperationParams{
+			ID: "recovery-attempt", SourceOperationID: "switch-source", ResolutionKind: "recovered_pre_switch",
+			ProfileID: "profile-restored", ProviderID: "provider-a",
+			RestoredActiveState: &RecoveryActiveStateParams{ProfileID: "profile-restored", OperationID: "switch-restored"},
+			MetadataJSON:        `{}`,
+		})
+		if err == nil {
+			t.Fatal("CompleteRecoveryOperation() succeeded without cleanup registration")
+		}
+		recovery, recoveryErr := db.GetOperation(ctx, "recovery-attempt")
+		source, sourceErr := db.GetOperation(ctx, "switch-source")
+		active, activeErr := db.GetActiveState(ctx, ActiveStateScopeProvider, "provider-a")
+		if recoveryErr != nil || recovery.Status != OperationStatusPending ||
+			sourceErr != nil || source.ResolvedAtUnixMS != 0 ||
+			activeErr != nil || active.ProfileID != "profile-before" || active.OperationID != "switch-before" {
+			t.Fatalf("recovery rollback = recovery %#v/%v source %#v/%v active %#v/%v", recovery, recoveryErr, source, sourceErr, active, activeErr)
+		}
+	})
+
+	t.Run("source closure", func(t *testing.T) {
+		db := migratedTestStore(t, ctx)
+		defer closeTestStore(t, db)
+		if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
+			ID: "switch-close", ProfileID: "profile-a", MetadataJSON: `{}`,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.db.DB.ExecContext(ctx, `DROP TABLE system_state`); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.ResolveSwitchOperationForCleanup(ctx, "switch-close", "closed_before_target_writes"); err == nil {
+			t.Fatal("ResolveSwitchOperationForCleanup() succeeded without cleanup registration")
+		}
+		operation, err := db.GetOperation(ctx, "switch-close")
+		if err != nil || operation.ResolvedAtUnixMS != 0 || operation.ResolutionKind != "" {
+			t.Fatalf("source closure rollback = %#v, %v", operation, err)
+		}
+	})
+
+	t.Run("application restore preparation", func(t *testing.T) {
+		db := migratedTestStore(t, ctx)
+		defer closeTestStore(t, db)
+		if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
+			ID: "switch-restore", ProfileID: "profile-a", MetadataJSON: `{}`,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.db.DB.ExecContext(ctx, `
+			INSERT INTO active_states (scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms)
+			VALUES (?, ?, ?, ?, 1)
+		`, ActiveStateScopeProvider, "provider-a", "profile-a", "switch-restore"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.db.DB.ExecContext(ctx, `DROP TABLE system_state`); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.PrepareForApplicationRestore(ctx); err == nil {
+			t.Fatal("PrepareForApplicationRestore() succeeded without cleanup registration")
+		}
+		operation, operationErr := db.GetOperation(ctx, "switch-restore")
+		active, activeErr := db.GetActiveState(ctx, ActiveStateScopeProvider, "provider-a")
+		if operationErr != nil || operation.ResolvedAtUnixMS != 0 ||
+			activeErr != nil || active.ProfileID != "profile-a" || active.OperationID != "switch-restore" {
+			t.Fatalf("restore preparation rollback = operation %#v/%v active %#v/%v", operation, operationErr, active, activeErr)
+		}
+	})
+}
+
+func TestCleanupRegistrationIsLimitedToDedicatedResolutionPaths(t *testing.T) {
+	ctx := context.Background()
+	db := migratedTestStore(t, ctx)
+	defer closeTestStore(t, db)
+	for _, id := range []string{"switch-generic", "switch-cleanup"} {
+		if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
+			ID: id, ProfileID: "profile-a", MetadataJSON: `{}`,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.ResolveOperation(ctx, "switch-generic", "generic_resolution"); err != nil {
+		t.Fatal(err)
+	}
+	if required, err := db.RecoveryCleanupRequired(ctx); err != nil || required {
+		t.Fatalf("generic resolution cleanup state = %t, %v", required, err)
+	}
+	if err := db.ResolveSwitchOperationForCleanup(ctx, "switch-cleanup", "closed_before_target_writes"); err != nil {
+		t.Fatal(err)
+	}
+	if required, err := db.RecoveryCleanupRequired(ctx); err != nil || !required {
+		t.Fatalf("dedicated resolution cleanup state = %t, %v", required, err)
+	}
+	if err := db.ClearRecoveryCleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PrepareForApplicationRestore(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if required, err := db.RecoveryCleanupRequired(ctx); err != nil || !required {
+		t.Fatalf("restore preparation cleanup state = %t, %v", required, err)
 	}
 }
 

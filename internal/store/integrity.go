@@ -15,6 +15,7 @@ const (
 	IntegrityIssueSchema      = "schema"
 	IntegrityIssueJSON        = "json"
 	IntegrityIssueReferences  = "references"
+	IntegrityIssueSystemState = "system_state"
 )
 
 type IntegrityScope string
@@ -53,6 +54,7 @@ type schemaContract struct {
 	triggers         []string
 	jsonQueries      []string
 	referenceQueries []string
+	stateQueries     []string
 }
 
 var (
@@ -158,6 +160,22 @@ var schemaContracts = []schemaContract{
 		jsonQueries: []string{
 			`SELECT COUNT(1) FROM usage_events WHERE NOT (` + jsonObjectExpression("metadata_json") + `)`,
 			`SELECT COUNT(1) FROM usage_import_cursors WHERE NOT (` + jsonObjectExpression("metadata_json") + `)`,
+		},
+	},
+	{
+		migrationKey: "system_state",
+		tables:       []string{"system_state"},
+		jsonQueries: []string{
+			`SELECT COUNT(1) FROM system_state WHERE json_valid(value_json) = 0`,
+		},
+		stateQueries: []string{
+			`SELECT COUNT(1) FROM system_state
+				WHERE key <> 'recovery.cleanup_required'
+					OR CASE
+						WHEN json_valid(value_json) = 0 THEN 1
+						WHEN json_type(value_json) = 'true' THEN 0
+						ELSE 1
+					END = 1`,
 		},
 	},
 }
@@ -351,6 +369,14 @@ func (s *Store) InspectIntegrity(ctx context.Context, scope IntegrityScope) (Int
 		return IntegrityReport{}, err
 	}
 	addIssue(IntegrityIssueReferences, referencesInvalid)
+
+	stateInvalid, err := s.contractQueryCount(ctx, contractCount, func(contract schemaContract) []string {
+		return contract.stateQueries
+	})
+	if err != nil {
+		return IntegrityReport{}, err
+	}
+	addIssue(IntegrityIssueSystemState, stateInvalid)
 	return report, nil
 }
 

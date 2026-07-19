@@ -15,6 +15,7 @@ import (
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/profiletarget"
+	"github.com/strahe/profiledeck/internal/recoverycleanup"
 	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/targetfs"
@@ -97,12 +98,23 @@ type RecoveryInspector func(context.Context, *store.Store, runtime.Paths, store.
 // safety-relevant even when their Desktop Agent is disabled.
 type SensitivePathLister func(context.Context, *store.Store) ([]string, error)
 
+type SharedLockRunner interface {
+	RunWithSharedLock(context.Context, string, func(context.Context) error) error
+}
+
+type RecoveryCleanupCoordinator struct {
+	Cleanup *recoverycleanup.Service
+	Locks   SharedLockRunner
+}
+
 type Service struct {
 	runtime           *runtime.Service
 	policy            agent.Policy
 	providerChecks    []ProviderCheck
 	recoveryInspector RecoveryInspector
 	sensitivePaths    SensitivePathLister
+	cleanup           *recoverycleanup.Service
+	locks             SharedLockRunner
 }
 
 func NewService(
@@ -111,12 +123,26 @@ func NewService(
 	providerChecks []ProviderCheck,
 	recoveryInspector RecoveryInspector,
 	sensitivePaths SensitivePathLister,
+	coordinators ...RecoveryCleanupCoordinator,
 ) *Service {
 	checks := append([]ProviderCheck(nil), providerChecks...)
-	return &Service{
+	service := &Service{
 		runtime: runtimeService, policy: policy, providerChecks: checks,
 		recoveryInspector: recoveryInspector, sensitivePaths: sensitivePaths,
 	}
+	if runtimeService != nil {
+		service.cleanup = recoverycleanup.NewService(runtimeService.Paths())
+		service.locks = directSharedLockRunner{path: runtimeService.Paths().Lock}
+	}
+	if len(coordinators) > 0 {
+		if coordinators[0].Cleanup != nil {
+			service.cleanup = coordinators[0].Cleanup
+		}
+		if coordinators[0].Locks != nil {
+			service.locks = coordinators[0].Locks
+		}
+	}
+	return service
 }
 
 func (service *Service) runProviderChecks(ctx context.Context, dbState doctorDatabaseState) ([]Finding, error) {
@@ -181,6 +207,19 @@ func (service *Service) Run(ctx context.Context) (DoctorResult, error) {
 		defer dbState.db.Close()
 	}
 	result.Findings = append(result.Findings, service.inspectSensitivePathPermissions(ctx, paths, dbState)...)
+	if dbState.healthy && dbState.db != nil && service.cleanup != nil {
+		inspection, err := service.cleanup.Inspect(ctx, dbState.db)
+		if err != nil {
+			return DoctorResult{}, apperror.New(apperror.StoreStatusFailed, "application recovery state could not be inspected")
+		}
+		if inspection.CleanupRequired() {
+			result.Findings = append(result.Findings, Finding{
+				ID:      "operation_recovery_cleanup_required",
+				Level:   LevelError,
+				Message: "temporary recovery files still need cleanup",
+			})
+		}
+	}
 	providerFindings, err := service.runProviderChecks(ctx, dbState)
 	if err != nil {
 		return DoctorResult{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to run provider health checks", err)
@@ -191,6 +230,80 @@ func (service *Service) Run(ctx context.Context) (DoctorResult, error) {
 	result.Operations = service.doctorOperations(ctx, dbState, paths, operations, result.Lock)
 	result.OverallLevel = doctorOverallLevel(result)
 	return result, nil
+}
+
+func (service *Service) RetryRecoveryCleanup(ctx context.Context, confirm bool) (recoverycleanup.RetryRecoveryCleanupResult, error) {
+	if !confirm {
+		return recoverycleanup.RetryRecoveryCleanupResult{}, apperror.New(
+			apperror.ConfirmationRequired,
+			"retrying recovery cleanup requires confirmation",
+		)
+	}
+	if service == nil || service.runtime == nil || service.cleanup == nil || service.locks == nil {
+		return recoverycleanup.RetryRecoveryCleanupResult{}, apperror.New(
+			apperror.OperationRecoveryCleanupRequired,
+			"recovery cleanup is unavailable",
+		)
+	}
+	db, err := service.runtime.StoreFactory().OpenHealthy(ctx, false)
+	if err != nil {
+		return recoverycleanup.RetryRecoveryCleanupResult{}, err
+	}
+	defer db.Close()
+	var result recoverycleanup.RetryRecoveryCleanupResult
+	err = service.locks.RunWithSharedLock(ctx, "doctor-recovery-cleanup", func(ctx context.Context) error {
+		var cleanupErr error
+		result, cleanupErr = service.cleanup.ReconcileLocked(ctx, db)
+		return cleanupErr
+	})
+	if err != nil {
+		return recoverycleanup.RetryRecoveryCleanupResult{}, recoveryCleanupRetryError(err)
+	}
+	return result, nil
+}
+
+func recoveryCleanupRetryError(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	var appErr *apperror.Error
+	if errors.As(err, &appErr) {
+		switch appErr.Code {
+		case apperror.LockAcquireFailed:
+			return apperror.New(apperror.LockAcquireFailed, "another ProfileDeck operation is in progress")
+		case apperror.StoreSchemaInvalid:
+			return apperror.New(
+				apperror.StoreSchemaInvalid,
+				"ProfileDeck local data is not in a valid state; run profiledeck doctor or restore a known-good application backup",
+			)
+		case apperror.OperationRecoveryCleanupRequired:
+			return apperror.New(
+				apperror.OperationRecoveryCleanupRequired,
+				"recovery files still need cleanup before switching or restore can continue",
+			)
+		}
+	}
+	return apperror.New(
+		apperror.OperationRecoveryCleanupRequired,
+		"recovery files still need cleanup before switching or restore can continue",
+	)
+}
+
+type directSharedLockRunner struct {
+	path string
+}
+
+func (runner directSharedLockRunner) RunWithSharedLock(
+	ctx context.Context,
+	owner string,
+	run func(context.Context) error,
+) error {
+	lock, err := targetfs.AcquireLock(runner.path, owner)
+	if err != nil {
+		return apperror.New(apperror.LockAcquireFailed, "another ProfileDeck operation is in progress")
+	}
+	defer lock.ReleaseAndRemoveBestEffort()
+	return run(ctx)
 }
 
 func (service *Service) RepairLock(ctx context.Context, confirm bool) (DoctorRepairLockResult, error) {
@@ -335,6 +448,9 @@ func integrityFindings(report store.IntegrityReport) []Finding {
 		case store.IntegrityIssueReferences:
 			finding.ID = "database_references_invalid"
 			finding.Message = "local application data contains invalid references"
+		case store.IntegrityIssueSystemState:
+			finding.ID = "database_recovery_state_invalid"
+			finding.Message = "ProfileDeck could not verify its recovery safety state"
 		default:
 			continue
 		}

@@ -8,6 +8,7 @@ export interface InitResult {
     "initialized": boolean;
     "schema_healthy": boolean;
     "migrations_applied": number;
+    "operation_recovery_cleanup_required": boolean;
 }
 
 export interface StatusResult {
@@ -18,4 +19,5 @@ export interface StatusResult {
     "schema_healthy": boolean;
     "pending_operations": number;
     "failed_operations": number;
+    "operation_recovery_cleanup_required": boolean;
 }

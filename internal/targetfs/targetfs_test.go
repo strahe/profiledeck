@@ -425,6 +425,110 @@ func TestAtomicWriteRejectsTargetChangedDuringTempWrite(t *testing.T) {
 	}
 }
 
+func TestAtomicWriteRequiresParentSyncBeforeAndAfterRename(t *testing.T) {
+	ctx := context.Background()
+	targetPath := filepath.Join(t.TempDir(), "target.txt")
+	if err := os.WriteFile(targetPath, []byte("before\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expected := ExpectedTarget{
+		TargetID: "target-a", Path: targetPath, Exists: true, SHA256: sha256String("before\n"),
+	}
+
+	t.Run("pre-sync failure leaves target unchanged", func(t *testing.T) {
+		calls := 0
+		err := atomicWriteWithDirectorySync(
+			ctx, expected, strings.NewReader("after\n"), 0, false, sourceGuard{},
+			func(string) error {
+				calls++
+				return errors.New("pre-sync failed")
+			},
+		)
+		assertKind(t, err, KindWriteFailed)
+		if calls != 1 || readTestFile(t, targetPath) != "before\n" {
+			t.Fatalf("pre-sync failure calls=%d content=%q", calls, readTestFile(t, targetPath))
+		}
+	})
+
+	t.Run("post-sync failure reports changed target", func(t *testing.T) {
+		calls := 0
+		err := atomicWriteWithDirectorySync(
+			ctx, expected, strings.NewReader("after\n"), 0, false, sourceGuard{},
+			func(string) error {
+				calls++
+				if calls == 2 {
+					return errors.New("post-sync failed")
+				}
+				return nil
+			},
+		)
+		assertKind(t, err, KindWriteFailed)
+		if calls != 2 || readTestFile(t, targetPath) != "after\n" {
+			t.Fatalf("post-sync failure calls=%d content=%q", calls, readTestFile(t, targetPath))
+		}
+	})
+}
+
+func TestGuardedRemoveRequiresParentSyncBeforeAndAfterRemoval(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("pre-sync failure leaves target", func(t *testing.T) {
+		targetPath := filepath.Join(t.TempDir(), "target.txt")
+		if err := os.WriteFile(targetPath, []byte("managed\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		removed, err := guardedRemoveWithDirectorySync(ctx, GuardedRemoveRequest{
+			Expected: ExpectedTarget{TargetID: "target-a", Path: targetPath, Exists: true, SHA256: sha256String("managed\n")},
+		}, func(string) error { return errors.New("pre-sync failed") })
+		assertKind(t, err, KindWriteFailed)
+		if removed || readTestFile(t, targetPath) != "managed\n" {
+			t.Fatalf("pre-sync failure removed=%t", removed)
+		}
+	})
+
+	t.Run("target change during pre-sync is preserved", func(t *testing.T) {
+		targetPath := filepath.Join(t.TempDir(), "target.txt")
+		if err := os.WriteFile(targetPath, []byte("managed\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		removed, err := guardedRemoveWithDirectorySync(ctx, GuardedRemoveRequest{
+			Expected: ExpectedTarget{TargetID: "target-a", Path: targetPath, Exists: true, SHA256: sha256String("managed\n")},
+		}, func(string) error {
+			return os.WriteFile(targetPath, []byte("external\n"), 0o600)
+		})
+		assertKind(t, err, KindTargetChanged)
+		if removed || readTestFile(t, targetPath) != "external\n" {
+			t.Fatalf("concurrent target change removed=%t content=%q", removed, readTestFile(t, targetPath))
+		}
+	})
+
+	t.Run("post-sync failure reports completed removal", func(t *testing.T) {
+		targetPath := filepath.Join(t.TempDir(), "target.txt")
+		if err := os.WriteFile(targetPath, []byte("managed\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		calls := 0
+		removed, err := guardedRemoveWithDirectorySync(ctx, GuardedRemoveRequest{
+			Expected: ExpectedTarget{TargetID: "target-a", Path: targetPath, Exists: true, SHA256: sha256String("managed\n")},
+		}, func(string) error {
+			calls++
+			if calls == 2 {
+				return errors.New("post-sync failed")
+			}
+			return nil
+		})
+		assertKind(t, err, KindWriteFailed)
+		if !removed || !errors.Is(statError(targetPath), os.ErrNotExist) {
+			t.Fatalf("post-sync failure removed=%t stat=%v", removed, statError(targetPath))
+		}
+	})
+}
+
+func statError(path string) error {
+	_, err := os.Stat(path)
+	return err
+}
+
 func TestAtomicWriteFileRejectsSourceHashMismatch(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

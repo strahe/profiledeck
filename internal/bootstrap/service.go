@@ -8,8 +8,10 @@ import (
 
 	"github.com/strahe/profiledeck/internal/appbackup"
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/recoverycleanup"
 	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
+	"github.com/strahe/profiledeck/internal/targetfs"
 )
 
 type BackupCreator interface {
@@ -20,10 +22,34 @@ type Service struct {
 	runtime *runtime.Service
 	backups BackupCreator
 	lease   *runtime.DataLease
+	cleanup *recoverycleanup.Service
+	locks   SharedLockRunner
 }
 
-func NewService(runtimeService *runtime.Service, backups BackupCreator, lease *runtime.DataLease) *Service {
-	return &Service{runtime: runtimeService, backups: backups, lease: lease}
+type SharedLockRunner interface {
+	RunWithSharedLock(context.Context, string, func(context.Context) error) error
+}
+
+type RecoveryCleanupCoordinator struct {
+	Cleanup *recoverycleanup.Service
+	Locks   SharedLockRunner
+}
+
+func NewService(runtimeService *runtime.Service, backups BackupCreator, lease *runtime.DataLease, coordinators ...RecoveryCleanupCoordinator) *Service {
+	service := &Service{runtime: runtimeService, backups: backups, lease: lease}
+	if runtimeService != nil {
+		service.cleanup = recoverycleanup.NewService(runtimeService.Paths())
+		service.locks = directLockRunner{path: runtimeService.Paths().Lock}
+	}
+	if len(coordinators) > 0 {
+		if coordinators[0].Cleanup != nil {
+			service.cleanup = coordinators[0].Cleanup
+		}
+		if coordinators[0].Locks != nil {
+			service.locks = coordinators[0].Locks
+		}
+	}
+	return service
 }
 
 func (service *Service) Initialize(ctx context.Context) (runtime.InitResult, error) {
@@ -55,8 +81,7 @@ func (service *Service) Initialize(ctx context.Context) (runtime.InitResult, err
 			return runtime.InitResult{}, databaseInspectionError(err)
 		}
 		if state.Current {
-			service.runtime.SecureDatabaseBestEffort()
-			return service.result(0), nil
+			return service.finishInitialization(ctx, 0)
 		}
 	}
 
@@ -119,16 +144,64 @@ func (service *Service) Initialize(ctx context.Context) (runtime.InitResult, err
 	if err != nil {
 		return runtime.InitResult{}, err
 	}
-	service.runtime.SecureDatabaseBestEffort()
-	return service.result(migrationResult.Applied), nil
+	return service.finishInitialization(ctx, migrationResult.Applied)
 }
 
-func (service *Service) result(applied int) runtime.InitResult {
+func (service *Service) finishInitialization(ctx context.Context, applied int) (runtime.InitResult, error) {
+	service.runtime.SecureDatabaseBestEffort()
+	cleanupRequired := false
+	if service.cleanup != nil && service.locks != nil {
+		db, err := service.runtime.StoreFactory().OpenHealthy(ctx, false)
+		if err != nil {
+			return runtime.InitResult{}, err
+		}
+		defer db.Close()
+		inspection, err := service.cleanup.Inspect(ctx, db)
+		if err != nil {
+			if errors.Is(err, store.ErrInvalidSystemState) {
+				return runtime.InitResult{}, invalidSchemaError()
+			}
+			return runtime.InitResult{}, apperror.New(apperror.StoreStatusFailed, "application recovery state could not be inspected")
+		}
+		cleanupRequired = inspection.CleanupRequired()
+		if cleanupRequired {
+			err = service.locks.RunWithSharedLock(ctx, "startup-recovery-cleanup", func(ctx context.Context) error {
+				_, cleanupErr := service.cleanup.ReconcileLocked(ctx, db)
+				return cleanupErr
+			})
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return runtime.InitResult{}, err
+			}
+			var appErr *apperror.Error
+			if errors.As(err, &appErr) && appErr.Code == apperror.StoreSchemaInvalid {
+				return runtime.InitResult{}, invalidSchemaError()
+			}
+			cleanupRequired = err != nil
+		}
+	}
+	return service.result(applied, cleanupRequired), nil
+}
+
+func (service *Service) result(applied int, cleanupRequired bool) runtime.InitResult {
 	paths := service.runtime.Paths()
 	return runtime.InitResult{
 		ConfigDir: service.runtime.ConfigDir(), RuntimeRoot: paths.Root, DatabasePath: paths.Database,
 		Initialized: true, SchemaHealthy: true, MigrationsApplied: applied,
+		OperationRecoveryCleanupRequired: cleanupRequired,
 	}
+}
+
+type directLockRunner struct {
+	path string
+}
+
+func (runner directLockRunner) RunWithSharedLock(ctx context.Context, owner string, run func(context.Context) error) error {
+	lock, err := targetfs.AcquireLock(runner.path, owner)
+	if err != nil {
+		return apperror.New(apperror.LockAcquireFailed, "another ProfileDeck operation is in progress")
+	}
+	defer lock.ReleaseAndRemoveBestEffort()
+	return run(ctx)
 }
 
 func inspectDatabase(ctx context.Context, stores store.Factory) (store.MigrationState, error) {

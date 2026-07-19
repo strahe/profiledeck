@@ -92,12 +92,16 @@ func newInitCommand() *urfavecli.Command {
 
 			_, err = fmt.Fprintf(
 				w,
-				"ProfileDeck initialized\nconfig dir: %s\nruntime root: %s\ndatabase: %s\nschema: healthy\nmigrations applied: %d\n",
+				"ProfileDeck initialized\nconfig dir: %s\nruntime root: %s\ndatabase: %s\nschema: healthy\nmigrations applied: %d\ntemporary recovery cleanup: %s\n",
 				result.ConfigDir,
 				result.RuntimeRoot,
 				result.DatabasePath,
 				result.MigrationsApplied,
+				recoveryCleanupStatus(result.OperationRecoveryCleanupRequired),
 			)
+			if err == nil && result.OperationRecoveryCleanupRequired {
+				_, err = fmt.Fprintln(w, "next action: profiledeck doctor retry-cleanup --yes")
+			}
 			return err
 		},
 	}
@@ -134,7 +138,7 @@ func newStatusCommand() *urfavecli.Command {
 			}
 			_, err = fmt.Fprintf(
 				w,
-				"ProfileDeck status\nconfig dir: %s\nruntime root: %s\ndatabase: %s\ninitialized: %t\nschema: %s\npending operations: %d\nfailed operations: %d\n",
+				"ProfileDeck status\nconfig dir: %s\nruntime root: %s\ndatabase: %s\ninitialized: %t\nschema: %s\npending operations: %d\nfailed operations: %d\ntemporary recovery cleanup: %s\n",
 				result.ConfigDir,
 				result.RuntimeRoot,
 				result.DatabasePath,
@@ -142,10 +146,21 @@ func newStatusCommand() *urfavecli.Command {
 				schema,
 				result.PendingOperations,
 				result.FailedOperations,
+				recoveryCleanupStatus(result.OperationRecoveryCleanupRequired),
 			)
+			if err == nil && result.OperationRecoveryCleanupRequired {
+				_, err = fmt.Fprintln(w, "next action: profiledeck doctor retry-cleanup --yes")
+			}
 			return err
 		},
 	}
+}
+
+func recoveryCleanupStatus(required bool) string {
+	if required {
+		return "required"
+	}
+	return "complete"
 }
 
 func newVersionCommand(info app.Info) *urfavecli.Command {

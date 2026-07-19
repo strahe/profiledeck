@@ -3,6 +3,7 @@
 	import type { CancellablePromise } from "@wailsio/runtime";
 	import { push } from "svelte-spa-router";
 	import { _, locale } from "svelte-i18n";
+	import { toast } from "svelte-sonner";
 	import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
 	import CheckIcon from "@lucide/svelte/icons/check";
 	import KeyRoundIcon from "@lucide/svelte/icons/key-round";
@@ -237,7 +238,13 @@
 				refreshDetect(),
 				route.kind === "detail" && route.profileID === switchedProfileID ? loadDetail(switchedProfileID) : Promise.resolve(),
 			]);
-			showNotice(translate("claudeCode.notice.switchedTitle"), translate("claudeCode.notice.switchedDescription", { profile: result.profile.name || result.profile.id }));
+			if (!result.recovery_cleanup_completed) {
+				toast.warning(translate("notice.recoveryCleanup.switchAppliedTitle"), {
+					description: translate("notice.recoveryCleanup.switchAppliedDescription", { profile: result.profile.name || result.profile.id }),
+				});
+			} else {
+				showNotice(translate("claudeCode.notice.switchedTitle"), translate("claudeCode.notice.switchedDescription", { profile: result.profile.name || result.profile.id }));
+			}
 		} catch (error) {
 			if (sequence !== useSequence || isCancelError(error)) return;
 			if (isDesktopErrorCode(error, "TARGET_CHANGED")) {

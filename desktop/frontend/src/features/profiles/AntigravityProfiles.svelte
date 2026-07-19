@@ -305,7 +305,13 @@
 				refreshDetect(),
 				detail ? loadDetail(activatedProfileID) : Promise.resolve(),
 			]);
-			showNotice(translate("antigravity.notice.switchedTitle"), translate("antigravity.notice.switchedDescription", { profile: result.profile.name || result.profile.id }));
+			if (!result.recovery_cleanup_completed) {
+				toast.warning(translate("notice.recoveryCleanup.switchAppliedTitle"), {
+					description: translate("notice.recoveryCleanup.switchAppliedDescription", { profile: result.profile.name || result.profile.id }),
+				});
+			} else {
+				showNotice(translate("antigravity.notice.switchedTitle"), translate("antigravity.notice.switchedDescription", { profile: result.profile.name || result.profile.id }));
+			}
 		} catch (error) {
 			if (sequence !== useSequence || isCancelError(error)) return;
 			if (isDesktopErrorCode(error, "TARGET_CHANGED")) {

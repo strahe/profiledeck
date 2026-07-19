@@ -21,6 +21,7 @@ import (
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/provider"
+	"github.com/strahe/profiledeck/internal/recoverycleanup"
 	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/settings"
 	"github.com/strahe/profiledeck/internal/switching"
@@ -725,6 +726,16 @@ func (s *SwitchService) Apply(ctx context.Context, req SwitchApplyRequest) (swit
 		profileID = strings.TrimSpace(req.ProfileID)
 	}
 	s.notifyMutationResult(DesktopChangeSwitchApplied, "switch.apply", providerID, profileID, result.OperationID, err)
+	if recoveryCleanupRequiredError(err) || (err == nil && !result.RecoveryCleanupCompleted) {
+		notifyRecoveryCleanupChanged(
+			s.changes,
+			"switch.recoveryCleanup",
+			providerID,
+			profileID,
+			result.OperationID,
+			false,
+		)
+	}
 	return result, err
 }
 
@@ -737,6 +748,19 @@ func (s *DoctorService) RepairLock(ctx context.Context, confirm bool) (doctor.Do
 	if err != nil || result.Repaired {
 		s.notifyMutationResult(DesktopChangeLockRepaired, "doctor.repairLock", "", "", "", err)
 	}
+	return result, err
+}
+
+func (s *DoctorService) RetryRecoveryCleanup(ctx context.Context, confirm bool) (recoverycleanup.RetryRecoveryCleanupResult, error) {
+	result, err := s.application.Doctor().RetryRecoveryCleanup(ctx, confirm)
+	notifyRecoveryCleanupChanged(
+		s.changes,
+		"doctor.retryRecoveryCleanup",
+		"",
+		"",
+		"",
+		err == nil && result.RecoveryCleanupCompleted,
+	)
 	return result, err
 }
 
@@ -837,6 +861,16 @@ func (s *DoctorService) RecoverOperation(ctx context.Context, operationID string
 		resultOperationID = strings.TrimSpace(operationID)
 	}
 	s.notifyMutationResult(DesktopChangeSwitchRecovered, "doctor.recoverOperation", result.ProviderID, result.ProfileID, resultOperationID, err)
+	if recoveryCleanupRequiredError(err) || (err == nil && !result.RecoveryCleanupCompleted) {
+		notifyRecoveryCleanupChanged(
+			s.changes,
+			"doctor.recoveryCleanup",
+			result.ProviderID,
+			result.ProfileID,
+			resultOperationID,
+			false,
+		)
+	}
 	if err == nil && result.ProviderID == codexconfig.ProviderID {
 		reloadCodexQuotaRuntime(s.quota)
 	}
@@ -953,6 +987,29 @@ func notifyMutationResult(changes *ChangeNotifier, kind, source, providerID, pro
 		event.Error = FormatDesktopErrorPtr(err)
 	}
 	changes.Notify(event)
+}
+
+func recoveryCleanupRequiredError(err error) bool {
+	var appErr *apperror.Error
+	return errors.As(err, &appErr) && appErr.Code == apperror.OperationRecoveryCleanupRequired
+}
+
+func notifyRecoveryCleanupChanged(
+	changes *ChangeNotifier,
+	source string,
+	providerID string,
+	profileID string,
+	operationID string,
+	completed bool,
+) {
+	status := DesktopChangeStatusFailure
+	if completed {
+		status = DesktopChangeStatusSuccess
+	}
+	changes.Notify(DesktopChangeEvent{
+		Kind: DesktopChangeRecoveryCleanupChanged, Source: source, Status: status,
+		ProviderID: providerID, ProfileID: profileID, OperationID: operationID,
+	})
 }
 
 func FormatDesktopError(err error) DesktopError {

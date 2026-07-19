@@ -33,6 +33,12 @@ const (
 	doctorOSLockStateFree = "free"
 )
 
+type leakingCleanupLockRunner struct{}
+
+func (leakingCleanupLockRunner) RunWithSharedLock(context.Context, string, func(context.Context) error) error {
+	return apperror.New(apperror.LockAcquireFailed, "lock unavailable").WithDetail("path", "SECRET_LOCK_PATH")
+}
+
 func TestDoctorBeforeInitReportsDiagnosticWithoutCreatingRuntime(t *testing.T) {
 	ctx := context.Background()
 	configDir := filepath.Join(t.TempDir(), "config")
@@ -65,6 +71,7 @@ func TestDoctorReportsVersionedDatabaseIntegrityFindings(t *testing.T) {
 		{defect: "schema", finding: "database_schema_unhealthy"},
 		{defect: "json", finding: "database_json_invalid"},
 		{defect: "references", finding: "database_references_invalid"},
+		{defect: "system_state", finding: "database_recovery_state_invalid"},
 	}
 	for _, test := range cases {
 		t.Run(test.defect, func(t *testing.T) {
@@ -137,6 +144,60 @@ func TestDoctorHealthyDatabaseReportsOK(t *testing.T) {
 	}
 	if result.OverallLevel != doctor.LevelOK || len(result.Operations) != 0 || result.Lock.Exists {
 		t.Fatalf("expected clean doctor result, got %#v", result)
+	}
+}
+
+func TestDoctorReportsAndRetriesRecoveryCleanup(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	application := newDoctorTestApplication(t, configDir, "")
+	if _, err := application.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	orphan := filepath.Join(application.Runtime().Paths().Recovery, "orphan")
+	if err := os.WriteFile(orphan, []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := application.Doctor().Run(ctx)
+	if err != nil || !hasDoctorFinding(result.Findings, "operation_recovery_cleanup_required") {
+		t.Fatalf("Doctor.Run() = %#v, %v", result, err)
+	}
+	_, err = application.Doctor().RetryRecoveryCleanup(ctx, false)
+	assertAppErrorCode(t, err, apperror.ConfirmationRequired)
+	retry, err := application.Doctor().RetryRecoveryCleanup(ctx, true)
+	if err != nil || !retry.RecoveryCleanupCompleted {
+		t.Fatalf("RetryRecoveryCleanup(true) = %#v, %v", retry, err)
+	}
+	result, err = application.Doctor().Run(ctx)
+	if err != nil || hasDoctorFinding(result.Findings, "operation_recovery_cleanup_required") {
+		t.Fatalf("Doctor.Run() after retry = %#v, %v", result, err)
+	}
+}
+
+func TestRetryRecoveryCleanupDoesNotExposeLockDetails(t *testing.T) {
+	ctx := context.Background()
+	runtimeService, err := profilesruntime.NewService(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bootstrap.NewService(runtimeService, nil, nil).Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service := doctor.NewService(
+		runtimeService,
+		nil,
+		nil,
+		nil,
+		nil,
+		doctor.RecoveryCleanupCoordinator{Locks: leakingCleanupLockRunner{}},
+	)
+	_, err = service.RetryRecoveryCleanup(ctx, true)
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.Code != apperror.LockAcquireFailed {
+		t.Fatalf("RetryRecoveryCleanup() error = %v", err)
+	}
+	if len(appErr.Details) != 0 || strings.Contains(err.Error(), "SECRET_LOCK_PATH") {
+		t.Fatalf("RetryRecoveryCleanup() exposed lock details: %#v", appErr)
 	}
 }
 
@@ -641,6 +702,9 @@ func TestDoctorReportsAppliedLockResidueAsOKAndRepairable(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("expected applied switch setup to succeed, got %v", err)
 	}
+	if err := db.ClearRecoveryCleanup(ctx); err != nil {
+		t.Fatalf("expected recovery cleanup state reset to succeed, got %v", err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("expected setup store close to succeed, got %v", err)
 	}
@@ -964,6 +1028,12 @@ func applyDoctorDatabaseDefect(t *testing.T, path, defect string) {
 		if _, err := db.Exec(`INSERT INTO provider_profile_settings
 			(profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms)
 			VALUES ('missing-profile', 'missing-provider', 0, 0, 1)`); err != nil {
+			t.Fatal(err)
+		}
+	case "system_state":
+		if _, err := db.Exec(`INSERT INTO system_state
+			(key, value_json, created_at_unix_ms, updated_at_unix_ms)
+			VALUES ('future.safety_state', 'true', 1, 1)`); err != nil {
 			t.Fatal(err)
 		}
 	default:

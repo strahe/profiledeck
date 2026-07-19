@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/store"
 )
 
 func TestStatusBeforeInitDoesNotCreateRuntime(t *testing.T) {
@@ -28,6 +29,106 @@ func TestStatusBeforeInitDoesNotCreateRuntime(t *testing.T) {
 	}
 	if _, err := os.Stat(configDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("status created runtime directory: %v", err)
+	}
+}
+
+func TestEnsureDirectoriesDoesNotFollowRecoverySymlink(t *testing.T) {
+	service, err := NewService(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(service.Paths().Root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Chmod(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, service.Paths().Recovery); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := service.EnsureDirectories(); err != nil {
+		t.Fatalf("EnsureDirectories() error = %v", err)
+	}
+	info, err := os.Lstat(service.Paths().Recovery)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("recovery path = %#v, %v, want unchanged symlink", info, err)
+	}
+	outsideInfo, err := os.Stat(outside)
+	if err != nil {
+		t.Fatalf("outside stat: %v", err)
+	}
+	if outsideInfo.Mode().Perm() != 0o755 {
+		t.Fatalf("outside mode = %#o, want 0755", outsideInfo.Mode().Perm())
+	}
+}
+
+func TestStatusQueriesRecoveryCleanupInspectorEachTime(t *testing.T) {
+	ctx := context.Background()
+	service, err := NewService(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.EnsureDirectories(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := service.StoreFactory().Open(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Migrate(ctx); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	inspector := &changingRecoveryCleanupInspector{required: true}
+	service.AttachRecoveryCleanup(inspector)
+	first, err := service.Status(ctx)
+	if err != nil || !first.OperationRecoveryCleanupRequired {
+		t.Fatalf("first Status() = %#v, %v", first, err)
+	}
+	inspector.required = false
+	second, err := service.Status(ctx)
+	if err != nil || second.OperationRecoveryCleanupRequired || inspector.calls != 2 {
+		t.Fatalf("second Status() = %#v, %v, calls=%d", second, err, inspector.calls)
+	}
+}
+
+type changingRecoveryCleanupInspector struct {
+	required bool
+	calls    int
+	err      error
+}
+
+func (inspector *changingRecoveryCleanupInspector) CleanupRequired(context.Context, *store.Store) (bool, error) {
+	inspector.calls++
+	return inspector.required, inspector.err
+}
+
+func TestStatusSkipsRecoveryCleanupInspectionUntilSchemaIsCurrent(t *testing.T) {
+	ctx := context.Background()
+	service, err := NewService(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.EnsureDirectories(); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Create(service.Paths().Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	inspector := &changingRecoveryCleanupInspector{err: errors.New("inspector must not run")}
+	service.AttachRecoveryCleanup(inspector)
+
+	result, err := service.Status(ctx)
+	if err != nil || !result.Initialized || result.SchemaHealthy || inspector.calls != 0 {
+		t.Fatalf("Status() = %#v, %v, inspector calls = %d", result, err, inspector.calls)
 	}
 }
 

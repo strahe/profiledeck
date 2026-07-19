@@ -491,7 +491,13 @@
 			if (sequence !== useSequence) return;
 			closeUse();
 			await Promise.all([refreshProfiles(), refreshConfigSets()]);
-			showNotice(translate("notice.profileSwitched.title"), translate("notice.profileSwitched.codexDescription", { profile: result.profile.name || result.profile.id }));
+			if (!result.recovery_cleanup_completed) {
+				toast.warning(translate("notice.recoveryCleanup.switchAppliedTitle"), {
+					description: translate("notice.recoveryCleanup.switchAppliedDescription", { profile: result.profile.name || result.profile.id }),
+				});
+			} else {
+				showNotice(translate("notice.profileSwitched.title"), translate("notice.profileSwitched.codexDescription", { profile: result.profile.name || result.profile.id }));
+			}
 		} catch (error) {
 			if (sequence !== useSequence || isCancelError(error)) return;
 			if (isDesktopErrorCode(error, "TARGET_CHANGED")) {

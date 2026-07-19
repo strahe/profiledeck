@@ -21,6 +21,7 @@ func newDoctorCommand() *urfavecli.Command {
 		},
 		Commands: []*urfavecli.Command{
 			newDoctorRepairLockCommand(),
+			newDoctorRetryCleanupCommand(),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
 			application, err := applicationFor(cmd)
@@ -35,6 +36,35 @@ func newDoctorCommand() *urfavecli.Command {
 				return writeJSON(outputWriter(cmd), result)
 			}
 			return writeDoctorResult(outputWriter(cmd), result)
+		},
+	}
+}
+
+func newDoctorRetryCleanupCommand() *urfavecli.Command {
+	return &urfavecli.Command{
+		Name:  "retry-cleanup",
+		Usage: "Retry cleanup of temporary operation recovery files",
+		Flags: []urfavecli.Flag{
+			boolFlag(yesFlagName, "Confirm recovery cleanup"),
+			boolFlag(jsonFlagName, "Write JSON output"),
+		},
+		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Doctor().RetryRecoveryCleanup(ctx, cmd.Bool(yesFlagName))
+			if err != nil {
+				return err
+			}
+			if cmd.Bool(jsonFlagName) {
+				return writeJSON(outputWriter(cmd), result)
+			}
+			_, err = fmt.Fprintln(
+				outputWriter(cmd),
+				"Recovery cleanup completed\nSwitching and application restore are available. Tool sign-ins and settings were not changed.",
+			)
+			return err
 		},
 	}
 }

@@ -19,6 +19,7 @@ import (
 	keyring "github.com/zalando/go-keyring"
 
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/recoverycleanup"
 	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/targetfs"
@@ -128,25 +129,68 @@ type exclusiveRunner interface {
 	RunExclusive(context.Context, string, func(context.Context) error) error
 }
 
+type SharedLockRunner interface {
+	RunWithSharedLock(context.Context, string, func(context.Context) error) error
+}
+
+type RecoveryCleanupCoordinator struct {
+	Cleanup *recoverycleanup.Service
+	Locks   SharedLockRunner
+}
+
 type Service struct {
 	mu        sync.Mutex
 	paths     runtime.Paths
 	stores    store.Factory
 	keys      keyStore
 	exclusive exclusiveRunner
+	cleanup   *recoverycleanup.Service
+	locks     SharedLockRunner
 	now       func() time.Time
 	retain    func(string, int) error
 }
 
-func NewService(paths runtime.Paths, stores store.Factory, lease *runtime.DataLease) *Service {
-	return newService(paths, stores, systemKeyStore{}, lease)
+func NewService(
+	paths runtime.Paths,
+	stores store.Factory,
+	lease *runtime.DataLease,
+	coordinators ...RecoveryCleanupCoordinator,
+) *Service {
+	service := newService(paths, stores, systemKeyStore{}, lease)
+	if len(coordinators) > 0 {
+		if coordinators[0].Cleanup != nil {
+			service.cleanup = coordinators[0].Cleanup
+		}
+		if coordinators[0].Locks != nil {
+			service.locks = coordinators[0].Locks
+		}
+	}
+	return service
 }
 
 func newService(paths runtime.Paths, stores store.Factory, keys keyStore, exclusive exclusiveRunner) *Service {
 	return &Service{
 		paths: paths, stores: stores, keys: keys, exclusive: exclusive,
+		cleanup: recoverycleanup.NewService(paths), locks: directSharedLockRunner{path: paths.Lock},
 		now: time.Now, retain: retainAutomaticBackups,
 	}
+}
+
+type directSharedLockRunner struct {
+	path string
+}
+
+func (runner directSharedLockRunner) RunWithSharedLock(
+	ctx context.Context,
+	owner string,
+	run func(context.Context) error,
+) error {
+	lock, err := targetfs.AcquireLock(runner.path, owner)
+	if err != nil {
+		return apperror.New(apperror.LockAcquireFailed, "another ProfileDeck operation is in progress")
+	}
+	defer lock.ReleaseAndRemoveBestEffort()
+	return run(ctx)
 }
 
 func (service *Service) Create(ctx context.Context, req CreateRequest) (BackupDetail, error) {

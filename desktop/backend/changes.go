@@ -17,6 +17,7 @@ const (
 	DesktopChangeSwitchRecovered           = "switch-recovered"
 	DesktopChangeApplicationBackupChanged  = "application-backup-changed"
 	DesktopChangeAgentStateChanged         = "agent-state-changed"
+	DesktopChangeRecoveryCleanupChanged    = "recovery-cleanup-changed"
 
 	DesktopChangeStatusSuccess  = "success"
 	DesktopChangeStatusFailure  = "failure"

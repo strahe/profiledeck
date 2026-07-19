@@ -106,6 +106,9 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 		return ApplySwitchResult{}, err
 	}
 	defer db.Close()
+	if err := service.retryRecoveryCleanup(ctx, db); err != nil {
+		return ApplySwitchResult{}, err
+	}
 
 	operationID, err := newSwitchOperationID(time.Now())
 	if err != nil {
@@ -128,6 +131,9 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, initialMetadata, err)
 	}
 	defer lock.Release()
+	if err := service.reconcileRecoveryCleanupLocked(ctx, db); err != nil {
+		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, initialMetadata, err)
+	}
 	// A Desktop Agent may be disabled while this operation waits for the lock.
 	// Once the lock is owned, later preference changes must not interrupt it.
 	if err := service.requireProviderWithStore(ctx, db, providerID); err != nil {
@@ -212,7 +218,8 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 	}); err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, recoveryMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to complete switch operation", err))
 	}
-	recoveryCleanupCompleted := transaction.RemoveRecoveryPoint(service.paths.Recovery, operationID) == nil
+	cleanupResult, cleanupErr := service.cleanup.ReconcileLocked(ctx, db)
+	recoveryCleanupCompleted := cleanupErr == nil && cleanupResult.RecoveryCleanupCompleted
 
 	return ApplySwitchResult{
 		OperationID:              operationID,

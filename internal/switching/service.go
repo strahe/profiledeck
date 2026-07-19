@@ -12,6 +12,7 @@ import (
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/maintenance"
+	"github.com/strahe/profiledeck/internal/recoverycleanup"
 	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/targetfs"
@@ -25,18 +26,63 @@ type Service struct {
 	policy         agent.Policy
 	dependencies   Dependencies
 	sharedLockGate chan struct{}
+	cleanup        *recoverycleanup.Service
 }
 
-func NewService(paths runtime.Paths, stores store.Factory, policy agent.Policy, dependencies Dependencies) *Service {
+func NewService(paths runtime.Paths, stores store.Factory, policy agent.Policy, dependencies Dependencies, cleanupServices ...*recoverycleanup.Service) *Service {
 	sharedLockGate := make(chan struct{}, 1)
 	sharedLockGate <- struct{}{}
+	cleanup := recoverycleanup.NewService(paths)
+	if len(cleanupServices) > 0 && cleanupServices[0] != nil {
+		cleanup = cleanupServices[0]
+	}
 	return &Service{
 		paths:          paths,
 		stores:         stores,
 		policy:         policy,
 		dependencies:   dependencies,
 		sharedLockGate: sharedLockGate,
+		cleanup:        cleanup,
 	}
+}
+
+func (service *Service) retryRecoveryCleanup(ctx context.Context, db *store.Store) error {
+	inspection, err := service.cleanup.Inspect(ctx, db)
+	if err != nil {
+		return mapRecoveryCleanupInspectionError(err)
+	}
+	if !inspection.CleanupRequired() {
+		return nil
+	}
+	return service.RunWithSharedLock(ctx, "recovery-cleanup", func(ctx context.Context) error {
+		_, err := service.cleanup.ReconcileLocked(ctx, db)
+		return err
+	})
+}
+
+func (service *Service) reconcileRecoveryCleanupLocked(ctx context.Context, db *store.Store) error {
+	inspection, err := service.cleanup.Inspect(ctx, db)
+	if err != nil {
+		return mapRecoveryCleanupInspectionError(err)
+	}
+	if !inspection.CleanupRequired() {
+		return nil
+	}
+	_, err = service.cleanup.ReconcileLocked(ctx, db)
+	return err
+}
+
+func mapRecoveryCleanupInspectionError(err error) error {
+	if errors.Is(err, store.ErrInvalidSystemState) {
+		return apperror.New(
+			apperror.StoreSchemaInvalid,
+			"ProfileDeck local data is not in a valid state; run profiledeck doctor or restore a known-good application backup",
+		)
+	}
+	return apperror.New(
+		apperror.OperationRecoveryCleanupRequired,
+		"recovery files still need cleanup before switching or restore can continue",
+	)
 }
 
 func (service *Service) RunMaintenance(ctx context.Context, req maintenance.Request, mutation maintenance.Func) error {
@@ -104,7 +150,7 @@ func (service *Service) RunWithSharedLock(ctx context.Context, operation string,
 	if err != nil {
 		return err
 	}
-	defer lock.Release()
+	defer lock.ReleaseAndRemoveBestEffort()
 	return run(ctx)
 }
 

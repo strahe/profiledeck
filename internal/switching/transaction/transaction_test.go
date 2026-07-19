@@ -52,6 +52,41 @@ func TestCreateRecoveryPointRemovesOwnedDirectoryAfterTargetBackupFailure(t *tes
 	}
 }
 
+func TestCreateRecoveryPointNeverCreatesOrFollowsRecoveryRoot(t *testing.T) {
+	t.Run("missing root", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "recovery")
+		_, err := New(target.MustRegistry()).CreateRecoveryPoint(context.Background(), RecoveryPointRequest{
+			RecoveryRoot: root,
+			OperationID:  "switch-missing-root",
+		})
+		if err == nil {
+			t.Fatal("CreateRecoveryPoint() succeeded without a cleanup-owned root")
+		}
+		if _, statErr := os.Lstat(root); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("transaction created recovery root: %v", statErr)
+		}
+	})
+
+	t.Run("symlink root", func(t *testing.T) {
+		parent := t.TempDir()
+		outside := t.TempDir()
+		root := filepath.Join(parent, "recovery")
+		if err := os.Symlink(outside, root); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		_, err := New(target.MustRegistry()).CreateRecoveryPoint(context.Background(), RecoveryPointRequest{
+			RecoveryRoot: root,
+			OperationID:  "switch-symlink-root",
+		})
+		if err == nil {
+			t.Fatal("CreateRecoveryPoint() followed a recovery symlink")
+		}
+		if _, statErr := os.Lstat(filepath.Join(outside, "switch-symlink-root")); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("transaction wrote through recovery symlink: %v", statErr)
+		}
+	})
+}
+
 func TestRestoreDoesNotExposeRecoverySourcePath(t *testing.T) {
 	t.Parallel()
 

@@ -238,6 +238,98 @@ func TestApplySwitchCreateCleansRecoveryPointAndSetsActiveState(t *testing.T) {
 	assertSuccessfulSwitchRecoveryRemoved(t, configDir, result)
 }
 
+func TestApplySwitchBlocksBeforeTargetWriteWhenRecoveryCleanupIsUnsafe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup is platform-specific")
+	}
+	ctx := context.Background()
+	configDir := t.TempDir()
+	initResult, err := initSwitchingTestRuntime(ctx, configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createGenericProviderAndProfile(t, ctx, configDir, true)
+	environment := newSwitchingTestEnvironment(t, configDir)
+	targetPath := filepath.Join(t.TempDir(), "settings.env")
+	if _, err := environment.targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
+		ProfileID: "profile-a", ProviderID: "provider-a", TargetID: "target-a",
+		Path: targetPath, Format: "text", Strategy: "replace-file",
+		ValueJSON: contentValueJSON(t, "OPENAI_API_KEY=managed\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	paths := environment.runtime.Paths()
+	if err := os.Remove(paths.Recovery); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	sentinel := filepath.Join(outside, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, paths.Recovery); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = environment.service.Apply(ctx, ApplySwitchRequest{
+		ProviderID: "provider-a", ProfileID: "profile-a", Confirm: true,
+	})
+	assertErrorCode(t, err, apperror.OperationRecoveryCleanupRequired)
+	if _, err := os.Stat(targetPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("target changed while cleanup was unsafe: %v", err)
+	}
+	if raw, err := os.ReadFile(sentinel); err != nil || string(raw) != "outside" {
+		t.Fatalf("recovery symlink target changed: %q, %v", raw, err)
+	}
+	if count := countOperationsByStatus(t, initResult.DatabasePath, store.OperationStatusPending) +
+		countOperationsByStatus(t, initResult.DatabasePath, store.OperationStatusFailed); count != 0 {
+		t.Fatalf("cleanup preflight created %d incomplete operations", count)
+	}
+}
+
+func TestApplySwitchRejectsUnknownSystemStateBeforeCreatingOperation(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	initResult, err := initSwitchingTestRuntime(ctx, configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createGenericProviderAndProfile(t, ctx, configDir, true)
+	environment := newSwitchingTestEnvironment(t, configDir)
+	targetPath := filepath.Join(t.TempDir(), "settings.env")
+	if _, err := environment.targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
+		ProfileID: "profile-a", ProviderID: "provider-a", TargetID: "target-a",
+		Path: targetPath, Format: "text", Strategy: "replace-file",
+		ValueJSON: contentValueJSON(t, "OPENAI_API_KEY=managed\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rawDB, err := sql.Open("sqlite", initResult.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, insertErr := rawDB.ExecContext(ctx, `
+		INSERT INTO system_state (key, value_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES ('future.safety_state', 'true', 1, 1)
+	`)
+	closeErr := rawDB.Close()
+	if err := errors.Join(insertErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = environment.service.Apply(ctx, ApplySwitchRequest{
+		ProviderID: "provider-a", ProfileID: "profile-a", Confirm: true,
+	})
+	assertErrorCode(t, err, apperror.StoreSchemaInvalid)
+	if _, err := os.Stat(targetPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("target changed with unknown system state: %v", err)
+	}
+	if count := countOperationsByStatus(t, initResult.DatabasePath, store.OperationStatusPending) +
+		countOperationsByStatus(t, initResult.DatabasePath, store.OperationStatusFailed); count != 0 {
+		t.Fatalf("unknown system state created %d incomplete operations", count)
+	}
+}
+
 func TestApplySwitchRechecksAgentPolicyAfterAcquiringLock(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
@@ -535,6 +627,61 @@ func TestApplySwitchFailsPartialMultiTargetWriteWithoutActiveState(t *testing.T)
 	defer db.Close()
 	if _, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, "provider-a"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("expected no active state after partial failed write, got %v", err)
+	}
+}
+
+func TestApplySwitchKeepsFailedOperationRecoverableWhenCleanupRegistrationFails(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	initResult, err := initSwitchingTestRuntime(ctx, configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createGenericProviderAndProfile(t, ctx, configDir, true)
+	environment := newSwitchingTestEnvironment(t, configDir)
+	targetPath := filepath.Join(t.TempDir(), "settings.txt")
+	if _, err := environment.targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
+		ProfileID: "profile-a", ProviderID: "provider-a", TargetID: "target-a",
+		Path: targetPath, Format: "text", Strategy: "replace-file", ValueJSON: contentValueJSON(t, "managed\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rawDB, err := sql.Open("sqlite", initResult.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, triggerErr := rawDB.ExecContext(ctx, `
+		CREATE TRIGGER fail_cleanup_registration
+		BEFORE INSERT ON system_state
+		BEGIN
+			SELECT RAISE(ABORT, 'injected cleanup registration failure');
+		END
+	`)
+	closeErr := rawDB.Close()
+	if err := errors.Join(triggerErr, closeErr); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = environment.service.Apply(ctx, ApplySwitchRequest{
+		ProviderID: "provider-a", ProfileID: "profile-a", Confirm: true,
+	})
+	assertErrorCode(t, err, apperror.OperationUpdateFailed)
+	assertFileContent(t, targetPath, "managed\n")
+	failedSwitchID := singleOperationIDByTypeStatus(
+		t, initResult.DatabasePath, store.OperationTypeSwitch, store.OperationStatusFailed,
+	)
+	paths := environment.runtime.Paths()
+	if info, err := os.Stat(filepath.Join(paths.Recovery, failedSwitchID)); err != nil || !info.IsDir() {
+		t.Fatalf("recovery point after registration failure = %#v, %v", info, err)
+	}
+	db := openAppTestStore(t, ctx, initResult.DatabasePath)
+	defer db.Close()
+	if _, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, "provider-a"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("active state committed after cleanup registration failure: %v", err)
+	}
+	operation := mustOperation(t, ctx, db, failedSwitchID)
+	if operation.Status != store.OperationStatusFailed || !strings.Contains(operation.MetadataJSON, `"checkpoint":"recovery_created"`) {
+		t.Fatalf("failed switch is not recoverable: %#v", operation)
 	}
 }
 

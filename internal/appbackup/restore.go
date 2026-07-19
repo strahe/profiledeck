@@ -2,10 +2,13 @@ package appbackup
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"filippo.io/age"
 
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/store"
@@ -102,63 +105,117 @@ func (service *Service) Restore(ctx context.Context, req RestoreRequest) (Restor
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	lock, err := service.acquireOperationLock("application-backup-restore")
-	if err != nil {
-		return RestoreResult{}, err
-	}
-	defer lock.Release()
-	identity, err := service.loadIdentity()
-	if err != nil {
-		return RestoreResult{}, err
-	}
-	path, expectedID, err := service.resolveRestoreSource(req.Source)
-	if err != nil {
-		return RestoreResult{}, err
-	}
 
 	var result RestoreResult
-	err = service.exclusive.RunExclusive(ctx, "application-restore", func(ctx context.Context) error {
-		if err := store.ReconcileDatabaseSwap(ctx, service.paths.Database); err != nil {
-			return apperror.New(apperror.RestoreFailed, "an interrupted application restore could not be resolved")
-		}
-		candidate := store.RestoreCandidatePath(service.paths.Database)
-		removeDatabaseFiles(candidate)
-		defer removeDatabaseFiles(candidate)
-		inspected, err := inspectArchive(ctx, path, identity, candidate)
+	err := service.exclusive.RunExclusive(ctx, "application-restore", func(ctx context.Context) error {
+		lock, err := service.acquireOperationLock("application-backup-restore")
 		if err != nil {
 			return err
 		}
-		if expectedID != "" && inspected.Manifest.BackupID != expectedID {
-			return apperror.New(apperror.BackupInvalid, "application backup id does not match its file name")
-		}
-		if inspected.Fingerprint != fingerprint {
-			return apperror.New(apperror.BackupInvalid, "application backup changed after preview")
-		}
-		if _, err := prepareDatabaseForRestore(ctx, candidate, true); err != nil {
+		defer lock.Release()
+		identity, err := service.loadIdentity()
+		if err != nil {
 			return err
 		}
-
-		if currentDatabaseHealthy(ctx, service.stores) {
-			safety, err := service.create(ctx, CreateRequest{Kind: KindAutomatic, Reason: ReasonBeforeRestore})
-			if err != nil {
-				return apperror.New(apperror.RestoreFailed, "the safety backup required before restore could not be created")
-			}
-			result.SafetyBackup = &safety.BackupSummary
-		} else {
-			result.SafetyBackupSkipped = true
+		path, expectedID, err := service.resolveRestoreSource(req.Source)
+		if err != nil {
+			return err
 		}
-		if err := store.ReplaceDatabase(ctx, service.paths.Database); err != nil {
-			return apperror.New(apperror.RestoreFailed, "application data could not be restored; the previous database was kept")
-		}
-		result.RecoveryCleanupCompleted = resetRecoveryDirectory(service.paths.Recovery) == nil
-		result.Backup = detailFromManifest(inspected.Manifest, inspected.SizeBytes)
-		result.RestartRequired = true
-		return nil
+		return service.locks.RunWithSharedLock(ctx, "application-restore", func(ctx context.Context) error {
+			return service.restoreLocked(ctx, path, expectedID, fingerprint, identity, &result)
+		})
 	})
 	if err != nil {
 		return RestoreResult{}, err
 	}
 	return result, nil
+}
+
+func (service *Service) restoreLocked(
+	ctx context.Context,
+	path string,
+	expectedID string,
+	fingerprint string,
+	identity *age.X25519Identity,
+	result *RestoreResult,
+) error {
+	if err := store.ReconcileDatabaseSwap(ctx, service.paths.Database); err != nil {
+		return apperror.New(apperror.RestoreFailed, "an interrupted application restore could not be resolved")
+	}
+	if currentDatabaseHealthy(ctx, service.stores) {
+		db, err := service.stores.OpenHealthy(ctx, false)
+		if err != nil {
+			return err
+		}
+		inspection, inspectErr := service.cleanup.Inspect(ctx, db)
+		if inspectErr == nil && inspection.CleanupRequired() {
+			_, inspectErr = service.cleanup.ReconcileLocked(ctx, db)
+		}
+		closeErr := db.Close()
+		if inspectErr != nil {
+			return recoveryCleanupGateError(inspectErr)
+		}
+		if closeErr != nil {
+			return apperror.New(apperror.StoreStatusFailed, "application database could not be inspected")
+		}
+	}
+	candidate := store.RestoreCandidatePath(service.paths.Database)
+	removeDatabaseFiles(candidate)
+	defer removeDatabaseFiles(candidate)
+	inspected, err := inspectArchive(ctx, path, identity, candidate)
+	if err != nil {
+		return err
+	}
+	if expectedID != "" && inspected.Manifest.BackupID != expectedID {
+		return apperror.New(apperror.BackupInvalid, "application backup id does not match its file name")
+	}
+	if inspected.Fingerprint != fingerprint {
+		return apperror.New(apperror.BackupInvalid, "application backup changed after preview")
+	}
+	if _, err := prepareDatabaseForRestore(ctx, candidate, true); err != nil {
+		return err
+	}
+
+	if currentDatabaseHealthy(ctx, service.stores) {
+		safety, err := service.create(ctx, CreateRequest{Kind: KindAutomatic, Reason: ReasonBeforeRestore})
+		if err != nil {
+			return apperror.New(apperror.RestoreFailed, "the safety backup required before restore could not be created")
+		}
+		result.SafetyBackup = &safety.BackupSummary
+	} else {
+		result.SafetyBackupSkipped = true
+	}
+	if err := store.ReplaceDatabase(ctx, service.paths.Database); err != nil {
+		return apperror.New(apperror.RestoreFailed, "application data could not be restored; the previous database was kept")
+	}
+	result.Backup = detailFromManifest(inspected.Manifest, inspected.SizeBytes)
+	result.RestartRequired = true
+	result.RecoveryCleanupCompleted = false
+	db, err := service.stores.OpenHealthy(ctx, false)
+	if err == nil {
+		cleanupResult, cleanupErr := service.cleanup.ReconcileLocked(ctx, db)
+		_ = db.Close()
+		result.RecoveryCleanupCompleted = cleanupErr == nil && cleanupResult.RecoveryCleanupCompleted
+	}
+	return nil
+}
+
+func recoveryCleanupGateError(err error) error {
+	if errors.Is(err, store.ErrInvalidSystemState) {
+		return apperror.New(
+			apperror.StoreSchemaInvalid,
+			"ProfileDeck local data is not in a valid state; run profiledeck doctor or restore a known-good application backup",
+		)
+	}
+	var appErr *apperror.Error
+	if errors.As(err, &appErr) &&
+		(appErr.Code == apperror.StoreSchemaInvalid || appErr.Code == apperror.OperationRecoveryCleanupRequired) {
+		return appErr
+	}
+	return apperror.New(
+		apperror.OperationRecoveryCleanupRequired,
+		"recovery files still need cleanup before switching or restore can continue",
+	)
 }
 
 func (service *Service) resolveRestoreSource(source RestoreSource) (string, string, error) {
@@ -179,13 +236,6 @@ func (service *Service) resolveRestoreSource(source RestoreSource) (string, stri
 		return "", "", apperror.New(apperror.BackupInvalid, "application backup file is required")
 	}
 	return path, "", nil
-}
-
-func resetRecoveryDirectory(path string) error {
-	if err := os.RemoveAll(path); err != nil {
-		return err
-	}
-	return os.MkdirAll(path, 0o700)
 }
 
 func removeDatabaseFiles(path string) {

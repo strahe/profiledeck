@@ -19,6 +19,7 @@ import (
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/provider"
+	"github.com/strahe/profiledeck/internal/recoverycleanup"
 	runtimeservice "github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/settings"
 	"github.com/strahe/profiledeck/internal/store"
@@ -105,8 +106,12 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 	}
 	runtimeService.AttachDataLease(dataLease)
 	stores := runtimeService.StoreFactory()
+	cleanupService := recoverycleanup.NewService(runtimeService.Paths())
+	runtimeService.AttachRecoveryCleanup(cleanupService)
 	agentService := agent.NewService(dependencies.agents, stores, accessMode)
-	switchingService := switching.NewService(runtimeService.Paths(), stores, agentService, dependencies.switching)
+	switchingService := switching.NewService(
+		runtimeService.Paths(), stores, agentService, dependencies.switching, cleanupService,
+	)
 
 	codexService := codex.NewService(runtimeService, switchingService, switchingService, agentService, config.CodexDir)
 	antigravityService := antigravity.NewService(
@@ -132,12 +137,23 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 			return inspection.Status, inspection.Action, inspection.Reason
 		},
 		codexService.SensitivePaths,
+		doctor.RecoveryCleanupCoordinator{Cleanup: cleanupService, Locks: switchingService},
 	)
 
-	backupService := appbackup.NewService(runtimeService.Paths(), stores, dataLease)
+	backupService := appbackup.NewService(
+		runtimeService.Paths(),
+		stores,
+		dataLease,
+		appbackup.RecoveryCleanupCoordinator{Cleanup: cleanupService, Locks: switchingService},
+	)
 	return &Application{
 		runtime: runtimeService, dataLease: dataLease, backups: backupService,
-		bootstrap: bootstrap.NewService(runtimeService, backupService, dataLease),
+		bootstrap: bootstrap.NewService(
+			runtimeService,
+			backupService,
+			dataLease,
+			bootstrap.RecoveryCleanupCoordinator{Cleanup: cleanupService, Locks: switchingService},
+		),
 		agents:    agentService,
 		providers: provider.NewService(stores, switchingService, agentService, dependencies.agents),
 		profiles:  profile.NewService(stores, switchingService),

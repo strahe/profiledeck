@@ -33,6 +33,7 @@ const messages = {
 			cancel: "Cancel",
 			useProfile: "Use Profile",
 			repairLock: "Restore switching",
+			retryCleanup: "Retry cleanup",
 			recheck: "Recheck",
 			retry: "Retry",
 			recover: "Recover",
@@ -93,6 +94,8 @@ const messages = {
 				databaseUpgradeRequiredDescription: "Close other ProfileDeck windows, then reopen ProfileDeck or run profiledeck init. An encrypted backup is created before the update.",
 				databaseIntegrityInvalidTitle: "Local ProfileDeck data needs attention",
 				databaseIntegrityInvalidDescription: "Do not switch Profiles. Restore a known-good application backup, then recheck Diagnostics.",
+				recoveryCleanupRequiredTitle: "Temporary recovery files need cleanup",
+				recoveryCleanupRequiredDescription: "Switching and application restore are paused until cleanup succeeds. Tool sign-ins and settings are unchanged.",
 				operationCheckFailedTitle: "Incomplete changes could not be checked",
 				operationCheckFailedDescription: "Recheck Diagnostics. If the problem continues, run profiledeck doctor before switching Profiles.",
 				codexSetupUnavailableTitle: "Saved Codex setup is incompatible",
@@ -157,6 +160,10 @@ const messages = {
 				databaseUnavailable: "ProfileDeck cannot verify whether a switch is still running because local data is unavailable. Resolve the data warning, then recheck.",
 				unreadable: "ProfileDeck cannot read the information that protects Profile switching. Close other ProfileDeck windows and recheck.",
 				unknown: "ProfileDeck cannot safely determine why switching is blocked. Close other ProfileDeck windows and recheck.",
+			},
+			cleanup: {
+				retryTitle: "Retry recovery cleanup?",
+				retryDescription: "ProfileDeck will remove only temporary operation recovery files. Tool sign-ins and settings will not be changed.",
 			},
 			recover: {
 				title: "Restore the pre-switch state?",
@@ -870,6 +877,14 @@ const messages = {
 				title: "Profile switched",
 				codexDescription: "Codex now uses {profile}. Restart to take effect.",
 			},
+			recoveryCleanup: {
+				completedTitle: "Cleanup completed",
+				completedDescription: "Switching and application restore are available again. Tool sign-ins and settings were not changed.",
+				switchAppliedTitle: "Profile switched; cleanup still required",
+				switchAppliedDescription: "{profile} is active, but switching and application restore are paused until temporary recovery files are cleaned up. Tool sign-ins and settings are unchanged.",
+				recoveryCompletedTitle: "Recovery completed; cleanup still required",
+				recoveryCompletedDescription: "The recovery result is saved, but switching and application restore remain paused. Retry cleanup in Diagnostics; tool sign-ins and settings will not be changed.",
+			},
 			lockOK: {
 				title: "Profile switching is ready",
 				noRepair: "No action is needed.",
@@ -991,6 +1006,7 @@ const messages = {
 			cancel: "取消",
 			useProfile: "使用 Profile",
 			repairLock: "恢复切换功能",
+			retryCleanup: "重试清理",
 			recheck: "重新检查",
 			retry: "重试",
 			recover: "恢复",
@@ -1051,6 +1067,8 @@ const messages = {
 				databaseUpgradeRequiredDescription: "请关闭其他 ProfileDeck 窗口，然后重新打开 ProfileDeck 或运行 profiledeck init。更新前会先创建加密备份。",
 				databaseIntegrityInvalidTitle: "ProfileDeck 本地数据需要处理",
 				databaseIntegrityInvalidDescription: "请勿切换 Profile。请恢复一份确认正常的应用备份，然后重新检查诊断信息。",
+				recoveryCleanupRequiredTitle: "临时恢复文件需要清理",
+				recoveryCleanupRequiredDescription: "清理成功前，Profile 切换和应用恢复将暂停。工具登录信息和设置不会因此改变。",
 				operationCheckFailedTitle: "无法检查未完成的更改",
 				operationCheckFailedDescription: "请重新检查诊断信息；如果问题持续存在，请先运行 profiledeck doctor，再切换 Profile。",
 				codexSetupUnavailableTitle: "已保存的 Codex 配置不兼容",
@@ -1115,6 +1133,10 @@ const messages = {
 				databaseUnavailable: "本地数据不可用，ProfileDeck 无法确认切换是否仍在进行。请先处理数据警告，再重新检查。",
 				unreadable: "ProfileDeck 无法读取用于保护 Profile 切换的信息。请关闭其他 ProfileDeck 窗口后重新检查。",
 				unknown: "ProfileDeck 无法安全判断切换为何被阻止。请关闭其他 ProfileDeck 窗口后重新检查。",
+			},
+			cleanup: {
+				retryTitle: "重试清理恢复文件？",
+				retryDescription: "ProfileDeck 只会移除临时操作恢复文件，不会改变任何工具的登录信息或设置。",
 			},
 			recover: {
 				title: "恢复切换前状态？",
@@ -1827,6 +1849,14 @@ const messages = {
 			profileSwitched: {
 				title: "Profile 已切换",
 				codexDescription: "Codex 现在使用 {profile}。请重启后生效。",
+			},
+			recoveryCleanup: {
+				completedTitle: "清理已完成",
+				completedDescription: "现在可以继续切换 Profile 或恢复应用数据。工具登录信息和设置没有改变。",
+				switchAppliedTitle: "Profile 已切换，但仍需清理",
+				switchAppliedDescription: "{profile} 已生效；临时恢复文件清理完成前，Profile 切换和应用恢复将暂停。工具登录信息和设置不会因此改变。",
+				recoveryCompletedTitle: "恢复已完成，但仍需清理",
+				recoveryCompletedDescription: "恢复结果已保存，但 Profile 切换和应用恢复仍处于暂停状态。请在诊断中重试清理；工具登录信息和设置不会因此改变。",
 			},
 			lockOK: {
 				title: "Profile 切换已恢复",

@@ -168,6 +168,10 @@ func AtomicWriteFile(ctx context.Context, req AtomicWriteFileRequest) error {
 }
 
 func GuardedRemove(ctx context.Context, req GuardedRemoveRequest) (bool, error) {
+	return guardedRemoveWithDirectorySync(ctx, req, SyncDirectory)
+}
+
+func guardedRemoveWithDirectorySync(ctx context.Context, req GuardedRemoveRequest, syncDirectory func(string) error) (bool, error) {
 	current, err := Inspect(ctx, req.Expected.Path)
 	if err != nil {
 		return false, err
@@ -190,10 +194,21 @@ func GuardedRemove(ctx context.Context, req GuardedRemoveRequest) (bool, error) 
 	if req.Expected.SHA256 != "" && current.SHA256 != req.Expected.SHA256 {
 		return false, changedError(req.Expected, "target content changed")
 	}
+	parent := filepath.Dir(req.Expected.Path)
+	if err := syncDirectory(parent); err != nil {
+		return false, WrapError(KindWriteFailed, "failed to prepare target directory for removal", err).WithDetail("path", parent)
+	}
+	// Directory synchronization can be slow. Re-check immediately before remove
+	// so a concurrent replacement is never deleted under the earlier snapshot.
+	if err := VerifyExpected(ctx, req.Expected); err != nil {
+		return false, err
+	}
 	if err := os.Remove(req.Expected.Path); err != nil {
 		return false, WrapError(KindWriteFailed, "failed to remove target", err).WithDetail("path", req.Expected.Path)
 	}
-	syncParentDirBestEffort(filepath.Dir(req.Expected.Path))
+	if err := syncDirectory(parent); err != nil {
+		return true, WrapError(KindWriteFailed, "failed to finalize target removal", err).WithDetail("path", parent)
+	}
 	return true, nil
 }
 
@@ -259,6 +274,18 @@ type sourceGuard struct {
 }
 
 func atomicWrite(ctx context.Context, expected ExpectedTarget, reader io.Reader, requestedMode os.FileMode, useMode bool, guard sourceGuard) error {
+	return atomicWriteWithDirectorySync(ctx, expected, reader, requestedMode, useMode, guard, SyncDirectory)
+}
+
+func atomicWriteWithDirectorySync(
+	ctx context.Context,
+	expected ExpectedTarget,
+	reader io.Reader,
+	requestedMode os.FileMode,
+	useMode bool,
+	guard sourceGuard,
+	syncDirectory func(string) error,
+) error {
 	parent := filepath.Dir(expected.Path)
 	parentInfo, err := os.Stat(parent)
 	if err != nil {
@@ -266,6 +293,11 @@ func atomicWrite(ctx context.Context, expected ExpectedTarget, reader io.Reader,
 	}
 	if !parentInfo.IsDir() {
 		return NewError(KindWriteFailed, "target parent path is not a directory").WithDetail("path", parent)
+	}
+	// Confirm the filesystem accepts the durability boundary before writing the
+	// desired content even to a private temporary file.
+	if err := syncDirectory(parent); err != nil {
+		return WrapError(KindWriteFailed, "failed to prepare target directory for replacement", err).WithDetail("path", parent)
 	}
 
 	mode := os.FileMode(0o600)
@@ -350,7 +382,9 @@ func atomicWrite(ctx context.Context, expected ExpectedTarget, reader io.Reader,
 		return WrapError(KindWriteFailed, "failed to replace target file", err).WithDetail("path", expected.Path)
 	}
 	removeTemp = false
-	syncParentDirBestEffort(parent)
+	if err := syncDirectory(parent); err != nil {
+		return WrapError(KindWriteFailed, "failed to finalize target replacement", err).WithDetail("path", parent)
+	}
 	return nil
 }
 
@@ -361,12 +395,7 @@ func changedError(expected ExpectedTarget, message string) *Error {
 }
 
 func syncParentDirBestEffort(parent string) {
-	dir, err := os.Open(parent)
-	if err != nil {
-		return
-	}
-	defer dir.Close()
-	_ = dir.Sync()
+	_ = SyncDirectory(parent)
 }
 
 type contextReader struct {

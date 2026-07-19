@@ -630,13 +630,31 @@
 		});
 	}
 
+	async function retryRecoveryCleanup() {
+		await runAction("retry-cleanup", async () => {
+			await track("retry-cleanup", DoctorService.RetryRecoveryCleanup(true));
+			doctorResult = await track("doctor", DoctorService.Run());
+			doctorError = "";
+			showNotice(
+				translate("notice.recoveryCleanup.completedTitle"),
+				translate("notice.recoveryCleanup.completedDescription"),
+			);
+		});
+	}
+
 	async function recoverOperation(operationID: string) {
 		await runAction(`recover:${operationID}`, async () => {
 			const result = await track("recover", DoctorService.RecoverOperation(operationID, true));
-			showNotice(
-				translate(result.action === "close" ? "diagnosticsPage.recover.closedTitle" : "diagnosticsPage.recover.completedTitle"),
-				translate(result.action === "close" ? "diagnosticsPage.recover.closedDescription" : "diagnosticsPage.recover.completedDescription"),
-			);
+			if (!result.recovery_cleanup_completed) {
+				toast.warning(translate("notice.recoveryCleanup.recoveryCompletedTitle"), {
+					description: translate("notice.recoveryCleanup.recoveryCompletedDescription"),
+				});
+			} else {
+				showNotice(
+					translate(result.action === "close" ? "diagnosticsPage.recover.closedTitle" : "diagnosticsPage.recover.completedTitle"),
+					translate(result.action === "close" ? "diagnosticsPage.recover.closedDescription" : "diagnosticsPage.recover.completedDescription"),
+				);
+			}
 		});
 	}
 
@@ -1064,6 +1082,19 @@
 				</div>
 			{/if}
 
+			{#if dashboard?.status.operation_recovery_cleanup_required && workspaceRoute.view !== "diagnostics"}
+				<div class="shrink-0 border-b px-4 py-3">
+					<Alert.Root variant="destructive">
+						<TriangleAlertIcon data-icon="inline-start" />
+						<Alert.Title>{$_("diagnosticsPage.finding.recoveryCleanupRequiredTitle")}</Alert.Title>
+						<Alert.Description>{$_("diagnosticsPage.finding.recoveryCleanupRequiredDescription")}</Alert.Description>
+						<Alert.Action>
+							<Button size="xs" variant="outline" onclick={() => push("/diagnostics")}>{$_("nav.diagnostics")}</Button>
+						</Alert.Action>
+					</Alert.Root>
+				</div>
+			{/if}
+
 			<div bind:this={contentViewport} class="min-h-0 flex-1 overflow-auto p-4">
 				{#if !agentWorkspaceReady}
 					{#if loading}<div class="grid h-full place-items-center"><Spinner /></div>{/if}
@@ -1153,6 +1184,7 @@
 						{actionBusy}
 						onRecheck={runDoctor}
 						onRepair={repairLock}
+						onRetryCleanup={retryRecoveryCleanup}
 						onRecover={recoverOperation}
 					/>
 				{/if}

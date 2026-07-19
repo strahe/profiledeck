@@ -13,33 +13,44 @@ import (
 )
 
 type InitResult struct {
-	ConfigDir         string `json:"config_dir"`
-	RuntimeRoot       string `json:"runtime_root"`
-	DatabasePath      string `json:"database_path"`
-	Initialized       bool   `json:"initialized"`
-	SchemaHealthy     bool   `json:"schema_healthy"`
-	MigrationsApplied int    `json:"migrations_applied"`
+	ConfigDir                        string `json:"config_dir"`
+	RuntimeRoot                      string `json:"runtime_root"`
+	DatabasePath                     string `json:"database_path"`
+	Initialized                      bool   `json:"initialized"`
+	SchemaHealthy                    bool   `json:"schema_healthy"`
+	MigrationsApplied                int    `json:"migrations_applied"`
+	OperationRecoveryCleanupRequired bool   `json:"operation_recovery_cleanup_required"`
 }
 
 type StatusResult struct {
-	ConfigDir         string `json:"config_dir"`
-	RuntimeRoot       string `json:"runtime_root"`
-	DatabasePath      string `json:"database_path"`
-	Initialized       bool   `json:"initialized"`
-	SchemaHealthy     bool   `json:"schema_healthy"`
-	PendingOperations int    `json:"pending_operations"`
-	FailedOperations  int    `json:"failed_operations"`
+	ConfigDir                        string `json:"config_dir"`
+	RuntimeRoot                      string `json:"runtime_root"`
+	DatabasePath                     string `json:"database_path"`
+	Initialized                      bool   `json:"initialized"`
+	SchemaHealthy                    bool   `json:"schema_healthy"`
+	PendingOperations                int    `json:"pending_operations"`
+	FailedOperations                 int    `json:"failed_operations"`
+	OperationRecoveryCleanupRequired bool   `json:"operation_recovery_cleanup_required"`
+}
+
+type RecoveryCleanupInspector interface {
+	CleanupRequired(context.Context, *store.Store) (bool, error)
 }
 
 type Service struct {
-	configDir string
-	paths     Paths
-	stores    store.Factory
-	dataLease *DataLease
+	configDir       string
+	paths           Paths
+	stores          store.Factory
+	dataLease       *DataLease
+	recoveryCleanup RecoveryCleanupInspector
 }
 
 func (service *Service) AttachDataLease(lease *DataLease) {
 	service.dataLease = lease
+}
+
+func (service *Service) AttachRecoveryCleanup(inspector RecoveryCleanupInspector) {
+	service.recoveryCleanup = inspector
 }
 
 func NewService(configDir string) (*Service, error) {
@@ -128,6 +139,19 @@ func (service *Service) Status(ctx context.Context) (StatusResult, error) {
 	result.SchemaHealthy = status.SchemaHealthy
 	result.PendingOperations = status.PendingOperations
 	result.FailedOperations = status.FailedOperations
+	if status.SchemaHealthy && service.recoveryCleanup != nil {
+		required, err := service.recoveryCleanup.CleanupRequired(ctx, db)
+		if err != nil {
+			if errors.Is(err, store.ErrInvalidSystemState) {
+				return StatusResult{}, apperror.New(
+					apperror.StoreSchemaInvalid,
+					"ProfileDeck local data is not in a valid state; run profiledeck doctor or restore a known-good application backup",
+				)
+			}
+			return StatusResult{}, apperror.New(apperror.StoreStatusFailed, "application recovery state could not be inspected")
+		}
+		result.OperationRecoveryCleanupRequired = required
+	}
 	return result, nil
 }
 
@@ -147,7 +171,9 @@ func (service *Service) leaseForOperation() (*DataLease, bool, error) {
 }
 
 func createDirs(paths Paths) error {
-	for _, dir := range []string{paths.Root, paths.Backups, paths.Recovery, paths.Exports, paths.Logs, filepath.Dir(paths.Lock)} {
+	// Recovery cleanup owns the final recovery directory so initialization never
+	// follows a substituted symlink before the cleanup safety check runs.
+	for _, dir := range []string{paths.Root, paths.Backups, paths.Exports, paths.Logs, filepath.Dir(paths.Lock)} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}

@@ -353,7 +353,10 @@ func writeRestoreResult(w io.Writer, result appbackup.RestoreResult) error {
 		}
 	}
 	if !result.RecoveryCleanupCompleted {
-		_, err := fmt.Fprintln(w, "warning: Old operation recovery files could not be removed.")
+		_, err := fmt.Fprintln(
+			w,
+			"warning: Application data was restored, but temporary recovery files still need cleanup. Restart ProfileDeck to retry automatically; tool sign-ins and settings are not changed by cleanup.",
+		)
 		return err
 	}
 	return nil

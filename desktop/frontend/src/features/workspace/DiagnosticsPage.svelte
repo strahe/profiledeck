@@ -21,6 +21,7 @@
 		actionBusy,
 		onRecheck,
 		onRepair,
+		onRetryCleanup,
 		onRecover,
 	}: {
 		doctor: DoctorResult | null;
@@ -29,6 +30,7 @@
 		actionBusy: string;
 		onRecheck: () => void | Promise<void>;
 		onRepair: () => void | Promise<void>;
+		onRetryCleanup: () => void | Promise<void>;
 		onRecover: (operationID: string) => void | Promise<void>;
 	} = $props();
 
@@ -56,6 +58,8 @@
 		database_foreign_key_check_failed: "databaseIntegrityInvalid",
 		database_json_invalid: "databaseIntegrityInvalid",
 		database_references_invalid: "databaseIntegrityInvalid",
+		database_recovery_state_invalid: "databaseIntegrityInvalid",
+		operation_recovery_cleanup_required: "recoveryCleanupRequired",
 		operation_list_failed: "operationCheckFailed",
 		codex_provider_check_failed: "codexSetupUnavailable",
 		codex_preset_v2_invalid: "codexSetupUnavailable",
@@ -167,11 +171,28 @@
 				{#each findings as finding (`${finding.id}:${finding.details?.profile_id ?? ""}:${finding.details?.config_set_id ?? ""}`)}
 					<div class="flex items-start gap-3 rounded-lg border p-3">
 						<Badge variant={findingVariant(finding.level)}>{levelLabel(finding.level)}</Badge>
-						<div class="min-w-0">
+						<div class="min-w-0 flex-1">
 							<div class="text-sm font-medium">{findingTitle(finding)}</div>
 							<p class="mt-1 text-sm text-muted-foreground">{findingDescription(finding)}</p>
 							{#if findingReference(finding)}<p class="mt-1 font-mono text-xs text-muted-foreground">{findingReference(finding)}</p>{/if}
 						</div>
+						{#if finding.id === "operation_recovery_cleanup_required"}
+							<AlertDialog.Root>
+								<AlertDialog.Trigger disabled={!!actionBusy} class={buttonVariants({ variant: "outline", size: "sm" })}>
+									{$_("actions.retryCleanup")}
+								</AlertDialog.Trigger>
+								<AlertDialog.Content>
+									<AlertDialog.Header>
+										<AlertDialog.Title>{$_("diagnosticsPage.cleanup.retryTitle")}</AlertDialog.Title>
+										<AlertDialog.Description>{$_("diagnosticsPage.cleanup.retryDescription")}</AlertDialog.Description>
+									</AlertDialog.Header>
+									<AlertDialog.Footer>
+										<AlertDialog.Cancel>{$_("actions.cancel")}</AlertDialog.Cancel>
+										<AlertDialog.Action onclick={onRetryCleanup}>{$_("actions.retryCleanup")}</AlertDialog.Action>
+									</AlertDialog.Footer>
+								</AlertDialog.Content>
+							</AlertDialog.Root>
+						{/if}
 					</div>
 				{/each}
 			</SectionCard>

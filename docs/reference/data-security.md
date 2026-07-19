@@ -43,6 +43,8 @@ The private X25519 recovery key is stored in the operating system credential sto
 
 Before a switch changes an external tool, ProfileDeck creates a private recovery point under `recovery/<operation-id>/`. It may contain complete Codex files, a Claude Code subscription login, or an Antigravity login without application-backup encryption. It exists only for an unfinished switch and is deleted after success. It is not listed, exported, or usable to undo a successful switch.
 
+ProfileDeck records a cleanup obligation before an operation becomes authoritative, then clears it only after the recovery directory has been synchronized. A crash or filesystem error can therefore leave completed-operation material visible as a cleanup warning. While that warning is active, Profile switching and application restore pause, but reads, Doctor, and application backups remain available. Run `profiledeck doctor retry-cleanup --yes` or use **Retry cleanup** in Desktop Diagnostics. The cleanup does not change tool sign-ins or settings.
+
 Backup lists and previews show only safe metadata. Keep encrypted backup files private as defense in depth, and never share operation recovery material.
 
 ## Export a Codex Profile safely

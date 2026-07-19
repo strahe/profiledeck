@@ -61,7 +61,10 @@ func writeRecoverResult(w io.Writer, result switching.RecoverOperationResult) er
 		return err
 	}
 	if !result.RecoveryCleanupCompleted {
-		_, err := fmt.Fprintln(w, "warning: Operation recovery files could not be removed.")
+		_, err := fmt.Fprintln(
+			w,
+			"warning: Recovery completed, but temporary recovery files still need cleanup. Run `profiledeck doctor retry-cleanup --yes`; this does not change tool sign-ins or settings.",
+		)
 		return err
 	}
 	return nil

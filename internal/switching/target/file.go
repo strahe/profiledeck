@@ -81,7 +81,9 @@ func (FileBackend) Remove(ctx context.Context, raw Spec, current Snapshot, allow
 		AllowMissing: allowMissing,
 	})
 	if err != nil {
-		return false, MapFilesystemError(err)
+		// A strict post-remove directory sync can fail after the target is gone.
+		// Preserve that partial-success fact for recovery orchestration.
+		return removed, MapFilesystemError(err)
 	}
 	return removed, nil
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/provider"
+	"github.com/strahe/profiledeck/internal/recoverycleanup"
 	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/switching"
@@ -79,7 +80,7 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 		codex.Command("config-set") == nil {
 		t.Fatalf("expected Codex profile and Config Set commands")
 	}
-	if cmd.Command("doctor") == nil {
+	if cmd.Command("doctor") == nil || cmd.Command("doctor").Command("retry-cleanup") == nil {
 		t.Fatalf("expected doctor subcommand")
 	}
 	if cmd.Command("init") == nil {
@@ -1643,7 +1644,8 @@ func TestRecoverHumanOutputWarnsWhenCleanupFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected recovery output to succeed, got %v", err)
 	}
-	if !strings.Contains(out.String(), "warning: Operation recovery files could not be removed.") {
+	if !strings.Contains(out.String(), "temporary recovery files still need cleanup") ||
+		!strings.Contains(out.String(), "does not change tool sign-ins or settings") {
 		t.Fatalf("expected recovery output to include warning, got %q", out.String())
 	}
 }
@@ -1767,6 +1769,53 @@ func TestDoctorRepairLockCLIFlow(t *testing.T) {
 	}
 	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
 		t.Fatalf("expected lock file to be removed, got %v", err)
+	}
+}
+
+func TestDoctorRetryCleanupCLIFlow(t *testing.T) {
+	configDir := t.TempDir()
+	initOut, err := runCLI(t, "--config-dir", configDir, "init", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var initResult profilesruntime.InitResult
+	decodeCLIJSON(t, []byte(initOut), &initResult)
+	orphan := filepath.Join(initResult.RuntimeRoot, "recovery", "orphan")
+	if err := os.WriteFile(orphan, []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statusOut, err := runCLI(t, "--config-dir", configDir, "status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status profilesruntime.StatusResult
+	decodeCLIJSON(t, []byte(statusOut), &status)
+	if !status.OperationRecoveryCleanupRequired {
+		t.Fatalf("status did not report cleanup requirement: %#v", status)
+	}
+	humanStatus, err := runCLI(t, "--config-dir", configDir, "status")
+	if err != nil || !strings.Contains(humanStatus, "temporary recovery cleanup: required") ||
+		!strings.Contains(humanStatus, "profiledeck doctor retry-cleanup --yes") {
+		t.Fatalf("human status did not explain cleanup restriction: %q, %v", humanStatus, err)
+	}
+	_, err = runCLI(t, "--config-dir", configDir, "doctor", "retry-cleanup", "--json")
+	assertCLIAppErrorCode(t, err, apperror.ConfirmationRequired)
+
+	out, err := runCLI(t, "--config-dir", configDir, "doctor", "retry-cleanup", "--yes", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result recoverycleanup.RetryRecoveryCleanupResult
+	decodeCLIJSON(t, []byte(out), &result)
+	if !result.RecoveryCleanupCompleted {
+		t.Fatalf("retry result = %#v", result)
+	}
+	human, err := runCLI(t, "--config-dir", configDir, "doctor", "retry-cleanup", "--yes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(human, "Tool sign-ins and settings were not changed") {
+		t.Fatalf("retry output missing safety explanation: %q", human)
 	}
 }
 

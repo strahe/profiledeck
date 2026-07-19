@@ -123,8 +123,11 @@ func (executor Executor) VerifyPlan(ctx context.Context, operations []Operation)
 // CreateRecoveryPoint captures private target state before any target mutation.
 func (executor Executor) CreateRecoveryPoint(ctx context.Context, req RecoveryPointRequest) (RecoveryPoint, error) {
 	recoveryPath := filepath.Join(req.RecoveryRoot, req.OperationID)
-	if err := os.MkdirAll(req.RecoveryRoot, 0o700); err != nil {
-		return RecoveryPoint{}, apperror.New(apperror.BackupFailed, "operation recovery directory could not be created")
+	rootInfo, err := os.Lstat(req.RecoveryRoot)
+	if err != nil || rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		// The cleanup service exclusively creates and validates this root before
+		// switching reaches recovery capture; never recreate or follow it here.
+		return RecoveryPoint{}, apperror.New(apperror.BackupFailed, "operation recovery directory is unavailable")
 	}
 	// Claim the operation directory exclusively so failure cleanup cannot remove
 	// recovery state created by another operation or an earlier process.
@@ -133,7 +136,8 @@ func (executor Executor) CreateRecoveryPoint(ctx context.Context, req RecoveryPo
 	}
 	complete := false
 	defer func() {
-		if !complete {
+		current, err := os.Lstat(req.RecoveryRoot)
+		if !complete && err == nil && current.IsDir() && current.Mode()&os.ModeSymlink == 0 && os.SameFile(rootInfo, current) {
 			_ = os.RemoveAll(recoveryPath)
 		}
 	}()
@@ -184,6 +188,10 @@ func (executor Executor) CreateRecoveryPoint(ctx context.Context, req RecoveryPo
 	}
 	if err := syncRecoveryDirectory(recoveryPath); err != nil {
 		return RecoveryPoint{}, apperror.New(apperror.BackupFailed, "operation recovery point could not be finalized")
+	}
+	currentRoot, err := os.Lstat(req.RecoveryRoot)
+	if err != nil || currentRoot.Mode()&os.ModeSymlink != 0 || !currentRoot.IsDir() || !os.SameFile(rootInfo, currentRoot) {
+		return RecoveryPoint{}, apperror.New(apperror.BackupFailed, "operation recovery directory changed")
 	}
 	if err := syncRecoveryDirectory(req.RecoveryRoot); err != nil {
 		return RecoveryPoint{}, apperror.New(apperror.BackupFailed, "operation recovery point could not be finalized")
@@ -387,21 +395,6 @@ func LoadRecoveryManifest(recoveryPath string) (Manifest, error) {
 		return Manifest{}, apperror.New(apperror.BackupInvalid, "operation recovery manifest is invalid")
 	}
 	return manifest, nil
-}
-
-// RemoveRecoveryPoint makes successful switch cleanup durable before callers
-// report that sensitive unfinished-operation state is gone.
-func RemoveRecoveryPoint(recoveryRoot, operationID string) error {
-	if filepath.Base(operationID) != operationID || operationID == "" || operationID == "." {
-		return apperror.New(apperror.BackupInvalid, "operation recovery id is invalid")
-	}
-	if err := os.RemoveAll(filepath.Join(recoveryRoot, operationID)); err != nil {
-		return apperror.New(apperror.BackupFailed, "operation recovery files could not be removed")
-	}
-	if err := syncRecoveryDirectory(recoveryRoot); err != nil {
-		return apperror.New(apperror.BackupFailed, "operation recovery cleanup could not be finalized")
-	}
-	return nil
 }
 
 func syncRecoveryDirectory(path string) error {
