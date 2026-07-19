@@ -7,6 +7,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/agent"
@@ -62,7 +64,7 @@ func newDoctorTestApplication(t *testing.T, configDir, codexDir string) *doctorT
 			inspection := switchingService.InspectRecoveryFromOperation(ctx, db, paths, operation)
 			return inspection.Status, inspection.Action, inspection.Reason
 		},
-		codexService.SensitivePaths,
+		[]doctor.SensitivePathCheck{{Kind: doctor.SensitivePathCodexAuth, List: codexService.SensitivePaths}},
 	)
 	return &doctorTestApplication{
 		runtime: runtimeService, doctor: doctorService,
@@ -107,6 +109,11 @@ func TestDisabledAgentSkipsProviderHealthCheckButKeepsOperationInspection(t *tes
 	}
 
 	providerCheckCalls := 0
+	sensitivePathCalls := 0
+	sensitivePath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(sensitivePath, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("create sensitive path fixture: %v", err)
+	}
 	service := doctor.NewService(
 		runtimeService,
 		agentService,
@@ -118,7 +125,13 @@ func TestDisabledAgentSkipsProviderHealthCheckButKeepsOperationInspection(t *tes
 			},
 		}},
 		nil,
-		nil,
+		[]doctor.SensitivePathCheck{{
+			Kind: doctor.SensitivePathCodexAuth,
+			List: func(context.Context, *store.Store) ([]string, error) {
+				sensitivePathCalls++
+				return []string{sensitivePath}, nil
+			},
+		}},
 	)
 	result, err := service.Run(ctx)
 	if err != nil {
@@ -127,8 +140,56 @@ func TestDisabledAgentSkipsProviderHealthCheckButKeepsOperationInspection(t *tes
 	if providerCheckCalls != 0 {
 		t.Fatalf("disabled Agent provider checker ran %d times", providerCheckCalls)
 	}
+	if runtime.GOOS == "windows" {
+		if sensitivePathCalls != 0 {
+			t.Fatalf("POSIX sensitive path checker ran %d times on Windows", sensitivePathCalls)
+		}
+	} else if sensitivePathCalls != 1 || !hasDoctorFinding(result.Findings, "codex_auth_target_permissions_weak") {
+		t.Fatalf("disabled Agent skipped sensitive path checks: calls=%d findings=%#v", sensitivePathCalls, result.Findings)
+	}
 	if len(result.Operations) != 1 || result.Operations[0].ID != "switch-disabled-agent" {
 		t.Fatalf("generic operation inspection was skipped: %#v", result.Operations)
+	}
+}
+
+func TestSensitivePathListerFailureDoesNotExposeCause(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission checks do not run on Windows")
+	}
+	ctx := context.Background()
+	runtimeService, err := profilesruntime.NewService(t.TempDir())
+	if err != nil {
+		t.Fatalf("create runtime Service: %v", err)
+	}
+	if _, err := bootstrap.NewService(runtimeService, nil, nil).Initialize(ctx); err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+	const sentinel = "SECRET_LISTER_DIAGNOSTIC"
+	service := doctor.NewService(
+		runtimeService,
+		nil,
+		nil,
+		nil,
+		[]doctor.SensitivePathCheck{{
+			Kind: doctor.SensitivePathCodexAuth,
+			List: func(context.Context, *store.Store) ([]string, error) {
+				return nil, errors.New(sentinel)
+			},
+		}},
+	)
+	result, err := service.Run(ctx)
+	if err != nil {
+		t.Fatalf("run Doctor: %v", err)
+	}
+	if !hasDoctorFinding(result.Findings, "codex_auth_target_permission_check_failed") {
+		t.Fatalf("missing lister failure finding: %#v", result.Findings)
+	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal Doctor result: %v", err)
+	}
+	if strings.Contains(string(raw), sentinel) {
+		t.Fatalf("Doctor result exposed lister cause: %s", raw)
 	}
 }
 

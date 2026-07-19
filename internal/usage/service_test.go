@@ -3,6 +3,7 @@ package usage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,19 @@ import (
 	"github.com/strahe/profiledeck/internal/bootstrap"
 	"github.com/strahe/profiledeck/internal/store"
 )
+
+func TestUsageImportErrorMessageExcludesRawCause(t *testing.T) {
+	const sentinel = "SECRET_OS_DIAGNOSTIC"
+	for _, err := range []error{
+		errors.New(sentinel),
+		&os.PathError{Op: "open", Path: "/private/" + sentinel, Err: errors.New("permission denied")},
+	} {
+		message := sanitizedUsageImportError(err)
+		if message != "Codex session file could not be read" || strings.Contains(message, sentinel) || strings.Contains(message, "permission denied") {
+			t.Fatalf("public usage import message = %q", message)
+		}
+	}
+}
 
 func TestUsageSyncCodexImportsAndSkipsUnchangedFiles(t *testing.T) {
 	ctx := context.Background()

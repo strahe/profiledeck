@@ -1,7 +1,10 @@
 // Package apperror defines stable application error codes and structured errors.
 package apperror
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // Code identifies a recoverable application error category.
 type Code string
@@ -64,6 +67,8 @@ const (
 	UpdateRestartFailed              Code = "UPDATE_RESTART_FAILED"
 )
 
+const publicCommandFailedMessage = "ProfileDeck could not complete this command"
+
 // Error carries a stable code, safe message, optional cause, and safe details.
 type Error struct {
 	Code    Code
@@ -86,21 +91,15 @@ func (e *Error) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
-	message := ""
-	if e.Code == "" {
-		message = e.Message
-	} else if e.Message == "" {
-		message = string(e.Code)
-	} else {
-		message = fmt.Sprintf("%s: %s", e.Code, e.Message)
+	// Causes can contain paths, secrets, or driver diagnostics. Keep them on the
+	// unwrap chain and render only the explicitly safe application contract.
+	if !KnownCode(e.Code) {
+		return fmt.Sprintf("%s: %s", CommandFailed, publicCommandFailedMessage)
 	}
-	if e.Cause == nil {
-		return message
+	if e.Message == "" {
+		return string(e.Code)
 	}
-	if message == "" {
-		return e.Cause.Error()
-	}
-	return fmt.Sprintf("%s: %v", message, e.Cause)
+	return fmt.Sprintf("%s: %s", e.Code, e.Message)
 }
 
 func (e *Error) Unwrap() error {
@@ -108,6 +107,84 @@ func (e *Error) Unwrap() error {
 		return nil
 	}
 	return e.Cause
+}
+
+// Public normalizes an arbitrary error into the safe application contract.
+// Details are deliberately excluded because each output boundary owns its
+// explicit allowlist.
+func Public(err error) *Error {
+	if err == nil {
+		return nil
+	}
+	var appErr *Error
+	if errors.As(err, &appErr) && KnownCode(appErr.Code) {
+		return Wrap(appErr.Code, appErr.Message, err)
+	}
+	return Wrap(CommandFailed, publicCommandFailedMessage, err)
+}
+
+// KnownCode reports whether code is part of ProfileDeck's stable error set.
+func KnownCode(code Code) bool {
+	switch code {
+	case InvalidRuntimePath,
+		CommandFailed,
+		RuntimeInitFailed,
+		StoreInitFailed,
+		StoreOpenFailed,
+		StoreMigrationFailed,
+		StoreNotInitialized,
+		StoreSchemaInvalid,
+		StoreSchemaUnsupported,
+		StoreStatusFailed,
+		ConfirmationRequired,
+		OperationCreateFailed,
+		OperationUpdateFailed,
+		OperationRecoveryCleanupRequired,
+		ProviderAlreadyExists,
+		ProviderInUse,
+		ProviderInvalid,
+		ProviderNotFound,
+		ProfileAlreadyExists,
+		ProfileInUse,
+		ProfileInvalid,
+		ProfileNotFound,
+		PlanBuildFailed,
+		AdapterNotFound,
+		AgentDisabled,
+		ProviderDisabled,
+		TargetInvalid,
+		TargetAlreadyExists,
+		TargetNotFound,
+		TargetReadFailed,
+		LockAcquireFailed,
+		SwitchPlanUnsupported,
+		TargetChanged,
+		BackupFailed,
+		BackupInvalid,
+		BackupSchemaUnsupported,
+		BackupNotFound,
+		RestoreFailed,
+		ApplicationRestartFailed,
+		RecoveryUnsupported,
+		TargetWriteFailed,
+		LockRepairUnsafe,
+		UsageInvalid,
+		UsageImportFailed,
+		CodexInvalid,
+		AntigravityInvalid,
+		ClaudeCodeInvalid,
+		SettingInvalid,
+		ExportFailed,
+		ImportInvalid,
+		ImportConflict,
+		ImportPlanChanged,
+		UpdateChannelBusy,
+		UpdateNotReady,
+		UpdateRestartFailed:
+		return true
+	default:
+		return false
+	}
 }
 
 // WithDetail attaches safe diagnostic data to the error.

@@ -1,4 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/svelte";
+import { locale } from "svelte-i18n";
+import { tick } from "svelte";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -58,6 +60,40 @@ function renderDiagnostics(doctor: DoctorResult, actionBusy = "") {
 }
 
 describe("DiagnosticsPage confirmations", () => {
+	it("shows permission guidance without backend error text", () => {
+		const path = "/Users/alice/.config/profiledeck/recovery";
+		const backendMessage = "chmod failed: SECRET_INTERNAL_ERROR";
+		renderDiagnostics(doctorResult({
+			findings: [{
+				id: "recovery_permissions_weak",
+				level: "error",
+				message: backendMessage,
+				details: { path, mode: "0755", want: "0700" },
+			}],
+		}));
+
+		expect(screen.getByText("Sensitive ProfileDeck files may be visible to other users")).toBeInTheDocument();
+		expect(screen.getByText(`Path: ${path}`)).toBeInTheDocument();
+		expect(screen.queryByText(backendMessage)).not.toBeInTheDocument();
+	});
+
+	it("shows Simplified Chinese permission guidance", async () => {
+		const path = "/Users/alice/.config/profiledeck/recovery";
+		locale.set("zh-CN");
+		await tick();
+		renderDiagnostics(doctorResult({
+			findings: [{
+				id: "recovery_permissions_weak",
+				level: "error",
+				message: "chmod failed: SECRET_INTERNAL_ERROR",
+				details: { path, mode: "0755", want: "0700" },
+			}],
+		}));
+
+		expect(screen.getByText("其他系统用户可能可以访问 ProfileDeck 敏感文件")).toBeInTheDocument();
+		expect(screen.getByText(`路径：${path}`)).toBeInTheDocument();
+	});
+
 	it("confirms recovery cleanup before invoking it", async () => {
 		const user = userEvent.setup();
 		const callbacks = renderDiagnostics(doctorResult({

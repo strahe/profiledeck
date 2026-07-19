@@ -827,8 +827,19 @@ func TestFailSwitchOperationPreservesOriginalErrorWhenFailureMarkFails(t *testin
 	if !errors.As(err, &appErr) {
 		t.Fatalf("expected app error, got %T: %v", err, err)
 	}
-	if appErr.Details["operation_update_error"] == "" {
-		t.Fatalf("expected cleanup failure detail to be preserved, got %#v", appErr.Details)
+	if len(appErr.Details) != 0 || strings.Contains(err.Error(), "database") {
+		t.Fatalf("expected cleanup failure diagnostics to remain private, got %#v: %v", appErr.Details, err)
+	}
+	if !errors.Is(err, originalErr) {
+		t.Fatal("expected original failure to remain on the error chain")
+	}
+}
+
+func TestErrorCodeAndMessageNormalizesUnknownFailure(t *testing.T) {
+	private := errors.New("write /private/SECRET_TARGET: permission denied")
+	code, message := errorCodeAndMessage(private)
+	if code != apperror.CommandFailed || strings.Contains(message, "SECRET_TARGET") {
+		t.Fatalf("unexpected persisted failure: %s %q", code, message)
 	}
 }
 

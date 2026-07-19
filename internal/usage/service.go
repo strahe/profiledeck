@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"path/filepath"
 
 	"github.com/strahe/profiledeck/internal/agent"
@@ -284,11 +283,10 @@ func sanitizedUsageImportError(err error) string {
 	if err == nil {
 		return ""
 	}
-	var pathErr *os.PathError
-	if errors.As(err, &pathErr) {
-		return pathErr.Err.Error()
-	}
-	return err.Error()
+	// Session readers can return operating-system or driver diagnostics. The
+	// file name and source key identify the affected input without exposing the
+	// raw cause through CLI, JSON, or Desktop results.
+	return "Codex session file could not be read"
 }
 
 func usageSourceCursor(ctx context.Context, db *store.Store, file SourceFile) (store.UsageImportCursor, bool, bool, error) {

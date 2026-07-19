@@ -8,13 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	goruntime "runtime"
 	"strconv"
 	"strings"
 
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
-	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/recoverycleanup"
 	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
@@ -94,9 +94,21 @@ type ProviderCheck struct {
 // RecoveryInspector evaluates an unresolved switch without mutating state.
 type RecoveryInspector func(context.Context, *store.Store, runtime.Paths, store.Operation) (status, action, reason string)
 
+type SensitivePathKind string
+
+const (
+	SensitivePathCodexAuth            SensitivePathKind = "codex_auth"
+	SensitivePathClaudeCodeCredential SensitivePathKind = "claude_code_credential"
+)
+
 // SensitivePathLister returns compiled-in Provider working paths that remain
 // safety-relevant even when their Desktop Agent is disabled.
 type SensitivePathLister func(context.Context, *store.Store) ([]string, error)
+
+type SensitivePathCheck struct {
+	Kind SensitivePathKind
+	List SensitivePathLister
+}
 
 type SharedLockRunner interface {
 	RunWithSharedLock(context.Context, string, func(context.Context) error) error
@@ -112,7 +124,7 @@ type Service struct {
 	policy            agent.Policy
 	providerChecks    []ProviderCheck
 	recoveryInspector RecoveryInspector
-	sensitivePaths    SensitivePathLister
+	sensitivePaths    []SensitivePathCheck
 	cleanup           *recoverycleanup.Service
 	locks             SharedLockRunner
 }
@@ -122,13 +134,14 @@ func NewService(
 	policy agent.Policy,
 	providerChecks []ProviderCheck,
 	recoveryInspector RecoveryInspector,
-	sensitivePaths SensitivePathLister,
+	sensitivePaths []SensitivePathCheck,
 	coordinators ...RecoveryCleanupCoordinator,
 ) *Service {
 	checks := append([]ProviderCheck(nil), providerChecks...)
+	pathChecks := append([]SensitivePathCheck(nil), sensitivePaths...)
 	service := &Service{
 		runtime: runtimeService, policy: policy, providerChecks: checks,
-		recoveryInspector: recoveryInspector, sensitivePaths: sensitivePaths,
+		recoveryInspector: recoveryInspector, sensitivePaths: pathChecks,
 	}
 	if runtimeService != nil {
 		service.cleanup = recoverycleanup.NewService(runtimeService.Paths())
@@ -347,7 +360,6 @@ func inspectDoctorDatabase(ctx context.Context, stores store.Factory) (doctorDat
 			ID:      "database_inspect_failed",
 			Level:   LevelError,
 			Message: "failed to inspect application database",
-			Details: map[string]any{"error": err.Error()},
 		}}
 	}
 
@@ -357,7 +369,6 @@ func inspectDoctorDatabase(ctx context.Context, stores store.Factory) (doctorDat
 			ID:      "database_open_failed",
 			Level:   LevelError,
 			Message: "failed to open application database",
-			Details: map[string]any{"error": err.Error()},
 		}}
 	}
 
@@ -382,7 +393,6 @@ func inspectDoctorDatabase(ctx context.Context, stores store.Factory) (doctorDat
 			ID:      "database_status_failed",
 			Level:   LevelError,
 			Message: "failed to inspect application database",
-			Details: map[string]any{"error": err.Error()},
 		}}
 	}
 	if !report.Healthy {
@@ -417,7 +427,6 @@ func inspectDoctorDatabase(ctx context.Context, stores store.Factory) (doctorDat
 			ID:      "operation_list_failed",
 			Level:   LevelError,
 			Message: "failed to list incomplete operations",
-			Details: map[string]any{"error": err.Error()},
 		}}
 	}
 
@@ -470,63 +479,117 @@ func (service *Service) inspectSensitivePathPermissions(ctx context.Context, pat
 		return nil
 	}
 	findings := []Finding{}
-	findings = append(findings, inspectPathPermission(paths.Database, 0o600, "database_permissions_weak", "application database file permissions are wider than 0600")...)
-	findings = append(findings, inspectPathPermission(paths.Backups, 0o700, "backups_permissions_weak", "backup directory permissions are wider than 0700")...)
+	runtimeChecks := []pathPermissionCheck{
+		{path: paths.Root, want: 0o700, id: "runtime_root_permissions_weak", level: LevelError, message: "ProfileDeck data directory may allow access by other users"},
+		{path: paths.Database, want: 0o600, id: "database_permissions_weak", level: LevelError, message: "application database may allow access by other users"},
+		{path: paths.Backups, want: 0o700, id: "backups_permissions_weak", level: LevelWarning, message: "backup directory may allow access by other users"},
+		{path: paths.Recovery, want: 0o700, id: "recovery_permissions_weak", level: LevelError, message: "operation recovery directory may allow access by other users"},
+		{path: paths.Exports, want: 0o700, id: "exports_permissions_weak", level: LevelWarning, message: "export directory may allow access by other users"},
+		{path: paths.Logs, want: 0o700, id: "logs_permissions_weak", level: LevelWarning, message: "log directory may allow access by other users"},
+		{path: filepath.Dir(paths.Lock), want: 0o700, id: "locks_permissions_weak", level: LevelWarning, message: "lock directory may allow access by other users"},
+	}
+	for _, check := range runtimeChecks {
+		findings = append(findings, inspectPathPermission(check)...)
+	}
 
 	if !dbState.healthy || dbState.db == nil {
 		return findings
 	}
-	if service.sensitivePaths == nil {
-		return findings
-	}
-	pathsToInspect, err := service.sensitivePaths(ctx, dbState.db)
-	if err != nil {
-		findings = append(findings, Finding{
-			ID:      "codex_auth_target_permission_check_failed",
-			Level:   LevelWarning,
-			Message: "failed to inspect Codex auth target permissions",
-			Details: map[string]any{"error": err.Error()},
-		})
-		return findings
-	}
 	seen := map[string]struct{}{}
-	for _, path := range pathsToInspect {
-		if path == "" {
+	for _, source := range service.sensitivePaths {
+		policy, ok := permissionPolicyForSensitivePath(source.Kind)
+		if !ok || source.List == nil {
 			continue
 		}
-		if _, ok := seen[path]; ok {
+		pathsToInspect, err := source.List(ctx, dbState.db)
+		if err != nil {
+			findings = append(findings, Finding{
+				ID:      policy.checkFailedID,
+				Level:   LevelWarning,
+				Message: policy.checkFailedMessage,
+			})
 			continue
 		}
-		seen[path] = struct{}{}
-		findings = append(findings, inspectPathPermission(path, 0o600, "codex_auth_target_permissions_weak", "Codex auth target file permissions are wider than 0600")...)
+		for _, path := range pathsToInspect {
+			if path == "" {
+				continue
+			}
+			key := string(source.Kind) + "\x00" + path
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			check := policy.pathPermissionCheck
+			check.path = path
+			findings = append(findings, inspectPathPermission(check)...)
+		}
 	}
 	return findings
 }
 
-func inspectPathPermission(path string, want os.FileMode, id, message string) []Finding {
-	info, err := os.Stat(path)
+type pathPermissionCheck struct {
+	path    string
+	want    os.FileMode
+	id      string
+	level   string
+	message string
+}
+
+type sensitivePathPermissionPolicy struct {
+	pathPermissionCheck
+	checkFailedID      string
+	checkFailedMessage string
+}
+
+func permissionPolicyForSensitivePath(kind SensitivePathKind) (sensitivePathPermissionPolicy, bool) {
+	switch kind {
+	case SensitivePathCodexAuth:
+		return sensitivePathPermissionPolicy{
+			pathPermissionCheck: pathPermissionCheck{
+				want: 0o600, id: "codex_auth_target_permissions_weak", level: LevelError,
+				message: "Codex login file may allow access by other users",
+			},
+			checkFailedID:      "codex_auth_target_permission_check_failed",
+			checkFailedMessage: "failed to inspect Codex login file permissions",
+		}, true
+	case SensitivePathClaudeCodeCredential:
+		return sensitivePathPermissionPolicy{
+			pathPermissionCheck: pathPermissionCheck{
+				want: 0o600, id: "claude_code_credentials_permissions", level: LevelError,
+				message: "Claude Code login file may allow access by other users",
+			},
+			checkFailedID:      "claude_code_credentials_permission_check_failed",
+			checkFailedMessage: "failed to inspect Claude Code login file permissions",
+		}, true
+	default:
+		return sensitivePathPermissionPolicy{}, false
+	}
+}
+
+func inspectPathPermission(check pathPermissionCheck) []Finding {
+	info, err := os.Stat(check.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return []Finding{{
-			ID:      id + "_inspect_failed",
+			ID:      check.id + "_inspect_failed",
 			Level:   LevelWarning,
 			Message: "failed to inspect sensitive path permissions",
-			Details: map[string]any{"path": path, "error": err.Error()},
+			Details: map[string]any{"path": check.path},
 		}}
 	}
-	if info.Mode().Perm() == want {
+	if info.Mode().Perm()&0o077 == 0 {
 		return nil
 	}
 	return []Finding{{
-		ID:      id,
-		Level:   LevelWarning,
-		Message: message,
+		ID:      check.id,
+		Level:   check.level,
+		Message: check.message,
 		Details: map[string]any{
-			"path": path,
+			"path": check.path,
 			"mode": fileModeString(info.Mode()),
-			"want": fileModeString(want),
+			"want": fileModeString(check.want),
 		},
 	}}
 }
@@ -589,7 +652,23 @@ func inspectDoctorLock(ctx context.Context, lockPath string, dbState doctorDatab
 	}
 
 	classifyDoctorLock(&lock, parseErr, probeErr, dbState.healthy)
+	if !publicDoctorLockOwner(lock) {
+		lock.Owner = ""
+		lock.OperationID = ""
+	}
 	return lock
+}
+
+func publicDoctorLockOwner(lock DoctorLock) bool {
+	if lock.OperationID == "" {
+		return false
+	}
+	switch lock.OperationStatus {
+	case store.OperationStatusPending, store.OperationStatusFailed, store.OperationStatusApplied:
+		return true
+	default:
+		return false
+	}
 }
 
 func populateDoctorLockFields(lock *DoctorLock, raw string) error {
@@ -723,7 +802,7 @@ func (service *Service) doctorOperation(ctx context.Context, dbState doctorDatab
 	result := DoctorOperation{
 		ID: operation.ID, OperationType: operation.OperationType, Status: operation.Status,
 		Checkpoint: metadata.Checkpoint, ProviderID: metadata.ProviderID, ProfileID: profileID,
-		ErrorCode: operation.ErrorCode, ErrorMessage: profiletarget.RedactSensitiveText(operation.ErrorMessage),
+		ErrorCode:       publicOperationErrorCode(operation.ErrorCode),
 		UpdatedAtUnixMS: operation.UpdatedAtUnixMS,
 	}
 
@@ -752,6 +831,17 @@ func (service *Service) doctorOperation(ctx context.Context, dbState doctorDatab
 		result.RecoveryStatus, result.RecoveryAction, result.RecoveryReason = service.recoveryInspector(ctx, dbState.db, paths, operation)
 	}
 	return result
+}
+
+func publicOperationErrorCode(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	code := apperror.Code(raw)
+	if !apperror.KnownCode(code) {
+		return string(apperror.CommandFailed)
+	}
+	return string(code)
 }
 
 func doctorLockMayBeActive(lock DoctorLock) bool {

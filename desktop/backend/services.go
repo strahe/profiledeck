@@ -1019,17 +1019,28 @@ func FormatDesktopError(err error) DesktopError {
 	if errors.Is(err, context.Canceled) {
 		return DesktopError{Code: "CANCELED", Message: "operation canceled"}
 	}
-	var appErr *apperror.Error
-	if errors.As(err, &appErr) {
-		return DesktopError{
-			Code:    string(appErr.Code),
-			Message: appErr.Message,
-			Details: appErr.Details,
-		}
+	publicErr := apperror.Public(err)
+	return DesktopError{
+		Code:    string(publicErr.Code),
+		Message: publicErr.Message,
+		Details: desktopErrorDetails(err),
 	}
-	// Unknown errors can include local paths or driver internals. Keep the
-	// desktop boundary structured without exposing raw error text.
-	return DesktopError{Code: "DESKTOP_ERROR", Message: "desktop operation failed"}
+}
+
+func desktopErrorDetails(err error) map[string]any {
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) {
+		return nil
+	}
+	reason, _ := appErr.Details["reason"].(string)
+	allowed := appErr.Code == apperror.ConfirmationRequired && reason == "replace_required" ||
+		appErr.Code == apperror.ExportFailed && reason == "exists"
+	if !allowed {
+		return nil
+	}
+	// These stable reasons drive explicit confirmation flows in the frontend;
+	// paths and arbitrary backend diagnostics never cross the Desktop boundary.
+	return map[string]any{"reason": reason}
 }
 
 func FormatDesktopErrorPtr(err error) *DesktopError {

@@ -649,8 +649,32 @@ func TestFormatDesktopError(t *testing.T) {
 	err := apperror.New(apperror.RuntimeInitFailed, "runtime failed").WithDetail("path", "/tmp/profiledeck")
 
 	result := FormatDesktopError(err)
-	if result.Code != string(apperror.RuntimeInitFailed) || result.Message != "runtime failed" || result.Details["path"] != "/tmp/profiledeck" {
+	if result.Code != string(apperror.RuntimeInitFailed) || result.Message != "runtime failed" || len(result.Details) != 0 {
 		t.Fatalf("unexpected app error format: %#v", result)
+	}
+}
+
+func TestFormatDesktopErrorAllowsOnlyInteractionReasons(t *testing.T) {
+	cases := []struct {
+		code   apperror.Code
+		reason string
+		want   bool
+	}{
+		{code: apperror.ConfirmationRequired, reason: "replace_required", want: true},
+		{code: apperror.ExportFailed, reason: "exists", want: true},
+		{code: apperror.ExportFailed, reason: "permissions"},
+	}
+	for _, tc := range cases {
+		err := apperror.New(tc.code, "safe message").
+			WithDetail("reason", tc.reason).
+			WithDetail("path", "/private/SECRET_PATH")
+		result := FormatDesktopError(err)
+		if (result.Details["reason"] == tc.reason) != tc.want {
+			t.Fatalf("unexpected details for %s/%s: %#v", tc.code, tc.reason, result.Details)
+		}
+		if _, exists := result.Details["path"]; exists {
+			t.Fatalf("expected private path to be omitted, got %#v", result.Details)
+		}
 	}
 }
 
@@ -666,7 +690,7 @@ func TestFormatDesktopErrorDoesNotExposeRawUnknownError(t *testing.T) {
 	rawPath := filepath.Join(t.TempDir(), "profiledeck.db")
 
 	result := FormatDesktopError(errors.New("open " + rawPath + ": permission denied"))
-	if result.Code != "DESKTOP_ERROR" || result.Message == "" {
+	if result.Code != string(apperror.CommandFailed) || result.Message == "" {
 		t.Fatalf("unexpected unknown error format: %#v", result)
 	}
 	if strings.Contains(result.Message, rawPath) {

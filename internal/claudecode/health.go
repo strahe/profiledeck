@@ -28,3 +28,19 @@ func (service *Service) HealthCheck(ctx context.Context, db *store.Store) ([]doc
 	})
 	return findings, nil
 }
+
+// SensitivePaths returns the file-backed login target for unconditional
+// permission checks. Keychain locators have no POSIX path to inspect.
+func (service *Service) SensitivePaths(ctx context.Context, db *store.Store) ([]string, error) {
+	reserved, err := service.ReservedPaths(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(reserved))
+	for _, target := range reserved {
+		if target.Path != "" {
+			paths = append(paths, target.Path)
+		}
+	}
+	return paths, nil
+}

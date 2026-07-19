@@ -22,6 +22,7 @@ import (
 	desktopupdate "github.com/strahe/profiledeck/desktop/update"
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
 )
 
 var (
@@ -62,7 +63,7 @@ func main() {
 		AgentAccess: agent.AccessDesktopPreferences,
 	})
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal(apperror.Public(err))
 	}
 	defer core.Close()
 	startupErr := backend.Bootstrap(desktopCtx, core)
@@ -101,7 +102,7 @@ func main() {
 	})
 	backend.ConfigureBackupRestarter(services.Backup, desktopRestarter(wailsApp))
 	if err := desktopupdate.Attach(updates, wailsApp); err != nil {
-		log.Printf("profiledeck: automatic updates are unavailable: %v", err)
+		log.Print("profiledeck: automatic updates are unavailable")
 	}
 
 	mainWindow := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
@@ -126,7 +127,7 @@ func main() {
 	setupApplicationBackupRuntime(desktopCtx, wailsApp, services)
 
 	if err := wailsApp.Run(); err != nil {
-		log.Fatal(err)
+		log.Fatal(apperror.Public(err))
 	}
 }
 

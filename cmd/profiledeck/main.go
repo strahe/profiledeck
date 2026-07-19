@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
 	internalcli "github.com/strahe/profiledeck/internal/cli"
 )
 
@@ -20,7 +22,11 @@ func main() {
 	cmd := internalcli.NewCommand(info)
 
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, err)
+		writeCommandError(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func writeCommandError(w io.Writer, err error) {
+	_, _ = fmt.Fprintln(w, apperror.Public(err))
 }

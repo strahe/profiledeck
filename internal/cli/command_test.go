@@ -1696,10 +1696,13 @@ func TestDoctorCLIJSONAndHumanOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected doctor human output to succeed, got %v", err)
 	}
-	for _, expected := range []string{"database:", "operations:", "lock:", "TARGET_WRITE_FAILED", "write failed"} {
+	for _, expected := range []string{"database:", "operations:", "lock:", "TARGET_WRITE_FAILED"} {
 		if !strings.Contains(humanOut, expected) {
 			t.Fatalf("expected human doctor output to contain %q, got %q", expected, humanOut)
 		}
+	}
+	if strings.Contains(humanOut, "write failed") {
+		t.Fatalf("expected persisted error message to stay private, got %q", humanOut)
 	}
 }
 
@@ -1731,13 +1734,14 @@ func TestDoctorHumanOperationsUseStableColumns(t *testing.T) {
 	output := out.String()
 	for _, expected := range []string{
 		"error_code=-",
-		"error_message=-",
 		"error_code=TARGET_WRITE_FAILED",
-		"error_message=write failed",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("expected doctor operation output to contain %q, got %q", expected, output)
 		}
+	}
+	if strings.Contains(output, "error_message") || strings.Contains(output, "write failed") {
+		t.Fatalf("expected persisted error messages to stay private, got %q", output)
 	}
 }
 

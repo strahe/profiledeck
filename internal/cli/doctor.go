@@ -159,11 +159,7 @@ func doctorOperationErrorDetails(operation doctor.DoctorOperation) string {
 	if errorCode == "" {
 		errorCode = "-"
 	}
-	errorMessage := doctorOutputField(operation.ErrorMessage)
-	if errorMessage == "" {
-		errorMessage = "-"
-	}
-	details := fmt.Sprintf("\terror_code=%s\terror_message=%s", errorCode, errorMessage)
+	details := fmt.Sprintf("\terror_code=%s", errorCode)
 	if operation.RecoveryStatus != "" {
 		details += fmt.Sprintf("\trecovery_status=%s", doctorOutputField(operation.RecoveryStatus))
 	}

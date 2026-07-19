@@ -162,9 +162,6 @@ func InspectHealth(ctx context.Context, db *store.Store, inspect TargetInspector
 		}
 	}
 	if metadata.Storage == claudecodeconfig.StorageFile {
-		if goruntime.GOOS == "linux" && snapshot.Mode.Perm() != 0o600 {
-			findings = append(findings, doctorcore.Finding{ID: "claude_code_credentials_permissions", Level: doctorcore.LevelError, Message: "Claude Code credential file permissions must be 0600"})
-		}
 		if goruntime.GOOS == "windows" && !FileReplacementAvailable(metadata.Path) {
 			findings = append(findings, doctorcore.Finding{ID: "claude_code_credentials_replace_unavailable", Level: doctorcore.LevelWarning, Message: "Claude Code credential file directory is not writable for atomic replacement"})
 		}

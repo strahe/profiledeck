@@ -105,7 +105,7 @@ func (service *Service) Detect(ctx context.Context) (CodexDetectResult, error) {
 			result.Warnings = append(result.Warnings, "Codex home exists but is not a directory")
 		}
 	} else if !os.IsNotExist(err) {
-		result.Warnings = append(result.Warnings, "failed to inspect Codex home: "+err.Error())
+		result.Warnings = append(result.Warnings, "failed to inspect Codex home")
 	}
 
 	if raw, err := os.ReadFile(home.ConfigPath); err == nil {
@@ -119,7 +119,7 @@ func (service *Service) Detect(ctx context.Context) (CodexDetectResult, error) {
 		result.ConfigStatus = "missing"
 	} else {
 		result.ConfigStatus = "unreadable"
-		result.Warnings = append(result.Warnings, "failed to read Codex config: "+err.Error())
+		result.Warnings = append(result.Warnings, "failed to read Codex config")
 	}
 	if raw, err := os.ReadFile(home.AuthPath); err == nil {
 		if _, err := codexauth.NormalizePayload(raw); err != nil {
@@ -132,7 +132,7 @@ func (service *Service) Detect(ctx context.Context) (CodexDetectResult, error) {
 		result.AuthStatus = "missing"
 	} else {
 		result.AuthStatus = "unreadable"
-		result.Warnings = append(result.Warnings, "failed to read Codex auth: "+err.Error())
+		result.Warnings = append(result.Warnings, "failed to read Codex auth")
 	}
 
 	if status.Initialized && !status.SchemaHealthy {

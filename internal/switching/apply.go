@@ -359,20 +359,15 @@ func preserveSwitchOperationError(operationErr, updateErr error) error {
 		return apperror.Wrap(apperror.OperationUpdateFailed, "failed to mark switch operation failed", updateErr)
 	}
 
-	var appErr *apperror.Error
-	if errors.As(operationErr, &appErr) {
-		return appErr.WithDetail("operation_update_error", updateErr.Error())
-	}
-	return apperror.Wrap(apperror.CommandFailed, "switch operation failed", operationErr).
-		WithDetail("operation_update_error", updateErr.Error())
+	publicErr := apperror.Public(operationErr)
+	// Keep both private failures available to internal callers without attaching
+	// database diagnostics to a detail map that can cross an output boundary.
+	return apperror.Wrap(publicErr.Code, publicErr.Message, errors.Join(operationErr, updateErr))
 }
 
 func errorCodeAndMessage(err error) (apperror.Code, string) {
-	var appErr *apperror.Error
-	if errors.As(err, &appErr) {
-		return appErr.Code, appErr.Message
-	}
-	return apperror.CommandFailed, err.Error()
+	publicErr := apperror.Public(err)
+	return publicErr.Code, publicErr.Message
 }
 
 func mapTargetFSError(err error) error {

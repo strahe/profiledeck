@@ -55,6 +55,44 @@ func (backend *failClaudeCodePostVerifyBackend) Verify(ctx context.Context, spec
 	return backend.Backend.Verify(ctx, spec, snapshot)
 }
 
+func TestClaudeCodeSensitivePathsReturnsOnlyFileBackedLogin(t *testing.T) {
+	ctx := context.Background()
+	t.Run("file", func(t *testing.T) {
+		configDir := t.TempDir()
+		if _, err := initClaudeCodeTestRuntime(ctx, configDir); err != nil {
+			t.Fatal(err)
+		}
+		credentialPath := filepath.Join(t.TempDir(), claudecodeconfig.CredentialsFile)
+		seedClaudeCodeFileProvider(t, ctx, configDir, credentialPath)
+		db, err := openHealthyStore(ctx, configDir, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		paths, err := newClaudeCodeTestEnvironment(t, configDir).claudeCode.SensitivePaths(ctx, db)
+		if err != nil || len(paths) != 1 || paths[0] != credentialPath {
+			t.Fatalf("file-backed sensitive paths = %#v, %v", paths, err)
+		}
+	})
+
+	t.Run("keychain", func(t *testing.T) {
+		configDir := t.TempDir()
+		if _, err := initClaudeCodeTestRuntime(ctx, configDir); err != nil {
+			t.Fatal(err)
+		}
+		seedClaudeCodeKeychainProvider(t, ctx, configDir, "profiledeck-test")
+		db, err := openHealthyStore(ctx, configDir, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		paths, err := newClaudeCodeTestEnvironment(t, configDir).claudeCode.SensitivePaths(ctx, db)
+		if err != nil || len(paths) != 0 {
+			t.Fatalf("Keychain sensitive paths = %#v, %v", paths, err)
+		}
+	})
+}
+
 func TestClaudeCodeCreateSwitchCaptureAndKnownMatch(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()

@@ -99,15 +99,27 @@
 		claude_code_login_unsupported: "claudeCodeWorkingLoginAttention",
 		claude_code_expiry_unknown: "claudeCodeWorkingLoginAttention",
 		claude_code_working_copy_changed: "claudeCodeWorkingLoginAttention",
-		claude_code_credentials_permissions: "claudeCodeCredentialPermissions",
+		claude_code_credentials_permissions: "claudeCodeLoginPermissions",
 		claude_code_credentials_replace_unavailable: "claudeCodeCredentialPermissions",
+		runtime_root_permissions_weak: "sensitiveDirectoryPermissions",
 		database_permissions_weak: "databasePermissions",
 		backups_permissions_weak: "backupPermissions",
+		recovery_permissions_weak: "sensitiveDirectoryPermissions",
+		exports_permissions_weak: "runtimeDirectoryPermissions",
+		logs_permissions_weak: "runtimeDirectoryPermissions",
+		locks_permissions_weak: "runtimeDirectoryPermissions",
 		codex_auth_target_permissions_weak: "loginPermissions",
 		codex_auth_target_permission_check_failed: "permissionsCheckFailed",
+		claude_code_credentials_permission_check_failed: "permissionsCheckFailed",
+		runtime_root_permissions_weak_inspect_failed: "permissionsCheckFailed",
 		database_permissions_weak_inspect_failed: "permissionsCheckFailed",
 		backups_permissions_weak_inspect_failed: "permissionsCheckFailed",
+		recovery_permissions_weak_inspect_failed: "permissionsCheckFailed",
+		exports_permissions_weak_inspect_failed: "permissionsCheckFailed",
+		logs_permissions_weak_inspect_failed: "permissionsCheckFailed",
+		locks_permissions_weak_inspect_failed: "permissionsCheckFailed",
 		codex_auth_target_permissions_weak_inspect_failed: "permissionsCheckFailed",
+		claude_code_credentials_permissions_inspect_failed: "permissionsCheckFailed",
 	};
 
 	function findingCopyKey(finding: DoctorFinding): string {
@@ -127,6 +139,8 @@
 		if (profileID) return translate("diagnosticsPage.finding.affectedProfile", { value: profileID });
 		const configSetID = String(finding.details?.config_set_id ?? "");
 		if (configSetID) return translate("diagnosticsPage.finding.affectedConfigSet", { value: configSetID });
+		const path = String(finding.details?.path ?? "");
+		if (path) return translate("diagnosticsPage.finding.affectedPath", { value: path });
 		return "";
 	}
 
@@ -168,7 +182,7 @@
 	{:else if doctor}
 		{#if findings.length}
 			<SectionCard title={$_("diagnosticsPage.findings")} contentClass="flex flex-col gap-3">
-				{#each findings as finding (`${finding.id}:${finding.details?.profile_id ?? ""}:${finding.details?.config_set_id ?? ""}`)}
+				{#each findings as finding (`${finding.id}:${finding.details?.profile_id ?? ""}:${finding.details?.config_set_id ?? ""}:${finding.details?.path ?? ""}`)}
 					<div class="flex items-start gap-3 rounded-lg border p-3">
 						<Badge variant={findingVariant(finding.level)}>{levelLabel(finding.level)}</Badge>
 						<div class="min-w-0 flex-1">

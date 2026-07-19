@@ -438,7 +438,7 @@ func (service *Service) failCheck(err error, checkedAtUnixMS int64) {
 	if code == "update_failed" && (state == StateVerifying || state == StatePreparing) {
 		code = ErrorArtifactVerificationFailed
 	}
-	log.Printf("profiledeck: update check failed (%s): %v", code, err)
+	log.Printf("profiledeck: update check failed (%s)", code)
 	service.setStatus(func(status *UpdateStatus) {
 		status.State = StateError
 		status.ErrorCode = code

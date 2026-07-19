@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/codex"
 	"github.com/strahe/profiledeck/internal/usage"
 )
@@ -181,7 +182,7 @@ func TestUsageAutoSyncReportsWarningsAndRedactsFatalErrors(t *testing.T) {
 		status := waitUsageAutoSyncStatus(t, statuses, func(status UsageAutoSyncStatus) bool {
 			return status.Outcome == UsageAutoSyncOutcomeError
 		})
-		if status.Error == nil || status.Error.Code != "DESKTOP_ERROR" {
+		if status.Error == nil || status.Error.Code != string(apperror.CommandFailed) {
 			t.Fatalf("expected structured fatal error, got %#v", status)
 		}
 		if strings.Contains(status.Error.Message, raw) {

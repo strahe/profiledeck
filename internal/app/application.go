@@ -136,7 +136,10 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 			inspection := switchingService.InspectRecoveryFromOperation(ctx, db, paths, operation)
 			return inspection.Status, inspection.Action, inspection.Reason
 		},
-		codexService.SensitivePaths,
+		[]doctor.SensitivePathCheck{
+			{Kind: doctor.SensitivePathCodexAuth, List: codexService.SensitivePaths},
+			{Kind: doctor.SensitivePathClaudeCodeCredential, List: claudeCodeService.SensitivePaths},
+		},
 		doctor.RecoveryCleanupCoordinator{Cleanup: cleanupService, Locks: switchingService},
 	)
 

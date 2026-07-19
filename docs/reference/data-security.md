@@ -24,7 +24,7 @@ The directory contains `profiledeck.db`, encrypted application backups, and temp
 
 ## Protect local data
 
-ProfileDeck encrypts `.profiledeck-backup` files with age X25519. The live database and unfinished-switch recovery material are not separately encrypted, so anyone who can read your local files may be able to read saved logins. ProfileDeck restricts their file permissions where the operating system allows it.
+ProfileDeck encrypts `.profiledeck-backup` files with age X25519. The live database and unfinished-switch recovery material are not separately encrypted, so anyone who can read your local files may be able to read saved logins. On macOS and Linux, ProfileDeck restricts its own private files and directories where possible. Desktop Diagnostics and `profiledeck doctor` report ProfileDeck, Codex, or Claude Code paths whose permissions may allow access by other local users. These checks do not block startup or Profile switching, and ProfileDeck does not change files owned by those tools during a check.
 
 - Use your operating system's full-disk encryption and screen lock.
 - Do not sync, commit, upload, or share the complete ProfileDeck data directory.

@@ -79,7 +79,7 @@ func newClaudeCodeTestEnvironment(t *testing.T, configDir string, customBackends
 			inspection := switchingService.InspectRecoveryFromOperation(ctx, db, paths, operation)
 			return inspection.Status, inspection.Action, inspection.Reason
 		},
-		nil,
+		[]doctor.SensitivePathCheck{{Kind: doctor.SensitivePathClaudeCodeCredential, List: claudeCodeService.SensitivePaths}},
 	)
 	return &claudeCodeTestEnvironment{
 		runtime: runtimeService, claudeCode: claudeCodeService,

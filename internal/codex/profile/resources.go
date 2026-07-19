@@ -494,13 +494,20 @@ func unsupportedBinding(message, profileID, slotID string) *apperror.Error {
 }
 
 func authPayloadError(err error) *apperror.Error {
-	appErr := apperror.Wrap(apperror.CodexInvalid, err.Error(), err)
+	message := "Codex auth payload is invalid"
 	var fieldErr codexauth.FieldError
 	if errors.As(err, &fieldErr) {
-		appErr = appErr.WithDetail("field", fieldErr.Field)
+		message = "Codex auth account metadata is invalid"
 	}
 	var sizeErr codexauth.SizeError
 	if errors.As(err, &sizeErr) {
+		message = "Codex auth payload is too large"
+	}
+	appErr := apperror.Wrap(apperror.CodexInvalid, message, err)
+	if fieldErr.Field != "" {
+		appErr = appErr.WithDetail("field", fieldErr.Field)
+	}
+	if sizeErr.Max > 0 {
 		appErr = appErr.WithDetail("size_bytes", sizeErr.Size).WithDetail("max_bytes", sizeErr.Max)
 	}
 	return appErr

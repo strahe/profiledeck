@@ -41,6 +41,34 @@ func TestCodexDetectBeforeInitIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestCodexDetectWarningsExcludeFilesystemErrors(t *testing.T) {
+	ctx := context.Background()
+	codexDir := filepath.Join(t.TempDir(), "SECRET_CODEX_HOME")
+	if err := os.Mkdir(codexDir, 0o700); err != nil {
+		t.Fatalf("expected Codex home setup to succeed, got %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(codexDir, codexconfig.ConfigFileName),
+		filepath.Join(codexDir, codexconfig.AuthFileName),
+	} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatalf("expected unreadable file fixture to succeed, got %v", err)
+		}
+	}
+
+	result, err := newCodexTestEnvironment(t, filepath.Join(t.TempDir(), "profiledeck"), codexDir).codex.Detect(ctx)
+	if err != nil {
+		t.Fatalf("expected Codex detect to report warnings, got %v", err)
+	}
+	warnings := strings.Join(result.Warnings, "\n")
+	if result.ConfigStatus != "unreadable" || result.AuthStatus != "unreadable" {
+		t.Fatalf("unexpected unreadable status: %#v", result)
+	}
+	if strings.Contains(warnings, codexDir) || strings.Contains(warnings, "is a directory") {
+		t.Fatalf("expected warnings to omit filesystem diagnostics, got %q", warnings)
+	}
+}
+
 func TestCodexDetectReportsPresetHomeConflict(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()

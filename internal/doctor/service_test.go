@@ -19,7 +19,6 @@ import (
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/doctor"
-	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/provider"
 	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
@@ -280,6 +279,9 @@ func TestDoctorTreatsReleasedMaintenanceLockAsSafeResidue(t *testing.T) {
 	if result.OverallLevel != doctor.LevelOK || result.Lock.Reason != "maintenance_lock_residue" || !result.Lock.Repairable {
 		t.Fatalf("expected safe maintenance lock residue, got %#v", result.Lock)
 	}
+	if result.Lock.Owner != "" || result.Lock.OperationID != "" {
+		t.Fatalf("expected unverified maintenance owner to stay private, got %#v", result.Lock)
+	}
 }
 
 func TestDoctorReportsCodexPresetAndBindingFailures(t *testing.T) {
@@ -416,7 +418,7 @@ func TestDoctorReportsIncompleteOperationsAndRedactsSensitiveMetadata(t *testing
 	malformedMetadata := `{"api_key":"raw-secret"}`
 	if err := db.MarkOperationFailed(ctx, store.MarkOperationFailedParams{
 		ID:           "switch-malformed",
-		ErrorCode:    string(apperror.BackupInvalid),
+		ErrorCode:    "PRIVATE_ERROR_CODE_raw-secret",
 		ErrorMessage: "recovery data invalid",
 		MetadataJSON: &malformedMetadata,
 	}); err != nil {
@@ -438,10 +440,13 @@ func TestDoctorReportsIncompleteOperationsAndRedactsSensitiveMetadata(t *testing
 	if failedSwitch.Checkpoint != "recovery_created" || failedSwitch.RecoveryStatus != switching.RecoveryStatusUnrecoverable {
 		t.Fatalf("expected failed switch recovery summary, got %#v", failedSwitch)
 	}
-	if strings.Contains(failedSwitch.ErrorMessage, "raw-error-secret") || !strings.Contains(failedSwitch.ErrorMessage, profiletarget.RedactedValue) {
-		t.Fatalf("expected failed switch error message to be redacted, got %#v", failedSwitch)
+	if failedSwitch.ErrorMessage != "" {
+		t.Fatalf("expected persisted error message to stay private, got %#v", failedSwitch)
 	}
-	doctorTestOperationByID(t, result.Operations, "switch-malformed")
+	malformed := doctorTestOperationByID(t, result.Operations, "switch-malformed")
+	if malformed.ErrorCode != string(apperror.CommandFailed) {
+		t.Fatalf("expected unknown persisted error code to be normalized, got %#v", malformed)
+	}
 	raw, err := json.Marshal(result)
 	if err != nil {
 		t.Fatalf("expected doctor result marshal to succeed, got %v", err)
@@ -914,13 +919,16 @@ func TestDoctorRefusesUnsafeLocks(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected runtime resolve to succeed, got %v", err)
 		}
-		writeTestLockFile(t, paths.Lock, "external-owner", deadTestPID)
+		writeTestLockFile(t, paths.Lock, "external-owner-SECRET_LOCK_OWNER", deadTestPID)
 		result, err := newDoctorTestApplication(t, configDir, "").Doctor().Run(ctx)
 		if err != nil {
 			t.Fatalf("expected doctor to succeed, got %v", err)
 		}
 		if result.Lock.Repairable || result.Lock.Reason != "owner_not_profiledeck_operation" {
 			t.Fatalf("expected unknown owner to be unsafe, got %#v", result.Lock)
+		}
+		if result.Lock.Owner != "" || result.Lock.OperationID != "" {
+			t.Fatalf("expected unknown owner to stay private, got %#v", result.Lock)
 		}
 	})
 
@@ -982,6 +990,80 @@ func TestDoctorWarnsAboutWeakCodexAuthPermissions(t *testing.T) {
 	}
 	if !hasDoctorFinding(result.Findings, "codex_auth_target_permissions_weak") {
 		t.Fatalf("expected weak Codex auth permission warning, got %#v", result.Findings)
+	}
+}
+
+func TestDoctorClassifiesWeakRuntimePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode checks do not apply on Windows")
+	}
+	ctx := context.Background()
+	configDir := t.TempDir()
+	application := newDoctorTestApplication(t, configDir, "")
+	if _, err := application.Initialize(ctx); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	_, paths, err := resolveRuntime(configDir)
+	if err != nil {
+		t.Fatalf("expected runtime paths, got %v", err)
+	}
+	checks := []struct {
+		path  string
+		mode  os.FileMode
+		id    string
+		level string
+	}{
+		{path: paths.Root, mode: 0o755, id: "runtime_root_permissions_weak", level: doctor.LevelError},
+		{path: paths.Database, mode: 0o644, id: "database_permissions_weak", level: doctor.LevelError},
+		{path: paths.Backups, mode: 0o755, id: "backups_permissions_weak", level: doctor.LevelWarning},
+		{path: paths.Recovery, mode: 0o755, id: "recovery_permissions_weak", level: doctor.LevelError},
+		{path: paths.Exports, mode: 0o755, id: "exports_permissions_weak", level: doctor.LevelWarning},
+		{path: paths.Logs, mode: 0o755, id: "logs_permissions_weak", level: doctor.LevelWarning},
+		{path: filepath.Dir(paths.Lock), mode: 0o755, id: "locks_permissions_weak", level: doctor.LevelWarning},
+	}
+	for _, check := range checks {
+		if err := os.Chmod(check.path, check.mode); err != nil {
+			t.Fatalf("expected chmod for %s, got %v", check.path, err)
+		}
+	}
+
+	result, err := application.Doctor().Run(ctx)
+	if err != nil {
+		t.Fatalf("expected doctor to succeed, got %v", err)
+	}
+	for _, check := range checks {
+		finding := doctorTestFindingByID(t, result.Findings, check.id)
+		if finding.Level != check.level || finding.Details["path"] != check.path {
+			t.Fatalf("unexpected permission finding for %s: %#v", check.path, finding)
+		}
+	}
+}
+
+func TestDoctorAcceptsMoreRestrictiveRuntimePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode checks do not apply on Windows")
+	}
+	ctx := context.Background()
+	configDir := t.TempDir()
+	application := newDoctorTestApplication(t, configDir, "")
+	if _, err := application.Initialize(ctx); err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	_, paths, err := resolveRuntime(configDir)
+	if err != nil {
+		t.Fatalf("expected runtime paths, got %v", err)
+	}
+	if err := os.Chmod(paths.Backups, 0o500); err != nil {
+		t.Fatalf("expected restrictive chmod, got %v", err)
+	}
+	defer func() { _ = os.Chmod(paths.Backups, 0o700) }()
+
+	result, err := application.Doctor().Run(ctx)
+	if err != nil {
+		t.Fatalf("expected doctor to succeed, got %v", err)
+	}
+	if hasDoctorFinding(result.Findings, "backups_permissions_weak") {
+		t.Fatalf("expected owner-only permissions to be accepted, got %#v", result.Findings)
 	}
 }
 
@@ -1079,6 +1161,17 @@ func doctorTestOperationByID(t *testing.T, operations []doctor.DoctorOperation, 
 	}
 	t.Fatalf("expected doctor operation %s in %#v", id, operations)
 	return doctor.DoctorOperation{}
+}
+
+func doctorTestFindingByID(t *testing.T, findings []doctor.Finding, id string) doctor.Finding {
+	t.Helper()
+	for _, finding := range findings {
+		if finding.ID == id {
+			return finding
+		}
+	}
+	t.Fatalf("expected doctor finding %s in %#v", id, findings)
+	return doctor.Finding{}
 }
 
 func hasDoctorFinding(findings []doctor.Finding, id string) bool {

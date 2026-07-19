@@ -184,6 +184,6 @@ func createDirs(paths Paths) error {
 
 func chmodBestEffort(path string, mode os.FileMode) {
 	if err := os.Chmod(path, mode); err != nil {
-		log.Printf("profiledeck: failed to chmod %s to %s: %v", path, mode, err)
+		log.Print("profiledeck: private permissions could not be applied; run profiledeck doctor")
 	}
 }
