@@ -226,6 +226,7 @@ tasks:
       RELEASE_SIGN_IDENTITY:
         sh: >-
           go run ./scripts/releasetool identity
+          --output fingerprint
           --requested "$PROFILEDECK_RELEASE_SIGN_IDENTITY"
           --keychain "{{.RELEASE_KEYCHAIN}}"
 

@@ -27,14 +27,35 @@ func run(ctx context.Context, args []string) error {
 		flags := newFlagSet("identity")
 		requested := flags.String("requested", "", "Developer ID identity override")
 		keychain := flags.String("keychain", "", "Keychain containing the signing identity")
+		output := flags.String("output", "fingerprint", "identity output: fingerprint or name")
+		interactive := flags.Bool("interactive", false, "prompt when multiple signing identities are available")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		identity, err := discoverIdentity(ctx, runner, *requested, cleanOptionalPath(*keychain))
+		identities, err := inspectDeveloperIDIdentities(ctx, runner, cleanOptionalPath(*keychain))
 		if err != nil {
 			return err
 		}
-		fmt.Println(identity)
+		var identity developerIDIdentity
+		if *interactive && *requested == "" && len(identities) > 1 {
+			// The controlling terminal keeps prompts out of stdout and prevents automation from waiting on stdin.
+			terminal, openErr := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+			if openErr != nil {
+				return developerIDIdentityCountError(len(identities))
+			}
+			defer terminal.Close()
+			identity, err = promptDeveloperIDIdentity(identities, terminal, terminal)
+		} else {
+			identity, err = selectDeveloperIDIdentity(identities, *requested)
+		}
+		if err != nil {
+			return err
+		}
+		value, err := formatDeveloperIDIdentity(identity, *output)
+		if err != nil {
+			return err
+		}
+		fmt.Println(value)
 		return nil
 
 	case "preflight":

@@ -228,6 +228,7 @@ jobs:
 
           if ! sign_identity="$(
             go run ./scripts/releasetool identity \
+              --output name \
               --keychain "$release_keychain" \
               2> "$credential_log"
           )"; then

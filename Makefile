@@ -28,6 +28,7 @@ BUILD_NUMBER ?=
 RELEASE_REPO ?=
 RELEASE_COMMIT ?= $(shell git rev-parse HEAD)
 RELEASE_PLATFORMS ?= macos
+# Set a full SHA-1 fingerprint to skip the interactive choice when multiple identities are installed.
 SIGN_IDENTITY ?=
 RELEASE_KEYCHAIN ?=
 RELEASES_DIR ?= $(CURDIR)/.task/releases
@@ -100,7 +101,7 @@ desktop-build:
 ifeq ($(DESKTOP_GOOS),darwin)
 	@if [ "$(DESKTOP_SIGN)" = "true" ]; then \
 		set -e; \
-		sign_identity="$$(go run ./scripts/releasetool identity --requested "$(SIGN_IDENTITY)")"; \
+		sign_identity="$$(go run ./scripts/releasetool identity --interactive --output fingerprint --requested "$(SIGN_IDENTITY)")"; \
 		codesign --force --sign "$$sign_identity" --identifier "$(DESKTOP_DEVELOPMENT_IDENTIFIER)" --options runtime --timestamp=none "$(DESKTOP_BINARY)"; \
 		codesign --verify --strict --verbose=2 "$(DESKTOP_BINARY)"; \
 	fi
