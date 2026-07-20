@@ -840,6 +840,7 @@ var initialIndexSpecs = []indexSpec{
 	{name: "idx_profile_targets_provider_id", table: "profile_targets", columns: []string{"provider_id"}},
 	{name: "idx_profile_targets_enabled", table: "profile_targets", columns: []string{"enabled"}},
 	{name: "idx_profile_targets_unique_path", table: "profile_targets", columns: []string{"profile_id", "provider_id", "path_key"}, unique: true},
+	{name: "idx_profile_targets_path_key", table: "profile_targets", columns: []string{"path_key"}},
 	{name: "idx_usage_events_provider_id", table: "usage_events", columns: []string{"provider_id"}},
 	{name: "idx_usage_events_source", table: "usage_events", columns: []string{"source"}},
 	{name: "idx_usage_events_source_key", table: "usage_events", columns: []string{"source_key"}},
@@ -1393,11 +1394,16 @@ func (s *Store) DeleteProfile(ctx context.Context, id string) error {
 		DELETE FROM profiles
 		WHERE id = ?
 			AND NOT EXISTS (SELECT 1 FROM active_states WHERE profile_id = ?)
-			AND NOT EXISTS (SELECT 1 FROM operations WHERE profile_id = ?)
+			AND NOT EXISTS (
+				SELECT 1 FROM operations
+				WHERE profile_id = ?
+					AND status IN (?, ?)
+					AND resolved_at_unix_ms = 0
+			)
 			AND NOT EXISTS (SELECT 1 FROM profile_targets WHERE profile_id = ?)
 			AND NOT EXISTS (SELECT 1 FROM profile_credential_bindings WHERE profile_id = ?)
 			AND NOT EXISTS (SELECT 1 FROM profile_config_set_bindings WHERE profile_id = ?)
-	`, id, id, id, id, id, id)
+	`, id, id, id, OperationStatusPending, OperationStatusFailed, id, id, id)
 	if err != nil {
 		return err
 	}
@@ -1641,6 +1647,11 @@ func (s *Store) DeleteProfileTarget(ctx context.Context, profileID, providerID, 
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (s *Store) DeleteProfileTargetsByProfile(ctx context.Context, profileID string) error {
+	_, err := s.executor().ExecContext(ctx, "DELETE FROM profile_targets WHERE profile_id = ?", strings.TrimSpace(profileID))
+	return err
 }
 
 func (s *Store) GetSetting(ctx context.Context, key string) (Setting, error) {
@@ -2218,6 +2229,39 @@ func (s *Store) CountProviderCredentialReferences(ctx context.Context, credentia
 	return count, err
 }
 
+func (s *Store) DeleteProviderCredential(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	// Hidden credentials may be removed only after every typed binding has
+	// released them; Profile deletion must never collect a shared login.
+	result, err := s.executor().ExecContext(
+		ctx,
+		`DELETE FROM provider_credentials
+		WHERE id = ?
+			AND NOT EXISTS (
+				SELECT 1 FROM profile_credential_bindings AS binding
+				WHERE binding.provider_id = provider_credentials.provider_id
+					AND binding.credential_id = provider_credentials.id
+			)`,
+		id,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		if _, getErr := s.GetProviderCredential(ctx, id); errors.Is(getErr, ErrNotFound) {
+			return ErrNotFound
+		} else if getErr != nil {
+			return getErr
+		}
+		return ErrInUse
+	}
+	return nil
+}
+
 func (s *Store) UpsertProfileConfigSetBinding(ctx context.Context, params UpsertProfileConfigSetBindingParams) (ProfileConfigSetBinding, error) {
 	profileID := strings.TrimSpace(params.ProfileID)
 	providerID := strings.TrimSpace(params.ProviderID)
@@ -2371,6 +2415,8 @@ func (s *Store) CountProviderConfigSetReferences(ctx context.Context, id string)
 
 func (s *Store) DeleteProviderConfigSet(ctx context.Context, id string) error {
 	id = strings.TrimSpace(id)
+	// Config Sets may outlive one Profile when another binding still shares
+	// them, so the final delete repeats the reference check atomically.
 	result, err := s.executor().ExecContext(
 		ctx,
 		`DELETE FROM provider_config_sets
@@ -3812,21 +3858,13 @@ func (s *Store) countOperations(ctx context.Context, status string) (int, error)
 }
 
 func (s *Store) profileReferenceCount(ctx context.Context, profileID string) (int, error) {
-	var activeStateCount int
-	if err := s.executor().QueryRowContext(
-		ctx,
-		"SELECT COUNT(1) FROM active_states WHERE profile_id = ?",
-		profileID,
-	).Scan(&activeStateCount); err != nil {
+	activeStateCount, err := s.CountActiveProfileReferences(ctx, profileID)
+	if err != nil {
 		return 0, err
 	}
 
-	var operationCount int
-	if err := s.executor().QueryRowContext(
-		ctx,
-		"SELECT COUNT(1) FROM operations WHERE profile_id = ?",
-		profileID,
-	).Scan(&operationCount); err != nil {
+	operationCount, err := s.CountUnresolvedProfileOperations(ctx, profileID)
+	if err != nil {
 		return 0, err
 	}
 
@@ -3845,6 +3883,31 @@ func (s *Store) profileReferenceCount(ctx context.Context, profileID string) (in
 	}
 
 	return activeStateCount + operationCount + targetCount + credentialBindingCount + configSetBindingCount, nil
+}
+
+func (s *Store) CountActiveProfileReferences(ctx context.Context, profileID string) (int, error) {
+	var count int
+	err := s.executor().QueryRowContext(
+		ctx,
+		"SELECT COUNT(1) FROM active_states WHERE profile_id = ?",
+		strings.TrimSpace(profileID),
+	).Scan(&count)
+	return count, err
+}
+
+func (s *Store) CountUnresolvedProfileOperations(ctx context.Context, profileID string) (int, error) {
+	var count int
+	err := s.executor().QueryRowContext(
+		ctx,
+		`SELECT COUNT(1) FROM operations
+		WHERE profile_id = ?
+			AND status IN (?, ?)
+			AND resolved_at_unix_ms = 0`,
+		strings.TrimSpace(profileID),
+		OperationStatusPending,
+		OperationStatusFailed,
+	).Scan(&count)
+	return count, err
 }
 
 func (s *Store) providerReferenceCount(ctx context.Context, providerID string) (int, error) {

@@ -45,7 +45,7 @@ func newClaudeCodeProfileCommand() *urfavecli.Command {
 		Name: "profile", Usage: "Manage official Claude Code subscription Profiles",
 		Commands: []*urfavecli.Command{
 			newClaudeCodeProfileCreateCommand(), newClaudeCodeProfileListCommand(), newClaudeCodeProfileShowCommand(),
-			newClaudeCodeProfileUpdateCommand(), newClaudeCodeProfileSaveCurrentCommand(),
+			newClaudeCodeProfileUpdateCommand(), newClaudeCodeProfileSaveCurrentCommand(), newProfileDeleteCommand(),
 		},
 	}
 }

@@ -57,6 +57,8 @@ type ClaudeCodeService struct {
 
 type ProfileService struct {
 	application *app.Application
+	changes     *ChangeNotifier
+	quota       *codexQuotaRuntime
 }
 
 type SwitchService struct {
@@ -247,7 +249,7 @@ func NewServices(application *app.Application, info app.Info, env Environment, s
 		Antigravity: &AntigravityService{application: application, changes: changes},
 		ClaudeCode:  &ClaudeCodeService{application: application, changes: changes},
 		Codex:       &CodexService{application: application, changes: changes, autoSync: autoSync, quota: quota},
-		Profile:     &ProfileService{application: application},
+		Profile:     &ProfileService{application: application, changes: changes, quota: quota},
 		Switch:      &SwitchService{application: application, changes: changes, quota: quota},
 		Doctor:      &DoctorService{application: application, changes: changes, quota: quota},
 		Backup:      &BackupService{application: application, changes: changes, runtime: backups},
@@ -699,6 +701,18 @@ func (s *ProfileService) ListTargets(ctx context.Context, profileID, providerID 
 	})
 }
 
+func (s *ProfileService) Delete(ctx context.Context, profileID string, confirm bool) (profile.DeleteResult, error) {
+	result, err := s.application.Profiles().Delete(ctx, profileID, confirm)
+	if err != nil {
+		return result, err
+	}
+	// Global Profile deletion changes only ProfileDeck data. Leave Provider ID
+	// empty so Desktop does not re-detect external tool state.
+	notifyMutationResult(s.changes, DesktopChangeProfileDeleted, "profile.delete", "", result.ID, "", nil)
+	reloadCodexQuotaRuntime(s.quota)
+	return result, nil
+}
+
 func (s *SwitchService) BuildPlan(ctx context.Context, providerID, profileID string) (switching.SwitchPlan, error) {
 	return s.application.Switching().BuildPlan(ctx, switching.BuildPlanRequest{
 		ProviderID: providerID,
@@ -973,6 +987,9 @@ func notifyMutationResult(changes *ChangeNotifier, kind, source, providerID, pro
 	case DesktopChangeAntigravityProfileChanged:
 		event.ProfileChanged = true
 		event.ActiveStateChanged = strings.Contains(source, "createProfile")
+	case DesktopChangeProfileDeleted:
+		event.ProfileChanged = true
+		event.ConfigSetsChanged = true
 	case DesktopChangeSwitchApplied, DesktopChangeSwitchRecovered:
 		event.ProfileChanged = providerID == codexconfig.ProviderID || providerID == agyconfig.ProviderID
 		event.ConfigSetsChanged = providerID == codexconfig.ProviderID
@@ -1033,8 +1050,13 @@ func desktopErrorDetails(err error) map[string]any {
 		return nil
 	}
 	reason, _ := appErr.Details["reason"].(string)
+	allowedProfileDeleteReason := appErr.Code == apperror.ProfileInUse &&
+		(reason == profile.DeleteReasonActive ||
+			reason == profile.DeleteReasonUnresolvedOperation ||
+			reason == profile.DeleteReasonUnsupportedManagedData)
 	allowed := appErr.Code == apperror.ConfirmationRequired && reason == "replace_required" ||
-		appErr.Code == apperror.ExportFailed && reason == "exists"
+		appErr.Code == apperror.ExportFailed && reason == "exists" ||
+		allowedProfileDeleteReason
 	if !allowed {
 		return nil
 	}

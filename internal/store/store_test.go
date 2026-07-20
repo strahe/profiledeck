@@ -36,8 +36,8 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
-	if result.Applied != 4 {
-		t.Fatalf("expected 4 migrations to apply, got %d", result.Applied)
+	if result.Applied != 5 {
+		t.Fatalf("expected 5 migrations to apply, got %d", result.Applied)
 	}
 
 	for _, table := range []string{
@@ -74,6 +74,7 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 		"idx_profile_targets_provider_id",
 		"idx_profile_targets_enabled",
 		"idx_profile_targets_unique_path",
+		"idx_profile_targets_path_key",
 		"idx_usage_events_provider_id",
 		"idx_usage_events_source",
 		"idx_usage_events_source_key",
@@ -522,8 +523,8 @@ func TestConcurrentMigrateIsIdempotent(t *testing.T) {
 	if err := db.db.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM bun_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("expected migration count query to succeed, got %v", err)
 	}
-	if migrationCount != 4 {
-		t.Fatalf("expected four migration rows after concurrent migration, got %d", migrationCount)
+	if migrationCount != 5 {
+		t.Fatalf("expected five migration rows after concurrent migration, got %d", migrationCount)
 	}
 }
 
@@ -574,8 +575,8 @@ func TestMigrateRetriesTransientSQLiteBusy(t *testing.T) {
 	if attempts != 2 {
 		t.Fatalf("Migrate() attempts = %d, want 2", attempts)
 	}
-	if result.Applied != 4 {
-		t.Fatalf("Migrate() applied = %d, want 4", result.Applied)
+	if result.Applied != 5 {
+		t.Fatalf("Migrate() applied = %d, want 5", result.Applied)
 	}
 }
 
@@ -1030,6 +1031,102 @@ func TestCompareAndSwapProviderCredentialRejectsStalePayload(t *testing.T) {
 	current, err := db.GetProviderCredential(ctx, "credential")
 	if err != nil || current.PayloadSHA256 != concurrentHash {
 		t.Fatalf("expected concurrent payload to win, credential=%#v err=%v", current, err)
+	}
+}
+
+func TestDeleteProviderCredentialRequiresAllBindingsReleased(t *testing.T) {
+	ctx := context.Background()
+	db := migratedTestStore(t, ctx)
+	defer closeTestStore(t, db)
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{
+		ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("create Provider: %v", err)
+	}
+	for _, profileID := range []string{"one", "two"} {
+		if _, err := db.CreateProfile(ctx, CreateProfileParams{ID: profileID, Name: profileID, MetadataJSON: `{}`}); err != nil {
+			t.Fatalf("create Profile %q: %v", profileID, err)
+		}
+	}
+	payload := `{"tokens":{"access_token":"private"}}`
+	if _, err := db.UpsertProviderCredential(ctx, UpsertProviderCredentialParams{
+		ID: "shared", ProviderID: "codex", CredentialKind: "codex-auth-json",
+		PayloadJSON: payload, PayloadSHA256: testPayloadSHA256(payload), MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+	for _, profileID := range []string{"one", "two"} {
+		if _, err := db.UpsertProfileCredentialBinding(ctx, UpsertProfileCredentialBindingParams{
+			ProfileID: profileID, ProviderID: "codex", SlotID: "auth", CredentialID: "shared",
+		}); err != nil {
+			t.Fatalf("create binding for %q: %v", profileID, err)
+		}
+	}
+	if err := db.DeleteProviderCredential(ctx, "shared"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("referenced credential delete error = %v, want ErrInUse", err)
+	}
+	if err := db.DeleteProfileCredentialBinding(ctx, "one", "codex", "auth"); err != nil {
+		t.Fatalf("release first binding: %v", err)
+	}
+	if err := db.DeleteProviderCredential(ctx, "shared"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("shared credential delete error = %v, want ErrInUse", err)
+	}
+	if err := db.DeleteProfileCredentialBinding(ctx, "two", "codex", "auth"); err != nil {
+		t.Fatalf("release final binding: %v", err)
+	}
+	if err := db.DeleteProviderCredential(ctx, "shared"); err != nil {
+		t.Fatalf("delete unreferenced credential: %v", err)
+	}
+	if _, err := db.GetProviderCredential(ctx, "shared"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted credential still exists: %v", err)
+	}
+}
+
+func TestLateInactiveCredentialCASCannotRecreateDeletedProfileCredential(t *testing.T) {
+	ctx := context.Background()
+	db := migratedTestStore(t, ctx)
+	defer closeTestStore(t, db)
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{
+		ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("create Provider: %v", err)
+	}
+	if _, err := db.CreateProfile(ctx, CreateProfileParams{ID: "inactive", Name: "Inactive", MetadataJSON: `{}`}); err != nil {
+		t.Fatalf("create Profile: %v", err)
+	}
+	oldPayload := `{"tokens":{"access_token":"old","refresh_token":"refresh"}}`
+	oldHash := testPayloadSHA256(oldPayload)
+	if _, err := db.UpsertProviderCredential(ctx, UpsertProviderCredentialParams{
+		ID: "inactive-login", ProviderID: "codex", CredentialKind: "codex-auth-json",
+		PayloadJSON: oldPayload, PayloadSHA256: oldHash, MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("create credential: %v", err)
+	}
+	if _, err := db.UpsertProfileCredentialBinding(ctx, UpsertProfileCredentialBindingParams{
+		ProfileID: "inactive", ProviderID: "codex", SlotID: "auth", CredentialID: "inactive-login",
+	}); err != nil {
+		t.Fatalf("create binding: %v", err)
+	}
+	if err := db.DeleteProfileCredentialBinding(ctx, "inactive", "codex", "auth"); err != nil {
+		t.Fatalf("release credential: %v", err)
+	}
+	if err := db.DeleteProviderCredential(ctx, "inactive-login"); err != nil {
+		t.Fatalf("delete credential: %v", err)
+	}
+	if err := db.DeleteProfile(ctx, "inactive"); err != nil {
+		t.Fatalf("delete Profile: %v", err)
+	}
+
+	refreshedPayload := `{"tokens":{"access_token":"late","refresh_token":"refresh"}}`
+	_, swapped, err := db.CompareAndSwapProviderCredential(ctx, oldHash, UpsertProviderCredentialParams{
+		ID: "inactive-login", ProviderID: "codex", CredentialKind: "codex-auth-json",
+		PayloadJSON: refreshedPayload, PayloadSHA256: testPayloadSHA256(refreshedPayload), MetadataJSON: `{}`,
+	})
+	if !errors.Is(err, ErrNotFound) || swapped {
+		t.Fatalf("late CAS result: swapped=%v err=%v, want missing credential", swapped, err)
+	}
+	if _, err := db.GetProviderCredential(ctx, "inactive-login"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("late CAS recreated credential: %v", err)
 	}
 }
 
@@ -2430,8 +2527,11 @@ func TestProfileCRUDAndInUseDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected operation setup to succeed, got %v", err)
 	}
-	if err := db.DeleteProfile(ctx, "profile-c"); !errors.Is(err, ErrInUse) {
-		t.Fatalf("expected operation-referenced profile delete to fail, got %v", err)
+	if err := db.DeleteProfile(ctx, "profile-c"); err != nil {
+		t.Fatalf("expected historical operation to allow Profile deletion, got %v", err)
+	}
+	if _, err := db.GetOperation(ctx, "operation-c"); err != nil {
+		t.Fatalf("expected historical operation to remain after Profile deletion, got %v", err)
 	}
 
 	if err := db.DeleteProfile(ctx, "profile-b"); err != nil {

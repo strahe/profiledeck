@@ -62,6 +62,16 @@ profiledeck claude-code profile save-current
 
 When the saved login is shared by multiple Profiles, ProfileDeck shows how many Profiles will change. Review that count before confirming with `--yes` in the CLI.
 
+## Delete a Profile
+
+Open a Profile's action menu in Desktop and choose **Delete Profile**, or run:
+
+```bash
+profiledeck claude-code profile delete work --yes
+```
+
+This deletes the complete global Profile from every Agent, not only its Claude Code data. A saved login used only by that Profile is deleted, while shared saved logins remain. A current Profile or one with an unfinished operation cannot be deleted. The current Claude Code Keychain item or credential file does not change.
+
 ## Allow Keychain access on macOS
 
 Claude Code must create its Keychain login with `/login` before ProfileDeck can save it. Opening the Profiles page, running `detect`, or opening Diagnostics only checks whether the login is available.
@@ -84,4 +94,4 @@ Start a new session, run `/status`, and review the [Claude Code authentication d
 
 ## What is not included
 
-Claude Code Profile support does not include Claude Desktop, saved-login deletion, sensitive export/import, quota checks, usage attribution, Console or API-key accounts, Claude Code settings switching, or parallel account sessions.
+Claude Code Profile support does not include Claude Desktop, sensitive export/import, quota checks, usage attribution, Console or API-key accounts, Claude Code settings switching, or parallel account sessions.

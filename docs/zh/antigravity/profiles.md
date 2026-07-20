@@ -61,6 +61,16 @@ profiledeck antigravity profile save-current
 
 在桌面端打开当前 Profile，然后选择**从当前 Antigravity 更新**。
 
+## 删除 Profile
+
+在桌面端打开 Profile 的操作菜单并选择**删除 Profile**，或运行：
+
+```bash
+profiledeck antigravity profile delete work --yes
+```
+
+这会从所有 Agent 中删除完整的全局 Profile，而不只是 Antigravity 数据。只有该 Profile 使用的已保存登录会删除，共享登录会保留。当前 Profile 或存在未完成操作的 Profile 不能删除。系统凭据存储中的当前 Antigravity 登录不会改变。
+
 ## 检查使用限额
 
 桌面端会在启动时检查一次当前 Antigravity Profile，并在成功切换后检查一次新 Profile。需要再次检查时，请在当前 Profile 上选择**刷新限额**。ProfileDeck 不会在后台轮询。

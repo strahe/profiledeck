@@ -51,6 +51,7 @@ profiledeck codex profile create <profile-id> [--new-config-set ID] [--config-se
 profiledeck codex profile fork <source-profile-id> <new-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
 profiledeck codex profile save-current [--codex-dir PATH] [--json]
 profiledeck codex profile set-config <profile-id> <config-set-id> [--json]
+profiledeck codex profile delete <profile-id> --yes [--json]
 profiledeck codex profile export [<profile-id> ...] --output PATH [--force] [--json]
 profiledeck codex profile import inspect <bundle-path> [--codex-dir PATH] [--json]
 profiledeck codex profile import apply <bundle-path> --plan-fingerprint FINGERPRINT --yes [--codex-dir PATH] [--json]
@@ -84,6 +85,7 @@ profiledeck claude-code profile list [--json]
 profiledeck claude-code profile show <profile-id> [--json]
 profiledeck claude-code profile update <profile-id> [--name NAME] [--description TEXT] [--json]
 profiledeck claude-code profile save-current [--yes] [--json]
+profiledeck claude-code profile delete <profile-id> --yes [--json]
 ```
 
 `create` 保存当前 Claude Code 官方订阅登录，并把新 Profile 设为当前 Profile。`save-current` 更新当前 Profile 使用的登录。如果该登录被共享，命令会报告受影响的 Profile 数量，并要求传入 `--yes`。
@@ -101,6 +103,7 @@ profiledeck antigravity profile show <profile-id> [--json]
 profiledeck antigravity profile create <profile-id> [--name NAME] [--description TEXT] [--json]
 profiledeck antigravity profile update <profile-id> [--name NAME] [--description TEXT] [--json]
 profiledeck antigravity profile save-current [--json]
+profiledeck antigravity profile delete <profile-id> --yes [--json]
 ```
 
 `agy` 是 `antigravity` 的别名。`create` 和 `save-current` 要求 Antigravity 当前存在有效的个人 OAuth 登录。输出只显示安全元数据，不会打印登录内容。
@@ -143,6 +146,8 @@ profiledeck profile create <id> [--name NAME] [--description TEXT] [--metadata-j
 profiledeck profile update <id> [--name NAME] [--description TEXT] [--metadata-json JSON] [--json]
 profiledeck profile delete <id> --yes [--json]
 ```
+
+以上四种 Profile 删除命令执行同一个全局删除。即使 Profile 只包含其他 Agent 的数据，从某个 Agent 命令进入也会删除整个 Profile。Profile 是任一 Agent 的当前 Profile，或存在未完成操作时，删除会停止。只有该 Profile 使用的已保存登录和配置集会一并删除；共享数据和无关的未绑定数据会保留。工具当前使用的登录、设置和文件不会改变。
 
 文件目标命令：
 

@@ -178,6 +178,10 @@ var schemaContracts = []schemaContract{
 					END = 1`,
 		},
 	},
+	{
+		migrationKey: "profile_target_path_lookup",
+		indexes:      []string{"idx_profile_targets_path_key"},
+	},
 }
 
 func jsonObjectExpression(column string) string {

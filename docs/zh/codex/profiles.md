@@ -119,6 +119,16 @@ profiledeck switch codex work \
 
 当前 `auth.json` 或 `config.toml` 缺失或无效时，预览会提示它不会被保存；确认切换后，ProfileDeck 可以使用所选 Profile 重新创建该文件。当前状态不受支持、无法安全检查或在审核后发生变化时，ProfileDeck 会在写入前停止。请先打开“诊断”或运行 `profiledeck doctor`，再重试。
 
+## 删除 Profile
+
+在桌面端打开 Profile 的操作菜单并选择**删除 Profile**，或运行：
+
+```bash
+profiledeck codex profile delete work --yes
+```
+
+这会从所有 Agent 中删除完整的全局 Profile，而不只是 Codex 数据。只有该 Profile 使用的已保存登录和配置集也会删除，共享数据会保留。当前 Profile 或存在未完成操作的 Profile 不能删除。删除不会修改 Codex 的 `auth.json`、`config.toml` 或其他工具当前使用的状态。
+
 ## 检查限额并保持登录
 
 桌面端可以检查某个已保存 Profile 当前的 ChatGPT Codex 限额。ProfileDeck 会在启动时检查一次当前 Profile；之后需要更新时，请使用**刷新限额**。检查可能会续期受支持的 Codex 登录，并保存刷新后的登录。除非为非当前 Profile 启用了自动间隔，否则不会自动检查它们。

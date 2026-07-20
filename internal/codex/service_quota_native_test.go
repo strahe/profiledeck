@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,8 +15,10 @@ import (
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
 	codexappserver "github.com/strahe/profiledeck/internal/codex/appserver"
+	codexauth "github.com/strahe/profiledeck/internal/codex/auth"
 	codexquota "github.com/strahe/profiledeck/internal/codex/quota"
 	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
+	"github.com/strahe/profiledeck/internal/store"
 )
 
 type failSecondCodexPolicy struct {
@@ -223,6 +226,69 @@ func TestNativeQuotaInactiveCASNeverOverwritesConcurrentCredential(t *testing.T)
 	credential, err := db.GetProviderCredential(ctx, child.Summary.CredentialID)
 	if err != nil || credential.PayloadJSON != concurrent {
 		t.Fatalf("expected concurrent credential to win, credential=%#v err=%v", credential, err)
+	}
+}
+
+func TestLateInactiveQuotaCaptureCannotRecreateDeletedCredential(t *testing.T) {
+	ctx := context.Background()
+	configDir, codexDir, _ := createManagedCodexQuotaFixture(t, ctx)
+	environment := newCodexTestEnvironment(t, configDir, codexDir)
+	child, err := environment.codex.ForkProfile(ctx, ForkCodexProfileRequest{
+		SourceProfileID: "work", ProfileID: "inactive",
+		CredentialBinding: CodexForkBindingCopyNew, ConfigBinding: CodexForkBindingShareParent,
+	})
+	if err != nil {
+		t.Fatalf("expected inactive fixture, got %v", err)
+	}
+	db, err := openHealthyStore(ctx, configDir, false)
+	if err != nil {
+		t.Fatalf("expected quota capture store open, got %v", err)
+	}
+	defer db.Close()
+	credential, err := db.GetProviderCredential(ctx, child.Summary.CredentialID)
+	if err != nil {
+		t.Fatalf("expected captured inactive credential, got %v", err)
+	}
+	sourceInfo, err := codexauth.Inspect([]byte(credential.PayloadJSON))
+	if err != nil {
+		t.Fatalf("expected valid captured credential, got %v", err)
+	}
+	rotated := `{"auth_mode":"chatgpt","tokens":{"account_id":"display-only","access_token":"late","refresh_token":"late-refresh"}}`
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authPath, []byte(rotated), 0o600); err != nil {
+		t.Fatalf("expected late auth fixture, got %v", err)
+	}
+
+	type captureResult struct {
+		result CodexCredentialJobResult
+		err    error
+	}
+	started := make(chan struct{})
+	allowCapture := make(chan struct{})
+	captured := make(chan captureResult, 1)
+	go func() {
+		close(started)
+		<-allowCapture
+		result := CodexCredentialJobResult{}
+		err := captureCodexCredentialAfterNativeJob(
+			ctx, db, authPath, credential, credential.PayloadJSON, sourceInfo, false, &result,
+		)
+		captured <- captureResult{result: result, err: err}
+	}()
+	<-started
+
+	deleted, err := environment.profiles.Delete(ctx, "inactive", true)
+	if err != nil || !deleted.Deleted {
+		t.Fatalf("expected Profile deletion before late capture, result=%#v err=%v", deleted, err)
+	}
+	close(allowCapture)
+	late := <-captured
+	assertErrorCode(t, late.err, apperror.CodexInvalid)
+	if late.result.CredentialUpdated || late.result.CredentialConflict {
+		t.Fatalf("late capture reported a credential mutation: %#v", late.result)
+	}
+	if _, err := db.GetProviderCredential(ctx, child.Summary.CredentialID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("late quota capture recreated deleted credential: %v", err)
 	}
 }
 

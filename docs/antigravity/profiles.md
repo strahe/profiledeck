@@ -61,6 +61,16 @@ profiledeck antigravity profile save-current
 
 In the Desktop app, open the current Profile and select **Update from Current Antigravity**.
 
+## Delete a Profile
+
+Open a Profile's action menu in Desktop and choose **Delete Profile**, or run:
+
+```bash
+profiledeck antigravity profile delete work --yes
+```
+
+This deletes the complete global Profile from every Agent, not only its Antigravity data. A saved login used only by that Profile is deleted, while shared saved logins remain. A current Profile or one with an unfinished operation cannot be deleted. The current Antigravity login in the system credential store does not change.
+
 ## Check usage limits
 
 The Desktop app checks the current Antigravity Profile once at startup and after a successful switch. Select **Refresh limits** on the current Profile to check again. ProfileDeck does not poll in the background.

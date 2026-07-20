@@ -8,6 +8,7 @@
 	import RocketIcon from "@lucide/svelte/icons/rocket";
 	import SaveIcon from "@lucide/svelte/icons/save";
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
+	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 
 	import type { CodexProfileDetail, CodexProfileQuota } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
@@ -38,9 +39,10 @@
 		onSaveCurrent: () => void;
 		onSetConfig: () => void;
 		onRefreshQuota: () => void;
+		onDelete: () => void;
 	}
 
-	let { detail, busyAction, updated, quota, quotaLoading, onUse, onFork, onEdit, onExport, onSaveCurrent, onSetConfig, onRefreshQuota }: Props = $props();
+	let { detail, busyAction, updated, quota, quotaLoading, onUse, onFork, onEdit, onExport, onSaveCurrent, onSetConfig, onRefreshQuota, onDelete }: Props = $props();
 	const runtime = useCodexRuntime();
 	let profileName = $derived(detail.summary.profile.name || detail.summary.profile.id);
 	let automation = $derived(runtime.settingsProfile(detail.summary.profile.id));
@@ -94,6 +96,7 @@
 						{:else}
 							<DropdownMenu.Item onSelect={onSetConfig}><SlidersHorizontalIcon />{$_("actions.changeConfigSet")}</DropdownMenu.Item>
 						{/if}
+						<DropdownMenu.Item variant="destructive" disabled={!!busyAction} onSelect={onDelete}><Trash2Icon />{$_("actions.deleteProfile")}</DropdownMenu.Item>
 					</DropdownMenu.Group>
 				</DropdownMenu.Content>
 			</DropdownMenu.Root>

@@ -12,6 +12,7 @@ const (
 	DesktopChangeCodexConfigSetChanged     = "codex-config-set-changed"
 	DesktopChangeAntigravityProfileChanged = "antigravity-profile-changed"
 	DesktopChangeClaudeCodeProfileChanged  = "claude-code-profile-changed"
+	DesktopChangeProfileDeleted            = "profile-deleted"
 	DesktopChangeSwitchApplied             = "switch-applied"
 	DesktopChangeLockRepaired              = "lock-repaired"
 	DesktopChangeSwitchRecovered           = "switch-recovered"

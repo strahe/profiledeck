@@ -10,6 +10,7 @@ import (
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/bootstrap"
 	codexadapter "github.com/strahe/profiledeck/internal/codex/adapter"
+	codexprofile "github.com/strahe/profiledeck/internal/codex/profile"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/provider"
@@ -56,7 +57,10 @@ func newCodexTestEnvironment(t *testing.T, configDir, codexDir string) *codexTes
 		runtime:   runtimeService,
 		codex:     codexService,
 		providers: provider.NewService(runtimeService.StoreFactory(), switchingService, agentService, agentRegistry),
-		profiles:  profile.NewService(runtimeService.StoreFactory(), switchingService),
+		profiles: profile.NewService(
+			runtimeService.StoreFactory(), switchingService,
+			profile.MustDeleteRegistry(codexprofile.DeleteParticipant{}),
+		),
 		targets: profiletarget.NewService(
 			runtimeService.StoreFactory(), switchingService, agentService, agentRegistry, codexService.ReservedPaths,
 		),

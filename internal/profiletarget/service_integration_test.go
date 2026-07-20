@@ -37,7 +37,7 @@ func newProfileTargetTestEnvironment(t *testing.T, configDir string) *profileTar
 	return &profileTargetTestEnvironment{
 		runtime:   runtimeService,
 		providers: provider.NewService(runtimeService.StoreFactory(), switchingService, agentService, agentRegistry),
-		profiles:  profile.NewService(runtimeService.StoreFactory(), switchingService),
+		profiles:  profile.NewService(runtimeService.StoreFactory(), switchingService, profile.DeleteRegistry{}),
 		targets: profiletarget.NewService(
 			runtimeService.StoreFactory(), switchingService, agentService, agentRegistry, loadTestManagedPaths,
 		),

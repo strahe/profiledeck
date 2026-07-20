@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	keyring "github.com/zalando/go-keyring"
@@ -20,6 +21,7 @@ import (
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/codex"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/settings"
 	"github.com/strahe/profiledeck/internal/usage"
 )
@@ -574,6 +576,63 @@ func TestSwitchApplyMissingFingerprintDoesNotNotify(t *testing.T) {
 	}
 }
 
+func TestProfileDeleteNotifiesOnlyAfterSuccessAndReloadsQuotaRuntime(t *testing.T) {
+	ctx := context.Background()
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil)
+	if _, err := services.App.Initialize(ctx); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	if _, err := services.Profile.application.Profiles().Create(ctx, profile.CreateRequest{ID: "work", Name: "Work"}); err != nil {
+		t.Fatalf("create Profile: %v", err)
+	}
+	var reloads atomic.Int32
+	services.Profile.quota = newCodexQuotaRuntime(
+		func(context.Context) ([]codex.CodexAutomationTarget, error) {
+			reloads.Add(1)
+			return nil, nil
+		},
+		func(context.Context, codex.RunCodexCredentialJobRequest) (codex.CodexCredentialJobResult, error) {
+			return codex.CodexCredentialJobResult{}, nil
+		},
+	)
+	events := []DesktopChangeEvent{}
+	services.SubscribeChanges(func(event DesktopChangeEvent) { events = append(events, event) })
+
+	if _, err := services.Profile.Delete(ctx, "work", false); err == nil {
+		t.Fatal("delete without confirmation succeeded")
+	}
+	if len(events) != 0 || reloads.Load() != 0 {
+		t.Fatalf("failed delete notified or reloaded: events=%#v reloads=%d", events, reloads.Load())
+	}
+	result, err := services.Profile.Delete(ctx, "work", true)
+	if err != nil || !result.Deleted || result.ID != "work" {
+		t.Fatalf("delete result=%#v err=%v", result, err)
+	}
+	if reloads.Load() != 1 {
+		t.Fatalf("quota reloads = %d, want 1", reloads.Load())
+	}
+	if len(events) != 1 {
+		t.Fatalf("delete events = %#v", events)
+	}
+	event := events[0]
+	if event.Kind != DesktopChangeProfileDeleted || event.Source != "profile.delete" ||
+		event.Status != DesktopChangeStatusSuccess || event.ProviderID != "" || event.ProfileID != "work" ||
+		!event.ProfileChanged || !event.ConfigSetsChanged || event.ActiveStateChanged {
+		t.Fatalf("unexpected Profile delete event: %#v", event)
+	}
+	dashboard, err := services.App.Dashboard(ctx)
+	if err != nil {
+		t.Fatalf("refresh Dashboard: %v", err)
+	}
+	if dashboard.CodexProfiles != nil {
+		for _, item := range dashboard.CodexProfiles.Profiles {
+			if item.Profile.ID == "work" {
+				t.Fatalf("Dashboard retained deleted Profile: %#v", dashboard.CodexProfiles)
+			}
+		}
+	}
+}
+
 func TestNotifyMutationResultMarksCanceled(t *testing.T) {
 	changes := NewChangeNotifier()
 	events := []DesktopChangeEvent{}
@@ -662,6 +721,10 @@ func TestFormatDesktopErrorAllowsOnlyInteractionReasons(t *testing.T) {
 	}{
 		{code: apperror.ConfirmationRequired, reason: "replace_required", want: true},
 		{code: apperror.ExportFailed, reason: "exists", want: true},
+		{code: apperror.ProfileInUse, reason: profile.DeleteReasonActive, want: true},
+		{code: apperror.ProfileInUse, reason: profile.DeleteReasonUnresolvedOperation, want: true},
+		{code: apperror.ProfileInUse, reason: profile.DeleteReasonUnsupportedManagedData, want: true},
+		{code: apperror.ProfileInUse, reason: "private_internal_reason"},
 		{code: apperror.ExportFailed, reason: "permissions"},
 	}
 	for _, tc := range cases {

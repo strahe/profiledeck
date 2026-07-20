@@ -69,7 +69,7 @@ func newDoctorTestApplication(t *testing.T, configDir, codexDir string) *doctorT
 	return &doctorTestApplication{
 		runtime: runtimeService, doctor: doctorService,
 		providers: provider.NewService(runtimeService.StoreFactory(), switchingService, agentService, registry),
-		profiles:  profile.NewService(runtimeService.StoreFactory(), switchingService),
+		profiles:  profile.NewService(runtimeService.StoreFactory(), switchingService, profile.DeleteRegistry{}),
 		targets: profiletarget.NewService(
 			runtimeService.StoreFactory(), switchingService, agentService, registry, codexService.ReservedPaths,
 		),

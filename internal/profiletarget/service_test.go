@@ -189,11 +189,16 @@ func TestProfileTargetAppCRUDValidationAndRedaction(t *testing.T) {
 		t.Fatalf("expected raw merge target preview to redact sensitive key, got %#v", rawMergeTarget.ValuePreview)
 	}
 
+	targetPath := filepath.Join(t.TempDir(), "target.txt")
+	const targetContent = "tool-owned-state\n"
+	if err := os.WriteFile(targetPath, []byte(targetContent), 0o600); err != nil {
+		t.Fatalf("expected external target fixture, got %v", err)
+	}
 	target, err := environment.targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
 		ProfileID:    "profile-a",
 		ProviderID:   "provider-a",
 		TargetID:     "target-a",
-		Path:         filepath.Join(t.TempDir(), "target.txt"),
+		Path:         targetPath,
 		Format:       "text",
 		Strategy:     "replace-file",
 		ValueJSON:    `{"content":"OPENAI_API_KEY=raw-key\nsafe=value"}`,
@@ -252,8 +257,16 @@ func TestProfileTargetAppCRUDValidationAndRedaction(t *testing.T) {
 
 	_, err = environment.providers.Delete(ctx, "provider-a", true)
 	assertAppErrorCode(t, err, apperror.ProviderInUse)
-	_, err = environment.profiles.Delete(ctx, "profile-a", true)
-	assertAppErrorCode(t, err, apperror.ProfileInUse)
+	result, err := environment.profiles.Delete(ctx, "profile-a", true)
+	if err != nil || !result.Deleted {
+		t.Fatalf("expected Profile delete to clean generic targets, result=%#v err=%v", result, err)
+	}
+	if count := countTableRows(t, environment.runtime.Paths().Database, "profile_targets"); count != 0 {
+		t.Fatalf("expected Profile targets to be removed, got %d", count)
+	}
+	if raw, err := os.ReadFile(targetPath); err != nil || string(raw) != targetContent {
+		t.Fatalf("Profile deletion changed external target: content=%q err=%v", raw, err)
+	}
 }
 
 func TestProfileTargetPathOwnershipAllowsSharedLogicalTarget(t *testing.T) {

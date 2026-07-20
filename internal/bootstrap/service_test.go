@@ -32,7 +32,7 @@ func TestInitializeCreatesRuntimeWithoutBackupAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
-	if !first.Initialized || !first.SchemaHealthy || first.MigrationsApplied != 4 {
+	if !first.Initialized || !first.SchemaHealthy || first.MigrationsApplied != 5 {
 		t.Fatalf("unexpected first initialization result: %#v", first)
 	}
 	if backups.calls != 0 {
@@ -193,11 +193,11 @@ func TestInitializeBacksUpKnownOldBaselineBeforeMigrating(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upgrade old baseline: %v", err)
 	}
-	if result.MigrationsApplied != 3 || backups.calls != 1 {
+	if result.MigrationsApplied != 4 || backups.calls != 1 {
 		t.Fatalf("upgrade result = %#v, backups = %d", result, backups.calls)
 	}
 	snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
-	if len(snapshot.markers) != 4 || !snapshot.usageTable || snapshot.setting != `{"kept":true}` {
+	if len(snapshot.markers) != 5 || !snapshot.usageTable || !snapshot.pathKeyIndex || snapshot.setting != `{"kept":true}` {
 		t.Fatalf("database after upgrade = %#v", snapshot)
 	}
 	if _, err := service.Initialize(ctx); err != nil || backups.calls != 1 {
@@ -292,7 +292,7 @@ func TestInitializeRejectsPostMigrationSchemaDriftAndKeepsBackup(t *testing.T) {
 		t.Fatalf("post-migration validation created %d backups", backups.calls)
 	}
 	snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
-	if len(snapshot.markers) != 4 {
+	if len(snapshot.markers) != 5 {
 		t.Fatalf("post-validation failure masked committed migration state: %#v", snapshot)
 	}
 }
@@ -354,6 +354,7 @@ type databaseSnapshot struct {
 	schemaVersion int
 	markers       []string
 	usageTable    bool
+	pathKeyIndex  bool
 	setting       string
 }
 
@@ -372,10 +373,11 @@ func createInitialBaseline(t *testing.T, ctx context.Context, runtimeService *ru
 		t.Fatalf("initialize fixture database: %v", err)
 	}
 	registered := storemigrations.Migrations.Sorted()
-	if len(registered) != 4 {
-		t.Fatalf("registered migrations = %d, want 4", len(registered))
+	if len(registered) != 5 {
+		t.Fatalf("registered migrations = %d, want 5", len(registered))
 	}
 	execDatabaseStatements(t, runtimeService.Paths().Database,
+		`DROP INDEX idx_profile_targets_path_key`,
 		`DROP TABLE system_state`,
 		`DROP INDEX idx_usage_import_cursors_source`,
 		`DROP TABLE usage_import_cursors`,
@@ -394,7 +396,7 @@ func createInitialBaseline(t *testing.T, ctx context.Context, runtimeService *ru
 		`DROP INDEX idx_profile_targets_provider_id`,
 		`DROP INDEX idx_profile_targets_profile_id`,
 		`DROP TABLE profile_targets`,
-		`DELETE FROM bun_migrations WHERE name IN ('`+registered[1].Name+`', '`+registered[2].Name+`', '`+registered[3].Name+`')`,
+		`DELETE FROM bun_migrations WHERE name IN ('`+registered[1].Name+`', '`+registered[2].Name+`', '`+registered[3].Name+`', '`+registered[4].Name+`')`,
 	)
 }
 
@@ -441,6 +443,11 @@ func inspectDatabaseSnapshot(t *testing.T, path string) databaseSnapshot {
 		t.Fatal(err)
 	}
 	snapshot.usageTable = usageCount > 0
+	var pathKeyIndexCount int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_profile_targets_path_key'`).Scan(&pathKeyIndexCount); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.pathKeyIndex = pathKeyIndexCount > 0
 	if err := db.QueryRow(`SELECT COALESCE((SELECT value_json FROM settings WHERE key = 'upgrade-data'), '')`).Scan(&snapshot.setting); err != nil {
 		t.Fatal(err)
 	}

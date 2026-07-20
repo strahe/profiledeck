@@ -53,13 +53,14 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	if cmd.Command("codex") == nil {
 		t.Fatalf("expected codex subcommand")
 	}
-	if antigravity := cmd.Command("antigravity"); antigravity == nil || antigravity.Command("detect") == nil || antigravity.Command("profile") == nil {
+	if antigravity := cmd.Command("antigravity"); antigravity == nil || antigravity.Command("detect") == nil || antigravity.Command("profile") == nil ||
+		antigravity.Command("profile").Command("delete") == nil {
 		t.Fatalf("expected Antigravity commands")
 	}
 	if claudeCode := cmd.Command("claude-code"); claudeCode == nil || claudeCode.Command("detect") == nil || claudeCode.Command("profile") == nil ||
 		claudeCode.Command("profile").Command("create") == nil || claudeCode.Command("profile").Command("list") == nil ||
 		claudeCode.Command("profile").Command("show") == nil || claudeCode.Command("profile").Command("update") == nil ||
-		claudeCode.Command("profile").Command("save-current") == nil {
+		claudeCode.Command("profile").Command("save-current") == nil || claudeCode.Command("profile").Command("delete") == nil {
 		t.Fatalf("expected Claude Code commands")
 	}
 	if cmd.Command("claude") != nil {
@@ -73,6 +74,7 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 		codex.Command("profile").Command("save-current") == nil ||
 		codex.Command("profile").Command("set-config") == nil ||
 		codex.Command("profile").Command("export") == nil ||
+		codex.Command("profile").Command("delete") == nil ||
 		codex.Command("profile").Command("import") == nil ||
 		codex.Command("profile").Command("import").Command("inspect") == nil ||
 		codex.Command("profile").Command("import").Command("apply") == nil ||
@@ -1242,6 +1244,90 @@ func TestProfileCLIJSONFlow(t *testing.T) {
 	decodeCLIJSON(t, []byte(out), &deleted)
 	if !deleted.Deleted || deleted.ID != "profile-b" {
 		t.Fatalf("unexpected delete result: %#v", deleted)
+	}
+	assertNoTargetToolConfigCreated(t, configDir)
+}
+
+func TestAgentProfileDeleteCommandsDeleteTheGlobalProfile(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+	for _, profileID := range []string{"from-codex", "from-antigravity", "from-claude"} {
+		if _, err := runCLI(t, "--config-dir", configDir, "profile", "create", profileID, "--name", profileID, "--json"); err != nil {
+			t.Fatalf("create global Profile %q: %v", profileID, err)
+		}
+	}
+
+	application, err := app.New(app.Config{ConfigDir: configDir})
+	if err != nil {
+		t.Fatalf("create application: %v", err)
+	}
+	db, err := application.Runtime().StoreFactory().OpenHealthy(ctx, false)
+	if err != nil {
+		application.Close()
+		t.Fatalf("open store: %v", err)
+	}
+	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
+		ID: claudecodeconfig.ProviderID, Name: claudecodeconfig.ProviderName,
+		AdapterID: claudecodeconfig.AdapterID, Enabled: true, MetadataJSON: `{}`,
+	}); err != nil {
+		_ = db.Close()
+		application.Close()
+		t.Fatalf("create Claude Code Provider: %v", err)
+	}
+	payload := `{"claudeAiOauth":{"accessToken":"private"}}`
+	if _, err := db.UpsertProviderCredential(ctx, store.UpsertProviderCredentialParams{
+		ID: "claude-only-login", ProviderID: claudecodeconfig.ProviderID, CredentialKind: claudecodeconfig.CredentialKind,
+		PayloadJSON: payload, PayloadSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(payload))), MetadataJSON: `{}`,
+	}); err != nil {
+		_ = db.Close()
+		application.Close()
+		t.Fatalf("create Claude Code credential: %v", err)
+	}
+	if _, err := db.UpsertProfileCredentialBinding(ctx, store.UpsertProfileCredentialBindingParams{
+		ProfileID: "from-codex", ProviderID: claudecodeconfig.ProviderID,
+		SlotID: claudecodeconfig.CredentialSlot, CredentialID: "claude-only-login",
+	}); err != nil {
+		_ = db.Close()
+		application.Close()
+		t.Fatalf("bind Claude Code-only data: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		application.Close()
+		t.Fatalf("close store: %v", err)
+	}
+	application.Close()
+
+	_, err = runCLI(t, "--config-dir", configDir, "codex", "profile", "delete", "from-codex", "--json")
+	assertCLIAppErrorCode(t, err, apperror.ConfirmationRequired)
+	for _, test := range []struct {
+		agent     string
+		profileID string
+	}{
+		{agent: "codex", profileID: "from-codex"},
+		{agent: "antigravity", profileID: "from-antigravity"},
+		{agent: "claude-code", profileID: "from-claude"},
+	} {
+		out, err := runCLI(t, "--config-dir", configDir, test.agent, "profile", "delete", test.profileID, "--yes", "--json")
+		if err != nil {
+			t.Fatalf("%s Profile delete: %v", test.agent, err)
+		}
+		var result profile.DeleteResult
+		decodeCLIJSON(t, []byte(out), &result)
+		if !result.Deleted || result.ID != test.profileID {
+			t.Fatalf("%s delete result = %#v", test.agent, result)
+		}
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "profile", "show", "from-codex", "--json"); err == nil {
+		t.Fatal("Codex alias left the global Profile behind")
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "profile", "create", "human", "--name", "Human", "--json"); err != nil {
+		t.Fatalf("create human-output Profile: %v", err)
+	}
+	if out, err := runCLI(t, "--config-dir", configDir, "codex", "profile", "delete", "human", "--yes"); err != nil || out != "Deleted profile human\n" {
+		t.Fatalf("human delete output = %q, err=%v", out, err)
 	}
 	assertNoTargetToolConfigCreated(t, configDir)
 }

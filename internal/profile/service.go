@@ -40,12 +40,13 @@ type DeleteResult struct {
 }
 
 type Service struct {
-	stores      store.Factory
-	maintenance maintenance.Runner
+	stores         store.Factory
+	maintenance    maintenance.Runner
+	deleteRegistry DeleteRegistry
 }
 
-func NewService(stores store.Factory, maintenance maintenance.Runner) *Service {
-	return &Service{stores: stores, maintenance: maintenance}
+func NewService(stores store.Factory, maintenance maintenance.Runner, deleteRegistry DeleteRegistry) *Service {
+	return &Service{stores: stores, maintenance: maintenance, deleteRegistry: deleteRegistry}
 }
 
 func (service *Service) List(ctx context.Context) ([]Profile, error) {
@@ -135,9 +136,40 @@ func (service *Service) Delete(ctx context.Context, id string, confirm bool) (De
 	if !confirm {
 		return DeleteResult{}, apperror.New(apperror.ConfirmationRequired, "Profile delete requires confirmation")
 	}
+	// Deletion is database-only lifecycle cleanup. It records no operation and
+	// never enters the external target transaction pipeline.
 	err := service.maintenance.RunMaintenance(ctx, maintenance.Request{
 		Operation: "profile-delete", ProfileID: id, MetadataJSON: `{"kind":"profile-delete"}`,
 	}, func(ctx context.Context, tx *store.Store, _ string) error {
+		if _, err := tx.GetProfile(ctx, id); err != nil {
+			return mapStoreError(err)
+		}
+		activeReferences, err := tx.CountActiveProfileReferences(ctx, id)
+		if err != nil {
+			return apperror.Wrap(apperror.StoreStatusFailed, "failed to inspect current Profile state", err)
+		}
+		if activeReferences > 0 {
+			return deleteBlockedError(
+				DeleteReasonActive,
+				"Profile is current in at least one Agent; use another Profile there and try again",
+			)
+		}
+		unresolvedOperations, err := tx.CountUnresolvedProfileOperations(ctx, id)
+		if err != nil {
+			return apperror.Wrap(apperror.StoreStatusFailed, "failed to inspect unfinished Profile operations", err)
+		}
+		if unresolvedOperations > 0 {
+			return deleteBlockedError(
+				DeleteReasonUnresolvedOperation,
+				"Profile has an unfinished operation; resolve it in Diagnostics and try again",
+			)
+		}
+		if err := service.deleteManagedData(ctx, tx, id); err != nil {
+			return err
+		}
+		if err := tx.DeleteProfileTargetsByProfile(ctx, id); err != nil {
+			return apperror.Wrap(apperror.StoreStatusFailed, "failed to delete Profile target data", err)
+		}
 		return mapStoreError(tx.DeleteProfile(ctx, id))
 	})
 	if err != nil {

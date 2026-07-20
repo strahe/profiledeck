@@ -354,8 +354,8 @@ func newProfileUpdateCommand() *urfavecli.Command {
 func newProfileDeleteCommand() *urfavecli.Command {
 	return &urfavecli.Command{
 		Name:      "delete",
-		Usage:     "Delete a profile",
-		ArgsUsage: "<id>",
+		Usage:     "Delete a Profile from every Agent",
+		ArgsUsage: "<profile-id>",
 		Flags: []urfavecli.Flag{
 			boolFlag(yesFlagName, "Confirm deletion"),
 			boolFlag(jsonFlagName, "Write JSON output"),

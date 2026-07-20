@@ -55,6 +55,7 @@
 	import ConfigSetDialog from "./ConfigSetDialog.svelte";
 	import ConfigSetPage from "./ConfigSetPage.svelte";
 	import ProfileDetail from "./ProfileDetail.svelte";
+	import ProfileDeleteDialog, { type ProfileDeleteTarget } from "./ProfileDeleteDialog.svelte";
 	import ProfileEditorPage from "./ProfileEditorPage.svelte";
 	import ProfileImportDialog from "./ProfileImportDialog.svelte";
 	import ProfileList from "./ProfileList.svelte";
@@ -119,6 +120,8 @@
 	let importOpen = $state(false);
 	let importPath = $state("");
 	let importPlan = $state<CodexProfileImportPlan | null>(null);
+	let deleteOpen = $state(false);
+	let deleteTarget = $state<ProfileDeleteTarget | null>(null);
 
 	let useOpen = $state(false);
 	let useProfile = $state<CodexProfileListItem | null>(null);
@@ -271,6 +274,20 @@
 		editName = detail.summary.profile.name || detail.summary.profile.id;
 		editDescription = detail.summary.profile.description || "";
 		editOpen = true;
+	}
+
+	function openProfileDelete(profile: { id: string; name: string }) {
+		deleteTarget = { id: profile.id, name: profile.name || translate("profile.unnamed") };
+		deleteOpen = true;
+	}
+
+	function profileDeleted(profile: ProfileDeleteTarget) {
+		if (detail?.summary.profile.id === profile.id) {
+			detail = null;
+			void push("/codex/profiles");
+		}
+		void refreshProfiles();
+		showNotice(translate("profileDelete.deletedTitle"), translate("profileDelete.deletedDescription"));
 	}
 
 	async function saveMetadata() {
@@ -671,6 +688,7 @@
 			canCreate={sourceReady}
 			onNew={() => push("/codex/profiles/new")}
 			onExport={(profile) => exportProfiles([profile.id])}
+			onDelete={openProfileDelete}
 			onRefreshQuota={(profile) => runtime.readQuota(profile.id)}
 			onUse={openUse}
 			onDetails={(profile) => push(`/codex/profiles/${encodeURIComponent(profile.id)}`)}
@@ -700,12 +718,15 @@
 		onExport={() => exportProfiles([detail!.summary.profile.id])}
 		onSaveCurrent={openSaveCurrent}
 		onSetConfig={openSetConfig}
+		onDelete={() => openProfileDelete({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || translate("profile.unnamed") })}
 	/>
 {:else}
 	<ProfileEditorPage mode="fork" {detail} {detectResult} busy={!!busyAction} bind:profileID bind:profileName bind:profileDescription bind:configMode bind:credentialBinding bind:configBinding bind:newConfigSetID bind:newConfigSetName idError={displayedIDError} nameError={displayedNameError} descriptionError={displayedDescriptionError} onCancel={() => push(`/codex/profiles/${encodeURIComponent(detail!.summary.profile.id)}`)} onSubmit={forkProfile} />
 {/if}
 
 <UseProfileDialog bind:open={useOpen} profile={useProfile} currentProfile={activeProfileID} plan={usePlan} building={useBuilding} applying={useApplying} inlineError={useInlineError} onClose={closeUse} onConfirm={confirmUse} />
+
+<ProfileDeleteDialog bind:open={deleteOpen} profile={deleteTarget} onDeleted={profileDeleted} />
 
 <ConfigSetDialog bind:open={configDialogOpen} mode={configDialog.mode} busy={busyAction === "config-set-save"} configSetID={configDialog.source?.id || ""} name={configDialog.source?.name || ""} description={configDialog.source?.description || ""} onClose={() => (configDialogOpen = false)} onSubmit={submitConfigDialog} />
 

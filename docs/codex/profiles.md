@@ -119,6 +119,16 @@ profiledeck switch codex work \
 
 If the current `auth.json` or `config.toml` is missing or invalid, the preview warns that it will not be saved; a confirmed switch can recreate it from the selected Profile. ProfileDeck stops before writing when the current state is unsupported, cannot be checked safely, or changes after review. Open Diagnostics or run `profiledeck doctor` before retrying.
 
+## Delete a Profile
+
+Open a Profile's action menu in Desktop and choose **Delete Profile**, or run:
+
+```bash
+profiledeck codex profile delete work --yes
+```
+
+This deletes the complete global Profile from every Agent, not only its Codex data. It also deletes saved logins and Config Sets used only by that Profile, while shared saved data remains. A current Profile or one with an unfinished operation cannot be deleted. Deletion does not change Codex `auth.json`, `config.toml`, or any other tool-owned working state.
+
 ## Check limits and keep a login active
 
 Desktop can check the current ChatGPT Codex limits for one saved Profile. ProfileDeck checks the current Profile once at startup; use **Refresh limits** when you need a later result. A check can renew a supported Codex sign-in and save the refreshed login. Inactive Profiles are not checked automatically unless you enable an interval for them.

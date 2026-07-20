@@ -8,6 +8,7 @@
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 
 	import IconAction from "$lib/components/app/IconAction.svelte";
@@ -39,6 +40,7 @@
 		onDetails,
 		onFork,
 		onExport,
+		onDelete,
 		onRefreshQuota,
 		onRetrySource,
 	}: {
@@ -52,6 +54,7 @@
 		onDetails: (profile: CodexProfileListItem) => void;
 		onFork: (profile: CodexProfileListItem) => void;
 		onExport: (profile: CodexProfileListItem) => void;
+		onDelete: (profile: CodexProfileListItem) => void;
 		onRefreshQuota: (profile: CodexProfileListItem) => void;
 		onRetrySource?: () => void;
 	} = $props();
@@ -150,6 +153,7 @@
 											<DropdownMenu.Item onSelect={() => onDetails(profile)}><EyeIcon />{$_("actions.details")}</DropdownMenu.Item>
 											<DropdownMenu.Item onSelect={() => onFork(profile)}><GitForkIcon />{$_("actions.fork")}</DropdownMenu.Item>
 											<DropdownMenu.Item onSelect={() => onExport(profile)}><DownloadIcon />{$_("actions.exportProfile")}</DropdownMenu.Item>
+											<DropdownMenu.Item variant="destructive" disabled={busy} onSelect={() => onDelete(profile)}><Trash2Icon />{$_("actions.deleteProfile")}</DropdownMenu.Item>
 										</DropdownMenu.Group>
 									</DropdownMenu.Content>
 								</DropdownMenu.Root>

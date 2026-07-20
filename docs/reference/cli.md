@@ -51,6 +51,7 @@ profiledeck codex profile create <profile-id> [--new-config-set ID] [--config-se
 profiledeck codex profile fork <source-profile-id> <new-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
 profiledeck codex profile save-current [--codex-dir PATH] [--json]
 profiledeck codex profile set-config <profile-id> <config-set-id> [--json]
+profiledeck codex profile delete <profile-id> --yes [--json]
 profiledeck codex profile export [<profile-id> ...] --output PATH [--force] [--json]
 profiledeck codex profile import inspect <bundle-path> [--codex-dir PATH] [--json]
 profiledeck codex profile import apply <bundle-path> --plan-fingerprint FINGERPRINT --yes [--codex-dir PATH] [--json]
@@ -84,6 +85,7 @@ profiledeck claude-code profile list [--json]
 profiledeck claude-code profile show <profile-id> [--json]
 profiledeck claude-code profile update <profile-id> [--name NAME] [--description TEXT] [--json]
 profiledeck claude-code profile save-current [--yes] [--json]
+profiledeck claude-code profile delete <profile-id> --yes [--json]
 ```
 
 `create` saves the current official Claude Code subscription login and makes the new Profile current. `save-current` updates the login used by the current Profile. If that saved login is shared, the command reports how many Profiles will change and requires `--yes`.
@@ -101,6 +103,7 @@ profiledeck antigravity profile show <profile-id> [--json]
 profiledeck antigravity profile create <profile-id> [--name NAME] [--description TEXT] [--json]
 profiledeck antigravity profile update <profile-id> [--name NAME] [--description TEXT] [--json]
 profiledeck antigravity profile save-current [--json]
+profiledeck antigravity profile delete <profile-id> --yes [--json]
 ```
 
 `agy` is an alias for `antigravity`. `create` and `save-current` require a valid current Antigravity consumer OAuth login. Output shows safe metadata and never prints login values.
@@ -143,6 +146,8 @@ profiledeck profile create <id> [--name NAME] [--description TEXT] [--metadata-j
 profiledeck profile update <id> [--name NAME] [--description TEXT] [--metadata-json JSON] [--json]
 profiledeck profile delete <id> --yes [--json]
 ```
+
+All four Profile delete commands perform the same global deletion. An Agent-specific command deletes the complete Profile even when it contains data only for another Agent. Deletion stops if the Profile is current in any Agent or has an unfinished operation. Saved logins and Config Sets used only by that Profile are deleted; shared saved data and unrelated unbound data remain. Tool-owned working logins, settings, and files do not change.
 
 Target commands:
 

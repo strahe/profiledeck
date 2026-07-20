@@ -36,6 +36,12 @@ When Profiles share a Config Set, saving changed Codex settings updates all of t
 
 Config Sets do not include sessions, logs, skills, plugin caches, project `.codex/config.toml` files, or system policy.
 
+## Delete a Profile
+
+Deleting removes the complete Profile from every Agent. ProfileDeck also deletes saved logins and Config Sets used only by that Profile, but keeps shared saved data and unrelated unbound data. The Profile cannot be deleted while it is current in any Agent or while an unfinished operation still refers to it.
+
+Deletion changes only ProfileDeck's saved data. It does not sign out a tool, replace its current settings, remove its working files, or erase completed operation history.
+
 ## What ProfileDeck changes
 
 Creating, editing, forking, or importing a Profile changes only saved ProfileDeck data. Confirming a switch or unfinished-switch recovery may change the selected tool's working login or files.

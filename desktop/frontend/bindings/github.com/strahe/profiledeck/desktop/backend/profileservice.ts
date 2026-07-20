@@ -15,6 +15,10 @@ import * as profiletarget$0 from "../../internal/profiletarget/models.js";
 // @ts-ignore: Unused imports
 import * as provider$0 from "../../internal/provider/models.js";
 
+export function Delete(profileID: string, confirm: boolean): $CancellablePromise<profile$0.DeleteResult> {
+    return $Call.ByID(1970065039, profileID, confirm);
+}
+
 export function ListProfiles(): $CancellablePromise<profile$0.Profile[] | null> {
     return $Call.ByID(2779719102);
 }

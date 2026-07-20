@@ -47,7 +47,7 @@ func newAntigravityProfileCommand() *urfavecli.Command {
 		Commands: []*urfavecli.Command{
 			newAntigravityProfileListCommand(), newAntigravityProfileShowCommand(),
 			newAntigravityProfileCreateCommand(), newAntigravityProfileUpdateCommand(),
-			newAntigravityProfileSaveCurrentCommand(),
+			newAntigravityProfileSaveCurrentCommand(), newProfileDeleteCommand(),
 		},
 	}
 }

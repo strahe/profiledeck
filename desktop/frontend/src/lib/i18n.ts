@@ -58,6 +58,7 @@ const messages = {
 			copy: "Copy",
 			edit: "Edit",
 			delete: "Delete",
+			deleteProfile: "Delete Profile",
 			save: "Save",
 			transferProfiles: "Backup & restore",
 			exportAllProfiles: "Export all Profiles",
@@ -199,6 +200,18 @@ const messages = {
 			noDescription: "No description",
 			noAccount: "No account",
 			noActive: "No active profile",
+		},
+		profileDelete: {
+			title: 'Delete "{name}"?',
+			identity: "Profile ID: {id}",
+			description: "This removes the Profile from every Agent in ProfileDeck. Saved logins and settings used only by this Profile will also be deleted. Shared saved data will remain. Current tool logins, settings, and files will not change.",
+			errorTitle: "Profile could not be deleted",
+			activeError: "This Profile is current in at least one Agent. Use another Profile there, then try again.",
+			unresolvedError: "This Profile has an unfinished operation. Resolve it in Diagnostics, then try again.",
+			unsupportedError: "This Profile contains unsupported saved data. Remove or repair that data, then try again.",
+			genericError: "ProfileDeck could not delete this Profile. Try again.",
+			deletedTitle: "Profile deleted",
+			deletedDescription: "The Profile was removed from ProfileDeck. Current tool logins, settings, and files were not changed.",
 		},
 		antigravity: {
 			actions: {
@@ -1043,6 +1056,7 @@ const messages = {
 			copy: "复制",
 			edit: "编辑",
 			delete: "删除",
+			deleteProfile: "删除 Profile",
 			save: "保存",
 			transferProfiles: "备份与恢复",
 			exportAllProfiles: "导出全部 Profiles",
@@ -1184,6 +1198,18 @@ const messages = {
 			noDescription: "无描述",
 			noAccount: "无账号",
 			noActive: "没有当前 Profile",
+		},
+		profileDelete: {
+			title: "删除“{name}”？",
+			identity: "Profile ID：{id}",
+			description: "这会从 ProfileDeck 的所有 Agent 中删除此 Profile。只有此 Profile 使用的已保存登录和设置也会被删除；共享数据将保留。当前工具的登录、设置和文件不会改变。",
+			errorTitle: "无法删除 Profile",
+			activeError: "此 Profile 至少是一个 Agent 的当前 Profile。请先在对应 Agent 中使用其他 Profile，然后重试。",
+			unresolvedError: "此 Profile 有一项未完成的操作。请先在“诊断”中解决，然后重试。",
+			unsupportedError: "此 Profile 包含不受支持的已保存数据。请先移除或修复这些数据，然后重试。",
+			genericError: "ProfileDeck 无法删除此 Profile，请重试。",
+			deletedTitle: "Profile 已删除",
+			deletedDescription: "此 Profile 已从 ProfileDeck 中移除；当前工具的登录、设置和文件没有改变。",
 		},
 		antigravity: {
 			actions: {

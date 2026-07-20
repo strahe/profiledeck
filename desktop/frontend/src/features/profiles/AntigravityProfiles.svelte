@@ -9,8 +9,10 @@
 	import EyeIcon from "@lucide/svelte/icons/eye";
 	import KeyRoundIcon from "@lucide/svelte/icons/key-round";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
+	import PencilIcon from "@lucide/svelte/icons/pencil";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 
 	import {
@@ -56,6 +58,7 @@
 	import AntigravityQuotaCard from "./AntigravityQuotaCard.svelte";
 	import AntigravityQuotaSummary from "./AntigravityQuotaSummary.svelte";
 	import ProfileQuotaFreshness from "./ProfileQuotaFreshness.svelte";
+	import ProfileDeleteDialog, { type ProfileDeleteTarget } from "./ProfileDeleteDialog.svelte";
 	import UseProfileDialog from "./UseProfileDialog.svelte";
 	import type { AntigravityQuotaCheck } from "./antigravity-quota.svelte.js";
 	import type { AntigravityProfileRoute, ProfileUseRequest, SwitchProfileItem } from "./types";
@@ -107,6 +110,8 @@
 	let editDescription = $state("");
 	let saveCurrentOpen = $state(false);
 	let saveCurrentReferenceCount = $state(1);
+	let deleteOpen = $state(false);
+	let deleteTarget = $state<ProfileDeleteTarget | null>(null);
 
 	let useOpen = $state(false);
 	let useProfile = $state<SwitchProfileItem | null>(null);
@@ -223,6 +228,20 @@
 		editName = detail.summary.profile.name || detail.summary.profile.id;
 		editDescription = detail.summary.profile.description || "";
 		editOpen = true;
+	}
+
+	function openProfileDelete(profile: { id: string; name: string }) {
+		deleteTarget = { id: profile.id, name: profile.name || translate("profile.unnamed") };
+		deleteOpen = true;
+	}
+
+	function profileDeleted(profile: ProfileDeleteTarget) {
+		if (detail?.summary.profile.id === profile.id) {
+			detail = null;
+			void push("/antigravity/profiles");
+		}
+		void refreshProfiles();
+		showNotice(translate("profileDelete.deletedTitle"), translate("profileDelete.deletedDescription"));
 	}
 
 	function openSaveCurrent(referenceCount: number) {
@@ -515,6 +534,7 @@
 											<DropdownMenu.Group>
 												<DropdownMenu.Item onSelect={() => push(`/antigravity/profiles/${encodeURIComponent(summary.profile.id)}`)}><EyeIcon />{$_("actions.details")}</DropdownMenu.Item>
 												{#if summary.active}<DropdownMenu.Item disabled={!sourceReady || !!busyAction} onSelect={() => openSaveCurrent(summary.credential_reference_count)}><RefreshCwIcon />{$_("antigravity.actions.updateCurrent")}</DropdownMenu.Item>{/if}
+												<DropdownMenu.Item variant="destructive" disabled={!!busyAction} onSelect={() => openProfileDelete({ id: summary.profile.id, name: summary.profile.name || $_("profile.unnamed") })}><Trash2Icon />{$_("actions.deleteProfile")}</DropdownMenu.Item>
 											</DropdownMenu.Group>
 										</DropdownMenu.Content>
 									</DropdownMenu.Root>
@@ -609,7 +629,17 @@
 				{/if}
 			</Card.Content>
 			<Card.Footer class="justify-end gap-2">
-				<Button variant="outline" disabled={!providerReady || !!busyAction} onclick={openEdit}>{$_("actions.editDetails")}</Button>
+				<DropdownMenu.Root>
+					<DropdownMenu.Trigger>
+						{#snippet child({ props })}<Button {...props} variant="outline" size="icon-sm" disabled={!!busyAction} aria-label={$_("actions.more")}><MoreHorizontalIcon /></Button>{/snippet}
+					</DropdownMenu.Trigger>
+					<DropdownMenu.Content align="end">
+						<DropdownMenu.Group>
+							<DropdownMenu.Item disabled={!providerReady || !!busyAction} onSelect={openEdit}><PencilIcon />{$_("actions.editDetails")}</DropdownMenu.Item>
+							<DropdownMenu.Item variant="destructive" disabled={!!busyAction} onSelect={() => openProfileDelete({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || $_("profile.unnamed") })}><Trash2Icon />{$_("actions.deleteProfile")}</DropdownMenu.Item>
+						</DropdownMenu.Group>
+					</DropdownMenu.Content>
+				</DropdownMenu.Root>
 				{#if detail.summary.active}<Button variant="outline" disabled={!sourceReady || !!busyAction} onclick={() => openSaveCurrent(detail!.summary.credential_reference_count)}>{$_("antigravity.actions.updateCurrent")}</Button>{/if}
 					<Button disabled={!switchReady || (detail.summary.active && !activeLoginMissing) || !!busyAction || useBuilding || useApplying} onclick={() => openUse({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || $_("profile.unnamed") })}>{$_("actions.useProfile")}</Button>
 			</Card.Footer>
@@ -627,6 +657,8 @@
 {/if}
 
 <UseProfileDialog bind:open={useOpen} profile={useProfile} agent="Antigravity" mode="antigravity" currentProfile={activeProfileID} plan={usePlan} building={useBuilding} applying={useApplying} inlineError={useInlineError} onClose={closeUse} onConfirm={confirmUse} />
+
+<ProfileDeleteDialog bind:open={deleteOpen} profile={deleteTarget} onDeleted={profileDeleted} />
 
 <Dialog.Root bind:open={editOpen}>
 	<Dialog.Content class="sm:max-w-lg">

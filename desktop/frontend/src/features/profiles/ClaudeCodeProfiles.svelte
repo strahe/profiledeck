@@ -6,9 +6,13 @@
 	import { toast } from "svelte-sonner";
 	import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
 	import CheckIcon from "@lucide/svelte/icons/check";
+	import EyeIcon from "@lucide/svelte/icons/eye";
 	import KeyRoundIcon from "@lucide/svelte/icons/key-round";
+	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
+	import PencilIcon from "@lucide/svelte/icons/pencil";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 
 	import { ClaudeCodeService, SwitchService } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
@@ -24,6 +28,7 @@
 	import * as AlertDialog from "$lib/components/ui/alert-dialog";
 	import * as Card from "$lib/components/ui/card";
 	import * as Dialog from "$lib/components/ui/dialog";
+	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import * as Empty from "$lib/components/ui/empty";
 	import * as Field from "$lib/components/ui/field";
 	import { Badge } from "$lib/components/ui/badge";
@@ -36,6 +41,7 @@
 	import { desktopErrorMessage, isCancelError, isDesktopErrorCode } from "$lib/desktop-errors";
 	import { currentDesktopLocale, translate } from "$lib/i18n";
 	import UseProfileDialog from "./UseProfileDialog.svelte";
+	import ProfileDeleteDialog, { type ProfileDeleteTarget } from "./ProfileDeleteDialog.svelte";
 	import type { ClaudeCodeProfileRoute, ProfileUseRequest, SwitchProfileItem } from "./types";
 
 	interface Props {
@@ -77,6 +83,8 @@
 	let editDescription = $state("");
 	let saveCurrentOpen = $state(false);
 	let saveCurrentReferenceCount = $state(1);
+	let deleteOpen = $state(false);
+	let deleteTarget = $state<ProfileDeleteTarget | null>(null);
 	let useOpen = $state(false);
 	let useProfile = $state<SwitchProfileItem | null>(null);
 	let usePlan = $state<SwitchPlan | null>(null);
@@ -169,6 +177,20 @@
 		editName = detail.summary.profile.name || detail.summary.profile.id;
 		editDescription = detail.summary.profile.description || "";
 		editOpen = true;
+	}
+
+	function openProfileDelete(profile: { id: string; name: string }) {
+		deleteTarget = { id: profile.id, name: profile.name || translate("profile.unnamed") };
+		deleteOpen = true;
+	}
+
+	function profileDeleted(profile: ProfileDeleteTarget) {
+		if (detail?.summary.profile.id === profile.id) {
+			detail = null;
+			void push("/claude-code/profiles");
+		}
+		void refreshProfiles();
+		showNotice(translate("profileDelete.deletedTitle"), translate("profileDelete.deletedDescription"));
 	}
 
 	async function saveMetadata() {
@@ -323,6 +345,7 @@
 					<div class="flex items-center gap-3"><button class="min-w-0 flex-1 truncate text-left font-medium hover:underline" onclick={() => push(`/claude-code/profiles/${encodeURIComponent(summary.profile.id)}`)}>{summary.profile.name || summary.profile.id}</button>
 						{#if summary.active}<StatusBadge tone="current"><CheckIcon />{$_("status.current")}</StatusBadge>{/if}<StatusBadge tone={summary.credential_status === "valid" ? "success" : "warning"}>{$_(`claudeCode.status.${summary.credential_status}`)}</StatusBadge>
 						{#if !summary.active}<Button size="sm" disabled={!providerReady || !!busyAction} onclick={() => openUse({ id: summary.profile.id, name: summary.profile.name || summary.profile.id })}>{$_("actions.useProfile")}</Button>{/if}
+						<DropdownMenu.Root><DropdownMenu.Trigger>{#snippet child({ props })}<Button {...props} variant="outline" size="icon-sm" disabled={!!busyAction} aria-label={$_("actions.more")}><MoreHorizontalIcon /></Button>{/snippet}</DropdownMenu.Trigger><DropdownMenu.Content align="end"><DropdownMenu.Group><DropdownMenu.Item onSelect={() => push(`/claude-code/profiles/${encodeURIComponent(summary.profile.id)}`)}><EyeIcon />{$_("actions.details")}</DropdownMenu.Item><DropdownMenu.Item variant="destructive" onSelect={() => openProfileDelete({ id: summary.profile.id, name: summary.profile.name || summary.profile.id })}><Trash2Icon />{$_("actions.deleteProfile")}</DropdownMenu.Item></DropdownMenu.Group></DropdownMenu.Content></DropdownMenu.Root>
 					</div><div class="text-sm text-muted-foreground">{$_("claudeCode.detail.expiry")}: {formatExpiry(summary.expires_at_unix_ms)}</div>
 					{#if summary.warnings?.length}<Alert.Root><TriangleAlertIcon /><Alert.Description>{$_("claudeCode.notice.profileWarning")}</Alert.Description></Alert.Root>{/if}
 				</div>{#if index < profiles.length - 1}<Separator />{/if}
@@ -347,12 +370,14 @@
 		<Card.Root><Card.Header><Card.Title>{detail.summary.profile.name || detail.summary.profile.id}</Card.Title><Card.Description>{detail.summary.profile.description || $_("profile.noDescription")}</Card.Description>{#if detail.summary.active}<Card.Action><Badge>{$_("status.current")}</Badge></Card.Action>{/if}</Card.Header>
 			<Card.Content><dl class="grid gap-4 text-sm sm:grid-cols-2"><div><dt class="text-muted-foreground">{$_("profilePages.form.profileID")}</dt><dd class="font-mono">{detail.summary.profile.id}</dd></div><div><dt class="text-muted-foreground">{$_("claudeCode.detail.status")}</dt><dd>{$_(`claudeCode.status.${detail.summary.credential_status}`)}</dd></div><div><dt class="text-muted-foreground">{$_("claudeCode.detail.expiry")}</dt><dd>{formatExpiry(detail.summary.expires_at_unix_ms)}</dd></div><div><dt class="text-muted-foreground">{$_("claudeCode.detail.references")}</dt><dd>{detail.summary.credential_reference_count}</dd></div></dl>
 			{#if detail.summary.warnings?.length}<Alert.Root class="mt-4"><TriangleAlertIcon /><Alert.Description>{$_("claudeCode.notice.profileWarning")}</Alert.Description></Alert.Root>{/if}</Card.Content>
-			<Card.Footer class="justify-end gap-2"><Button variant="outline" onclick={openEdit}>{$_("actions.editDetails")}</Button>{#if detail.summary.active}<Button variant="outline" disabled={!sourceReady || !!busyAction} onclick={() => openSaveCurrent(detail!.summary.credential_reference_count)}><RefreshCwIcon />{$_("claudeCode.actions.updateCurrent")}</Button>{/if}<Button disabled={!providerReady || detail.summary.active || !!busyAction} onclick={() => openUse({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || detail!.summary.profile.id })}>{$_("actions.useProfile")}</Button></Card.Footer>
+			<Card.Footer class="justify-end gap-2"><DropdownMenu.Root><DropdownMenu.Trigger>{#snippet child({ props })}<Button {...props} variant="outline" size="icon-sm" disabled={!!busyAction} aria-label={$_("actions.more")}><MoreHorizontalIcon /></Button>{/snippet}</DropdownMenu.Trigger><DropdownMenu.Content align="end"><DropdownMenu.Group><DropdownMenu.Item onSelect={openEdit}><PencilIcon />{$_("actions.editDetails")}</DropdownMenu.Item><DropdownMenu.Item variant="destructive" onSelect={() => openProfileDelete({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || detail!.summary.profile.id })}><Trash2Icon />{$_("actions.deleteProfile")}</DropdownMenu.Item></DropdownMenu.Group></DropdownMenu.Content></DropdownMenu.Root>{#if detail.summary.active}<Button variant="outline" disabled={!sourceReady || !!busyAction} onclick={() => openSaveCurrent(detail!.summary.credential_reference_count)}><RefreshCwIcon />{$_("claudeCode.actions.updateCurrent")}</Button>{/if}<Button disabled={!providerReady || detail.summary.active || !!busyAction} onclick={() => openUse({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || detail!.summary.profile.id })}>{$_("actions.useProfile")}</Button></Card.Footer>
 		</Card.Root>
 	</div>
 {/if}
 
 <UseProfileDialog bind:open={useOpen} profile={useProfile} agent="Claude Code" mode="claude-code" currentProfile={activeProfileID} plan={usePlan} building={useBuilding} applying={useApplying} inlineError={useInlineError} onClose={closeUse} onConfirm={confirmUse} />
+
+<ProfileDeleteDialog bind:open={deleteOpen} profile={deleteTarget} onDeleted={profileDeleted} />
 
 <Dialog.Root bind:open={editOpen}><Dialog.Content class="sm:max-w-lg"><Dialog.Header><Dialog.Title>{$_("profilePages.edit.title")}</Dialog.Title><Dialog.Description>{$_("claudeCode.edit.description")}</Dialog.Description></Dialog.Header><Field.FieldGroup><Field.Field><Field.FieldLabel for="edit-claude-code-name">{$_("profilePages.form.name")}</Field.FieldLabel><Input id="edit-claude-code-name" bind:value={editName} /></Field.Field><Field.Field><Field.FieldLabel for="edit-claude-code-description">{$_("profilePages.form.description")}</Field.FieldLabel><Textarea id="edit-claude-code-description" bind:value={editDescription} rows={3} /></Field.Field></Field.FieldGroup><Dialog.Footer><Button variant="outline" onclick={() => (editOpen = false)}>{$_("actions.cancel")}</Button><Button disabled={!editName.trim() || !!busyAction} onclick={saveMetadata}>{#if busyAction === "claude-code-edit"}<Spinner />{/if}{$_("actions.save")}</Button></Dialog.Footer></Dialog.Content></Dialog.Root>
 

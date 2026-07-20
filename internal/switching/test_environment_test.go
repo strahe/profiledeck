@@ -45,7 +45,7 @@ func newSwitchingTestEnvironmentWithTargets(t *testing.T, configDir string, targ
 		runtime:   runtimeService,
 		service:   service,
 		providers: provider.NewService(runtimeService.StoreFactory(), service, agentService, agentRegistry),
-		profiles:  profile.NewService(runtimeService.StoreFactory(), service),
+		profiles:  profile.NewService(runtimeService.StoreFactory(), service, profile.DeleteRegistry{}),
 		targets:   profiletarget.NewService(runtimeService.StoreFactory(), service, agentService, agentRegistry),
 	}
 }

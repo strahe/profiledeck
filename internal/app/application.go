@@ -8,13 +8,16 @@ import (
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/antigravity"
 	agyadapter "github.com/strahe/profiledeck/internal/antigravity/adapter"
+	agyprofile "github.com/strahe/profiledeck/internal/antigravity/profile"
 	"github.com/strahe/profiledeck/internal/appbackup"
 	"github.com/strahe/profiledeck/internal/bootstrap"
 	"github.com/strahe/profiledeck/internal/claudecode"
 	claudeadapter "github.com/strahe/profiledeck/internal/claudecode/adapter"
+	claudeprofile "github.com/strahe/profiledeck/internal/claudecode/profile"
 	claudetarget "github.com/strahe/profiledeck/internal/claudecode/target"
 	"github.com/strahe/profiledeck/internal/codex"
 	codexadapter "github.com/strahe/profiledeck/internal/codex/adapter"
+	codexprofile "github.com/strahe/profiledeck/internal/codex/profile"
 	"github.com/strahe/profiledeck/internal/doctor"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/profiletarget"
@@ -149,6 +152,11 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 		dataLease,
 		appbackup.RecoveryCleanupCoordinator{Cleanup: cleanupService, Locks: switchingService},
 	)
+	profileDeleteRegistry := profile.MustDeleteRegistry(
+		codexprofile.DeleteParticipant{},
+		agyprofile.DeleteParticipant{},
+		claudeprofile.DeleteParticipant{},
+	)
 	return &Application{
 		runtime: runtimeService, dataLease: dataLease, backups: backupService,
 		bootstrap: bootstrap.NewService(
@@ -159,7 +167,7 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 		),
 		agents:    agentService,
 		providers: provider.NewService(stores, switchingService, agentService, dependencies.agents),
-		profiles:  profile.NewService(stores, switchingService),
+		profiles:  profile.NewService(stores, switchingService, profileDeleteRegistry),
 		targets:   profileTargetService,
 		switching: switchingService, doctor: doctorService,
 		usage: usage.NewService(stores, config.CodexDir, agentService), settings: settings.NewService(stores),
