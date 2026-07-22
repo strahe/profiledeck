@@ -1,17 +1,24 @@
 package usage
 
 import (
+	"crypto/sha256"
 	"errors"
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
 	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
+	"github.com/strahe/profiledeck/internal/store"
 )
 
 type usageTestEnvironment struct {
 	runtime *profilesruntime.Service
 	service *Service
+}
+
+func usageTestEventKey(value string) store.UsageKey {
+	sum := sha256.Sum256([]byte(value))
+	return store.UsageKey(sum)
 }
 
 func assertAppErrorCode(t *testing.T, err error, code apperror.Code) {
@@ -32,6 +39,10 @@ func newUsageTestEnvironment(t *testing.T, configDir, codexDir string) *usageTes
 	policy := agent.NewService(registry, runtimeService.StoreFactory(), agent.AccessUnrestricted)
 	return &usageTestEnvironment{
 		runtime: runtimeService,
-		service: NewService(runtimeService.StoreFactory(), codexDir, policy),
+		service: NewService(
+			runtimeService.StoreFactory(),
+			MustRegistry(NewCodexIntegration(codexDir)),
+			policy,
+		),
 	}
 }

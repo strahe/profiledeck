@@ -83,6 +83,10 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 	if accessMode != agent.AccessUnrestricted && accessMode != agent.AccessDesktopPreferences {
 		return nil, fmt.Errorf("unsupported Agent access mode %q", accessMode)
 	}
+	usageRegistry, err := usage.NewRegistry(usage.NewCodexIntegration(config.CodexDir))
+	if err != nil {
+		return nil, err
+	}
 	for _, manifest := range dependencies.agents.Manifests() {
 		for _, providerID := range manifest.ProviderIDs {
 			if _, ok := dependencies.switching.Adapters.ManagedAdapterID(providerID); !ok {
@@ -93,6 +97,11 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 	for _, providerID := range dependencies.switching.Adapters.ManagedProviderIDs() {
 		if _, ok := dependencies.agents.AgentForProvider(providerID); !ok {
 			return nil, fmt.Errorf("managed plan adapter Provider %q has no owning Agent", providerID)
+		}
+	}
+	for _, providerID := range usageRegistry.ProviderIDs() {
+		if _, ok := dependencies.agents.AgentForProvider(providerID); !ok {
+			return nil, fmt.Errorf("usage Provider %q has no owning Agent", providerID)
 		}
 	}
 
@@ -170,7 +179,7 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 		profiles:  profile.NewService(stores, switchingService, profileDeleteRegistry),
 		targets:   profileTargetService,
 		switching: switchingService, doctor: doctorService,
-		usage: usage.NewService(stores, config.CodexDir, agentService), settings: settings.NewService(stores),
+		usage: usage.NewService(stores, usageRegistry, agentService), settings: settings.NewService(stores),
 		codex: codexService, antigravity: antigravityService, claudeCode: claudeCodeService,
 	}, nil
 }

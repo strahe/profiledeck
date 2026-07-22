@@ -18,6 +18,7 @@ import (
 	"time"
 
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	"github.com/strahe/profiledeck/internal/store"
 )
 
 const maxCodexSessionLineBytes = 16 * 1024 * 1024
@@ -164,11 +165,10 @@ func parseCodexSessionFile(ctx context.Context, file SourceFile, maxLineBytes in
 
 	sessionID := strings.TrimSuffix(filepath.Base(file.Path), filepath.Ext(file.Path))
 	hasLogSessionID := false
-	modelForStorage := ""
+	modelForStorage := store.UsageUnknownModelKey
 	modelForPricing := ""
 	previousTotals := map[string]TokenCounts{}
 	usageOrdinals := map[string]int64{}
-	var lineIndex int64
 	for {
 		// Background imports must remain cancellable while scanning large local
 		// session files so Desktop shutdown and per-run deadlines can complete.
@@ -182,7 +182,6 @@ func parseCodexSessionFile(ctx context.Context, file SourceFile, maxLineBytes in
 		if err != nil {
 			return FileParseResult{}, err
 		}
-		lineIndex++
 		if tooLong {
 			result.InvalidLines++
 			continue
@@ -216,7 +215,7 @@ func parseCodexSessionFile(ctx context.Context, file SourceFile, maxLineBytes in
 			modelForPricing = found.Pricing
 		}
 
-		counts, usageKind, cumulative, ok := tokenCountsFromObject(object)
+		counts, _, cumulative, ok := tokenCountsFromObject(object)
 		if !ok {
 			continue
 		}
@@ -247,10 +246,7 @@ func parseCodexSessionFile(ctx context.Context, file SourceFile, maxLineBytes in
 		usageOrdinal := usageOrdinals[storedSessionIdentity]
 		costMicros, costStatus := EstimateCostMicros(modelForPricing, delta)
 		result.Events = append(result.Events, Event{
-			ID:                  EventID(ProviderCodex, SourceCodexSessionJSONL, usageOrdinal, storedSessionIdentity, modelForStorage, delta),
-			ProviderID:          ProviderCodex,
-			Source:              SourceCodexSessionJSONL,
-			SourceKey:           file.SourceKey,
+			EventKey:            EventID(ProviderCodex, SourceCodexSessionJSONL, usageOrdinal, storedSessionIdentity, modelForStorage, delta),
 			SessionID:           storedSessionIdentity,
 			Model:               modelForStorage,
 			OccurredAtUnixMS:    occurredAtUnixMS(object),
@@ -260,7 +256,6 @@ func parseCodexSessionFile(ctx context.Context, file SourceFile, maxLineBytes in
 			TotalTokens:         delta.TotalTokens,
 			EstimatedCostMicros: costMicros,
 			CostStatus:          costStatus,
-			MetadataJSON:        MetadataJSON(lineIndex, usageOrdinal, eventType, usageKind),
 		})
 	}
 	return result, nil
@@ -329,13 +324,13 @@ func discardCodexSessionLine(ctx context.Context, reader *bufio.Reader) error {
 	}
 }
 
-func eventIdentitySessionID(sessionID, sourceKey string, hasLogSessionID bool) string {
+func eventIdentitySessionID(sessionID string, sourceKey store.UsageKey, hasLogSessionID bool) string {
 	if hasLogSessionID {
 		return sessionID
 	}
 	// Without a log-provided session id, the filename fallback is not globally
 	// unique. Include the cursor key only for this fallback identity.
-	return sourceKey + "\x00" + sessionID
+	return sourceKey.String() + "\x00" + sessionID
 }
 
 func tokenCountsFromObject(object map[string]any) (TokenCounts, string, bool, bool) {
@@ -444,6 +439,9 @@ func sessionIDFromObject(object map[string]any, eventType string) string {
 	return ""
 }
 
+// Codex model handling intentionally uses three forms: Stored preserves a safe
+// exact report label, Pricing lowercases only for exact allowlist lookup, and
+// EventID lowercases and strips namespace/date suffixes solely for fork deduplication.
 type codexModel struct {
 	Stored  string
 	Pricing string
@@ -476,10 +474,9 @@ func modelFromObject(object map[string]any) codexModel {
 }
 
 func codexModelFromValue(value string) codexModel {
-	exact := pricingModelID(value)
-	stored := storedModelName(exact)
-	pricing := exact
-	if stored == "unknown" {
+	stored := store.NormalizeUsageModelKey(value)
+	pricing := pricingModelID(value)
+	if stored == store.UsageUnknownModelKey {
 		pricing = ""
 	}
 	return codexModel{Stored: stored, Pricing: pricing}
@@ -692,28 +689,18 @@ func (tokens TokenCounts) valid() bool {
 		tokens.TotalTokens >= 0
 }
 
-func storedModelName(value string) string {
-	if value == "" {
-		return ""
-	}
-	if len(value) > 200 || !isSafeUsageIdentifier(value, true) {
-		return "unknown"
-	}
-	return value
-}
-
 func storedSessionID(identity string) string {
 	if identity == "" {
 		return ""
 	}
-	if len(identity) <= 256 && isSafeUsageIdentifier(identity, false) {
+	if len(identity) <= 256 && isSafeUsageSessionIdentifier(identity) {
 		return identity
 	}
 	sum := sha256.Sum256([]byte(identity))
 	return "derived-" + hex.EncodeToString(sum[:])
 }
 
-func isSafeUsageIdentifier(value string, model bool) bool {
+func isSafeUsageSessionIdentifier(value string) bool {
 	for _, character := range value {
 		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' {
 			continue
@@ -721,10 +708,6 @@ func isSafeUsageIdentifier(value string, model bool) bool {
 		switch character {
 		case '.', '_', '-', ':':
 			continue
-		case '/', '@':
-			if model {
-				continue
-			}
 		}
 		return false
 	}

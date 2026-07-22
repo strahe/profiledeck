@@ -54,6 +54,8 @@ const (
 	LockRepairUnsafe                 Code = "LOCK_REPAIR_UNSAFE"
 	UsageInvalid                     Code = "USAGE_INVALID"
 	UsageImportFailed                Code = "USAGE_IMPORT_FAILED"
+	UsageMigrationRequired           Code = "USAGE_MIGRATION_REQUIRED"
+	UsageSyncConflict                Code = "USAGE_SYNC_CONFLICT"
 	CodexInvalid                     Code = "CODEX_INVALID"
 	AntigravityInvalid               Code = "ANTIGRAVITY_INVALID"
 	ClaudeCodeInvalid                Code = "CLAUDE_CODE_INVALID"
@@ -170,6 +172,8 @@ func KnownCode(code Code) bool {
 		LockRepairUnsafe,
 		UsageInvalid,
 		UsageImportFailed,
+		UsageMigrationRequired,
+		UsageSyncConflict,
 		CodexInvalid,
 		AntigravityInvalid,
 		ClaudeCodeInvalid,

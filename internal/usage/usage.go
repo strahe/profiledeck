@@ -2,27 +2,30 @@ package usage
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
+
+	"github.com/strahe/profiledeck/internal/store"
 )
 
 const (
-	ProviderCodex             = "codex"
-	SourceCodexSessionJSONL   = "codex-session-jsonl"
-	CostStatusEstimated       = "estimated"
-	CostStatusPartial         = "partial"
-	CostStatusUnknown         = "unknown"
-	CodexSessionParserVersion = "codex-session-jsonl-v2"
-	PricingBasis              = "openai-standard-api"
-	PricingSourceURL          = "https://developers.openai.com/api/docs/pricing"
-	PricingVerifiedAt         = "2026-07-10"
+	ProviderCodex            = "codex"
+	SourceCodexSessionJSONL  = "codex-session-jsonl"
+	CostStatusEstimated      = store.UsageCostStatusEstimated
+	CostStatusPartial        = store.UsageCostStatusPartial
+	CostStatusUnknown        = store.UsageCostStatusUnknown
+	CodexUsageParserRevision = int64(1)
+	PricingBasis             = "openai-standard-api"
+	PricingSourceURL         = "https://developers.openai.com/api/docs/pricing"
+	PricingVerifiedAt        = "2026-07-10"
 )
+
+// CodexUsageIdentityRevision changes whenever fact identity semantics change;
+// runtime sync rejects checkpoints written under an older revision.
+const CodexUsageIdentityRevision = int64(2)
 
 type TokenCounts struct {
 	InputTokens       int64
@@ -32,10 +35,7 @@ type TokenCounts struct {
 }
 
 type Event struct {
-	ID                  string
-	ProviderID          string
-	Source              string
-	SourceKey           string
+	EventKey            store.UsageKey
 	SessionID           string
 	Model               string
 	OccurredAtUnixMS    int64
@@ -44,13 +44,12 @@ type Event struct {
 	OutputTokens        int64
 	TotalTokens         int64
 	EstimatedCostMicros *int64
-	CostStatus          string
-	MetadataJSON        string
+	CostStatus          store.UsageCostStatus
 }
 
 type SourceFile struct {
 	Path           string
-	SourceKey      string
+	SourceKey      store.UsageKey
 	ModifiedUnixMS int64
 	SizeBytes      int64
 }
@@ -98,7 +97,7 @@ var staticPrices = map[string]Price{
 	"gpt-4.1-nano":  price(100_000, 25_000, 400_000),
 }
 
-func EstimateCostMicros(model string, tokens TokenCounts) (*int64, string) {
+func EstimateCostMicros(model string, tokens TokenCounts) (*int64, store.UsageCostStatus) {
 	price, ok := staticPrices[pricingModelID(model)]
 	if !ok || tokens.CachedInputTokens > tokens.InputTokens {
 		return nil, CostStatusUnknown
@@ -136,17 +135,6 @@ func EstimateCostMicros(model string, tokens TokenCounts) (*int64, string) {
 	return &cost, CostStatusEstimated
 }
 
-func PartialCostModelIDs() []string {
-	models := make([]string, 0)
-	for model, price := range staticPrices {
-		if price.CacheWriteMicrosPerMillion != nil {
-			models = append(models, model)
-		}
-	}
-	sort.Strings(models)
-	return models
-}
-
 func pricingModelID(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
@@ -172,31 +160,32 @@ func priceWithoutCached(inputMicrosPerMillion, outputMicrosPerMillion int64) Pri
 	}
 }
 
-func SourceKey(path string) (string, error) {
+func SourceKey(path string) (store.UsageKey, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return "", err
+		return store.UsageKey{}, err
 	}
 	normalized := filepath.ToSlash(filepath.Clean(abs))
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		normalized = strings.ToLower(normalized)
 	}
 	sum := sha256.Sum256([]byte(normalized))
-	return hex.EncodeToString(sum[:]), nil
+	return store.UsageKey(sum), nil
 }
 
-func EventID(providerID, source string, usageOrdinal int64, sessionID, model string, tokens TokenCounts) string {
+func EventID(providerID, source string, usageOrdinal int64, sessionID, model string, tokens TokenCounts) store.UsageKey {
 	if providerID == "" || source == "" || usageOrdinal <= 0 || sessionID == "" {
-		return ""
+		return store.UsageKey{}
 	}
 	// Fork persistence rewrites paths, line positions, and timestamps. The
 	// primary identity excludes them while provider/source scope and session
 	// usage order keep independent events distinct.
 	model = normalizeCodexModel(model)
 	payload := fmt.Sprintf(
-		"profiledeck-usage-event-v2\x00%s\x00%s\x00%s\x00%d\x00%s\x00%d\x00%d\x00%d\x00%d",
+		"profiledeck-usage-fact-v1\x00%s\x00%s\x00%d\x00%s\x00%d\x00%s\x00%d\x00%d\x00%d\x00%d",
 		providerID,
 		source,
+		CodexUsageIdentityRevision,
 		sessionID,
 		usageOrdinal,
 		model,
@@ -206,43 +195,23 @@ func EventID(providerID, source string, usageOrdinal int64, sessionID, model str
 		tokens.TotalTokens,
 	)
 	sum := sha256.Sum256([]byte(payload))
-	return hex.EncodeToString(sum[:])
+	return store.UsageKey(sum)
 }
 
-func EventDigest(events []Event, limit int64) string {
+func EventDigest(events []Event, limit int64) store.UsageKey {
 	if limit < 0 || limit > int64(len(events)) {
 		limit = int64(len(events))
 	}
 	hash := sha256.New()
 	for _, event := range events[:limit] {
-		hash.Write([]byte(event.ID))
+		// Preserve the stored cursor digest representation while keeping the
+		// Store API strongly typed and free of hex round trips.
+		hash.Write([]byte(event.EventKey.String()))
 		hash.Write([]byte{0})
 	}
-	return hex.EncodeToString(hash.Sum(nil))
-}
-
-func MetadataJSON(lineIndex, usageOrdinal int64, eventType, usageKind string) string {
-	// Codex session events can contain prompts, completions, and credentials; only
-	// derived audit fields are persisted.
-	raw, err := json.Marshal(map[string]any{
-		"parser_version": CodexSessionParserVersion,
-		"line_index":     lineIndex,
-		"usage_ordinal":  usageOrdinal,
-		"event_type":     safeUsageMetadataLabel(eventType),
-		"usage_kind":     safeUsageMetadataLabel(usageKind),
-	})
-	if err != nil {
-		return "{}"
-	}
-	return string(raw)
-}
-
-func safeUsageMetadataLabel(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if len(value) == 0 || len(value) > 80 || !isSafeUsageIdentifier(value, false) {
-		return "unknown"
-	}
-	return value
+	var digest store.UsageKey
+	copy(digest[:], hash.Sum(nil))
+	return digest
 }
 
 func roundedTokenCostMicros(tokens, microsPerMillion int64) int64 {

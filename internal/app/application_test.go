@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/agent"
@@ -21,6 +22,7 @@ import (
 	"github.com/strahe/profiledeck/internal/provider"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/switching"
+	switchplan "github.com/strahe/profiledeck/internal/switching/plan"
 )
 
 func TestApplicationExposesOneTypedServiceGraph(t *testing.T) {
@@ -61,6 +63,16 @@ func TestApplicationRejectsDivergentAgentAndAdapterOwnership(t *testing.T) {
 		dependencies.agents = agent.MustRegistry()
 		if _, err := NewWithDependencies(Config{ConfigDir: t.TempDir()}, dependencies); err == nil {
 			t.Fatal("application accepted a managed plan adapter without an owning Agent")
+		}
+	})
+
+	t.Run("usage Provider without Agent", func(t *testing.T) {
+		dependencies := defaultDependencies()
+		dependencies.agents = agent.MustRegistry()
+		dependencies.switching.Adapters = switchplan.MustRegistry(switchplan.GenericAdapter{})
+		_, err := NewWithDependencies(Config{ConfigDir: t.TempDir()}, dependencies)
+		if err == nil || !strings.Contains(err.Error(), "usage Provider \"codex\" has no owning Agent") {
+			t.Fatalf("application accepted a usage Provider without an owning Agent: %v", err)
 		}
 	})
 }

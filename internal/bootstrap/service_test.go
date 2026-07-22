@@ -379,16 +379,17 @@ func createInitialBaseline(t *testing.T, ctx context.Context, runtimeService *ru
 	execDatabaseStatements(t, runtimeService.Paths().Database,
 		`DROP INDEX idx_profile_targets_path_key`,
 		`DROP TABLE system_state`,
-		`DROP INDEX idx_usage_import_cursors_source`,
-		`DROP TABLE usage_import_cursors`,
-		`DROP INDEX idx_usage_events_provider_cost_model_id`,
-		`DROP INDEX idx_usage_events_cost_status`,
-		`DROP INDEX idx_usage_events_occurred_at`,
-		`DROP INDEX idx_usage_events_model`,
-		`DROP INDEX idx_usage_events_source_key`,
-		`DROP INDEX idx_usage_events_source`,
-		`DROP INDEX idx_usage_events_provider_id`,
-		`DROP TABLE usage_events`,
+		`DROP TABLE codex_usage_import_files`,
+		`DROP INDEX idx_usage_facts_source_cost_model_id`,
+		`DROP INDEX idx_usage_facts_source_time`,
+		`DROP INDEX idx_usage_facts_event_key`,
+		`DROP TABLE usage_facts`,
+		`DROP INDEX idx_usage_models_source_model`,
+		`DROP TABLE usage_models`,
+		`DROP INDEX idx_usage_sessions_source_session`,
+		`DROP TABLE usage_sessions`,
+		`DROP INDEX idx_usage_sources_provider_source`,
+		`DROP TABLE usage_sources`,
 		`DROP TRIGGER trg_profile_targets_path_owner_update`,
 		`DROP TRIGGER trg_profile_targets_path_owner_insert`,
 		`DROP INDEX idx_profile_targets_unique_path`,
@@ -439,7 +440,7 @@ func inspectDatabaseSnapshot(t *testing.T, path string) databaseSnapshot {
 		t.Fatal(err)
 	}
 	var usageCount int
-	if err := db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'usage_events'`).Scan(&usageCount); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'usage_facts'`).Scan(&usageCount); err != nil {
 		t.Fatal(err)
 	}
 	snapshot.usageTable = usageCount > 0

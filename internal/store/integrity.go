@@ -155,11 +155,37 @@ var schemaContracts = []schemaContract{
 	},
 	{
 		migrationKey: "usage",
-		tables:       []string{"usage_events", "usage_import_cursors"},
-		indexes:      []string{"idx_usage_events_provider_id", "idx_usage_events_source", "idx_usage_events_source_key", "idx_usage_events_model", "idx_usage_events_occurred_at", "idx_usage_events_cost_status", "idx_usage_events_provider_cost_model_id", "idx_usage_import_cursors_source"},
-		jsonQueries: []string{
-			`SELECT COUNT(1) FROM usage_events WHERE NOT (` + jsonObjectExpression("metadata_json") + `)`,
-			`SELECT COUNT(1) FROM usage_import_cursors WHERE NOT (` + jsonObjectExpression("metadata_json") + `)`,
+		tables: []string{
+			"usage_sources", "usage_sessions", "usage_models", "usage_facts",
+			"codex_usage_import_files",
+		},
+		indexes: []string{
+			"idx_usage_sources_provider_source", "idx_usage_sessions_source_session",
+			"idx_usage_models_source_model", "idx_usage_facts_event_key",
+			"idx_usage_facts_source_time", "idx_usage_facts_source_cost_model_id",
+		},
+		referenceQueries: []string{
+			`SELECT COUNT(1) FROM usage_sessions AS value
+				WHERE NOT EXISTS (SELECT 1 FROM usage_sources WHERE usage_sources.id = value.source_id)`,
+			`SELECT COUNT(1) FROM usage_models AS value
+				WHERE NOT EXISTS (SELECT 1 FROM usage_sources WHERE usage_sources.id = value.source_id)`,
+			`SELECT COUNT(1) FROM usage_facts AS value
+				WHERE NOT EXISTS (SELECT 1 FROM usage_sources WHERE usage_sources.id = value.source_id)
+					OR (value.session_id IS NOT NULL AND NOT EXISTS (
+						SELECT 1 FROM usage_sessions
+						WHERE usage_sessions.id = value.session_id AND usage_sessions.source_id = value.source_id
+					))
+					OR NOT EXISTS (
+						SELECT 1 FROM usage_models
+						WHERE usage_models.id = value.model_id AND usage_models.source_id = value.source_id
+					)`,
+			`SELECT COUNT(1) FROM codex_usage_import_files AS value
+				WHERE NOT EXISTS (
+					SELECT 1 FROM usage_sources
+					WHERE usage_sources.id = value.source_id
+						AND usage_sources.provider_id = 'codex'
+						AND usage_sources.identity_revision = value.identity_revision
+				)`,
 		},
 	},
 	{
@@ -216,15 +242,11 @@ func (s *Store) MigrationState(ctx context.Context) (MigrationState, error) {
 		return MigrationState{}, err
 	}
 	state := MigrationState{Pending: len(registered), Current: len(registered) == 0}
-	exists, err := s.objectExists(ctx, "table", "bun_migrations")
+	migrationTableExists, lockTableExists, err := s.migrationInfrastructureTablePresence(ctx)
 	if err != nil {
 		return state, err
 	}
-	if !exists {
-		lockTableExists, err := s.objectExists(ctx, "table", "bun_migration_locks")
-		if err != nil {
-			return MigrationState{}, err
-		}
+	if !migrationTableExists {
 		if lockTableExists {
 			return MigrationState{}, ErrInvalidMigrationHistory
 		}
@@ -293,6 +315,21 @@ func (s *Store) MigrationState(ctx context.Context) (MigrationState, error) {
 	state.Pending = len(registered) - appliedCount
 	state.Current = state.Pending == 0
 	return state, nil
+}
+
+func (s *Store) migrationInfrastructureTablePresence(ctx context.Context) (bool, bool, error) {
+	var migrationTables, lockTables int
+	// Read both objects from one SQLite snapshot. Separate existence queries can
+	// straddle another process's atomic initialization commit and invent a
+	// malformed half-old, half-new infrastructure state.
+	err := s.executor().QueryRowContext(ctx, `
+		SELECT
+			COUNT(CASE WHEN name = 'bun_migrations' THEN 1 END),
+			COUNT(CASE WHEN name = 'bun_migration_locks' THEN 1 END)
+		FROM sqlite_master
+		WHERE type = 'table' AND name IN ('bun_migrations', 'bun_migration_locks')
+	`).Scan(&migrationTables, &lockTables)
+	return migrationTables == 1, lockTables == 1, err
 }
 
 func (s *Store) migrationInfrastructureHealthy(ctx context.Context) (bool, error) {

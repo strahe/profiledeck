@@ -2,20 +2,21 @@ package usage
 
 import (
 	"math"
-	"strings"
 	"testing"
+
+	"github.com/strahe/profiledeck/internal/store"
 )
 
 func TestEventIDUsesStableLogicalDimensions(t *testing.T) {
 	tokens := TokenCounts{InputTokens: 10, CachedInputTokens: 2, OutputTokens: 3, TotalTokens: 13}
 	base := EventID(ProviderCodex, SourceCodexSessionJSONL, 1, "session-a", "openai/gpt-5.3-codex-2026-07-01", tokens)
-	if base == "" {
+	if base.IsZero() {
 		t.Fatalf("expected a stable event ID")
 	}
 	if normalized := EventID(ProviderCodex, SourceCodexSessionJSONL, 1, "session-a", "gpt-5.3-codex", tokens); normalized != base {
 		t.Fatalf("expected equivalent model labels to keep the same event ID")
 	}
-	for name, candidate := range map[string]string{
+	for name, candidate := range map[string]store.UsageKey{
 		"provider": EventID("other", SourceCodexSessionJSONL, 1, "session-a", "gpt-5.3-codex", tokens),
 		"source":   EventID(ProviderCodex, "other-source", 1, "session-a", "gpt-5.3-codex", tokens),
 		"session":  EventID(ProviderCodex, SourceCodexSessionJSONL, 1, "session-b", "gpt-5.3-codex", tokens),
@@ -89,9 +90,6 @@ func TestEstimateCostMicrosReportsGPT56BaseCostAsPartial(t *testing.T) {
 				t.Fatalf("expected partial base cost %d, got status=%q cost=%v", tt.want, status, got)
 			}
 		})
-	}
-	if got := strings.Join(PartialCostModelIDs(), ","); got != "gpt-5.6-luna,gpt-5.6-sol,gpt-5.6-terra" {
-		t.Fatalf("unexpected partial cost models: %s", got)
 	}
 }
 

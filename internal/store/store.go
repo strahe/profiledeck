@@ -40,10 +40,6 @@ const (
 
 	ActiveStateScopeProvider = "provider"
 
-	UsageCostStatusEstimated = "estimated"
-	UsageCostStatusPartial   = "partial"
-	UsageCostStatusUnknown   = "unknown"
-
 	recoveryCleanupStateKey = "recovery.cleanup_required"
 
 	maxProviderCredentialPayloadBytes = 16 * 1024 * 1024
@@ -150,39 +146,6 @@ type ActiveState struct {
 	ProfileID       string
 	OperationID     string
 	UpdatedAtUnixMS int64
-}
-
-type UsageEvent struct {
-	ID                  string
-	ProviderID          string
-	Source              string
-	SourceKey           string
-	SessionID           string
-	Model               string
-	OccurredAtUnixMS    int64
-	InputTokens         int64
-	CachedInputTokens   int64
-	OutputTokens        int64
-	TotalTokens         int64
-	EstimatedCostMicros *int64
-	CostStatus          string
-	MetadataJSON        string
-	CreatedAtUnixMS     int64
-	UpdatedAtUnixMS     int64
-}
-
-type UsageImportCursor struct {
-	ProviderID       string
-	Source           string
-	SourceKey        string
-	ModifiedUnixMS   int64
-	SizeBytes        int64
-	ImportedEvents   int64
-	InvalidLines     int64
-	UnsupportedLines int64
-	MetadataJSON     string
-	CreatedAtUnixMS  int64
-	UpdatedAtUnixMS  int64
 }
 
 type ProviderCredential struct {
@@ -337,60 +300,6 @@ type CompleteRecoveryOperationParams struct {
 	ResolutionKind      string
 }
 
-type CreateUsageEventParams struct {
-	ID                  string
-	ProviderID          string
-	Source              string
-	SourceKey           string
-	SessionID           string
-	Model               string
-	OccurredAtUnixMS    int64
-	InputTokens         int64
-	CachedInputTokens   int64
-	OutputTokens        int64
-	TotalTokens         int64
-	EstimatedCostMicros *int64
-	CostStatus          string
-	MetadataJSON        string
-}
-
-type UsageInsertResult struct {
-	Inserted   int
-	Duplicates int
-}
-
-type UsageCostCandidate struct {
-	ID                string
-	Model             string
-	InputTokens       int64
-	CachedInputTokens int64
-	OutputTokens      int64
-	TotalTokens       int64
-}
-
-type UpdateUsageEventCostParams struct {
-	ID                  string
-	EstimatedCostMicros int64
-	CostStatus          string
-}
-
-type CommitUsageImportParams struct {
-	Events []CreateUsageEventParams
-	Cursor UpsertUsageImportCursorParams
-}
-
-type UpsertUsageImportCursorParams struct {
-	ProviderID       string
-	Source           string
-	SourceKey        string
-	ModifiedUnixMS   int64
-	SizeBytes        int64
-	ImportedEvents   int64
-	InvalidLines     int64
-	UnsupportedLines int64
-	MetadataJSON     string
-}
-
 type UpsertProviderCredentialParams struct {
 	ID             string
 	ProviderID     string
@@ -442,73 +351,6 @@ type UpsertProviderProfileSettingParams struct {
 	ProviderID                  string
 	QuotaRefreshIntervalSeconds int
 	AuthKeepaliveEnabled        bool
-}
-
-type UsageSummary struct {
-	ProviderID              string
-	Sources                 []string
-	EventCount              int64
-	InputTokens             int64
-	CachedInputTokens       int64
-	OutputTokens            int64
-	TotalTokens             int64
-	EstimatedCostMicros     int64
-	UnknownCostEvents       int64
-	PartialCostEvents       int64
-	EstimatedCostEventCount int64
-}
-
-type UsageReportQuery struct {
-	ProviderID  string
-	StartUnixMS *int64
-	EndUnixMS   int64
-	Buckets     []UsageTimeBucket
-}
-
-type UsageTimeBucket struct {
-	StartUnixMS int64
-	EndUnixMS   int64
-}
-
-type UsageAggregate struct {
-	EventCount              int64
-	SessionCount            int64
-	FreshInputTokens        int64
-	InputTokens             int64
-	CachedInputTokens       int64
-	OutputTokens            int64
-	TotalTokens             int64
-	EstimatedCostMicros     int64
-	EstimatedTokenCount     int64
-	UnknownCostEvents       int64
-	EstimatedCostEventCount int64
-	PartialCostEventCount   int64
-	UndatedEventCount       int64
-}
-
-type UsageTrendAggregate struct {
-	BucketIndex int
-	UsageAggregate
-}
-
-type UsageModelAggregate struct {
-	Model string
-	UsageAggregate
-}
-
-type UsageImportSummary struct {
-	TrackedFiles       int64
-	LastSyncedAtUnixMS int64
-	InvalidLines       int64
-	UnsupportedLines   int64
-}
-
-type UsageReportSnapshot struct {
-	Sources       []string
-	Summary       UsageAggregate
-	Trend         []UsageTrendAggregate
-	Models        []UsageModelAggregate
-	ImportSummary UsageImportSummary
 }
 
 type MigrationResult struct {
@@ -717,55 +559,110 @@ var initialTableSpecs = []tableSpec{
 		},
 	},
 	{
-		name: "usage_events",
+		name: "usage_sources",
 		columns: []columnSpec{
-			{name: "id", columnType: "TEXT", primaryKey: true},
+			{name: "id", columnType: "INTEGER", primaryKey: true},
 			{name: "provider_id", columnType: "TEXT", notNull: true},
-			{name: "source", columnType: "TEXT", notNull: true},
 			{name: "source_key", columnType: "TEXT", notNull: true},
-			{name: "session_id", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
-			{name: "model", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
+			{name: "identity_revision", columnType: "INTEGER", notNull: true},
+			{name: "sync_generation", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+			{name: "last_completed_at_unix_ms", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+			{name: "tracked_units", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+			{name: "invalid_records", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+			{name: "unsupported_records", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+		},
+		checks: []string{
+			"CHECK (identity_revision > 0)",
+			"CHECK (sync_generation >= 0)",
+			"CHECK (last_completed_at_unix_ms >= 0)",
+			"CHECK (tracked_units >= 0)",
+			"CHECK (invalid_records >= 0)",
+			"CHECK (unsupported_records >= 0)",
+		},
+	},
+	{
+		name: "usage_sessions",
+		columns: []columnSpec{
+			{name: "id", columnType: "INTEGER", primaryKey: true},
+			{name: "source_id", columnType: "INTEGER", notNull: true},
+			{name: "session_key", columnType: "TEXT", notNull: true},
+		},
+		checks: []string{
+			"CHECK (length(session_key) BETWEEN 1 AND 256)",
+			"FOREIGN KEY (source_id) REFERENCES usage_sources(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+		},
+	},
+	{
+		name: "usage_models",
+		columns: []columnSpec{
+			{name: "id", columnType: "INTEGER", primaryKey: true},
+			{name: "source_id", columnType: "INTEGER", notNull: true},
+			{name: "model_key", columnType: "TEXT", notNull: true},
+		},
+		checks: []string{
+			"CHECK (length(model_key) BETWEEN 1 AND 200 AND model_key NOT GLOB '*[^A-Za-z0-9._:/@-]*')",
+			"FOREIGN KEY (source_id) REFERENCES usage_sources(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+		},
+	},
+	{
+		name: "usage_facts",
+		columns: []columnSpec{
+			{name: "id", columnType: "INTEGER", primaryKey: true},
+			{name: "event_key", columnType: "BLOB", notNull: true},
+			{name: "source_id", columnType: "INTEGER", notNull: true},
+			{name: "session_id", columnType: "INTEGER"},
+			{name: "model_id", columnType: "INTEGER", notNull: true},
 			{name: "occurred_at_unix_ms", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
 			{name: "input_tokens", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
 			{name: "cached_input_tokens", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
 			{name: "output_tokens", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
 			{name: "total_tokens", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
 			{name: "estimated_cost_micros", columnType: "INTEGER"},
-			{name: "cost_status", columnType: "TEXT", notNull: true},
-			{name: "metadata_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
-			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
-			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
+			{name: "cost_status", columnType: "INTEGER", notNull: true},
 		},
 		checks: []string{
+			"CHECK (typeof(event_key) = 'blob' AND length(event_key) = 32 AND event_key <> zeroblob(32))",
+			"CHECK (occurred_at_unix_ms >= 0)",
 			"CHECK (input_tokens >= 0)",
-			"CHECK (cached_input_tokens >= 0)",
+			"CHECK (cached_input_tokens >= 0 AND cached_input_tokens <= input_tokens)",
 			"CHECK (output_tokens >= 0)",
 			"CHECK (total_tokens >= 0)",
 			"CHECK (estimated_cost_micros IS NULL OR estimated_cost_micros >= 0)",
-			"CHECK (cost_status IN ('estimated', 'partial', 'unknown'))",
-			"CHECK ((cost_status IN ('estimated', 'partial') AND estimated_cost_micros IS NOT NULL) OR (cost_status = 'unknown' AND estimated_cost_micros IS NULL))",
+			"CHECK (cost_status IN (0, 1, 2))",
+			"FOREIGN KEY (source_id) REFERENCES usage_sources(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+			"FOREIGN KEY (session_id) REFERENCES usage_sessions(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+			"FOREIGN KEY (model_id) REFERENCES usage_models(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+			"CHECK ((cost_status IN (1, 2) AND estimated_cost_micros IS NOT NULL) OR (cost_status = 0 AND estimated_cost_micros IS NULL))",
 		},
 	},
 	{
-		name: "usage_import_cursors",
+		name: "codex_usage_import_files",
 		columns: []columnSpec{
-			{name: "provider_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "source", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "source_key", columnType: "TEXT", notNull: true, primaryKey: true},
+			{name: "source_id", columnType: "INTEGER", notNull: true, primaryKey: true},
+			{name: "file_key", columnType: "BLOB", notNull: true, primaryKey: true},
 			{name: "modified_unix_ms", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
 			{name: "size_bytes", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "imported_events", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+			{name: "imported_facts", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
 			{name: "invalid_lines", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
 			{name: "unsupported_lines", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "metadata_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
-			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
+			{name: "parser_revision", columnType: "INTEGER", notNull: true},
+			{name: "identity_revision", columnType: "INTEGER", notNull: true},
+			{name: "event_digest", columnType: "BLOB", notNull: true},
 			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
 		},
 		checks: []string{
+			"CHECK (typeof(file_key) = 'blob' AND length(file_key) = 32 AND file_key <> zeroblob(32))",
+			"CHECK (modified_unix_ms >= 0)",
 			"CHECK (size_bytes >= 0)",
-			"CHECK (imported_events >= 0)",
+			"CHECK (imported_facts >= 0)",
 			"CHECK (invalid_lines >= 0)",
 			"CHECK (unsupported_lines >= 0)",
+			"CHECK (parser_revision > 0)",
+			"CHECK (identity_revision > 0)",
+			"CHECK (typeof(event_digest) = 'blob' AND length(event_digest) = 32 AND event_digest <> zeroblob(32))",
+			"CHECK (updated_at_unix_ms >= 0)",
+			"FOREIGN KEY (source_id) REFERENCES usage_sources(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
+			"WITHOUT ROWID",
 		},
 	},
 	{
@@ -841,14 +738,12 @@ var initialIndexSpecs = []indexSpec{
 	{name: "idx_profile_targets_enabled", table: "profile_targets", columns: []string{"enabled"}},
 	{name: "idx_profile_targets_unique_path", table: "profile_targets", columns: []string{"profile_id", "provider_id", "path_key"}, unique: true},
 	{name: "idx_profile_targets_path_key", table: "profile_targets", columns: []string{"path_key"}},
-	{name: "idx_usage_events_provider_id", table: "usage_events", columns: []string{"provider_id"}},
-	{name: "idx_usage_events_source", table: "usage_events", columns: []string{"source"}},
-	{name: "idx_usage_events_source_key", table: "usage_events", columns: []string{"source_key"}},
-	{name: "idx_usage_events_model", table: "usage_events", columns: []string{"model"}},
-	{name: "idx_usage_events_occurred_at", table: "usage_events", columns: []string{"occurred_at_unix_ms"}},
-	{name: "idx_usage_events_cost_status", table: "usage_events", columns: []string{"cost_status"}},
-	{name: "idx_usage_events_provider_cost_model_id", table: "usage_events", columns: []string{"provider_id", "cost_status", "model", "id"}},
-	{name: "idx_usage_import_cursors_source", table: "usage_import_cursors", columns: []string{"source"}},
+	{name: "idx_usage_sources_provider_source", table: "usage_sources", columns: []string{"provider_id", "source_key"}, unique: true},
+	{name: "idx_usage_sessions_source_session", table: "usage_sessions", columns: []string{"source_id", "session_key"}, unique: true},
+	{name: "idx_usage_models_source_model", table: "usage_models", columns: []string{"source_id", "model_key"}, unique: true},
+	{name: "idx_usage_facts_event_key", table: "usage_facts", columns: []string{"event_key"}, unique: true},
+	{name: "idx_usage_facts_source_time", table: "usage_facts", columns: []string{"source_id", "occurred_at_unix_ms"}},
+	{name: "idx_usage_facts_source_cost_model_id", table: "usage_facts", columns: []string{"source_id", "cost_status", "model_id", "id"}},
 	{name: "idx_provider_credentials_provider_id", table: "provider_credentials", columns: []string{"provider_id"}},
 	{name: "idx_provider_credentials_kind", table: "provider_credentials", columns: []string{"credential_kind"}},
 	{name: "idx_provider_credentials_provider_id_id", table: "provider_credentials", columns: []string{"provider_id", "id"}, unique: true},
@@ -2948,636 +2843,6 @@ func (s *Store) GetActiveState(ctx context.Context, scopeType, scopeID string) (
 	return activeState, err
 }
 
-func (s *Store) InsertUsageEvents(ctx context.Context, events []CreateUsageEventParams) (UsageInsertResult, error) {
-	if len(events) == 0 {
-		return UsageInsertResult{}, nil
-	}
-	if s.transactional {
-		return s.insertUsageEvents(ctx, events)
-	}
-
-	var result UsageInsertResult
-	err := s.WithTransaction(ctx, func(txStore *Store) error {
-		var insertErr error
-		result, insertErr = txStore.insertUsageEvents(ctx, events)
-		return insertErr
-	})
-	return result, err
-}
-
-func (s *Store) insertUsageEvents(ctx context.Context, events []CreateUsageEventParams) (UsageInsertResult, error) {
-	now := time.Now().UnixMilli()
-	stmt, err := s.executor().PrepareContext(
-		ctx,
-		`INSERT INTO usage_events
-			(id, provider_id, source, source_key, session_id, model, occurred_at_unix_ms,
-			 input_tokens, cached_input_tokens, output_tokens, total_tokens,
-			 estimated_cost_micros, cost_status, metadata_json, created_at_unix_ms, updated_at_unix_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO NOTHING`,
-	)
-	if err != nil {
-		return UsageInsertResult{}, err
-	}
-	defer stmt.Close()
-	canonicalStmt, err := s.executor().PrepareContext(
-		ctx,
-		`UPDATE usage_events
-		SET source_key = ?, model = ?, occurred_at_unix_ms = ?, estimated_cost_micros = ?,
-			cost_status = ?, metadata_json = ?, updated_at_unix_ms = ?
-		WHERE id = ? AND provider_id = ? AND source = ?
-			AND ? > 0
-			AND (occurred_at_unix_ms = 0 OR occurred_at_unix_ms > ?)`,
-	)
-	if err != nil {
-		return UsageInsertResult{}, err
-	}
-	defer canonicalStmt.Close()
-
-	result := UsageInsertResult{}
-	for _, event := range events {
-		metadataJSON := event.MetadataJSON
-		if metadataJSON == "" {
-			metadataJSON = "{}"
-		}
-		var estimatedCost any
-		if event.EstimatedCostMicros != nil {
-			estimatedCost = *event.EstimatedCostMicros
-		}
-		insert, err := stmt.ExecContext(
-			ctx,
-			event.ID,
-			event.ProviderID,
-			event.Source,
-			event.SourceKey,
-			event.SessionID,
-			event.Model,
-			event.OccurredAtUnixMS,
-			event.InputTokens,
-			event.CachedInputTokens,
-			event.OutputTokens,
-			event.TotalTokens,
-			estimatedCost,
-			event.CostStatus,
-			metadataJSON,
-			now,
-			now,
-		)
-		if err != nil {
-			return UsageInsertResult{}, err
-		}
-		rows, err := insert.RowsAffected()
-		if err != nil {
-			return UsageInsertResult{}, err
-		}
-		if rows > 0 {
-			result.Inserted++
-			continue
-		}
-
-		// Fork copies can rewrite timestamps and model labels. Keep fields from the
-		// earliest dated observation without inserting another usage event.
-		update, err := canonicalStmt.ExecContext(
-			ctx,
-			event.SourceKey,
-			event.Model,
-			event.OccurredAtUnixMS,
-			estimatedCost,
-			event.CostStatus,
-			metadataJSON,
-			now,
-			event.ID,
-			event.ProviderID,
-			event.Source,
-			event.OccurredAtUnixMS,
-			event.OccurredAtUnixMS,
-		)
-		if err != nil {
-			return UsageInsertResult{}, err
-		}
-		if _, err := update.RowsAffected(); err != nil {
-			return UsageInsertResult{}, err
-		}
-	}
-	result.Duplicates = len(events) - result.Inserted
-	return result, nil
-}
-
-func (s *Store) CommitUsageImport(ctx context.Context, params CommitUsageImportParams) (UsageInsertResult, error) {
-	if s.transactional {
-		result, err := s.InsertUsageEvents(ctx, params.Events)
-		if err != nil {
-			return UsageInsertResult{}, err
-		}
-		if err := s.UpsertUsageImportCursor(ctx, params.Cursor); err != nil {
-			return UsageInsertResult{}, err
-		}
-		return result, nil
-	}
-
-	var result UsageInsertResult
-	// A cursor may advance only with the events it describes, otherwise a crash
-	// could permanently skip usage that never reached the database.
-	err := s.WithTransaction(ctx, func(txStore *Store) error {
-		var importErr error
-		result, importErr = txStore.CommitUsageImport(ctx, params)
-		return importErr
-	})
-	return result, err
-}
-
-func (s *Store) GetUsageImportCursor(ctx context.Context, providerID, source, sourceKey string) (UsageImportCursor, error) {
-	row := s.executor().QueryRowContext(
-		ctx,
-		`SELECT provider_id, source, source_key, modified_unix_ms, size_bytes,
-			imported_events, invalid_lines, unsupported_lines, metadata_json, created_at_unix_ms, updated_at_unix_ms
-		FROM usage_import_cursors
-		WHERE provider_id = ? AND source = ? AND source_key = ?`,
-		providerID,
-		source,
-		sourceKey,
-	)
-	cursor, err := scanUsageImportCursor(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return UsageImportCursor{}, ErrNotFound
-	}
-	return cursor, err
-}
-
-func (s *Store) UpsertUsageImportCursor(ctx context.Context, params UpsertUsageImportCursorParams) error {
-	now := time.Now().UnixMilli()
-	metadataJSON := params.MetadataJSON
-	if metadataJSON == "" {
-		metadataJSON = "{}"
-	}
-	_, err := s.executor().ExecContext(
-		ctx,
-		`INSERT INTO usage_import_cursors
-			(provider_id, source, source_key, modified_unix_ms, size_bytes,
-			 imported_events, invalid_lines, unsupported_lines, metadata_json, created_at_unix_ms, updated_at_unix_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(provider_id, source, source_key) DO UPDATE SET
-			modified_unix_ms = excluded.modified_unix_ms,
-			size_bytes = excluded.size_bytes,
-			imported_events = excluded.imported_events,
-			invalid_lines = excluded.invalid_lines,
-			unsupported_lines = excluded.unsupported_lines,
-			metadata_json = excluded.metadata_json,
-			updated_at_unix_ms = excluded.updated_at_unix_ms`,
-		params.ProviderID,
-		params.Source,
-		params.SourceKey,
-		params.ModifiedUnixMS,
-		params.SizeBytes,
-		params.ImportedEvents,
-		params.InvalidLines,
-		params.UnsupportedLines,
-		metadataJSON,
-		now,
-		now,
-	)
-	return err
-}
-
-func (s *Store) TouchUsageImportCursor(ctx context.Context, providerID, source, sourceKey string) error {
-	result, err := s.executor().ExecContext(
-		ctx,
-		`UPDATE usage_import_cursors
-		SET updated_at_unix_ms = ?
-		WHERE provider_id = ? AND source = ? AND source_key = ?`,
-		time.Now().UnixMilli(),
-		providerID,
-		source,
-		sourceKey,
-	)
-	if err != nil {
-		return err
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-func (s *Store) ListUnknownUsageCostCandidates(ctx context.Context, providerID string, models []string, afterID string, limit int) ([]UsageCostCandidate, error) {
-	providerID = strings.TrimSpace(providerID)
-	if providerID == "" {
-		return nil, errors.New("usage provider id is required")
-	}
-	if len(models) == 0 || len(models) > 32 {
-		return nil, errors.New("usage cost candidate models are invalid")
-	}
-	if limit <= 0 || limit > 1_000 {
-		return nil, errors.New("usage cost candidate limit is invalid")
-	}
-
-	normalizedModels := make([]string, 0, len(models))
-	seen := make(map[string]struct{}, len(models))
-	for _, model := range models {
-		model = strings.TrimSpace(model)
-		if model == "" {
-			return nil, errors.New("usage cost candidate model is required")
-		}
-		if _, ok := seen[model]; ok {
-			continue
-		}
-		seen[model] = struct{}{}
-		normalizedModels = append(normalizedModels, model)
-	}
-
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(normalizedModels)), ",")
-	args := make([]any, 0, len(normalizedModels)+4)
-	args = append(args, providerID, UsageCostStatusUnknown)
-	for _, model := range normalizedModels {
-		args = append(args, model)
-	}
-	args = append(args, afterID, limit)
-	rows, err := s.executor().QueryContext(
-		ctx,
-		`SELECT id, model, input_tokens, cached_input_tokens, output_tokens, total_tokens
-		FROM usage_events
-		WHERE provider_id = ? AND cost_status = ? AND model IN (`+placeholders+`) AND id > ?
-		ORDER BY id ASC
-		LIMIT ?`,
-		args...,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	candidates := make([]UsageCostCandidate, 0)
-	for rows.Next() {
-		var candidate UsageCostCandidate
-		if err := rows.Scan(
-			&candidate.ID,
-			&candidate.Model,
-			&candidate.InputTokens,
-			&candidate.CachedInputTokens,
-			&candidate.OutputTokens,
-			&candidate.TotalTokens,
-		); err != nil {
-			return nil, err
-		}
-		candidates = append(candidates, candidate)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return candidates, nil
-}
-
-func (s *Store) UpdateUnknownUsageEventCosts(ctx context.Context, updates []UpdateUsageEventCostParams) (int, error) {
-	if len(updates) == 0 {
-		return 0, nil
-	}
-	if s.transactional {
-		return s.updateUnknownUsageEventCosts(ctx, updates)
-	}
-
-	var updated int
-	err := s.WithTransaction(ctx, func(txStore *Store) error {
-		var updateErr error
-		updated, updateErr = txStore.updateUnknownUsageEventCosts(ctx, updates)
-		return updateErr
-	})
-	return updated, err
-}
-
-func (s *Store) updateUnknownUsageEventCosts(ctx context.Context, updates []UpdateUsageEventCostParams) (int, error) {
-	stmt, err := s.executor().PrepareContext(
-		ctx,
-		`UPDATE usage_events
-		SET estimated_cost_micros = ?, cost_status = ?, updated_at_unix_ms = ?
-		WHERE id = ? AND cost_status = ?`,
-	)
-	if err != nil {
-		return 0, err
-	}
-	defer stmt.Close()
-
-	now := time.Now().UnixMilli()
-	updated := 0
-	for _, item := range updates {
-		if strings.TrimSpace(item.ID) == "" || item.EstimatedCostMicros < 0 ||
-			(item.CostStatus != UsageCostStatusEstimated && item.CostStatus != UsageCostStatusPartial) {
-			return 0, errors.New("usage event cost update is invalid")
-		}
-		result, err := stmt.ExecContext(
-			ctx,
-			item.EstimatedCostMicros,
-			item.CostStatus,
-			now,
-			item.ID,
-			UsageCostStatusUnknown,
-		)
-		if err != nil {
-			return 0, err
-		}
-		rows, err := result.RowsAffected()
-		if err != nil {
-			return 0, err
-		}
-		updated += int(rows)
-	}
-	return updated, nil
-}
-
-func (s *Store) UsageSummary(ctx context.Context, providerID string) (UsageSummary, error) {
-	row := s.executor().QueryRowContext(
-		ctx,
-		`SELECT
-			COUNT(1),
-			COALESCE(SUM(input_tokens), 0),
-			COALESCE(SUM(cached_input_tokens), 0),
-			COALESCE(SUM(output_tokens), 0),
-			COALESCE(SUM(total_tokens), 0),
-			COALESCE(SUM(CASE WHEN estimated_cost_micros IS NULL THEN 0 ELSE estimated_cost_micros END), 0),
-			COALESCE(SUM(CASE WHEN cost_status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN cost_status = ? THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN cost_status = ? THEN 1 ELSE 0 END), 0)
-		FROM usage_events
-		WHERE provider_id = ?`,
-		UsageCostStatusUnknown,
-		UsageCostStatusPartial,
-		UsageCostStatusEstimated,
-		providerID,
-	)
-	summary := UsageSummary{ProviderID: providerID}
-	if err := row.Scan(
-		&summary.EventCount,
-		&summary.InputTokens,
-		&summary.CachedInputTokens,
-		&summary.OutputTokens,
-		&summary.TotalTokens,
-		&summary.EstimatedCostMicros,
-		&summary.UnknownCostEvents,
-		&summary.PartialCostEvents,
-		&summary.EstimatedCostEventCount,
-	); err != nil {
-		return UsageSummary{}, err
-	}
-	sources, err := s.usageSummarySources(ctx, providerID)
-	if err != nil {
-		return UsageSummary{}, err
-	}
-	summary.Sources = sources
-	return summary, nil
-}
-
-func (s *Store) usageSummarySources(ctx context.Context, providerID string) ([]string, error) {
-	rows, err := s.executor().QueryContext(
-		ctx,
-		`SELECT DISTINCT source
-		FROM usage_events
-		WHERE provider_id = ?
-		ORDER BY source ASC`,
-		providerID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var sources []string
-	for rows.Next() {
-		var source string
-		if err := rows.Scan(&source); err != nil {
-			return nil, err
-		}
-		sources = append(sources, source)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return sources, nil
-}
-
-func (s *Store) EarliestDatedUsageUnixMS(ctx context.Context, providerID string) (int64, error) {
-	var earliest sql.NullInt64
-	err := s.executor().QueryRowContext(
-		ctx,
-		`SELECT MIN(occurred_at_unix_ms)
-		FROM usage_events
-		WHERE provider_id = ? AND occurred_at_unix_ms > 0`,
-		providerID,
-	).Scan(&earliest)
-	if err != nil {
-		return 0, err
-	}
-	if !earliest.Valid {
-		return 0, nil
-	}
-	return earliest.Int64, nil
-}
-
-func (s *Store) UsageReport(ctx context.Context, query UsageReportQuery) (UsageReportSnapshot, error) {
-	if strings.TrimSpace(query.ProviderID) == "" {
-		return UsageReportSnapshot{}, errors.New("usage provider id is required")
-	}
-	if query.StartUnixMS != nil && query.EndUnixMS <= *query.StartUnixMS {
-		return UsageReportSnapshot{}, errors.New("usage report range is invalid")
-	}
-	if len(query.Buckets) > 512 {
-		return UsageReportSnapshot{}, errors.New("usage report has too many buckets")
-	}
-	for _, bucket := range query.Buckets {
-		if bucket.EndUnixMS <= bucket.StartUnixMS {
-			return UsageReportSnapshot{}, errors.New("usage report bucket is invalid")
-		}
-	}
-
-	if !s.transactional {
-		var snapshot UsageReportSnapshot
-		// Every aggregate in one report must observe the same event/cursor state,
-		// even when a concurrent importer commits between individual queries.
-		err := s.WithTransaction(ctx, func(txStore *Store) error {
-			var reportErr error
-			snapshot, reportErr = txStore.UsageReport(ctx, query)
-			return reportErr
-		})
-		return snapshot, err
-	}
-
-	summary, err := s.queryUsageAggregate(ctx, query.ProviderID, query.StartUnixMS, query.EndUnixMS)
-	if err != nil {
-		return UsageReportSnapshot{}, err
-	}
-	if query.StartUnixMS != nil {
-		if err := s.executor().QueryRowContext(
-			ctx,
-			"SELECT COUNT(1) FROM usage_events WHERE provider_id = ? AND occurred_at_unix_ms = 0",
-			query.ProviderID,
-		).Scan(&summary.UndatedEventCount); err != nil {
-			return UsageReportSnapshot{}, err
-		}
-	}
-	models, err := s.queryUsageModels(ctx, query.ProviderID, query.StartUnixMS, query.EndUnixMS)
-	if err != nil {
-		return UsageReportSnapshot{}, err
-	}
-	trend := make([]UsageTrendAggregate, 0, len(query.Buckets))
-	for index, bucket := range query.Buckets {
-		start := bucket.StartUnixMS
-		aggregate, err := s.queryUsageAggregate(ctx, query.ProviderID, &start, bucket.EndUnixMS)
-		if err != nil {
-			return UsageReportSnapshot{}, err
-		}
-		trend = append(trend, UsageTrendAggregate{BucketIndex: index, UsageAggregate: aggregate})
-	}
-	sources, err := s.usageSummarySources(ctx, query.ProviderID)
-	if err != nil {
-		return UsageReportSnapshot{}, err
-	}
-	importSummary, err := s.queryUsageImportSummary(ctx, query.ProviderID)
-	if err != nil {
-		return UsageReportSnapshot{}, err
-	}
-	return UsageReportSnapshot{
-		Sources:       sources,
-		Summary:       summary,
-		Trend:         trend,
-		Models:        models,
-		ImportSummary: importSummary,
-	}, nil
-}
-
-func (s *Store) queryUsageAggregate(ctx context.Context, providerID string, startUnixMS *int64, endUnixMS int64) (UsageAggregate, error) {
-	where, args := usageReportWhere(providerID, startUnixMS, endUnixMS)
-	row := s.executor().QueryRowContext(ctx, usageAggregateSelect+" FROM usage_events WHERE "+where, args...)
-	return scanUsageAggregate(row)
-}
-
-func (s *Store) queryUsageModels(ctx context.Context, providerID string, startUnixMS *int64, endUnixMS int64) ([]UsageModelAggregate, error) {
-	where, args := usageReportWhere(providerID, startUnixMS, endUnixMS)
-	rows, err := s.executor().QueryContext(
-		ctx,
-		`SELECT `+usageReportModelExpression+`,`+usageAggregateColumns+`
-		FROM usage_events
-		WHERE `+where+`
-		GROUP BY `+usageReportModelExpression+`
-		ORDER BY COALESCE(SUM(total_tokens), 0) DESC, `+usageReportModelExpression+` ASC`,
-		args...,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	models := make([]UsageModelAggregate, 0)
-	for rows.Next() {
-		var item UsageModelAggregate
-		if err := rows.Scan(
-			&item.Model,
-			&item.EventCount,
-			&item.SessionCount,
-			&item.FreshInputTokens,
-			&item.InputTokens,
-			&item.CachedInputTokens,
-			&item.OutputTokens,
-			&item.TotalTokens,
-			&item.EstimatedCostMicros,
-			&item.EstimatedTokenCount,
-			&item.UnknownCostEvents,
-			&item.EstimatedCostEventCount,
-			&item.PartialCostEventCount,
-			&item.UndatedEventCount,
-		); err != nil {
-			return nil, err
-		}
-		models = append(models, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return models, nil
-}
-
-func (s *Store) queryUsageImportSummary(ctx context.Context, providerID string) (UsageImportSummary, error) {
-	var summary UsageImportSummary
-	err := s.executor().QueryRowContext(
-		ctx,
-		`SELECT
-			COUNT(1),
-			COALESCE(MAX(updated_at_unix_ms), 0),
-			COALESCE(SUM(invalid_lines), 0),
-			COALESCE(SUM(unsupported_lines), 0)
-		FROM usage_import_cursors
-		WHERE provider_id = ?`,
-		providerID,
-	).Scan(
-		&summary.TrackedFiles,
-		&summary.LastSyncedAtUnixMS,
-		&summary.InvalidLines,
-		&summary.UnsupportedLines,
-	)
-	return summary, err
-}
-
-const usageAggregateSelect = "SELECT " + usageAggregateColumns
-
-// Model strings cross CLI/Desktop output boundaries. Group malformed or
-// unreasonably large persisted values under a safe label rather than echoing
-// arbitrary session content.
-const usageReportModelExpression = `CASE
-	WHEN length(model) BETWEEN 1 AND 200
-		AND model NOT GLOB '*[^A-Za-z0-9._:/@-]*'
-	THEN model
-	ELSE 'unknown'
-END`
-
-const usageAggregateColumns = `
-	COUNT(1),
-	COUNT(DISTINCT NULLIF(session_id, '')),
-	COALESCE(SUM(CASE
-		WHEN cached_input_tokens <= input_tokens THEN input_tokens - cached_input_tokens
-		ELSE input_tokens
-	END), 0),
-	COALESCE(SUM(input_tokens), 0),
-	COALESCE(SUM(cached_input_tokens), 0),
-	COALESCE(SUM(output_tokens), 0),
-	COALESCE(SUM(total_tokens), 0),
-	COALESCE(SUM(CASE WHEN estimated_cost_micros IS NULL THEN 0 ELSE estimated_cost_micros END), 0),
-	COALESCE(SUM(CASE WHEN cost_status IN ('estimated', 'partial') THEN total_tokens ELSE 0 END), 0),
-	COALESCE(SUM(CASE WHEN cost_status = 'unknown' THEN 1 ELSE 0 END), 0),
-	COALESCE(SUM(CASE WHEN cost_status = 'estimated' THEN 1 ELSE 0 END), 0),
-	COALESCE(SUM(CASE WHEN cost_status = 'partial' THEN 1 ELSE 0 END), 0),
-	COALESCE(SUM(CASE WHEN occurred_at_unix_ms = 0 THEN 1 ELSE 0 END), 0)`
-
-func usageReportWhere(providerID string, startUnixMS *int64, endUnixMS int64) (string, []any) {
-	where := "provider_id = ?"
-	args := []any{providerID}
-	if startUnixMS != nil {
-		where += " AND occurred_at_unix_ms >= ? AND occurred_at_unix_ms < ?"
-		args = append(args, *startUnixMS, endUnixMS)
-	}
-	return where, args
-}
-
-func scanUsageAggregate(row rowScanner) (UsageAggregate, error) {
-	var aggregate UsageAggregate
-	err := row.Scan(
-		&aggregate.EventCount,
-		&aggregate.SessionCount,
-		&aggregate.FreshInputTokens,
-		&aggregate.InputTokens,
-		&aggregate.CachedInputTokens,
-		&aggregate.OutputTokens,
-		&aggregate.TotalTokens,
-		&aggregate.EstimatedCostMicros,
-		&aggregate.EstimatedTokenCount,
-		&aggregate.UnknownCostEvents,
-		&aggregate.EstimatedCostEventCount,
-		&aggregate.PartialCostEventCount,
-		&aggregate.UndatedEventCount,
-	)
-	return aggregate, err
-}
-
 func (s *Store) CountProviderTargetReferences(ctx context.Context, providerID string) (int, error) {
 	var count int
 	err := s.executor().QueryRowContext(
@@ -4141,26 +3406,6 @@ func scanActiveState(row rowScanner) (ActiveState, error) {
 		return ActiveState{}, err
 	}
 	return activeState, nil
-}
-
-func scanUsageImportCursor(row rowScanner) (UsageImportCursor, error) {
-	var cursor UsageImportCursor
-	if err := row.Scan(
-		&cursor.ProviderID,
-		&cursor.Source,
-		&cursor.SourceKey,
-		&cursor.ModifiedUnixMS,
-		&cursor.SizeBytes,
-		&cursor.ImportedEvents,
-		&cursor.InvalidLines,
-		&cursor.UnsupportedLines,
-		&cursor.MetadataJSON,
-		&cursor.CreatedAtUnixMS,
-		&cursor.UpdatedAtUnixMS,
-	); err != nil {
-		return UsageImportCursor{}, err
-	}
-	return cursor, nil
 }
 
 func isSQLiteConstraintError(err error) bool {

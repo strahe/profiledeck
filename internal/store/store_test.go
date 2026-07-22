@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	bunmigrate "github.com/uptrace/bun/migrate"
 
@@ -52,8 +51,11 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 		"provider_credentials",
 		"provider_config_sets",
 		"profile_targets",
-		"usage_events",
-		"usage_import_cursors",
+		"usage_sources",
+		"usage_sessions",
+		"usage_models",
+		"usage_facts",
+		"codex_usage_import_files",
 		"system_state",
 	} {
 		assertSQLiteObjectExists(t, ctx, db, "table", table)
@@ -75,14 +77,12 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 		"idx_profile_targets_enabled",
 		"idx_profile_targets_unique_path",
 		"idx_profile_targets_path_key",
-		"idx_usage_events_provider_id",
-		"idx_usage_events_source",
-		"idx_usage_events_source_key",
-		"idx_usage_events_model",
-		"idx_usage_events_occurred_at",
-		"idx_usage_events_cost_status",
-		"idx_usage_events_provider_cost_model_id",
-		"idx_usage_import_cursors_source",
+		"idx_usage_sources_provider_source",
+		"idx_usage_sessions_source_session",
+		"idx_usage_models_source_model",
+		"idx_usage_facts_event_key",
+		"idx_usage_facts_source_time",
+		"idx_usage_facts_source_cost_model_id",
 	} {
 		assertSQLiteObjectExists(t, ctx, db, "index", index)
 	}
@@ -251,7 +251,7 @@ func TestInspectIntegrityClassifiesVersionedFailuresWithoutStoredValues(t *testi
 	t.Run("schema", func(t *testing.T) {
 		db := migratedTestStore(t, ctx)
 		defer closeTestStore(t, db)
-		if _, err := db.db.DB.ExecContext(ctx, `DROP INDEX idx_usage_events_model`); err != nil {
+		if _, err := db.db.DB.ExecContext(ctx, `DROP INDEX idx_usage_models_source_model`); err != nil {
 			t.Fatal(err)
 		}
 		assertIntegrityIssue(t, ctx, db, IntegrityIssueSchema)
@@ -330,10 +330,13 @@ func TestInspectIntegrityClassifiesVersionedFailuresWithoutStoredValues(t *testi
 			t.Fatal(err)
 		}
 		if _, err := db.db.DB.ExecContext(ctx, `
-			INSERT INTO usage_events
-				(id, provider_id, source, source_key, cost_status, metadata_json, created_at_unix_ms, updated_at_unix_ms)
-			VALUES ('usage', 'unmanaged-provider', 'test', 'source', 'unknown', '{}', 1, 1)
-		`); err != nil {
+			INSERT INTO usage_sources (id, provider_id, source_key, identity_revision)
+			VALUES (1, 'unmanaged-provider', 'test', 1);
+			INSERT INTO usage_models (id, source_id, model_key)
+			VALUES (1, 1, 'unknown');
+			INSERT INTO usage_facts (event_key, source_id, model_id, cost_status)
+			VALUES (?, 1, 1, 0)
+		`, testUsageKey("allowed-historical-reference")); err != nil {
 			t.Fatal(err)
 		}
 		report, err := db.InspectIntegrity(ctx, IntegrityCurrentBaseline)
@@ -448,27 +451,6 @@ func TestUnsupportedMigrationStopsStatusAndMigrateBeforeSchemaWrites(t *testing.
 	}
 	if strings.Contains(err.Error(), unknownName) {
 		t.Fatalf("OpenHealthy() exposed migration name: %v", err)
-	}
-}
-
-func TestUsageSchemaSupportsPartialCost(t *testing.T) {
-	ctx := context.Background()
-	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
-	defer closeTestStore(t, db)
-	if _, err := db.Migrate(ctx); err != nil {
-		t.Fatalf("expected migrations to succeed, got %v", err)
-	}
-	partialCost := int64(42)
-	if result, err := db.InsertUsageEvents(ctx, []CreateUsageEventParams{{
-		ID: "partial-usage", ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source",
-		SessionID: "session", Model: "gpt-5.6-sol", TotalTokens: 1,
-		EstimatedCostMicros: &partialCost, CostStatus: UsageCostStatusPartial,
-	}}); err != nil || result.Inserted != 1 {
-		t.Fatalf("expected base usage schema to accept partial cost, result=%#v err=%v", result, err)
-	}
-	storeStatus, err := db.Status(ctx)
-	if err != nil || !storeStatus.SchemaHealthy {
-		t.Fatalf("expected usage schema to remain healthy, status=%#v err=%v", storeStatus, err)
 	}
 }
 
@@ -1309,545 +1291,6 @@ func TestStatusCountsPendingAndFailedOperations(t *testing.T) {
 	}
 	if status.PendingOperations != 1 || status.FailedOperations != 1 {
 		t.Fatalf("unexpected operation counts: pending=%d failed=%d", status.PendingOperations, status.FailedOperations)
-	}
-}
-
-func TestUsageEventsAreIdempotentAndSummarized(t *testing.T) {
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
-
-	db := openTestStore(t, ctx, dbPath, false)
-	defer closeTestStore(t, db)
-
-	if _, err := db.Migrate(ctx); err != nil {
-		t.Fatalf("expected migrations to succeed, got %v", err)
-	}
-
-	cost := int64(123)
-	params := []CreateUsageEventParams{{
-		ID:                  "event-1",
-		ProviderID:          "codex",
-		Source:              "codex-session-jsonl",
-		SourceKey:           "source-key",
-		SessionID:           "session-1",
-		Model:               "gpt-5.3-codex",
-		InputTokens:         10,
-		CachedInputTokens:   2,
-		OutputTokens:        3,
-		TotalTokens:         13,
-		EstimatedCostMicros: &cost,
-		CostStatus:          UsageCostStatusEstimated,
-		MetadataJSON:        "{}",
-	}}
-
-	first, err := db.InsertUsageEvents(ctx, params)
-	if err != nil {
-		t.Fatalf("expected first usage insert to succeed, got %v", err)
-	}
-	if first.Inserted != 1 || first.Duplicates != 0 {
-		t.Fatalf("expected inserted=1 duplicates=0, got %#v", first)
-	}
-	second, err := db.InsertUsageEvents(ctx, params)
-	if err != nil {
-		t.Fatalf("expected duplicate usage insert to succeed, got %v", err)
-	}
-	if second.Inserted != 0 || second.Duplicates != 1 {
-		t.Fatalf("expected inserted=0 duplicates=1, got %#v", second)
-	}
-
-	summary, err := db.UsageSummary(ctx, "codex")
-	if err != nil {
-		t.Fatalf("expected usage summary to succeed, got %v", err)
-	}
-	if summary.EventCount != 1 || summary.InputTokens != 10 || summary.CachedInputTokens != 2 || summary.OutputTokens != 3 || summary.TotalTokens != 13 {
-		t.Fatalf("unexpected usage summary: %#v", summary)
-	}
-	if summary.EstimatedCostMicros != cost || summary.UnknownCostEvents != 0 || summary.EstimatedCostEventCount != 1 {
-		t.Fatalf("unexpected usage cost summary: %#v", summary)
-	}
-	if len(summary.Sources) != 1 || summary.Sources[0] != "codex-session-jsonl" {
-		t.Fatalf("unexpected usage sources: %#v", summary.Sources)
-	}
-}
-
-func TestUsageEventsDeduplicateStableIDAndKeepEarlierObservation(t *testing.T) {
-	ctx := context.Background()
-	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
-	defer closeTestStore(t, db)
-	if _, err := db.Migrate(ctx); err != nil {
-		t.Fatalf("expected migrations to succeed, got %v", err)
-	}
-
-	cost := int64(123)
-	forkCopy := CreateUsageEventParams{
-		ID:         "stable-event",
-		ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source-fork",
-		SessionID: "session-parent", Model: "gpt-5.3-codex", OccurredAtUnixMS: 2_000,
-		InputTokens: 10, CachedInputTokens: 2, OutputTokens: 3, TotalTokens: 13,
-		EstimatedCostMicros: &cost, CostStatus: UsageCostStatusEstimated,
-		MetadataJSON: `{"line_index":20}`,
-	}
-	if result, err := db.InsertUsageEvents(ctx, []CreateUsageEventParams{forkCopy}); err != nil || result.Inserted != 1 {
-		t.Fatalf("expected fork observation insert, result=%#v err=%v", result, err)
-	}
-	parent := forkCopy
-	parent.SourceKey = "source-parent"
-	parent.Model = "openai/gpt-5.3-codex-2026-07-01"
-	parent.OccurredAtUnixMS = 1_000
-	parent.EstimatedCostMicros = nil
-	parent.CostStatus = UsageCostStatusUnknown
-	parent.MetadataJSON = `{"line_index":3}`
-	if result, err := db.InsertUsageEvents(ctx, []CreateUsageEventParams{parent}); err != nil || result.Inserted != 0 || result.Duplicates != 1 {
-		t.Fatalf("expected parent observation to share the stable event ID, result=%#v err=%v", result, err)
-	}
-
-	var id string
-	var sourceKey string
-	var model string
-	var occurredAt int64
-	var estimatedCost sql.NullInt64
-	var costStatus string
-	var metadataJSON string
-	if err := db.executor().QueryRowContext(ctx, `SELECT id, source_key, model, occurred_at_unix_ms,
-		estimated_cost_micros, cost_status, metadata_json
-		FROM usage_events WHERE id = ?`, forkCopy.ID,
-	).Scan(&id, &sourceKey, &model, &occurredAt, &estimatedCost, &costStatus, &metadataJSON); err != nil {
-		t.Fatalf("expected canonical usage event, got %v", err)
-	}
-	if id != forkCopy.ID || sourceKey != "source-parent" || model != parent.Model || occurredAt != 1_000 || estimatedCost.Valid ||
-		costStatus != UsageCostStatusUnknown || metadataJSON != `{"line_index":3}` {
-		t.Fatalf("expected earliest observation fields on the existing event, id=%q source=%q model=%q occurred=%d cost=%#v status=%q metadata=%s", id, sourceKey, model, occurredAt, estimatedCost, costStatus, metadataJSON)
-	}
-	summary, err := db.UsageSummary(ctx, "codex")
-	if err != nil || summary.EventCount != 1 || summary.TotalTokens != 13 {
-		t.Fatalf("expected one counted stable event, summary=%#v err=%v", summary, err)
-	}
-}
-
-func TestUsageSummaryReportsDistinctSources(t *testing.T) {
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
-
-	db := openTestStore(t, ctx, dbPath, false)
-	defer closeTestStore(t, db)
-
-	if _, err := db.Migrate(ctx); err != nil {
-		t.Fatalf("expected migrations to succeed, got %v", err)
-	}
-
-	cost := int64(1)
-	result, err := db.InsertUsageEvents(ctx, []CreateUsageEventParams{
-		{
-			ID:                  "event-1",
-			ProviderID:          "codex",
-			Source:              "codex-archive-jsonl",
-			SourceKey:           "source-a",
-			InputTokens:         1,
-			TotalTokens:         1,
-			EstimatedCostMicros: &cost,
-			CostStatus:          UsageCostStatusEstimated,
-			MetadataJSON:        "{}",
-		},
-		{
-			ID:                  "event-2",
-			ProviderID:          "codex",
-			Source:              "codex-session-jsonl",
-			SourceKey:           "source-b",
-			InputTokens:         1,
-			TotalTokens:         1,
-			EstimatedCostMicros: &cost,
-			CostStatus:          UsageCostStatusEstimated,
-			MetadataJSON:        "{}",
-		},
-	})
-	if err != nil {
-		t.Fatalf("expected usage events insert to succeed, got %v", err)
-	}
-	if result.Inserted != 2 {
-		t.Fatalf("expected two usage events, got %#v", result)
-	}
-
-	summary, err := db.UsageSummary(ctx, "codex")
-	if err != nil {
-		t.Fatalf("expected usage summary to succeed, got %v", err)
-	}
-	if strings.Join(summary.Sources, ",") != "codex-archive-jsonl,codex-session-jsonl" {
-		t.Fatalf("unexpected sorted usage sources: %#v", summary.Sources)
-	}
-}
-
-func TestUsageImportCursorUpsert(t *testing.T) {
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
-
-	db := openTestStore(t, ctx, dbPath, false)
-	defer closeTestStore(t, db)
-
-	if _, err := db.Migrate(ctx); err != nil {
-		t.Fatalf("expected migrations to succeed, got %v", err)
-	}
-
-	if err := db.UpsertUsageImportCursor(ctx, UpsertUsageImportCursorParams{
-		ProviderID:       "codex",
-		Source:           "codex-session-jsonl",
-		SourceKey:        "source-key",
-		ModifiedUnixMS:   100,
-		SizeBytes:        20,
-		ImportedEvents:   1,
-		InvalidLines:     2,
-		UnsupportedLines: 3,
-		MetadataJSON:     "{}",
-	}); err != nil {
-		t.Fatalf("expected cursor upsert to succeed, got %v", err)
-	}
-	if err := db.UpsertUsageImportCursor(ctx, UpsertUsageImportCursorParams{
-		ProviderID:       "codex",
-		Source:           "codex-session-jsonl",
-		SourceKey:        "source-key",
-		ModifiedUnixMS:   200,
-		SizeBytes:        30,
-		ImportedEvents:   4,
-		InvalidLines:     5,
-		UnsupportedLines: 6,
-		MetadataJSON:     "{}",
-	}); err != nil {
-		t.Fatalf("expected cursor update to succeed, got %v", err)
-	}
-
-	cursor, err := db.GetUsageImportCursor(ctx, "codex", "codex-session-jsonl", "source-key")
-	if err != nil {
-		t.Fatalf("expected cursor query to succeed, got %v", err)
-	}
-	if cursor.ModifiedUnixMS != 200 || cursor.SizeBytes != 30 || cursor.ImportedEvents != 4 || cursor.InvalidLines != 5 || cursor.UnsupportedLines != 6 {
-		t.Fatalf("unexpected cursor after update: %#v", cursor)
-	}
-	if _, err := db.db.DB.ExecContext(ctx, "UPDATE usage_import_cursors SET updated_at_unix_ms = 1 WHERE source_key = 'source-key'"); err != nil {
-		t.Fatalf("expected cursor timestamp fixture update, got %v", err)
-	}
-	if err := db.TouchUsageImportCursor(ctx, "codex", "codex-session-jsonl", "source-key"); err != nil {
-		t.Fatalf("expected cursor touch to succeed, got %v", err)
-	}
-	touched, err := db.GetUsageImportCursor(ctx, "codex", "codex-session-jsonl", "source-key")
-	if err != nil {
-		t.Fatalf("expected touched cursor query, got %v", err)
-	}
-	if touched.UpdatedAtUnixMS <= 1 || touched.ModifiedUnixMS != 200 || touched.SizeBytes != 30 || touched.ImportedEvents != 4 || touched.InvalidLines != 5 || touched.UnsupportedLines != 6 {
-		t.Fatalf("expected touch to preserve cursor state, got %#v", touched)
-	}
-}
-
-func TestCommitUsageImportIsAtomicAndIdempotent(t *testing.T) {
-	ctx := context.Background()
-	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
-	defer closeTestStore(t, db)
-	if _, err := db.Migrate(ctx); err != nil {
-		t.Fatalf("expected migrations to succeed, got %v", err)
-	}
-
-	cost := int64(42)
-	event := CreateUsageEventParams{
-		ID:                  "event-atomic",
-		ProviderID:          "codex",
-		Source:              "codex-session-jsonl",
-		SourceKey:           "source-atomic",
-		SessionID:           "session-atomic",
-		Model:               "gpt-5.3-codex",
-		OccurredAtUnixMS:    1_000,
-		InputTokens:         10,
-		CachedInputTokens:   2,
-		OutputTokens:        3,
-		TotalTokens:         13,
-		EstimatedCostMicros: &cost,
-		CostStatus:          UsageCostStatusEstimated,
-	}
-	cursor := UpsertUsageImportCursorParams{
-		ProviderID:     "codex",
-		Source:         "codex-session-jsonl",
-		SourceKey:      "source-atomic",
-		ModifiedUnixMS: 100,
-		SizeBytes:      200,
-		ImportedEvents: 1,
-	}
-
-	first, err := db.CommitUsageImport(ctx, CommitUsageImportParams{Events: []CreateUsageEventParams{event}, Cursor: cursor})
-	if err != nil || first.Inserted != 1 || first.Duplicates != 0 {
-		t.Fatalf("expected first atomic import to insert one event, result=%#v err=%v", first, err)
-	}
-	second, err := db.CommitUsageImport(ctx, CommitUsageImportParams{Events: []CreateUsageEventParams{event}, Cursor: cursor})
-	if err != nil || second.Inserted != 0 || second.Duplicates != 1 {
-		t.Fatalf("expected repeated atomic import to deduplicate, result=%#v err=%v", second, err)
-	}
-	earlierDuplicate := event
-	earlierDuplicate.SourceKey = "source-earlier-duplicate"
-	earlierDuplicate.OccurredAtUnixMS = 500
-	rollbackCursor := cursor
-	rollbackCursor.SourceKey = "source-canonical-rollback"
-	rollbackCursor.SizeBytes = -1
-	if _, err := db.CommitUsageImport(ctx, CommitUsageImportParams{
-		Events: []CreateUsageEventParams{earlierDuplicate},
-		Cursor: rollbackCursor,
-	}); err == nil {
-		t.Fatalf("expected invalid cursor to roll back canonical observation update")
-	}
-	var canonicalSourceKey string
-	var canonicalOccurredAt int64
-	if err := db.executor().QueryRowContext(ctx, `SELECT source_key, occurred_at_unix_ms
-		FROM usage_events WHERE id = ?`, event.ID).Scan(&canonicalSourceKey, &canonicalOccurredAt); err != nil {
-		t.Fatalf("expected canonical event after rollback, got %v", err)
-	}
-	if canonicalSourceKey != event.SourceKey || canonicalOccurredAt != event.OccurredAtUnixMS {
-		t.Fatalf("expected failed cursor to roll back canonical update, source=%q occurred=%d", canonicalSourceKey, canonicalOccurredAt)
-	}
-
-	failingEvent := event
-	failingEvent.ID = "event-rolled-back"
-	failingCursor := cursor
-	failingCursor.SourceKey = "source-rolled-back"
-	failingCursor.SizeBytes = -1
-	if _, err := db.CommitUsageImport(ctx, CommitUsageImportParams{
-		Events: []CreateUsageEventParams{failingEvent},
-		Cursor: failingCursor,
-	}); err == nil {
-		t.Fatalf("expected invalid cursor to fail the atomic import")
-	}
-
-	summary, err := db.UsageSummary(ctx, "codex")
-	if err != nil {
-		t.Fatalf("expected usage summary after rollback, got %v", err)
-	}
-	if summary.EventCount != 1 {
-		t.Fatalf("expected failed import event to roll back, got %#v", summary)
-	}
-	if _, err := db.GetUsageImportCursor(ctx, "codex", "codex-session-jsonl", "source-rolled-back"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected failed import cursor not to advance, got %v", err)
-	}
-	failingCursor.SizeBytes = 1
-	retry, err := db.CommitUsageImport(ctx, CommitUsageImportParams{
-		Events: []CreateUsageEventParams{failingEvent},
-		Cursor: failingCursor,
-	})
-	if err != nil || retry.Inserted != 1 || retry.Duplicates != 0 {
-		t.Fatalf("expected rolled-back event ID to remain insertable, result=%#v err=%v", retry, err)
-	}
-}
-
-func TestUsageReportAggregatesRangeModelsBucketsAndImportHealth(t *testing.T) {
-	ctx := context.Background()
-	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
-	defer closeTestStore(t, db)
-	if _, err := db.Migrate(ctx); err != nil {
-		t.Fatalf("expected migrations to succeed, got %v", err)
-	}
-
-	cost10 := int64(10)
-	cost20 := int64(20)
-	cost5 := int64(5)
-	events := []CreateUsageEventParams{
-		{ID: "event-a1", ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source-a", SessionID: "session-a", Model: "model-a", OccurredAtUnixMS: 1_000, InputTokens: 100, CachedInputTokens: 40, OutputTokens: 20, TotalTokens: 120, EstimatedCostMicros: &cost10, CostStatus: UsageCostStatusEstimated},
-		{ID: "event-a2", ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source-a", SessionID: "session-a", Model: "model-a", OccurredAtUnixMS: 1_500, InputTokens: 50, CachedInputTokens: 10, OutputTokens: 10, TotalTokens: 60, CostStatus: UsageCostStatusUnknown},
-		{ID: "event-b1", ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source-b", SessionID: "session-b", Model: "model-b", OccurredAtUnixMS: 2_500, InputTokens: 80, CachedInputTokens: 80, OutputTokens: 20, TotalTokens: 100, EstimatedCostMicros: &cost20, CostStatus: UsageCostStatusEstimated},
-		{ID: "event-undated", ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source-c", SessionID: "session-c", Model: "model-b", InputTokens: 30, OutputTokens: 5, TotalTokens: 35, EstimatedCostMicros: &cost5, CostStatus: UsageCostStatusEstimated},
-	}
-	if result, err := db.InsertUsageEvents(ctx, events); err != nil || result.Inserted != len(events) {
-		t.Fatalf("expected usage fixture insert, result=%#v err=%v", result, err)
-	}
-	if err := db.UpsertUsageImportCursor(ctx, UpsertUsageImportCursorParams{
-		ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source-a",
-		SizeBytes: 100, ImportedEvents: 2, InvalidLines: 3, UnsupportedLines: 4,
-	}); err != nil {
-		t.Fatalf("expected import cursor fixture, got %v", err)
-	}
-
-	start := int64(1_000)
-	report, err := db.UsageReport(ctx, UsageReportQuery{
-		ProviderID:  "codex",
-		StartUnixMS: &start,
-		EndUnixMS:   3_000,
-		Buckets: []UsageTimeBucket{
-			{StartUnixMS: 1_000, EndUnixMS: 2_000},
-			{StartUnixMS: 2_000, EndUnixMS: 2_400},
-			{StartUnixMS: 2_400, EndUnixMS: 3_000},
-		},
-	})
-	if err != nil {
-		t.Fatalf("expected usage report query, got %v", err)
-	}
-	if report.Summary.EventCount != 3 || report.Summary.SessionCount != 2 || report.Summary.FreshInputTokens != 100 || report.Summary.TotalTokens != 280 {
-		t.Fatalf("unexpected ranged aggregate: %#v", report.Summary)
-	}
-	if report.Summary.EstimatedCostMicros != 30 || report.Summary.EstimatedTokenCount != 220 || report.Summary.UnknownCostEvents != 1 || report.Summary.UndatedEventCount != 1 {
-		t.Fatalf("unexpected ranged cost and undated aggregate: %#v", report.Summary)
-	}
-	if len(report.Trend) != 3 || report.Trend[0].TotalTokens != 180 || report.Trend[1].EventCount != 0 || report.Trend[2].TotalTokens != 100 {
-		t.Fatalf("unexpected zero-filled trend: %#v", report.Trend)
-	}
-	if len(report.Models) != 2 || report.Models[0].Model != "model-a" || report.Models[0].SessionCount != 1 || report.Models[1].Model != "model-b" {
-		t.Fatalf("unexpected model summary or ordering: %#v", report.Models)
-	}
-	if report.ImportSummary.TrackedFiles != 1 || report.ImportSummary.InvalidLines != 3 || report.ImportSummary.UnsupportedLines != 4 || report.ImportSummary.LastSyncedAtUnixMS == 0 {
-		t.Fatalf("unexpected import summary: %#v", report.ImportSummary)
-	}
-
-	all, err := db.UsageReport(ctx, UsageReportQuery{ProviderID: "codex", EndUnixMS: 3_000})
-	if err != nil {
-		t.Fatalf("expected all-time usage report, got %v", err)
-	}
-	if all.Summary.EventCount != 4 || all.Summary.SessionCount != 3 || all.Summary.UndatedEventCount != 1 || all.Summary.TotalTokens != 315 {
-		t.Fatalf("expected undated event in all-time totals, got %#v", all.Summary)
-	}
-}
-
-func TestUpdateUnknownUsageEventCostsIsFilteredAtomicAndIdempotent(t *testing.T) {
-	ctx := context.Background()
-	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
-	defer closeTestStore(t, db)
-	if _, err := db.Migrate(ctx); err != nil {
-		t.Fatalf("expected migrations to succeed, got %v", err)
-	}
-	events := []CreateUsageEventParams{
-		{ID: "candidate-a", ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source-a", Model: "gpt-5.6-sol", InputTokens: 100, CachedInputTokens: 20, OutputTokens: 10, TotalTokens: 110, CostStatus: UsageCostStatusUnknown},
-		{ID: "candidate-b", ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source-b", Model: "other-model", InputTokens: 50, OutputTokens: 5, TotalTokens: 55, CostStatus: UsageCostStatusUnknown},
-	}
-	if result, err := db.InsertUsageEvents(ctx, events); err != nil || result.Inserted != len(events) {
-		t.Fatalf("expected usage candidates, result=%#v err=%v", result, err)
-	}
-
-	candidates, err := db.ListUnknownUsageCostCandidates(ctx, "codex", []string{"gpt-5.6-sol"}, "", 10)
-	if err != nil || len(candidates) != 1 || candidates[0].ID != "candidate-a" || candidates[0].CachedInputTokens != 20 {
-		t.Fatalf("unexpected filtered candidates: %#v err=%v", candidates, err)
-	}
-	updated, err := db.UpdateUnknownUsageEventCosts(ctx, []UpdateUsageEventCostParams{{
-		ID: "candidate-a", EstimatedCostMicros: 123, CostStatus: UsageCostStatusPartial,
-	}})
-	if err != nil || updated != 1 {
-		t.Fatalf("expected one partial cost update, updated=%d err=%v", updated, err)
-	}
-	updated, err = db.UpdateUnknownUsageEventCosts(ctx, []UpdateUsageEventCostParams{{
-		ID: "candidate-a", EstimatedCostMicros: 456, CostStatus: UsageCostStatusPartial,
-	}})
-	if err != nil || updated != 0 {
-		t.Fatalf("expected repeated backfill not to overwrite classified cost, updated=%d err=%v", updated, err)
-	}
-	var cost int64
-	var status string
-	if err := db.executor().QueryRowContext(ctx, "SELECT estimated_cost_micros, cost_status FROM usage_events WHERE id = ?", "candidate-a").Scan(&cost, &status); err != nil {
-		t.Fatalf("expected updated usage event, got %v", err)
-	}
-	if cost != 123 || status != UsageCostStatusPartial {
-		t.Fatalf("unexpected persisted partial cost: cost=%d status=%q", cost, status)
-	}
-	report, err := db.UsageReport(ctx, UsageReportQuery{ProviderID: "codex", EndUnixMS: 1})
-	if err != nil {
-		t.Fatalf("expected usage report after partial update, got %v", err)
-	}
-	if report.Summary.EstimatedCostMicros != 123 || report.Summary.EstimatedTokenCount != 110 ||
-		report.Summary.EstimatedCostEventCount != 0 || report.Summary.PartialCostEventCount != 1 || report.Summary.UnknownCostEvents != 1 {
-		t.Fatalf("unexpected partial cost aggregate: %#v", report.Summary)
-	}
-	summary, err := db.UsageSummary(ctx, "codex")
-	if err != nil || summary.PartialCostEvents != 1 || summary.UnknownCostEvents != 1 || summary.EstimatedCostMicros != 123 {
-		t.Fatalf("unexpected partial legacy summary: %#v err=%v", summary, err)
-	}
-
-	_, err = db.UpdateUnknownUsageEventCosts(ctx, []UpdateUsageEventCostParams{
-		{ID: "candidate-b", EstimatedCostMicros: 99, CostStatus: UsageCostStatusEstimated},
-		{ID: "", EstimatedCostMicros: 1, CostStatus: UsageCostStatusPartial},
-	})
-	if err == nil {
-		t.Fatalf("expected invalid batch to fail")
-	}
-	if err := db.executor().QueryRowContext(ctx, "SELECT cost_status FROM usage_events WHERE id = ?", "candidate-b").Scan(&status); err != nil {
-		t.Fatalf("expected rolled back usage event, got %v", err)
-	}
-	if status != UsageCostStatusUnknown {
-		t.Fatalf("expected invalid batch to roll back, got %q", status)
-	}
-}
-
-func TestUsageReportTransactionKeepsAConsistentReadSnapshot(t *testing.T) {
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
-	db := openTestStore(t, ctx, dbPath, false)
-	defer closeTestStore(t, db)
-	if _, err := db.Migrate(ctx); err != nil {
-		t.Fatalf("expected migrations to succeed, got %v", err)
-	}
-	var journalMode string
-	if err := db.db.DB.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&journalMode); err != nil || strings.ToLower(journalMode) != "wal" {
-		t.Fatalf("expected WAL mode for concurrent snapshot test, mode=%q err=%v", journalMode, err)
-	}
-
-	cost := int64(1)
-	first := CreateUsageEventParams{ID: "snapshot-first", ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source-first", SessionID: "session-first", Model: "model-a", OccurredAtUnixMS: 1_000, InputTokens: 10, TotalTokens: 10, EstimatedCostMicros: &cost, CostStatus: UsageCostStatusEstimated}
-	if result, err := db.InsertUsageEvents(ctx, []CreateUsageEventParams{first}); err != nil || result.Inserted != 1 {
-		t.Fatalf("expected first snapshot fixture, result=%#v err=%v", result, err)
-	}
-
-	writer := openTestStore(t, ctx, dbPath, false)
-	defer closeTestStore(t, writer)
-	second := first
-	second.ID = "snapshot-second"
-	second.SourceKey = "source-second"
-	second.SessionID = "session-second"
-	second.OccurredAtUnixMS = 1_500
-	start := int64(500)
-	var snapshot UsageReportSnapshot
-	err := db.WithTransaction(ctx, func(txStore *Store) error {
-		if _, err := txStore.EarliestDatedUsageUnixMS(ctx, "codex"); err != nil {
-			return err
-		}
-		writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		defer cancel()
-		writeDone := make(chan error, 1)
-		go func() {
-			_, writeErr := writer.InsertUsageEvents(writeCtx, []CreateUsageEventParams{second})
-			writeDone <- writeErr
-		}()
-		if err := <-writeDone; err != nil {
-			return fmt.Errorf("concurrent fixture write failed: %w", err)
-		}
-		var reportErr error
-		snapshot, reportErr = txStore.UsageReport(ctx, UsageReportQuery{
-			ProviderID:  "codex",
-			StartUnixMS: &start,
-			EndUnixMS:   2_000,
-			Buckets:     []UsageTimeBucket{{StartUnixMS: 500, EndUnixMS: 2_000}},
-		})
-		return reportErr
-	})
-	if err != nil {
-		t.Fatalf("expected concurrent snapshot report, got %v", err)
-	}
-	if snapshot.Summary.EventCount != 1 || snapshot.Trend[0].EventCount != 1 || len(snapshot.Models) != 1 {
-		t.Fatalf("expected all report queries to retain the first snapshot, got %#v", snapshot)
-	}
-	after, err := db.UsageSummary(ctx, "codex")
-	if err != nil || after.EventCount != 2 {
-		t.Fatalf("expected concurrent event after report transaction, summary=%#v err=%v", after, err)
-	}
-}
-
-func TestUsageReportDoesNotExposeUnsafePersistedModelLabels(t *testing.T) {
-	ctx := context.Background()
-	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
-	defer closeTestStore(t, db)
-	if _, err := db.Migrate(ctx); err != nil {
-		t.Fatalf("expected migrations to succeed, got %v", err)
-	}
-	cost := int64(1)
-	events := []CreateUsageEventParams{
-		{ID: "unsafe-model", ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source-a", SessionID: "session-a", Model: "SECRET PROMPT VALUE", InputTokens: 1, TotalTokens: 1, EstimatedCostMicros: &cost, CostStatus: UsageCostStatusEstimated},
-		{ID: "blank-model", ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source-b", SessionID: "session-b", InputTokens: 1, TotalTokens: 1, EstimatedCostMicros: &cost, CostStatus: UsageCostStatusEstimated},
-	}
-	if result, err := db.InsertUsageEvents(ctx, events); err != nil || result.Inserted != 2 {
-		t.Fatalf("expected unsafe model fixtures, result=%#v err=%v", result, err)
-	}
-	report, err := db.UsageReport(ctx, UsageReportQuery{ProviderID: "codex"})
-	if err != nil {
-		t.Fatalf("expected safe usage report, got %v", err)
-	}
-	if len(report.Models) != 1 || report.Models[0].Model != "unknown" || report.Models[0].EventCount != 2 {
-		t.Fatalf("expected unsafe models to merge into a safe label, got %#v", report.Models)
 	}
 }
 

@@ -28,14 +28,24 @@ func TestUsageReportRangesUndatedAndPartialPricing(t *testing.T) {
 	costMonth := int64(250_000)
 	costOld := int64(100_000)
 	costUndated := int64(50_000)
-	events := []store.CreateUsageEventParams{
+	source, err := db.BeginUsageSync(ctx, ProviderCodex, SourceCodexSessionJSONL, CodexUsageIdentityRevision)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("expected usage source fixture, got %v", err)
+	}
+	events := []store.CreateUsageFactParams{
 		reportEvent("today", "session-today", "gpt-5.3-codex", now.Add(-time.Hour).UnixMilli(), 100, 40, 20, &costToday, store.UsageCostStatusEstimated),
 		reportEvent("week", "session-week", "unknown-model", now.AddDate(0, 0, -3).UnixMilli(), 50, 10, 10, nil, store.UsageCostStatusUnknown),
 		reportEvent("month", "session-month", "gpt-5.3-codex", now.AddDate(0, 0, -10).UnixMilli(), 30, 0, 5, &costMonth, store.UsageCostStatusEstimated),
 		reportEvent("old", "session-old", "gpt-5.3-codex", now.AddDate(-2, 0, 0).UnixMilli(), 20, 0, 5, &costOld, store.UsageCostStatusEstimated),
 		reportEvent("undated", "session-undated", "gpt-5.3-codex", 0, 10, 0, 2, &costUndated, store.UsageCostStatusEstimated),
 	}
-	if result, insertErr := db.InsertUsageEvents(ctx, events); insertErr != nil || result.Inserted != len(events) {
+	for index := range events {
+		events[index].SourceID = source.ID
+	}
+	if result, insertErr := db.InsertUsageFacts(ctx, store.InsertUsageFactsParams{
+		SourceID: source.ID, Generation: source.SyncGeneration, Facts: events,
+	}); insertErr != nil || result.Inserted != len(events) {
 		_ = db.Close()
 		t.Fatalf("expected report fixture insert, result=%#v err=%v", result, insertErr)
 	}
@@ -144,10 +154,9 @@ func TestUsageReportEmptyDefaultsAndValidation(t *testing.T) {
 	assertAppErrorCode(t, err, apperror.UsageInvalid)
 }
 
-func reportEvent(id, sessionID, model string, occurredAt, input, cached, output int64, cost *int64, status string) store.CreateUsageEventParams {
-	return store.CreateUsageEventParams{
-		ID: id, ProviderID: "codex", Source: "codex-session-jsonl", SourceKey: "source-" + id,
-		SessionID: sessionID, Model: model, OccurredAtUnixMS: occurredAt,
+func reportEvent(id, sessionID, model string, occurredAt, input, cached, output int64, cost *int64, status store.UsageCostStatus) store.CreateUsageFactParams {
+	return store.CreateUsageFactParams{
+		EventKey: usageTestEventKey(id), SessionKey: sessionID, ModelKey: model, OccurredAtUnixMS: occurredAt,
 		InputTokens: input, CachedInputTokens: cached, OutputTokens: output,
 		TotalTokens: input + output, EstimatedCostMicros: cost, CostStatus: status,
 	}

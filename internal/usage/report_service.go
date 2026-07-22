@@ -93,7 +93,7 @@ func (service *Service) Report(ctx context.Context, req UsageReportRequest) (Usa
 }
 
 func (service *Service) usageReportAt(ctx context.Context, req UsageReportRequest, now time.Time) (UsageReportResult, error) {
-	providerID, appErr := normalizeUsageProviderID(req.ProviderID)
+	providerID, integration, appErr := service.resolveIntegration(req.ProviderID)
 	if appErr != nil {
 		return UsageReportResult{}, appErr
 	}
@@ -114,9 +114,6 @@ func (service *Service) usageReportAt(ctx context.Context, req UsageReportReques
 		return UsageReportResult{}, err
 	}
 	defer db.Close()
-	if err := requireEnabledProviderIfPresent(ctx, db, providerID); err != nil {
-		return UsageReportResult{}, err
-	}
 
 	var resolved ResolvedRange
 	var snapshot store.UsageReportSnapshot
@@ -170,12 +167,7 @@ func (service *Service) usageReportAt(ctx context.Context, req UsageReportReques
 			InvalidLines:       snapshot.ImportSummary.InvalidLines,
 			UnsupportedLines:   snapshot.ImportSummary.UnsupportedLines,
 		},
-		Pricing: UsagePricingInfo{
-			Basis:               PricingBasis,
-			SourceURL:           PricingSourceURL,
-			VerifiedAt:          PricingVerifiedAt,
-			HistoricalRepricing: false,
-		},
+		Pricing: integration.PricingInfo(),
 	}
 	result.Trend = make([]UsageTrendPoint, 0, len(snapshot.Trend))
 	for _, point := range snapshot.Trend {
@@ -199,11 +191,11 @@ func (service *Service) usageReportAt(ctx context.Context, req UsageReportReques
 func usageAggregateSummary(aggregate store.UsageAggregate) UsageAggregateSummary {
 	cacheHitRate := ratio(aggregate.CachedInputTokens, aggregate.InputTokens)
 	pricingCoverage := ratio(aggregate.EstimatedTokenCount, aggregate.TotalTokens)
-	costStatus := CostStatusUnknown
+	costStatus := CostStatusUnknown.String()
 	if aggregate.EventCount > 0 && aggregate.UnknownCostEvents == 0 && aggregate.PartialCostEventCount > 0 {
-		costStatus = CostStatusPartial
+		costStatus = CostStatusPartial.String()
 	} else if aggregate.EventCount > 0 && aggregate.UnknownCostEvents == 0 {
-		costStatus = CostStatusEstimated
+		costStatus = CostStatusEstimated.String()
 	}
 	return UsageAggregateSummary{
 		EventCount:              aggregate.EventCount,

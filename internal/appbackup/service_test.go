@@ -1043,7 +1043,7 @@ func applyDatabaseIntegrityDefect(t *testing.T, path, defect string) {
 			t.Fatal(err)
 		}
 	case "schema":
-		if _, err := db.Exec(`DROP INDEX idx_usage_events_model`); err != nil {
+		if _, err := db.Exec(`DROP INDEX idx_usage_models_source_model`); err != nil {
 			t.Fatal(err)
 		}
 	case "json":

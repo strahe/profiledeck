@@ -3,7 +3,6 @@ package usage
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -71,10 +70,6 @@ func TestParseCodexSessionFileComputesCumulativeDeltas(t *testing.T) {
 	if first.CostStatus != CostStatusEstimated || first.EstimatedCostMicros == nil {
 		t.Fatalf("expected first event to have estimated cost, got %#v", first)
 	}
-	if strings.Contains(first.MetadataJSON, "do not store me") || strings.Contains(first.MetadataJSON, "prompt") || strings.Contains(first.MetadataJSON, "content") {
-		t.Fatalf("expected metadata to exclude raw prompt/content, got %s", first.MetadataJSON)
-	}
-
 	second := result.Events[1]
 	if second.InputTokens != 50 || second.CachedInputTokens != 5 || second.OutputTokens != 5 || second.TotalTokens != 55 {
 		t.Fatalf("unexpected second delta counts: %#v", second)
@@ -162,9 +157,26 @@ func TestParseCodexSessionFileUsesLastTokenUsageFallback(t *testing.T) {
 	}
 }
 
+func TestParseCodexSessionFileMapsMissingModelToUnknown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	writeTestFile(t, path, `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":5,"output_tokens":2}}}}`)
+
+	sourceKey, err := SourceKey(path)
+	if err != nil {
+		t.Fatalf("expected source key, got %v", err)
+	}
+	result, err := ParseCodexSessionFile(SourceFile{Path: path, SourceKey: sourceKey})
+	if err != nil || len(result.Events) != 1 {
+		t.Fatalf("expected one usage event, result=%#v err=%v", result, err)
+	}
+	if event := result.Events[0]; event.Model != "unknown" || event.CostStatus != CostStatusUnknown {
+		t.Fatalf("expected missing model to use unknown storage semantics, got %#v", event)
+	}
+}
+
 func TestParseCodexSessionFileUsesTokenCountInfoModel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
-	writeTestFile(t, path, `{"type":"event_msg","payload":{"type":"token_count","info":{"model_name":"openai/gpt-5.3-codex-2026-07-06","total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3}}},"timestamp":1751846400000000}`)
+	writeTestFile(t, path, `{"type":"event_msg","payload":{"type":"token_count","info":{"model_name":"OpenAI/GPT-5.3-Codex-2026-07-06","total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3}}},"timestamp":1751846400000000}`)
 
 	sourceKey, err := SourceKey(path)
 	if err != nil {
@@ -179,7 +191,7 @@ func TestParseCodexSessionFileUsesTokenCountInfoModel(t *testing.T) {
 	}
 
 	event := result.Events[0]
-	if event.Model != "openai/gpt-5.3-codex-2026-07-06" {
+	if event.Model != "OpenAI/GPT-5.3-Codex-2026-07-06" {
 		t.Fatalf("expected exact safe model name for analysis, got %q", event.Model)
 	}
 	if event.CostStatus != CostStatusUnknown || event.EstimatedCostMicros != nil {
@@ -193,8 +205,8 @@ func TestParseCodexSessionFileUsesTokenCountInfoModel(t *testing.T) {
 		event.Model,
 		TokenCounts{InputTokens: 10, CachedInputTokens: 2, OutputTokens: 3, TotalTokens: 13},
 	)
-	if event.ID != wantID {
-		t.Fatalf("expected exact model storage not to change stable event identity, got %q want %q", event.ID, wantID)
+	if event.EventKey != wantID {
+		t.Fatalf("expected exact model storage not to change stable event identity, got %q want %q", event.EventKey, wantID)
 	}
 	if event.OccurredAtUnixMS != 1751846400000 {
 		t.Fatalf("expected microsecond timestamp to convert to millis, got %d", event.OccurredAtUnixMS)
@@ -255,11 +267,8 @@ func TestParseCodexSessionFileEventIDIgnoresSourcePath(t *testing.T) {
 	if len(first.Events) != 1 || len(second.Events) != 1 {
 		t.Fatalf("expected one event from each file, got first=%d second=%d", len(first.Events), len(second.Events))
 	}
-	if first.Events[0].ID != second.Events[0].ID {
-		t.Fatalf("expected copied session events to keep the same ID, got %q and %q", first.Events[0].ID, second.Events[0].ID)
-	}
-	if first.Events[0].SourceKey == second.Events[0].SourceKey {
-		t.Fatalf("expected source keys to remain path-specific cursor keys")
+	if first.Events[0].EventKey != second.Events[0].EventKey {
+		t.Fatalf("expected copied session events to keep the same key, got %q and %q", first.Events[0].EventKey, second.Events[0].EventKey)
 	}
 }
 
@@ -291,23 +300,12 @@ func TestParseCodexSessionFileStableIDMatchesForkedHistory(t *testing.T) {
 		t.Fatalf("unexpected parent/fork event counts: parent=%d fork=%d", len(parent.Events), len(fork.Events))
 	}
 	for index := range parent.Events {
-		if parent.Events[index].ID == "" || parent.Events[index].ID != fork.Events[index].ID {
+		if parent.Events[index].EventKey.IsZero() || parent.Events[index].EventKey != fork.Events[index].EventKey {
 			t.Fatalf("expected fork history event %d to retain its stable ID, parent=%#v fork=%#v", index, parent.Events[index], fork.Events[index])
 		}
 	}
-	if fork.Events[2].SessionID != "session-child" || fork.Events[2].ID == parent.Events[0].ID {
+	if fork.Events[2].SessionID != "session-child" || fork.Events[2].EventKey == parent.Events[0].EventKey {
 		t.Fatalf("expected post-fork child usage to remain distinct, got %#v", fork.Events[2])
-	}
-
-	var metadata struct {
-		ParserVersion string `json:"parser_version"`
-		UsageOrdinal  int64  `json:"usage_ordinal"`
-	}
-	if err := json.Unmarshal([]byte(fork.Events[1].MetadataJSON), &metadata); err != nil {
-		t.Fatalf("expected safe usage metadata, got %v", err)
-	}
-	if metadata.ParserVersion != CodexSessionParserVersion || metadata.UsageOrdinal != 2 {
-		t.Fatalf("expected repeated session metadata not to reset the ordinal, got %#v", metadata)
 	}
 }
 
@@ -330,7 +328,7 @@ func TestParseCodexSessionFileStableIDSeparatesIndependentSessions(t *testing.T)
 	if len(first.Events) != 1 || len(second.Events) != 1 {
 		t.Fatalf("expected one event per independent session")
 	}
-	if first.Events[0].ID == second.Events[0].ID {
+	if first.Events[0].EventKey == second.Events[0].EventKey {
 		t.Fatalf("expected independent sessions with identical timestamps and tokens to stay distinct")
 	}
 }
@@ -365,7 +363,7 @@ func TestParseCodexSessionFileFallbackSessionIDIncludesSourceKey(t *testing.T) {
 	if !strings.HasPrefix(first.Events[0].SessionID, "derived-") || !strings.HasPrefix(second.Events[0].SessionID, "derived-") || first.Events[0].SessionID == second.Events[0].SessionID {
 		t.Fatalf("expected distinct derived fallback session ids, got first=%q second=%q", first.Events[0].SessionID, second.Events[0].SessionID)
 	}
-	if first.Events[0].ID == second.Events[0].ID {
+	if first.Events[0].EventKey == second.Events[0].EventKey {
 		t.Fatalf("expected missing-session fallback events from different files not to collide")
 	}
 }
@@ -428,7 +426,7 @@ func TestParseCodexSessionFileSanitizesPersistedLabelsWithoutChangingUsage(t *te
 	if !strings.HasPrefix(event.SessionID, "derived-") || event.Model != "unknown" || event.InputTokens != 10 || event.OutputTokens != 2 {
 		t.Fatalf("unexpected sanitized usage event: %#v", event)
 	}
-	for _, value := range []string{event.SessionID, event.Model, event.MetadataJSON} {
+	for _, value := range []string{event.SessionID, event.Model} {
 		if strings.Contains(strings.ToLower(value), "secret") {
 			t.Fatalf("expected persisted labels to exclude raw unsafe content, got %q", value)
 		}
@@ -538,7 +536,7 @@ func TestListCodexSessionFilesReturnsJSONLFiles(t *testing.T) {
 	if len(files) != 1 {
 		t.Fatalf("expected one jsonl file, got %d", len(files))
 	}
-	if files[0].SourceKey == "" || files[0].SizeBytes == 0 {
+	if files[0].SourceKey.IsZero() || files[0].SizeBytes == 0 {
 		t.Fatalf("expected source metadata, got %#v", files[0])
 	}
 }

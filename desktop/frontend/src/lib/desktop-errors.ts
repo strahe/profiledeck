@@ -54,6 +54,8 @@ const userErrorKeys: Record<string, string> = {
 	LOCK_REPAIR_UNSAFE: "errors.switchRepairUnsafe",
 	USAGE_INVALID: "errors.usageUnavailable",
 	USAGE_IMPORT_FAILED: "errors.usageUnavailable",
+	USAGE_MIGRATION_REQUIRED: "errors.usageUnavailable",
+	USAGE_SYNC_CONFLICT: "errors.usageUnavailable",
 	CODEX_INVALID: "errors.codexNotReady",
 	ANTIGRAVITY_INVALID: "errors.antigravityNotReady",
 	CLAUDE_CODE_INVALID: "errors.claudeCodeNotReady",
