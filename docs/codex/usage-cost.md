@@ -31,6 +31,8 @@ profiledeck usage sync codex --codex-dir /path/to/codex-home
 
 You can repeat a sync safely; previously imported usage is not counted again. Invalid, oversized, or unsupported records are skipped and reported without storing their contents.
 
+Deleting the Codex Provider also deletes its saved usage reports. Desktop background sync will not recreate a deleted Provider. Running this CLI sync is an explicit request: it can set up the Codex Provider again and reimport usage that still exists in the local Codex logs.
+
 ## View a summary
 
 ```bash

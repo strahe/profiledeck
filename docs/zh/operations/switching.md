@@ -67,4 +67,4 @@ profiledeck switch codex work \
 
 未完成切换的恢复点可能包含之前的 Codex 文件、Claude Code 订阅登录或 Antigravity 登录。请保持 ProfileDeck 数据目录私有，不要提交、上传或分享其中的恢复文件。
 
-恢复会把未完成切换还原到切换前的目标和当前 Profile 状态。已经保存到 Profile 中的更新仍会保留。成功切换不能撤销；如需更换配置，请切换到目标 Profile。可用操作见[诊断、备份与恢复](./recovery.md)。
+恢复会把未完成切换影响的目标还原到切换前状态，但不会改变当前 Profile。如果未完成切换后当前 Profile 已发生变化，ProfileDeck 会在写入前拒绝恢复。已经保存到 Profile 中的更新仍会保留。成功切换不能撤销；如需更换配置，请切换到目标 Profile。可用操作见[诊断、备份与恢复](./recovery.md)。

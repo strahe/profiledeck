@@ -106,9 +106,6 @@ func (service *Service) usageReportAt(ctx context.Context, req UsageReportReques
 		return UsageReportResult{}, apperror.New(apperror.UsageInvalid, "unsupported usage range")
 	}
 
-	if err := service.requireProvider(ctx, providerID); err != nil {
-		return UsageReportResult{}, err
-	}
 	db, err := service.stores.OpenHealthy(ctx, true)
 	if err != nil {
 		return UsageReportResult{}, err

@@ -164,11 +164,14 @@ func (service *Service) Delete(ctx context.Context, id string, confirm bool) (De
 				"Profile has an unfinished operation; resolve it in Diagnostics and try again",
 			)
 		}
+		// Operation rows retain Profiles with RESTRICT while they are recovery
+		// evidence. Once resolved, deleting any related Profile deletes the whole
+		// operation before Profile-owned rows cascade.
+		if err := tx.DeleteResolvedProfileOperations(ctx, id); err != nil {
+			return apperror.Wrap(apperror.StoreStatusFailed, "failed to delete Profile operation history", err)
+		}
 		if err := service.deleteManagedData(ctx, tx, id); err != nil {
 			return err
-		}
-		if err := tx.DeleteProfileTargetsByProfile(ctx, id); err != nil {
-			return apperror.Wrap(apperror.StoreStatusFailed, "failed to delete Profile target data", err)
 		}
 		return mapStoreError(tx.DeleteProfile(ctx, id))
 	})

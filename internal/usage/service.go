@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/validate"
@@ -13,18 +12,10 @@ import (
 type Service struct {
 	stores   store.Factory
 	registry Registry
-	policy   agent.Policy
 }
 
-func NewService(stores store.Factory, registry Registry, policy agent.Policy) *Service {
-	return &Service{stores: stores, registry: registry, policy: policy}
-}
-
-func (service *Service) requireProvider(ctx context.Context, providerID string) error {
-	if service.policy == nil {
-		return nil
-	}
-	return service.policy.RequireProvider(ctx, providerID)
+func NewService(stores store.Factory, registry Registry) *Service {
+	return &Service{stores: stores, registry: registry}
 }
 
 type UsageImportError struct {
@@ -69,14 +60,26 @@ type UsageSummaryResult struct {
 }
 
 func (service *Service) Sync(ctx context.Context, req UsageSyncRequest) (UsageSyncResult, error) {
+	return service.sync(ctx, req, SyncProvisionProvider)
+}
+
+func (service *Service) sync(
+	ctx context.Context,
+	req UsageSyncRequest,
+	mode SyncProvisionMode,
+) (UsageSyncResult, error) {
 	providerID, integration, appErr := service.resolveIntegration(req.ProviderID)
 	if appErr != nil {
 		return UsageSyncResult{}, appErr
 	}
-	if err := service.requireProvider(ctx, providerID); err != nil {
-		return UsageSyncResult{}, err
+	result, err := integration.Sync(ctx, service.stores, mode)
+	if mode == SyncExistingProvider && errors.Is(err, store.ErrUsageProviderMissing) {
+		return UsageSyncResult{
+			ProviderID: providerID,
+			Source:     summarySource(integration.SourceIDs()),
+			Errors:     []UsageImportError{},
+		}, nil
 	}
-	result, err := integration.Sync(ctx, service.stores)
 	if err != nil {
 		return UsageSyncResult{}, usageSyncError(providerID, err)
 	}
@@ -87,8 +90,8 @@ func usageSyncError(providerID string, err error) error {
 	switch {
 	case err == nil:
 		return nil
-	case errors.Is(err, store.ErrUsageProviderDisabled):
-		return apperror.Wrap(apperror.ProviderDisabled, "Provider is disabled", err).
+	case errors.Is(err, store.ErrUsageProviderMissing):
+		return apperror.Wrap(apperror.ProviderNotFound, "Provider is unavailable", err).
 			WithDetail("provider_id", providerID)
 	case errors.Is(err, store.ErrUsageIdentityRevision):
 		return apperror.Wrap(
@@ -114,13 +117,16 @@ func (service *Service) SyncCodex(ctx context.Context) (UsageSyncResult, error) 
 	return service.Sync(ctx, UsageSyncRequest{ProviderID: ProviderCodex})
 }
 
+// SyncCodexBackground never provisions a deleted Provider. A later explicit
+// sync remains the only action that may recreate it.
+func (service *Service) SyncCodexBackground(ctx context.Context) (UsageSyncResult, error) {
+	return service.sync(ctx, UsageSyncRequest{ProviderID: ProviderCodex}, SyncExistingProvider)
+}
+
 func (service *Service) Summary(ctx context.Context, req UsageSummaryRequest) (UsageSummaryResult, error) {
 	providerID, _, appErr := service.resolveIntegration(req.ProviderID)
 	if appErr != nil {
 		return UsageSummaryResult{}, appErr
-	}
-	if err := service.requireProvider(ctx, providerID); err != nil {
-		return UsageSummaryResult{}, err
 	}
 	db, err := service.stores.OpenHealthy(ctx, true)
 	if err != nil {

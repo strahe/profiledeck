@@ -145,7 +145,11 @@ func (service *Service) RecoverOperation(ctx context.Context, req RecoverOperati
 		return RecoverOperationResult{}, apperror.Wrap(apperror.OperationCreateFailed, "failed to encode recovery operation metadata", err)
 	}
 	if _, err := db.CreatePendingRecoveryOperation(ctx, store.CreateRecoveryOperationParams{
-		ID: recoveryOperationID, ProfileID: source.Metadata.ProfileID, MetadataJSON: initialMetadata,
+		ID: recoveryOperationID, ProviderID: source.Metadata.ProviderID,
+		SourceOperationID:     source.Operation.ID,
+		ProfileIDs:            recoveryRelatedProfileIDs(metadataBase),
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          initialMetadata,
 	}); err != nil {
 		return RecoverOperationResult{}, apperror.Wrap(apperror.OperationCreateFailed, "failed to create recovery operation", err)
 	}
@@ -164,13 +168,10 @@ func (service *Service) RecoverOperation(ctx context.Context, req RecoverOperati
 		return RecoverOperationResult{}, failRecoveryOperation(ctx, db, recoveryOperationID, initialMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode recovery operation metadata", err))
 	}
 	if err := db.CompleteRecoveryOperation(ctx, store.CompleteRecoveryOperationParams{
-		ID:                  recoveryOperationID,
-		SourceOperationID:   source.Operation.ID,
-		ResolutionKind:      "recovered_pre_switch",
-		ProfileID:           restoredProfileID(source.Metadata.PreviousActive),
-		ProviderID:          source.Metadata.ProviderID,
-		RestoredActiveState: restoredStoreActiveState(source.Metadata.PreviousActive),
-		MetadataJSON:        appliedMetadata,
+		ID: recoveryOperationID, SourceOperationID: source.Operation.ID,
+		ProviderID:            source.Metadata.ProviderID,
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          appliedMetadata, ResolutionKind: "recovered_pre_switch",
 	}); err != nil {
 		return RecoverOperationResult{}, failRecoveryOperation(ctx, db, recoveryOperationID, appliedMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to complete recovery operation", err))
 	}
@@ -201,6 +202,13 @@ func (service *Service) inspectRecoveryFromOperation(
 		operation.ResolvedAtUnixMS != 0 {
 		inspection.Status = RecoveryStatusUnrecoverable
 		inspection.Reason = "operation_not_unresolved_switch"
+		return recoveryAssessment{Inspection: inspection}
+	}
+	if operation.MetadataSchemaVersion != store.OperationMetadataSchemaVersion {
+		// Recovery metadata is executable safety state. A newer schema must be
+		// interpreted only by a binary that understands its full contract.
+		inspection.Status = RecoveryStatusUnrecoverable
+		inspection.Reason = "operation_metadata_version_unsupported"
 		return recoveryAssessment{Inspection: inspection}
 	}
 	if probeLock {
@@ -313,18 +321,22 @@ func validateRecoveryActiveState(ctx context.Context, db *store.Store, source re
 	if previous == nil {
 		return apperror.New(apperror.RecoveryUnsupported, "switch operation does not include its previous active state").WithDetail("operation_id", source.Operation.ID)
 	}
-	activeState, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, source.Metadata.ProviderID)
+	activeState, err := db.GetActiveState(ctx, source.Metadata.ProviderID)
 	if errors.Is(err, store.ErrNotFound) {
 		if !previous.Exists {
 			return nil
 		}
-		return apperror.New(apperror.TargetChanged, "active state no longer matches the incomplete switch").WithDetail("operation_id", source.Operation.ID)
+		return apperror.New(apperror.TargetChanged, "active state no longer matches the incomplete switch").
+			WithDetail("operation_id", source.Operation.ID).
+			WithDetail("reason", "active_state_changed")
 	}
 	if err != nil {
 		return apperror.Wrap(apperror.StoreStatusFailed, "failed to read active state", err)
 	}
-	if !previous.Exists || activeState.ProfileID != previous.ProfileID || activeState.OperationID != previous.OperationID {
-		return apperror.New(apperror.TargetChanged, "active state no longer matches the incomplete switch").WithDetail("operation_id", source.Operation.ID)
+	if !previous.Exists || activeState.ProfileID != previous.ProfileID || activeState.Revision != previous.Revision {
+		return apperror.New(apperror.TargetChanged, "active state no longer matches the incomplete switch").
+			WithDetail("operation_id", source.Operation.ID).
+			WithDetail("reason", "active_state_changed")
 	}
 	return nil
 }
@@ -378,7 +390,11 @@ func recoveryInspectionFromError(operationID string, err error) RecoveryInspecti
 			inspection.Reason = "recovery_files_invalid"
 		case apperror.TargetChanged:
 			inspection.Status = RecoveryStatusUnrecoverable
-			inspection.Reason = "target_state_unrecognized"
+			if appErr.Details["reason"] == "active_state_changed" {
+				inspection.Reason = "active_state_changed"
+			} else {
+				inspection.Reason = "target_state_unrecognized"
+			}
 		case apperror.BackupFailed, apperror.StoreStatusFailed, apperror.TargetReadFailed:
 			inspection.Status = RecoveryStatusUnknown
 			inspection.Reason = "recovery_check_failed"
@@ -394,6 +410,11 @@ func recoveryInspectionFromError(operationID string, err error) RecoveryInspecti
 }
 
 func recoveryInspectionError(inspection RecoveryInspection) error {
+	// A revision mismatch is a concurrent active-state change, not an
+	// unrecognized target snapshot; preserve that distinction for callers.
+	if inspection.Reason == "active_state_changed" {
+		return apperror.New(apperror.TargetChanged, "active state changed after the incomplete switch")
+	}
 	switch inspection.Status {
 	case RecoveryStatusRunning:
 		return apperror.New(apperror.LockAcquireFailed, "a switch operation is still running")

@@ -40,7 +40,7 @@ Config Sets do not include sessions, logs, skills, plugin caches, project `.code
 
 Deleting removes the complete Profile from every Agent. ProfileDeck also deletes saved logins and Config Sets used only by that Profile, but keeps shared saved data and unrelated unbound data. The Profile cannot be deleted while it is current in any Agent or while an unfinished operation still refers to it.
 
-Deletion changes only ProfileDeck's saved data. It does not sign out a tool, replace its current settings, remove its working files, or erase completed operation history.
+Deletion changes only ProfileDeck's saved data. It removes completed operation records that refer to the Profile, but does not sign out a tool, replace its current settings, or remove its working files.
 
 ## What ProfileDeck changes
 

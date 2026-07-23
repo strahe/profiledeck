@@ -36,7 +36,6 @@ const (
 	PlanBuildFailed                  Code = "PLAN_BUILD_FAILED"
 	AdapterNotFound                  Code = "ADAPTER_NOT_FOUND"
 	AgentDisabled                    Code = "agent_disabled"
-	ProviderDisabled                 Code = "PROVIDER_DISABLED"
 	TargetInvalid                    Code = "TARGET_INVALID"
 	TargetAlreadyExists              Code = "TARGET_EXISTS"
 	TargetNotFound                   Code = "TARGET_NOT_FOUND"
@@ -71,6 +70,13 @@ const (
 )
 
 const publicCommandFailedMessage = "ProfileDeck could not complete this command"
+
+// StoreSchemaUnsupportedMessage explains the supported recovery paths without
+// implying that installing another application version can convert the data.
+const StoreSchemaUnsupportedMessage = "the existing local data uses an unsupported format; restore a compatible application backup, or move the ProfileDeck data directory aside and initialize ProfileDeck again"
+
+// BackupSchemaUnsupportedMessage explains that restore requires another backup.
+const BackupSchemaUnsupportedMessage = "the selected backup uses an unsupported data format; choose a compatible application backup"
 
 // Error carries a stable code, safe message, optional cause, and safe details.
 type Error struct {
@@ -155,7 +161,6 @@ func KnownCode(code Code) bool {
 		PlanBuildFailed,
 		AdapterNotFound,
 		AgentDisabled,
-		ProviderDisabled,
 		TargetInvalid,
 		TargetAlreadyExists,
 		TargetNotFound,

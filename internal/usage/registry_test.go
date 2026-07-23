@@ -26,7 +26,7 @@ func (integration *registryTestIntegration) SourceIDs() []string {
 	return append([]string(nil), integration.sources...)
 }
 
-func (integration *registryTestIntegration) Sync(context.Context, store.Factory) (UsageSyncResult, error) {
+func (integration *registryTestIntegration) Sync(context.Context, store.Factory, SyncProvisionMode) (UsageSyncResult, error) {
 	integration.called = true
 	if integration.syncErr != nil {
 		return UsageSyncResult{}, integration.syncErr
@@ -78,7 +78,7 @@ func TestUsageServiceDispatchesRegisteredIntegrationAndRejectsUnsupportedProvide
 	}
 	integration := &registryTestIntegration{provider: "test-provider", sources: []string{"test-source"}}
 	registry := MustRegistry(integration)
-	service := NewService(runtimeService.StoreFactory(), registry, nil)
+	service := NewService(runtimeService.StoreFactory(), registry)
 
 	result, err := service.Sync(ctx, UsageSyncRequest{ProviderID: "test-provider"})
 	if err != nil || !integration.called || result.ProviderID != "test-provider" {
@@ -103,7 +103,7 @@ func TestUsageServiceMapsIntegrationErrors(t *testing.T) {
 		err  error
 		code apperror.Code
 	}{
-		{name: "disabled Provider", err: store.ErrUsageProviderDisabled, code: apperror.ProviderDisabled},
+		{name: "missing Provider", err: store.ErrUsageProviderMissing, code: apperror.ProviderNotFound},
 		{name: "identity revision", err: store.ErrUsageIdentityRevision, code: apperror.UsageMigrationRequired},
 		{name: "cursor conflict", err: store.ErrUsageCursorConflict, code: apperror.UsageSyncConflict},
 		{name: "superseded sync", err: store.ErrUsageSyncSuperseded, code: apperror.UsageSyncConflict},
@@ -117,7 +117,7 @@ func TestUsageServiceMapsIntegrationErrors(t *testing.T) {
 				sources:  []string{"test-source"},
 				syncErr:  test.err,
 			}
-			service := NewService(runtimeService.StoreFactory(), MustRegistry(integration), nil)
+			service := NewService(runtimeService.StoreFactory(), MustRegistry(integration))
 			_, err := service.Sync(ctx, UsageSyncRequest{ProviderID: integration.provider})
 			assertAppErrorCode(t, err, test.code)
 			if !errors.Is(err, test.err) {

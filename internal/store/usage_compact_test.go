@@ -29,112 +29,88 @@ func testCodexUsageImport(source UsageSource, params CommitCodexUsageImportParam
 	return params
 }
 
-func TestUsageWritesAllowMissingOrDeletedProviderRecord(t *testing.T) {
-	ctx := context.Background()
-	db := migratedTestStore(t, ctx)
-	defer closeTestStore(t, db)
-
-	missing, err := db.BeginUsageSync(ctx, "codex", "missing-provider-source", 1)
-	if err != nil {
-		t.Fatalf("begin sync without Provider record: %v", err)
-	}
+func createUsageProviderFixture(t *testing.T, ctx context.Context, db *Store, providerID string) {
+	t.Helper()
 	if _, err := db.CreateProvider(ctx, CreateProviderParams{
-		ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: "{}",
-	}); err != nil {
-		t.Fatalf("create Provider: %v", err)
-	}
-	if err := db.DeleteProvider(ctx, "codex"); err != nil {
-		t.Fatalf("delete Provider: %v", err)
-	}
-	deleted, err := db.BeginUsageSync(ctx, "codex", "deleted-provider-source", 1)
-	if err != nil {
-		t.Fatalf("begin sync after Provider deletion: %v", err)
-	}
-	for _, test := range []struct {
-		source UsageSource
-		fact   CreateUsageFactParams
-	}{
-		{source: missing, fact: CreateUsageFactParams{EventKey: testUsageKey("missing-provider-fact"), SourceID: missing.ID, ModelKey: "model", TotalTokens: 1, CostStatus: UsageCostStatusUnknown}},
-		{source: deleted, fact: CreateUsageFactParams{EventKey: testUsageKey("deleted-provider-fact"), SourceID: deleted.ID, ModelKey: "model", TotalTokens: 1, CostStatus: UsageCostStatusUnknown}},
-	} {
-		if result, err := db.InsertUsageFacts(ctx, testUsageFactBatch(test.source, []CreateUsageFactParams{test.fact})); err != nil || result.Inserted != 1 {
-			t.Fatalf("insert fact without Provider record: result=%#v err=%v", result, err)
-		}
+		ID: providerID, Name: providerID, AdapterID: providerID, MetadataJSON: `{}`,
+	}); err != nil && !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("create Usage Provider fixture %q: %v", providerID, err)
 	}
 }
 
-func TestUsageWritesRejectDisabledProviderInsideTransactions(t *testing.T) {
+func TestUsageWritesRequireProviderAndCascadeOnDelete(t *testing.T) {
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
+
+	if _, err := db.BeginUsageSync(ctx, "codex", "missing-provider-source", 1); !errors.Is(err, ErrUsageProviderMissing) {
+		t.Fatalf("begin sync without Provider error = %v, want ErrUsageProviderMissing", err)
+	}
 	if _, err := db.CreateProvider(ctx, CreateProviderParams{
-		ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: "{}",
+		ID: "codex", Name: "Codex", AdapterID: "codex", MetadataJSON: "{}",
 	}); err != nil {
 		t.Fatalf("create Provider: %v", err)
 	}
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
-		t.Fatalf("begin enabled sync: %v", err)
+		t.Fatalf("begin sync: %v", err)
 	}
-	existing := CreateUsageFactParams{
-		EventKey: testUsageKey("existing-disabled-provider-fact"), SourceID: source.ID,
-		ModelKey: "gpt-5.6-sol", InputTokens: 5, TotalTokens: 5, CostStatus: UsageCostStatusUnknown,
+	fact := CreateUsageFactParams{
+		EventKey: testUsageKey("provider-owned-fact"), SourceID: source.ID,
+		ModelKey: "model", TotalTokens: 1, CostStatus: UsageCostStatusUnknown,
 	}
-	if _, err := db.InsertUsageFacts(ctx, testUsageFactBatch(source, []CreateUsageFactParams{existing})); err != nil {
-		t.Fatalf("insert enabled fact: %v", err)
+	if result, err := db.InsertUsageFacts(ctx, testUsageFactBatch(source, []CreateUsageFactParams{fact})); err != nil || result.Inserted != 1 {
+		t.Fatalf("insert fact: result=%#v err=%v", result, err)
 	}
-
-	disabled := false
-	if _, err := db.UpdateProvider(ctx, UpdateProviderParams{ID: "codex", Enabled: &disabled}); err != nil {
-		t.Fatalf("disable Provider: %v", err)
+	if err := db.DeleteProvider(ctx, "codex"); err != nil {
+		t.Fatalf("delete Provider: %v", err)
 	}
-	if _, err := db.BeginUsageSync(ctx, "codex", "other-source", 1); !errors.Is(err, ErrUsageProviderDisabled) {
-		t.Fatalf("disabled begin error = %v", err)
+	if _, err := db.GetUsageSource(ctx, "codex", "codex-session-jsonl"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Provider deletion retained source: %v", err)
 	}
-	if _, err := db.GetUsageSource(ctx, "codex", "other-source"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("disabled begin created a source: %v", err)
-	}
-
-	blockedFact := existing
-	blockedFact.EventKey = testUsageKey("blocked-disabled-provider-fact")
-	if _, err := db.InsertUsageFacts(ctx, testUsageFactBatch(source, []CreateUsageFactParams{blockedFact})); !errors.Is(err, ErrUsageProviderDisabled) {
-		t.Fatalf("disabled fact insert error = %v", err)
-	}
-	blockedFile := CodexUsageImportFile{
-		SourceID: source.ID, FileKey: testUsageKey("blocked-disabled-provider-file"), ImportedFacts: 1,
-		ParserRevision: 1, IdentityRevision: 1, EventDigest: testUsageKey("blocked-disabled-provider-digest"),
-	}
-	if _, err := db.CommitCodexUsageImport(ctx, testCodexUsageImport(source, CommitCodexUsageImportParams{
-		Facts: []CreateUsageFactParams{blockedFact}, File: blockedFile,
-	})); !errors.Is(err, ErrUsageProviderDisabled) {
-		t.Fatalf("disabled Codex commit error = %v", err)
-	}
-	if _, err := db.GetCodexUsageImportFile(ctx, source.ID, blockedFile.FileKey); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("disabled Codex commit advanced its cursor: %v", err)
-	}
-	if err := db.CompleteUsageSync(ctx, CompleteUsageSyncParams{
-		SourceID: source.ID, Generation: source.SyncGeneration,
-		Finalization: &StaticUsageSyncFinalization{},
-	}); !errors.Is(err, ErrUsageProviderDisabled) {
-		t.Fatalf("disabled completion error=%v", err)
-	}
-
-	models, err := db.ListUnknownUsageCostModels(ctx, "codex")
-	if err != nil || len(models) != 1 {
-		t.Fatalf("list existing cost model: models=%#v err=%v", models, err)
-	}
-	candidates, err := db.ListUnknownUsageFactCostCandidates(ctx, "codex", models[0].SourceID, models[0].ModelID, 0, 10)
-	if err != nil || len(candidates) != 1 {
-		t.Fatalf("list existing cost candidate: candidates=%#v err=%v", candidates, err)
-	}
-	if _, err := db.UpdateUnknownUsageFactCosts(ctx, "codex", []UpdateUsageFactCostParams{{
-		ID: candidates[0].ID, EstimatedCostMicros: 1, CostStatus: UsageCostStatusPartial,
-	}}); !errors.Is(err, ErrUsageProviderDisabled) {
-		t.Fatalf("disabled cost update error = %v", err)
+	if _, err := db.InsertUsageFacts(ctx, testUsageFactBatch(source, []CreateUsageFactParams{fact})); !errors.Is(err, ErrUsageSyncSuperseded) {
+		t.Fatalf("stale source write error = %v, want ErrUsageSyncSuperseded", err)
 	}
 	summary, err := db.UsageSummary(ctx, "codex")
-	if err != nil || summary.EventCount != 1 || summary.UnknownCostEvents != 1 {
-		t.Fatalf("disabled writes changed history: summary=%#v err=%v", summary, err)
+	if err != nil || summary.EventCount != 0 {
+		t.Fatalf("Provider deletion retained Usage: summary=%#v err=%v", summary, err)
+	}
+}
+
+func TestUsageWriteTransactionRollsBackWhenProviderIsDeleted(t *testing.T) {
+	ctx := context.Background()
+	db := migratedTestStore(t, ctx)
+	defer closeTestStore(t, db)
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{
+		ID: "codex", Name: "Codex", AdapterID: "codex", MetadataJSON: "{}",
+	}); err != nil {
+		t.Fatalf("create Provider: %v", err)
+	}
+	err := db.WithTransaction(ctx, func(tx *Store) error {
+		source, err := tx.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
+		if err != nil {
+			return err
+		}
+		fact := CreateUsageFactParams{
+			EventKey: testUsageKey("rolled-back-provider-fact"), SourceID: source.ID,
+			ModelKey: "gpt-5.6-sol", TotalTokens: 5, CostStatus: UsageCostStatusUnknown,
+		}
+		if _, err := tx.InsertUsageFacts(ctx, testUsageFactBatch(source, []CreateUsageFactParams{fact})); err != nil {
+			return err
+		}
+		if err := tx.DeleteProvider(ctx, "codex"); err != nil {
+			return err
+		}
+		return errors.New("force rollback")
+	})
+	if err == nil {
+		t.Fatal("transaction unexpectedly committed")
+	}
+	if _, err := db.GetProvider(ctx, "codex"); err != nil {
+		t.Fatalf("rollback did not restore Provider: %v", err)
+	}
+	if _, err := db.GetUsageSource(ctx, "codex", "codex-session-jsonl"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("rollback retained transient Usage source: %v", err)
 	}
 }
 
@@ -142,6 +118,7 @@ func TestUsageFactConflictRollsBackFileAndOtherFacts(t *testing.T) {
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("begin usage sync: %v", err)
@@ -214,6 +191,7 @@ func TestCodexUsageImportCursorCASAllowsOneConcurrentAdvance(t *testing.T) {
 	if _, err := firstDB.Migrate(ctx); err != nil {
 		t.Fatalf("migrate database: %v", err)
 	}
+	createUsageProviderFixture(t, ctx, firstDB, "codex")
 	source, err := firstDB.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("begin usage sync: %v", err)
@@ -286,6 +264,7 @@ func TestUsageSyncGenerationPreventsStaleFinalizationAndPreservesFacts(t *testin
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
+	createUsageProviderFixture(t, ctx, db, "codex")
 	first, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("begin first sync: %v", err)
@@ -350,6 +329,7 @@ func TestSupersededUsageSyncCannotWriteAfterLatestCompletion(t *testing.T) {
 	if _, err := staleDB.Migrate(ctx); err != nil {
 		t.Fatalf("migrate database: %v", err)
 	}
+	createUsageProviderFixture(t, ctx, staleDB, "codex")
 	stale, err := staleDB.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("begin stale sync: %v", err)
@@ -408,6 +388,7 @@ func TestCompleteUsageSyncSupportsProviderSpecificIntegrations(t *testing.T) {
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
+	createUsageProviderFixture(t, ctx, db, "future-agent")
 	first, err := db.BeginUsageSync(ctx, "future-agent", "local-log", 1)
 	if err != nil {
 		t.Fatalf("begin first usage sync: %v", err)
@@ -452,6 +433,7 @@ func TestUsageIdentityRevisionMismatchWritesNothing(t *testing.T) {
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("begin usage sync: %v", err)
@@ -510,6 +492,7 @@ func TestUsageReportQueryCountDoesNotScaleWithBuckets(t *testing.T) {
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("begin usage sync: %v", err)
@@ -554,6 +537,7 @@ func TestUsageReportMergesModelsAndIsolatesSessionsAcrossSources(t *testing.T) {
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
+	createUsageProviderFixture(t, ctx, db, "future-agent")
 	firstSource, err := db.BeginUsageSync(ctx, "future-agent", "primary-log", 1)
 	if err != nil {
 		t.Fatalf("begin first source: %v", err)

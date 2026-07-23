@@ -134,10 +134,10 @@ Only local Codex usage is supported. `report` defaults to `7d`; `summary` gives 
 The following commands are advanced CLI features for tools other than the built-in Codex, Claude Code, and Antigravity workflows. Use each built-in tool's dedicated commands above; generic target commands cannot manage their saved logins or settings.
 
 ```bash
-profiledeck provider list [--all] [--json]
+profiledeck provider list [--json]
 profiledeck provider show <id> [--json]
-profiledeck provider create <id> [--name NAME] [--adapter ID] [--disabled] [--metadata-json JSON] [--json]
-profiledeck provider update <id> [--name NAME] [--adapter ID] [--enabled] [--disabled] [--metadata-json JSON] [--json]
+profiledeck provider create <id> [--name NAME] [--adapter ID] [--metadata-json JSON] [--json]
+profiledeck provider update <id> [--name NAME] [--adapter ID] [--metadata-json JSON] [--json]
 profiledeck provider delete <id> --yes [--json]
 
 profiledeck profile list [--json]
@@ -147,7 +147,9 @@ profiledeck profile update <id> [--name NAME] [--description TEXT] [--metadata-j
 profiledeck profile delete <id> --yes [--json]
 ```
 
-All four Profile delete commands perform the same global deletion. An Agent-specific command deletes the complete Profile even when it contains data only for another Agent. Deletion stops if the Profile is current in any Agent or has an unfinished operation. Saved logins and Config Sets used only by that Profile are deleted; shared saved data and unrelated unbound data remain. Tool-owned working logins, settings, and files do not change.
+Deleting a Provider removes all ProfileDeck data owned by it, including its settings, saved resources and bindings, file targets, current-Profile state, usage reports, and completed operation records. Global Profiles, Desktop Agent preferences, tool-owned working logins, settings, and files remain. Deletion stops while that Provider has an unfinished operation.
+
+All four Profile delete commands perform the same global deletion. An Agent-specific command deletes the complete Profile even when it contains data only for another Agent. Deletion stops if the Profile is current in any Agent or has an unfinished operation. Saved logins and Config Sets used only by that Profile are deleted; shared saved data and unrelated unbound data remain. Completed operation records that refer to the Profile are also removed. Tool-owned working logins, settings, and files do not change.
 
 Target commands:
 

@@ -56,7 +56,7 @@ func newCodexTestEnvironment(t *testing.T, configDir, codexDir string) *codexTes
 	return &codexTestEnvironment{
 		runtime:   runtimeService,
 		codex:     codexService,
-		providers: provider.NewService(runtimeService.StoreFactory(), switchingService, agentService, agentRegistry),
+		providers: provider.NewService(runtimeService.StoreFactory(), switchingService, agentRegistry),
 		profiles: profile.NewService(
 			runtimeService.StoreFactory(), switchingService,
 			profile.MustDeleteRegistry(codexprofile.DeleteParticipant{}),

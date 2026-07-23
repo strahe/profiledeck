@@ -20,7 +20,7 @@ var (
 	ErrUsageCursorConflict   = errors.New("usage import cursor conflict")
 	ErrUsageFactConflict     = errors.New("usage fact conflict")
 	ErrUsageIdentityRevision = errors.New("usage identity revision requires migration")
-	ErrUsageProviderDisabled = errors.New("usage provider is disabled")
+	ErrUsageProviderMissing  = errors.New("usage provider is missing")
 	ErrUsageSyncSuperseded   = errors.New("usage sync was superseded")
 )
 
@@ -238,29 +238,20 @@ func (s *Store) beginUsageSync(ctx context.Context, providerID, sourceKey string
 }
 
 func (s *Store) reserveUsageProviderStateForWrite(ctx context.Context, providerID string) error {
-	// Reserve SQLite's single writer before reading enabled state so a concurrent
-	// Provider update is ordered before or after this usage write, never between.
-	if _, err := s.executor().ExecContext(ctx, `
-		UPDATE providers SET enabled = enabled WHERE id = ?
-	`, providerID); err != nil {
-		return err
-	}
-	return s.requireUsageProviderWritable(ctx, providerID)
-}
-
-func (s *Store) requireUsageProviderWritable(ctx context.Context, providerID string) error {
-	var enabled int
-	err := s.executor().QueryRowContext(ctx, `SELECT enabled FROM providers WHERE id = ?`, providerID).Scan(&enabled)
-	if errors.Is(err, sql.ErrNoRows) {
-		// Integration registration owns sync capability. A missing Provider row
-		// means there is no persisted disablement, not that the Integration is absent.
-		return nil
-	}
+	// Reserve SQLite's single writer before creating or advancing a source. This
+	// orders Provider deletion before or after the whole source transaction.
+	result, err := s.executor().ExecContext(ctx, `
+		UPDATE providers SET id = id WHERE id = ?
+	`, providerID)
 	if err != nil {
 		return err
 	}
-	if enabled != 1 {
-		return ErrUsageProviderDisabled
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrUsageProviderMissing
 	}
 	return nil
 }
@@ -682,17 +673,10 @@ func (s *Store) reserveCurrentUsageSyncForWrite(ctx context.Context, sourceID, g
 	if err != nil {
 		return UsageSource{}, err
 	}
-	source, err := s.getUsageSourceByID(ctx, sourceID)
-	if err != nil {
-		return UsageSource{}, err
-	}
 	if matched != 1 {
 		return UsageSource{}, ErrUsageSyncSuperseded
 	}
-	if err := s.requireUsageProviderWritable(ctx, source.ProviderID); err != nil {
-		return UsageSource{}, err
-	}
-	return source, nil
+	return s.getUsageSourceByID(ctx, sourceID)
 }
 
 func validateUsageSyncCompletion(params CompleteUsageSyncParams) error {

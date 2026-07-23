@@ -379,7 +379,7 @@ func inspectDoctorDatabase(ctx context.Context, stores store.Factory) (doctorDat
 			return doctorDatabaseState{}, nil, []Finding{{
 				ID:      "database_schema_unsupported",
 				Level:   LevelError,
-				Message: "this ProfileDeck version cannot open the existing local data; update ProfileDeck and try again",
+				Message: apperror.StoreSchemaUnsupportedMessage,
 			}}
 		}
 		if errors.Is(err, store.ErrInvalidMigrationHistory) {
@@ -460,6 +460,15 @@ func integrityFindings(report store.IntegrityReport) []Finding {
 		case store.IntegrityIssueSystemState:
 			finding.ID = "database_recovery_state_invalid"
 			finding.Message = "ProfileDeck could not verify its recovery safety state"
+		case store.IntegrityIssueContentHash:
+			finding.ID = "database_content_hash_invalid"
+			finding.Message = "saved credentials or settings failed an integrity check"
+		case store.IntegrityIssueMetadata:
+			finding.ID = "database_operation_metadata_invalid"
+			finding.Message = "saved operation recovery information is inconsistent"
+		case store.IntegrityIssueTarget:
+			finding.ID = "database_target_registry_invalid"
+			finding.Message = "a saved file target is not supported by this ProfileDeck version"
 		default:
 			continue
 		}
@@ -796,12 +805,9 @@ func (service *Service) doctorOperations(ctx context.Context, dbState doctorData
 func (service *Service) doctorOperation(ctx context.Context, dbState doctorDatabaseState, paths runtime.Paths, operation store.Operation, lock DoctorLock) DoctorOperation {
 	metadata := parseDoctorOperationMetadata(operation.MetadataJSON)
 	profileID := metadata.ProfileID
-	if profileID == "" {
-		profileID = operation.ProfileID
-	}
 	result := DoctorOperation{
 		ID: operation.ID, OperationType: operation.OperationType, Status: operation.Status,
-		Checkpoint: metadata.Checkpoint, ProviderID: metadata.ProviderID, ProfileID: profileID,
+		Checkpoint: metadata.Checkpoint, ProviderID: operation.ProviderID, ProfileID: profileID,
 		ErrorCode:       publicOperationErrorCode(operation.ErrorCode),
 		UpdatedAtUnixMS: operation.UpdatedAtUnixMS,
 	}

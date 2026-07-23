@@ -53,6 +53,7 @@ type switchOperationMetadata struct {
 	Checkpoint      string                          `json:"checkpoint"`
 	ProviderID      string                          `json:"provider_id"`
 	ProfileID       string                          `json:"profile_id"`
+	RelatedProfiles []string                        `json:"related_profile_ids,omitempty"`
 	PlanFingerprint string                          `json:"plan_fingerprint,omitempty"`
 	RecoveryPath    string                          `json:"recovery_path,omitempty"`
 	Counts          SwitchCounts                    `json:"counts"`
@@ -64,10 +65,9 @@ type switchOperationMetadata struct {
 }
 
 type switchPreviousActiveState struct {
-	Exists          bool   `json:"exists"`
-	ProfileID       string `json:"profile_id,omitempty"`
-	OperationID     string `json:"operation_id,omitempty"`
-	UpdatedAtUnixMS int64  `json:"updated_at_unix_ms,omitempty"`
+	Exists    bool   `json:"exists"`
+	ProfileID string `json:"profile_id,omitempty"`
+	Revision  int64  `json:"revision,omitempty"`
 }
 
 type switchOperationTargetMetadata struct {
@@ -123,9 +123,9 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 		return ApplySwitchResult{}, apperror.Wrap(apperror.OperationCreateFailed, "failed to encode switch operation metadata", err)
 	}
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID:           operationID,
-		ProfileID:    profileID,
-		MetadataJSON: initialMetadata,
+		ID: operationID, ProviderID: providerID, ProfileIDs: []string{profileID},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          initialMetadata,
 	}); err != nil {
 		return ApplySwitchResult{}, apperror.Wrap(apperror.OperationCreateFailed, "failed to create switch operation", err)
 	}
@@ -171,7 +171,23 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 	if err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, initialMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode switch operation metadata", err))
 	}
-	if err := db.UpdateOperationMetadata(ctx, operationID, plannedMetadata); err != nil {
+	relatedProfileIDs, err := switchRelatedProfileIDs(ctx, db, profileID, previousActive, plan)
+	if err != nil {
+		return ApplySwitchResult{}, failSwitchOperation(
+			ctx,
+			db,
+			operationID,
+			plannedMetadata,
+			apperror.Wrap(apperror.StoreStatusFailed, "failed to resolve Profiles affected by the switch", err),
+		)
+	}
+	if err := db.UpdateOperationMetadata(
+		ctx,
+		operationID,
+		store.OperationMetadataSchemaVersion,
+		plannedMetadata,
+		relatedProfileIDs,
+	); err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, initialMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to update switch operation metadata", err))
 	}
 
@@ -198,7 +214,13 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 	if err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, plannedMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode switch operation metadata", err))
 	}
-	if err := db.UpdateOperationMetadata(ctx, operationID, recoveryMetadata); err != nil {
+	if err := db.UpdateOperationMetadata(
+		ctx,
+		operationID,
+		store.OperationMetadataSchemaVersion,
+		recoveryMetadata,
+		relatedProfileIDs,
+	); err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, plannedMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to update switch operation metadata", err))
 	}
 	if err := verifySwitchPlanHashesWithExecutor(ctx, executor, plan.Operations); err != nil {
@@ -226,12 +248,11 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, recoveryMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode switch operation metadata", err))
 	}
 	if err := db.CompleteSwitchOperation(ctx, store.CompleteSwitchOperationParams{
-		ID:                operationID,
-		ProfileID:         profileID,
-		ProviderID:        providerID,
-		MetadataJSON:      appliedMetadata,
-		CredentialUpdates: plan.CredentialUpdates,
-		ConfigSetUpdates:  plan.ConfigSetUpdates,
+		ID: operationID, ProfileID: profileID, ProviderID: providerID,
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          appliedMetadata,
+		CredentialUpdates:     plan.CredentialUpdates,
+		ConfigSetUpdates:      plan.ConfigSetUpdates,
 	}); err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, recoveryMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to complete switch operation", err))
 	}
@@ -259,7 +280,7 @@ func newSwitchOperationID(now time.Time) (string, error) {
 }
 
 func readPreviousActiveState(ctx context.Context, db *store.Store, providerID string) (*switchPreviousActiveState, error) {
-	activeState, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, providerID)
+	activeState, err := db.GetActiveState(ctx, providerID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return &switchPreviousActiveState{Exists: false}, nil
@@ -267,11 +288,39 @@ func readPreviousActiveState(ctx context.Context, db *store.Store, providerID st
 		return nil, apperror.Wrap(apperror.StoreStatusFailed, "failed to read previous active state", err)
 	}
 	return &switchPreviousActiveState{
-		Exists:          true,
-		ProfileID:       activeState.ProfileID,
-		OperationID:     activeState.OperationID,
-		UpdatedAtUnixMS: activeState.UpdatedAtUnixMS,
+		Exists: true, ProfileID: activeState.ProfileID, Revision: activeState.Revision,
 	}, nil
+}
+
+func switchRelatedProfileIDs(
+	ctx context.Context,
+	db *store.Store,
+	profileID string,
+	previous *switchPreviousActiveState,
+	plan applyPlan,
+) ([]string, error) {
+	profileIDs := []string{profileID}
+	if previous != nil && previous.Exists {
+		profileIDs = append(profileIDs, previous.ProfileID)
+	}
+	credentialIDs := make([]string, 0, len(plan.CredentialUpdates))
+	for _, update := range plan.CredentialUpdates {
+		credentialIDs = append(credentialIDs, update.ID)
+	}
+	configSetIDs := make([]string, 0, len(plan.ConfigSetUpdates))
+	for _, update := range plan.ConfigSetUpdates {
+		configSetIDs = append(configSetIDs, update.ID)
+	}
+	resourceProfileIDs, err := db.ListProviderResourceProfileIDs(
+		ctx,
+		plan.SwitchPlan.Provider.ID,
+		credentialIDs,
+		configSetIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return append(profileIDs, resourceProfileIDs...), nil
 }
 
 func acquireSwitchLock(path, operationID string) (targetfs.Lock, error) {

@@ -81,7 +81,7 @@ func TestProfileTargetAppCRUDValidationAndRedaction(t *testing.T) {
 	if _, err := environment.profiles.Delete(ctx, "profile-a", true); err != nil {
 		t.Fatalf("expected setup profile delete to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	for _, tc := range []profiletarget.CreateProfileTargetRequest{
 		{
@@ -255,8 +255,13 @@ func TestProfileTargetAppCRUDValidationAndRedaction(t *testing.T) {
 	})
 	assertAppErrorCode(t, err, apperror.TargetInvalid)
 
-	_, err = environment.providers.Delete(ctx, "provider-a", true)
-	assertAppErrorCode(t, err, apperror.ProviderInUse)
+	providerDelete, err := environment.providers.Delete(ctx, "provider-a", true)
+	if err != nil || !providerDelete.Deleted {
+		t.Fatalf("expected Provider delete to clean generic targets, result=%#v err=%v", providerDelete, err)
+	}
+	if count := countTableRows(t, environment.runtime.Paths().Database, "profile_targets"); count != 0 {
+		t.Fatalf("expected Provider targets to be removed, got %d", count)
+	}
 	result, err := environment.profiles.Delete(ctx, "profile-a", true)
 	if err != nil || !result.Deleted {
 		t.Fatalf("expected Profile delete to clean generic targets, result=%#v err=%v", result, err)
@@ -276,7 +281,7 @@ func TestProfileTargetPathOwnershipAllowsSharedLogicalTarget(t *testing.T) {
 	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 	if _, err := environment.profiles.Create(ctx, profile.CreateRequest{
 		ID:   "profile-b",
 		Name: "Profile B",
@@ -372,7 +377,7 @@ func TestGenericTargetsCannotClaimManagedCodexPaths(t *testing.T) {
 			t.Fatalf("open store: %v", err)
 		}
 		if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
-			ID: codexconfig.ProviderID, Name: "Codex", AdapterID: codexconfig.AdapterID, Enabled: true, MetadataJSON: metadataJSON,
+			ID: codexconfig.ProviderID, Name: "Codex", AdapterID: codexconfig.AdapterID, MetadataJSON: metadataJSON,
 		}); err != nil {
 			_ = db.Close()
 			t.Fatalf("seed managed Provider: %v", err)
@@ -380,7 +385,7 @@ func TestGenericTargetsCannotClaimManagedCodexPaths(t *testing.T) {
 		if err := db.Close(); err != nil {
 			t.Fatalf("close store: %v", err)
 		}
-		createGenericProviderAndProfile(t, ctx, configDir, true)
+		createGenericProviderAndProfile(t, ctx, configDir)
 		for targetID, path := range map[string]string{
 			"codex-auth-conflict":   filepath.Join(codexDir, codexconfig.AuthFileName),
 			"codex-config-conflict": filepath.Join(codexDir, codexconfig.ConfigFileName),
@@ -400,7 +405,7 @@ func TestGenericTargetsCannotClaimManagedCodexPaths(t *testing.T) {
 		if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 			t.Fatalf("expected init to succeed, got %v", err)
 		}
-		createGenericProviderAndProfile(t, ctx, configDir, true)
+		createGenericProviderAndProfile(t, ctx, configDir)
 		if _, err := environment.targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
 			ProfileID: "profile-a", ProviderID: "provider-a", TargetID: "auth-owner",
 			Path: filepath.Join(codexDir, codexconfig.AuthFileName), Format: "text", Strategy: "replace-file",
@@ -428,7 +433,7 @@ func TestProfileTargetPathNormalizationPreventsOwnershipBypass(t *testing.T) {
 	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	targetDir := t.TempDir()
 	cleanPath := filepath.Join(targetDir, "settings.json")
@@ -487,7 +492,7 @@ func TestBuildPlanUsesBoundedPreviewForLargeTargets(t *testing.T) {
 	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	targetDir := t.TempDir()
 	targetPath := filepath.Join(targetDir, "large.env")
@@ -536,7 +541,7 @@ func TestBuildPlanRejectsOversizedMergeTargets(t *testing.T) {
 	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	targetPath := filepath.Join(t.TempDir(), "oversized.env")
 	if err := os.WriteFile(targetPath, []byte(strings.Repeat("x", targetfs.MaxFileBytes+1)), 0o600); err != nil {
@@ -565,7 +570,7 @@ func TestBuildPlanRejectsOversizedReplaceFileTargets(t *testing.T) {
 	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	targetPath := filepath.Join(t.TempDir(), "oversized.env")
 	beforeContent := strings.Repeat("x", targetfs.MaxFileBytes+1)
@@ -595,7 +600,7 @@ func TestBuildPlanRejectsOversizedDesiredContent(t *testing.T) {
 	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	if _, err := environment.targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
 		ProfileID:  "profile-a",
@@ -621,7 +626,7 @@ func TestBuildPlanReadOnlyOperationsAndRedaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	targetDir := t.TempDir()
 	missingPath := filepath.Join(targetDir, "missing.env")
@@ -804,18 +809,11 @@ func TestBuildPlanErrorsAndSymlinkHandling(t *testing.T) {
 	_, err := environment.switching.BuildPlan(ctx, switching.BuildPlanRequest{ProviderID: "provider-missing", ProfileID: "profile-missing"})
 	assertAppErrorCode(t, err, apperror.ProviderNotFound)
 
-	createGenericProviderAndProfile(t, ctx, configDir, false)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	_, err = environment.switching.BuildPlan(ctx, switching.BuildPlanRequest{ProviderID: "provider-a", ProfileID: "profile-missing"})
 	assertAppErrorCode(t, err, apperror.ProfileNotFound)
 
-	_, err = environment.switching.BuildPlan(ctx, switching.BuildPlanRequest{ProviderID: "provider-a", ProfileID: "profile-a"})
-	assertAppErrorCode(t, err, apperror.ProviderDisabled)
-
-	enabled := true
-	if _, err := environment.providers.Update(ctx, provider.UpdateRequest{ID: "provider-a", Enabled: &enabled}); err != nil {
-		t.Fatalf("expected provider enable to succeed, got %v", err)
-	}
 	if _, err := environment.providers.Update(ctx, provider.UpdateRequest{ID: "provider-a", AdapterID: stringPtr("unknown")}); err != nil {
 		t.Fatalf("expected provider adapter update to succeed, got %v", err)
 	}
@@ -887,7 +885,7 @@ func TestBuildPlanErrorsAndSymlinkHandling(t *testing.T) {
 	}
 }
 
-func createGenericProviderAndProfile(t *testing.T, ctx context.Context, configDir string, enabled bool) {
+func createGenericProviderAndProfile(t *testing.T, ctx context.Context, configDir string) {
 	t.Helper()
 	environment := newProfileTargetTestEnvironment(t, configDir)
 
@@ -895,7 +893,6 @@ func createGenericProviderAndProfile(t *testing.T, ctx context.Context, configDi
 		ID:        "provider-a",
 		Name:      "Provider A",
 		AdapterID: "generic",
-		Enabled:   &enabled,
 	}); err != nil {
 		t.Fatalf("expected provider create to succeed, got %v", err)
 	}

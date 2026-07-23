@@ -177,7 +177,6 @@ export interface CodexProfileSummary {
     "model_provider"?: string;
     "openai_base_url"?: string;
     "active": boolean;
-    "active_operation_id"?: string;
     "updated_at_unix_ms": number;
     "warnings"?: string[] | null;
 }

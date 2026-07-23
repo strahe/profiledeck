@@ -13,8 +13,21 @@ import (
 type Integration interface {
 	ProviderID() string
 	SourceIDs() []string
-	Sync(context.Context, store.Factory) (UsageSyncResult, error)
+	Sync(context.Context, store.Factory, SyncProvisionMode) (UsageSyncResult, error)
 	PricingInfo() UsagePricingInfo
+}
+
+type SyncProvisionMode int
+
+const (
+	SyncExistingProvider SyncProvisionMode = iota
+	SyncProvisionProvider
+)
+
+// ProviderProvisioner validates a typed Provider and may create it only for an
+// explicit user-requested sync.
+type ProviderProvisioner interface {
+	Ensure(context.Context, *store.Store, SyncProvisionMode) error
 }
 
 // Registry is immutable after construction. Provider and source ownership is

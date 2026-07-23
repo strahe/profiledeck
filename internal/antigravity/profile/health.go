@@ -53,7 +53,7 @@ func InspectHealth(ctx context.Context, db *store.Store, inspect TargetInspector
 			grouped[binding.ProfileID] = nil
 		}
 	}
-	if active, activeErr := db.GetActiveState(ctx, store.ActiveStateScopeProvider, agyconfig.ProviderID); activeErr == nil {
+	if active, activeErr := db.GetActiveState(ctx, agyconfig.ProviderID); activeErr == nil {
 		if _, ok := grouped[active.ProfileID]; !ok {
 			grouped[active.ProfileID] = nil
 		}

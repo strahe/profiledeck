@@ -6,7 +6,7 @@ export interface ActiveState {
     "provider_name": string;
     "profile_id": string;
     "profile_name": string;
-    "operation_id": string;
+    "revision": number;
     "updated_at_unix_ms": number;
     "profile_available": boolean;
 }
@@ -15,7 +15,6 @@ export interface Provider {
     "id": string;
     "name": string;
     "adapter_id": string;
-    "enabled": boolean;
     "metadata": { [_ in string]?: any } | null;
     "created_at_unix_ms": number;
     "updated_at_unix_ms": number;

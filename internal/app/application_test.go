@@ -161,10 +161,10 @@ func TestApplicationDeletesGlobalProfileDataWithoutChangingExternalState(t *test
 		t.Fatalf("open store: %v", err)
 	}
 	for _, fixture := range []store.CreateProviderParams{
-		{ID: codexconfig.ProviderID, Name: codexpreset.ProviderName, AdapterID: codexconfig.AdapterID, Enabled: true, MetadataJSON: `{}`},
-		{ID: agyconfig.ProviderID, Name: agyconfig.ProviderName, AdapterID: agyconfig.AdapterID, Enabled: false, MetadataJSON: `{}`},
-		{ID: claudecodeconfig.ProviderID, Name: claudecodeconfig.ProviderName, AdapterID: claudecodeconfig.AdapterID, Enabled: true, MetadataJSON: `{}`},
-		{ID: "generic", Name: "Generic", AdapterID: "generic", Enabled: true, MetadataJSON: `{}`},
+		{ID: codexconfig.ProviderID, Name: codexpreset.ProviderName, AdapterID: codexconfig.AdapterID, MetadataJSON: `{}`},
+		{ID: agyconfig.ProviderID, Name: agyconfig.ProviderName, AdapterID: agyconfig.AdapterID, MetadataJSON: `{}`},
+		{ID: claudecodeconfig.ProviderID, Name: claudecodeconfig.ProviderName, AdapterID: claudecodeconfig.AdapterID, MetadataJSON: `{}`},
+		{ID: "generic", Name: "Generic", AdapterID: "generic", MetadataJSON: `{}`},
 	} {
 		if _, err := db.CreateProvider(ctx, fixture); err != nil {
 			_ = db.Close()
@@ -229,7 +229,9 @@ func TestApplicationDeletesGlobalProfileDataWithoutChangingExternalState(t *test
 		t.Fatalf("create Config Set binding: %v", err)
 	}
 	if _, err := db.UpsertProviderProfileSetting(ctx, store.UpsertProviderProfileSettingParams{
-		ProfileID: "doomed", ProviderID: codexconfig.ProviderID, QuotaRefreshIntervalSeconds: 600, AuthKeepaliveEnabled: true,
+		ProfileID: "doomed", ProviderID: codexconfig.ProviderID,
+		SchemaVersion: store.ProviderSettingsSchemaVersion,
+		SettingsJSON:  `{"quota_refresh_interval_seconds":600,"auth_keepalive_enabled":true}`,
 	}); err != nil {
 		_ = db.Close()
 		t.Fatalf("create Profile setting: %v", err)
@@ -248,13 +250,15 @@ func TestApplicationDeletesGlobalProfileDataWithoutChangingExternalState(t *test
 		t.Fatalf("create generic target: %v", err)
 	}
 	if _, err := db.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
-		ID: "history-applied", ProfileID: "doomed", MetadataJSON: `{}`,
+		ID: "history-applied", ProviderID: codexconfig.ProviderID, RelatedProfileIDs: []string{"doomed"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 	}); err != nil {
 		_ = db.Close()
 		t.Fatalf("create applied history: %v", err)
 	}
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID: "history-resolved", ProfileID: "doomed", MetadataJSON: `{}`,
+		ID: "history-resolved", ProviderID: codexconfig.ProviderID, ProfileIDs: []string{"doomed"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 	}); err != nil {
 		_ = db.Close()
 		t.Fatalf("create resolved history: %v", err)
@@ -269,18 +273,6 @@ func TestApplicationDeletesGlobalProfileDataWithoutChangingExternalState(t *test
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close seed store: %v", err)
-	}
-
-	raw, err := sql.Open("sqlite", application.Runtime().StoreFactory().DatabasePath())
-	if err != nil {
-		t.Fatalf("open raw database: %v", err)
-	}
-	if _, err := raw.ExecContext(ctx, `UPDATE provider_credentials SET payload_json = 'damaged', payload_sha256 = 'damaged' WHERE id = 'codex-exclusive'`); err != nil {
-		_ = raw.Close()
-		t.Fatalf("damage credential payload fixture: %v", err)
-	}
-	if err := raw.Close(); err != nil {
-		t.Fatalf("close raw database: %v", err)
 	}
 
 	result, err := application.Profiles().Delete(ctx, "doomed", true)
@@ -308,10 +300,10 @@ func TestApplicationDeletesGlobalProfileDataWithoutChangingExternalState(t *test
 			t.Fatalf("preserved credential %q missing: %v", credentialID, err)
 		}
 	}
-	if _, err := db.GetProviderConfigSet(ctx, "codex-exclusive-config"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, "codex-exclusive-config"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("exclusive Config Set still exists: %v", err)
 	}
-	if _, err := db.GetProviderConfigSet(ctx, "unrelated-config"); err != nil {
+	if _, err := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, "unrelated-config"); err != nil {
 		t.Fatalf("unrelated Config Set missing: %v", err)
 	}
 	if _, err := db.GetProviderProfileSetting(ctx, "doomed", codexconfig.ProviderID); !errors.Is(err, store.ErrNotFound) {
@@ -321,8 +313,8 @@ func TestApplicationDeletesGlobalProfileDataWithoutChangingExternalState(t *test
 		t.Fatalf("deleted Profile targets = %#v, err=%v", targets, err)
 	}
 	for _, operationID := range []string{"history-applied", "history-resolved"} {
-		if _, err := db.GetOperation(ctx, operationID); err != nil {
-			t.Fatalf("historical operation %q missing: %v", operationID, err)
+		if _, err := db.GetOperation(ctx, operationID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("Profile deletion retained operation %q: %v", operationID, err)
 		}
 	}
 	for _, providerID := range []string{codexconfig.ProviderID, agyconfig.ProviderID, claudecodeconfig.ProviderID, "generic"} {
@@ -330,21 +322,18 @@ func TestApplicationDeletesGlobalProfileDataWithoutChangingExternalState(t *test
 			t.Fatalf("Provider %q missing: %v", providerID, err)
 		}
 	}
-	if provider, err := db.GetProvider(ctx, agyconfig.ProviderID); err != nil || provider.Enabled {
-		t.Fatalf("disabled Provider changed: provider=%#v err=%v", provider, err)
-	}
 	contents, err := os.ReadFile(externalPath)
 	if err != nil || string(contents) != externalContent {
 		t.Fatalf("external tool state changed: content=%q err=%v", contents, err)
 	}
-	raw, err = sql.Open("sqlite", application.Runtime().StoreFactory().DatabasePath())
+	raw, err := sql.Open("sqlite", application.Runtime().StoreFactory().DatabasePath())
 	if err != nil {
 		t.Fatalf("reopen raw database: %v", err)
 	}
 	defer raw.Close()
 	var operationCount int
-	if err := raw.QueryRowContext(ctx, `SELECT COUNT(1) FROM operations`).Scan(&operationCount); err != nil || operationCount != 2 {
-		t.Fatalf("operations after delete = %d, err=%v, want preserved history only", operationCount, err)
+	if err := raw.QueryRowContext(ctx, `SELECT COUNT(1) FROM operations`).Scan(&operationCount); err != nil || operationCount != 0 {
+		t.Fatalf("operations after delete = %d, err=%v, want no related history", operationCount, err)
 	}
 }
 
@@ -374,8 +363,8 @@ func TestApplicationProfileDeleteRollsBackUnsupportedManagedData(t *testing.T) {
 				t.Fatalf("open store: %v", err)
 			}
 			providers := []store.CreateProviderParams{
-				{ID: agyconfig.ProviderID, Name: agyconfig.ProviderName, AdapterID: agyconfig.AdapterID, Enabled: true, MetadataJSON: `{}`},
-				{ID: test.providerID, Name: "Test", AdapterID: test.providerID, Enabled: true, MetadataJSON: `{}`},
+				{ID: agyconfig.ProviderID, Name: agyconfig.ProviderName, AdapterID: agyconfig.AdapterID, MetadataJSON: `{}`},
+				{ID: test.providerID, Name: "Test", AdapterID: test.providerID, MetadataJSON: `{}`},
 			}
 			if test.providerID == codexconfig.ProviderID {
 				providers[1].Name = codexpreset.ProviderName

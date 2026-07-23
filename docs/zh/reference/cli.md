@@ -134,10 +134,10 @@ profiledeck usage report [--provider codex] [--range today|7d|30d|all] [--json]
 以下命令是面向其他工具的高级 CLI 功能。Codex、Claude Code 和 Antigravity 必须使用上方各自的专用命令；通用文件目标命令不能管理它们保存的登录或设置。
 
 ```bash
-profiledeck provider list [--all] [--json]
+profiledeck provider list [--json]
 profiledeck provider show <id> [--json]
-profiledeck provider create <id> [--name NAME] [--adapter ID] [--disabled] [--metadata-json JSON] [--json]
-profiledeck provider update <id> [--name NAME] [--adapter ID] [--enabled] [--disabled] [--metadata-json JSON] [--json]
+profiledeck provider create <id> [--name NAME] [--adapter ID] [--metadata-json JSON] [--json]
+profiledeck provider update <id> [--name NAME] [--adapter ID] [--metadata-json JSON] [--json]
 profiledeck provider delete <id> --yes [--json]
 
 profiledeck profile list [--json]
@@ -147,7 +147,9 @@ profiledeck profile update <id> [--name NAME] [--description TEXT] [--metadata-j
 profiledeck profile delete <id> --yes [--json]
 ```
 
-以上四种 Profile 删除命令执行同一个全局删除。即使 Profile 只包含其他 Agent 的数据，从某个 Agent 命令进入也会删除整个 Profile。Profile 是任一 Agent 的当前 Profile，或存在未完成操作时，删除会停止。只有该 Profile 使用的已保存登录和配置集会一并删除；共享数据和无关的未绑定数据会保留。工具当前使用的登录、设置和文件不会改变。
+删除 Provider 会清除全部由它拥有的 ProfileDeck 数据，包括设置、已保存资源及绑定、文件目标、当前 Profile 状态、用量报告和已完成操作记录。全局 Profile、桌面端 Agent 偏好，以及工具当前使用的登录、设置和文件会保留。Provider 存在未完成操作时，删除会停止。
+
+以上四种 Profile 删除命令执行同一个全局删除。即使 Profile 只包含其他 Agent 的数据，从某个 Agent 命令进入也会删除整个 Profile。Profile 是任一 Agent 的当前 Profile，或存在未完成操作时，删除会停止。只有该 Profile 使用的已保存登录和配置集会一并删除；共享数据和无关的未绑定数据会保留。引用该 Profile 的已完成操作记录也会删除。工具当前使用的登录、设置和文件不会改变。
 
 文件目标命令：
 

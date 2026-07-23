@@ -68,7 +68,7 @@ func (factory Factory) OpenHealthy(ctx context.Context, readOnly bool) (*Store, 
 	if err != nil {
 		_ = db.Close()
 		if errors.Is(err, ErrUnsupportedSchema) {
-			return nil, apperror.New(apperror.StoreSchemaUnsupported, "this ProfileDeck version cannot open the existing local data; update ProfileDeck and try again")
+			return nil, apperror.New(apperror.StoreSchemaUnsupported, apperror.StoreSchemaUnsupportedMessage)
 		}
 		if errors.Is(err, ErrInvalidMigrationHistory) {
 			return nil, apperror.New(apperror.StoreSchemaInvalid, "ProfileDeck local data is not in a valid state; run profiledeck doctor or restore a known-good application backup")

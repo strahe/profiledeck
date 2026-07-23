@@ -50,7 +50,7 @@ func InspectHealth(ctx context.Context, db *store.Store) []doctorcore.Finding {
 		configBindingsByProfile[binding.ProfileID] = append(configBindingsByProfile[binding.ProfileID], binding)
 		profileIDs[binding.ProfileID] = struct{}{}
 	}
-	if active, activeErr := db.GetActiveState(ctx, store.ActiveStateScopeProvider, codexconfig.ProviderID); activeErr == nil {
+	if active, activeErr := db.GetActiveState(ctx, codexconfig.ProviderID); activeErr == nil {
 		profileIDs[active.ProfileID] = struct{}{}
 	} else if !errors.Is(activeErr, store.ErrNotFound) {
 		findings = append(findings, doctorcore.Finding{ID: "codex_active_state_check_failed", Level: doctorcore.LevelWarning, Message: "failed to inspect active Codex Profile"})

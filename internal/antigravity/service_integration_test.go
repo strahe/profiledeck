@@ -67,7 +67,7 @@ func newAntigravityTestEnvironment(t *testing.T, configDir string, client switch
 	)
 	return &antigravityTestEnvironment{
 		runtime: runtimeService, antigravity: antigravityService,
-		providers: provider.NewService(runtimeService.StoreFactory(), switchingService, agentService, agentRegistry),
+		providers: provider.NewService(runtimeService.StoreFactory(), switchingService, agentRegistry),
 		profiles:  profile.NewService(runtimeService.StoreFactory(), switchingService, profile.DeleteRegistry{}),
 		targets:   profiletarget.NewService(runtimeService.StoreFactory(), switchingService, agentService, agentRegistry),
 		switching: switchingService, doctor: doctorService,

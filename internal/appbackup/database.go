@@ -75,7 +75,7 @@ func prepareDatabaseForRestore(ctx context.Context, path string, applyRestoreRes
 }
 
 func unsupportedBackupSchemaError() *apperror.Error {
-	return apperror.New(apperror.BackupSchemaUnsupported, "this ProfileDeck version cannot open the selected backup; update ProfileDeck and try again")
+	return apperror.New(apperror.BackupSchemaUnsupported, apperror.BackupSchemaUnsupportedMessage)
 }
 
 func currentDatabaseHealthy(ctx context.Context, stores store.Factory) bool {

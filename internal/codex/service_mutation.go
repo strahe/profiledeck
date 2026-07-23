@@ -111,7 +111,7 @@ func (service *Service) CreateProfile(ctx context.Context, req CreateCodexProfil
 		Operation: "codex-profile-create", ProfileID: profileID, ProviderID: codexconfig.ProviderID, Record: false,
 	}, func(ctx context.Context, txStore *store.Store, currentOperationID string) error {
 		operationID = currentOperationID
-		currentProvider, hasProvider, err := codexPreflightProvider(ctx, txStore, home)
+		_, hasProvider, err := codexPreflightProvider(ctx, txStore, home)
 		if err != nil {
 			return err
 		}
@@ -128,6 +128,14 @@ func (service *Service) CreateProfile(ctx context.Context, req CreateCodexProfil
 				return apperror.New(apperror.ProfileAlreadyExists, "Codex profile already exists").WithDetail("profile_id", profileID)
 			}
 		}
+		providerMetadata, err := codexpreset.ProviderMetadataJSON(home)
+		if err != nil {
+			return apperror.Wrap(apperror.CodexInvalid, "failed to encode Codex provider metadata", err)
+		}
+		provider, err = upsertCodexProvider(ctx, txStore, providerMetadata, hasProvider)
+		if err != nil {
+			return err
+		}
 		configSet, err = resolveCreatedProfileConfigSet(ctx, txStore, payload.ConfigContent, req)
 		if err != nil {
 			return err
@@ -139,15 +147,6 @@ func (service *Service) CreateProfile(ctx context.Context, req CreateCodexProfil
 		if _, err := upsertCodexAuthCredential(ctx, txStore, credentialID, payload.AuthPayload); err != nil {
 			return err
 		}
-		providerMetadata, err := codexpreset.ProviderMetadataJSON(home)
-		if err != nil {
-			return apperror.Wrap(apperror.CodexInvalid, "failed to encode Codex provider metadata", err)
-		}
-		provider, err = upsertCodexProvider(ctx, txStore, providerMetadata, hasProvider)
-		if err != nil {
-			return err
-		}
-		_ = currentProvider
 		profile, err = upsertCodexProfile(ctx, txStore, profileID, fields, hasProfile)
 		if err != nil {
 			return err
@@ -159,8 +158,19 @@ func (service *Service) CreateProfile(ctx context.Context, req CreateCodexProfil
 		if err != nil {
 			return err
 		}
+		relatedProfileIDs, err := txStore.ListProviderResourceProfileIDs(
+			ctx,
+			codexconfig.ProviderID,
+			[]string{credentialID},
+			[]string{configSet.ID},
+		)
+		if err != nil {
+			return apperror.Wrap(apperror.StoreStatusFailed, "failed to resolve Profiles affected by Codex profile creation", err)
+		}
 		_, err = txStore.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
-			ID: operationID, ProfileID: profileID, ProviderID: codexconfig.ProviderID, MetadataJSON: metadata, SetActive: true,
+			ID: operationID, ProviderID: codexconfig.ProviderID,
+			RelatedProfileIDs: relatedProfileIDs, ActiveProfileID: profileID,
+			MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: metadata,
 		})
 		return err
 	})
@@ -291,7 +301,8 @@ func (service *Service) ForkProfile(ctx context.Context, req ForkCodexProfileReq
 			return err
 		}
 		_, err = txStore.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
-			ID: operationID, ProfileID: profileID, ProviderID: codexconfig.ProviderID, MetadataJSON: metadata,
+			ID: operationID, RelatedProfileIDs: []string{profileID}, ProviderID: codexconfig.ProviderID,
+			MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: metadata,
 		})
 		return err
 	})
@@ -323,7 +334,7 @@ func (service *Service) UpdateProfileConfigSet(ctx context.Context, req UpdateCo
 		Operation: "codex-profile-set-config", ProfileID: profileID, ProviderID: codexconfig.ProviderID, Record: false,
 	}, func(ctx context.Context, txStore *store.Store, currentOperationID string) error {
 		operationID = currentOperationID
-		if _, err := requireEnabledProvider(ctx, txStore); err != nil {
+		if _, err := requireCodexProvider(ctx, txStore); err != nil {
 			return err
 		}
 		active, exists, err := codexActiveState(ctx, txStore)
@@ -356,7 +367,8 @@ func (service *Service) UpdateProfileConfigSet(ctx context.Context, req UpdateCo
 			return err
 		}
 		_, err = txStore.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
-			ID: operationID, ProfileID: profileID, ProviderID: codexconfig.ProviderID, MetadataJSON: metadata,
+			ID: operationID, RelatedProfileIDs: []string{profileID}, ProviderID: codexconfig.ProviderID,
+			MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: metadata,
 		})
 		return err
 	})
@@ -445,8 +457,18 @@ func (service *Service) SaveActiveProfileState(ctx context.Context) (CodexProfil
 		if err != nil {
 			return err
 		}
+		relatedProfileIDs, err := txStore.ListProviderResourceProfileIDs(
+			ctx,
+			codexconfig.ProviderID,
+			[]string{credentialID},
+			[]string{configSet.ID},
+		)
+		if err != nil {
+			return apperror.Wrap(apperror.StoreStatusFailed, "failed to resolve Profiles affected by saved Codex state", err)
+		}
 		_, err = txStore.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
-			ID: operationID, ProfileID: profileID, ProviderID: codexconfig.ProviderID, MetadataJSON: metadata,
+			ID: operationID, RelatedProfileIDs: relatedProfileIDs, ProviderID: codexconfig.ProviderID,
+			MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: metadata,
 		})
 		return err
 	})
@@ -508,7 +530,7 @@ func resolveCreatedProfileConfigSet(ctx context.Context, db *store.Store, conten
 		return upsertCodexConfigSet(ctx, db, current.ID, current.Name, current.Description, content)
 	}
 	if !activeExists && newID == "" {
-		if shared, err := db.GetProviderConfigSet(ctx, codexSharedConfigSetID); err == nil {
+		if shared, err := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, codexSharedConfigSetID); err == nil {
 			if shared.ProviderID != codexconfig.ProviderID || shared.ConfigKind != codexpreset.ConfigSetKindTOML {
 				return store.ProviderConfigSet{}, apperror.New(apperror.CodexInvalid, "shared Codex config set has unsupported kind")
 			}
@@ -522,7 +544,7 @@ func resolveCreatedProfileConfigSet(ctx context.Context, db *store.Store, conten
 	if appErr != nil {
 		return store.ProviderConfigSet{}, appErr
 	}
-	if _, err := db.GetProviderConfigSet(ctx, id); err == nil {
+	if _, err := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, id); err == nil {
 		return store.ProviderConfigSet{}, apperror.New(apperror.ProfileAlreadyExists, "Codex config set already exists").WithDetail("config_set_id", id)
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return store.ProviderConfigSet{}, mapCodexConfigSetStoreError(err)
@@ -552,7 +574,7 @@ func copyForkedCodexConfigSet(ctx context.Context, db *store.Store, source store
 	if appErr != nil {
 		return store.ProviderConfigSet{}, appErr
 	}
-	if _, err := db.GetProviderConfigSet(ctx, id); err == nil {
+	if _, err := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, id); err == nil {
 		return store.ProviderConfigSet{}, apperror.New(apperror.ProfileAlreadyExists, "Codex config set already exists").WithDetail("config_set_id", id)
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return store.ProviderConfigSet{}, mapCodexConfigSetStoreError(err)

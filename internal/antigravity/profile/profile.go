@@ -97,7 +97,7 @@ func EnsureProvider(ctx context.Context, db *store.Store) error {
 		}
 		_, err = db.CreateProvider(ctx, store.CreateProviderParams{
 			ID: agyconfig.ProviderID, Name: agyconfig.ProviderName, AdapterID: agyconfig.AdapterID,
-			Enabled: true, MetadataJSON: string(metadata),
+			MetadataJSON: string(metadata),
 		})
 		return err
 	}
@@ -106,9 +106,6 @@ func EnsureProvider(ctx context.Context, db *store.Store) error {
 	}
 	if err := ValidateProvider(provider); err != nil {
 		return err
-	}
-	if !provider.Enabled {
-		return apperror.New(apperror.ProviderDisabled, "Antigravity Provider is disabled").WithDetail("provider_id", provider.ID)
 	}
 	name := agyconfig.ProviderName
 	_, err = db.UpdateProvider(ctx, store.UpdateProviderParams{ID: provider.ID, Name: &name})

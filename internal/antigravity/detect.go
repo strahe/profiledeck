@@ -44,9 +44,6 @@ func (service *Service) Detect(ctx context.Context) (AntigravityDetectResult, er
 		switch {
 		case providerErr == nil:
 			result.ProviderExists = true
-			if err := providerEnabled(provider); err != nil {
-				return AntigravityDetectResult{}, err
-			}
 			if err := validateAntigravityProvider(provider); err != nil {
 				result.ProviderCompatible = false
 				result.Warnings = append(result.Warnings, "Existing Antigravity Profiles use a saved setup that is not supported by this version of ProfileDeck")

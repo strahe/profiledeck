@@ -18,7 +18,7 @@ func TestBuildPlanRejectsNonRegularTarget(t *testing.T) {
 	if _, err := initSwitchingTestRuntime(ctx, configDir); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	fifoPath := filepath.Join(t.TempDir(), "target.fifo")
 	if err := syscall.Mkfifo(fifoPath, 0o600); err != nil {

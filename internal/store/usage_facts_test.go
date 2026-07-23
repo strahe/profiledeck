@@ -15,6 +15,7 @@ func TestUsageSchemaSupportsPartialCost(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("expected usage source to initialize, got %v", err)
@@ -43,6 +44,7 @@ func TestUsageFactsAreIdempotentAndSummarized(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("expected usage source, got %v", err)
@@ -99,6 +101,7 @@ func TestUsageFactsDeduplicateStableKeyWithEarlierObservationAndMonotonicCost(t 
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("expected usage source, got %v", err)
@@ -174,6 +177,7 @@ func TestUsageFactsPreferDatedCanonicalObservation(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("expected usage source, got %v", err)
@@ -244,6 +248,7 @@ func TestUsageSummaryReportsDistinctSources(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createUsageProviderFixture(t, ctx, db, "codex")
 	archiveSource, err := db.BeginUsageSync(ctx, "codex", "codex-archive-jsonl", 1)
 	if err != nil {
 		t.Fatalf("expected archive usage source, got %v", err)
@@ -295,6 +300,7 @@ func TestUpdateUnknownUsageFactCostsIsFilteredAtomicAndIdempotent(t *testing.T) 
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("expected usage source, got %v", err)

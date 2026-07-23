@@ -435,7 +435,7 @@ func requireAuthCredential(ctx context.Context, state switchplan.StateReader, cr
 }
 
 func requireConfigSet(ctx context.Context, state switchplan.StateReader, configSetID string) (switchplan.ConfigSet, error) {
-	configSet, err := state.GetConfigSet(ctx, configSetID)
+	configSet, err := state.GetConfigSet(ctx, codexconfig.ProviderID, configSetID)
 	if err != nil {
 		if errors.Is(err, switchplan.ErrStateNotFound) {
 			return switchplan.ConfigSet{}, apperror.New(apperror.CodexInvalid, "Codex config set not found")

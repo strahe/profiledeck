@@ -13,7 +13,8 @@ import (
 func TestBeginCodexUsageSyncRejectsCursorIdentityWithoutAdvancingGeneration(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	environment := newUsageTestEnvironment(t, configDir, "")
+	codexDir := t.TempDir()
+	environment := newUsageTestEnvironment(t, configDir, codexDir)
 	initialized, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx)
 	if err != nil {
 		t.Fatalf("initialize runtime: %v", err)
@@ -23,7 +24,8 @@ func TestBeginCodexUsageSyncRejectsCursorIdentityWithoutAdvancingGeneration(t *t
 		t.Fatalf("open Store: %v", err)
 	}
 	defer db.Close()
-	source, err := beginCodexUsageSync(ctx, db)
+	provisioner := codexProviderProvisioner{codexDir: codexDir}
+	source, err := beginCodexUsageSync(ctx, db, provisioner, SyncProvisionProvider)
 	if err != nil {
 		t.Fatalf("begin initial sync: %v", err)
 	}
@@ -49,7 +51,7 @@ func TestBeginCodexUsageSyncRejectsCursorIdentityWithoutAdvancingGeneration(t *t
 		t.Fatalf("close fixture database: %v", err)
 	}
 
-	if _, err := beginCodexUsageSync(ctx, db); !errors.Is(err, store.ErrUsageIdentityRevision) {
+	if _, err := beginCodexUsageSync(ctx, db, provisioner, SyncProvisionProvider); !errors.Is(err, store.ErrUsageIdentityRevision) {
 		t.Fatalf("cursor identity mismatch error = %v", err)
 	}
 	unchanged, err := db.GetUsageSource(ctx, ProviderCodex, SourceCodexSessionJSONL)

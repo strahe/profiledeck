@@ -53,11 +53,10 @@ type AntigravityProfileSummary struct {
 	CredentialReferenceCount int                 `json:"credential_reference_count"`
 	// ExpiresAtUnixMS remains available to machine-readable clients; human
 	// surfaces avoid presenting a short-lived access-token expiry as login health.
-	ExpiresAtUnixMS   int64    `json:"expires_at_unix_ms,omitempty"`
-	Active            bool     `json:"active"`
-	ActiveOperationID string   `json:"active_operation_id,omitempty"`
-	UpdatedAtUnixMS   int64    `json:"updated_at_unix_ms"`
-	Warnings          []string `json:"warnings,omitempty"`
+	ExpiresAtUnixMS int64    `json:"expires_at_unix_ms,omitempty"`
+	Active          bool     `json:"active"`
+	UpdatedAtUnixMS int64    `json:"updated_at_unix_ms"`
+	Warnings        []string `json:"warnings,omitempty"`
 }
 
 type AntigravityProfileListResult struct {
@@ -159,7 +158,7 @@ func (service *Service) CreateProfile(ctx context.Context, req CreateAntigravity
 	operationID := ""
 	err = service.maintenance.RunMaintenance(ctx, maintenance.Request{
 		Operation: "antigravity-profile-create", ProfileID: profileID, ProviderID: agyconfig.ProviderID,
-		MetadataJSON: metadata, SetActive: true, Record: true,
+		ActiveProfileID: profileID, MetadataJSON: metadata, Record: true,
 	}, func(ctx context.Context, tx *store.Store, currentOperationID string) error {
 		operationID = currentOperationID
 		backend, ok := service.targets.Backend(switchtarget.BackendKeyring)
@@ -324,7 +323,7 @@ func (service *Service) SaveActiveProfile(ctx context.Context) (AntigravityProfi
 		if err != nil {
 			return apperror.New(apperror.AntigravityInvalid, "Antigravity login is not supported by ProfileDeck")
 		}
-		active, err := tx.GetActiveState(ctx, store.ActiveStateScopeProvider, agyconfig.ProviderID)
+		active, err := tx.GetActiveState(ctx, agyconfig.ProviderID)
 		if errors.Is(err, store.ErrNotFound) {
 			return apperror.New(apperror.ProfileNotFound, "no active Antigravity profile")
 		}
@@ -351,8 +350,18 @@ func (service *Service) SaveActiveProfile(ctx context.Context) (AntigravityProfi
 		if err != nil {
 			return err
 		}
+		relatedProfileIDs, err := tx.ListProviderResourceProfileIDs(
+			ctx,
+			agyconfig.ProviderID,
+			[]string{credential.ID},
+			nil,
+		)
+		if err != nil {
+			return apperror.Wrap(apperror.StoreStatusFailed, "failed to resolve Profiles affected by the saved Antigravity login", err)
+		}
 		_, err = tx.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
-			ID: operationID, ProfileID: profileID, ProviderID: agyconfig.ProviderID, MetadataJSON: metadata,
+			ID: operationID, RelatedProfileIDs: relatedProfileIDs, ProviderID: agyconfig.ProviderID,
+			MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: metadata,
 		})
 		return err
 	})
@@ -440,10 +449,9 @@ func antigravityProfileSummary(ctx context.Context, db *store.Store, profileID s
 		return AntigravityProfileSummary{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to count Antigravity login references", err)
 	}
 	summary.CredentialReferenceCount = references
-	active, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, agyconfig.ProviderID)
+	active, err := db.GetActiveState(ctx, agyconfig.ProviderID)
 	if err == nil && active.ProfileID == profileID {
 		summary.Active = true
-		summary.ActiveOperationID = active.OperationID
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return AntigravityProfileSummary{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to read active Antigravity profile", err)
 	}
@@ -468,9 +476,6 @@ func requireAntigravityProvider(ctx context.Context, db *store.Store) (store.Pro
 		return store.Provider{}, mapProviderStoreError(err)
 	}
 	if err := validateAntigravityProvider(provider); err != nil {
-		return store.Provider{}, err
-	}
-	if err := providerEnabled(provider); err != nil {
 		return store.Provider{}, err
 	}
 	return provider, nil

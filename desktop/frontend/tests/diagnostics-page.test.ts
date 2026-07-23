@@ -94,6 +94,20 @@ describe("DiagnosticsPage confirmations", () => {
 		expect(screen.getByText(`路径：${path}`)).toBeInTheDocument();
 	});
 
+	it("shows actionable recovery guidance for unsupported local data", () => {
+		renderDiagnostics(doctorResult({
+			findings: [{
+				id: "database_schema_unsupported",
+				level: "error",
+				message: "Update ProfileDeck and try again",
+			}],
+		}));
+
+		expect(screen.getByText("Local data format is not supported")).toBeInTheDocument();
+		expect(screen.getByText(/Restore a compatible application backup/)).toBeInTheDocument();
+		expect(screen.queryByText(/Update ProfileDeck/)).not.toBeInTheDocument();
+	});
+
 	it("confirms recovery cleanup before invoking it", async () => {
 		const user = userEvent.setup();
 		const callbacks = renderDiagnostics(doctorResult({

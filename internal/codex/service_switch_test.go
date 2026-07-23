@@ -135,7 +135,7 @@ func TestCodexSwitchAlreadyMatchingTargetDoesNotPolluteOutgoingBindings(t *testi
 	if err != nil {
 		t.Fatalf("expected store open, got %v", err)
 	}
-	firstConfigSet, err := db.GetProviderConfigSet(ctx, first.Summary.ConfigSetID)
+	firstConfigSet, err := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, first.Summary.ConfigSetID)
 	if err != nil {
 		t.Fatalf("expected first config set, got %v", err)
 	}
@@ -144,7 +144,7 @@ func TestCodexSwitchAlreadyMatchingTargetDoesNotPolluteOutgoingBindings(t *testi
 		t.Fatalf("expected second detail, got %v", err)
 	}
 	secondCredentialBefore, _ := db.GetProviderCredential(ctx, second.Summary.CredentialID)
-	secondConfigBefore, _ := db.GetProviderConfigSet(ctx, second.Summary.ConfigSetID)
+	secondConfigBefore, _ := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, second.Summary.ConfigSetID)
 	_ = db.Close()
 	formattedTargetAuth := "{\n  \"tokens\": {\n    \"account_id\": \"first\",\n    \"access_token\": \"first-token\"\n  }\n}\n"
 	writeCodexProfileFixture(t, codexDir, firstConfigSet.PayloadText, formattedTargetAuth)
@@ -167,7 +167,7 @@ func TestCodexSwitchAlreadyMatchingTargetDoesNotPolluteOutgoingBindings(t *testi
 	}
 	defer db.Close()
 	secondCredentialAfter, _ := db.GetProviderCredential(ctx, second.Summary.CredentialID)
-	secondConfigAfter, _ := db.GetProviderConfigSet(ctx, second.Summary.ConfigSetID)
+	secondConfigAfter, _ := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, second.Summary.ConfigSetID)
 	if secondCredentialAfter.PayloadSHA256 != secondCredentialBefore.PayloadSHA256 || secondConfigAfter.PayloadSHA256 != secondConfigBefore.PayloadSHA256 {
 		t.Fatalf("expected outgoing bindings to remain unchanged")
 	}
@@ -193,9 +193,9 @@ func TestCodexSwitchDoesNotCaptureKnownOtherProfileIntoActiveProfile(t *testing.
 		t.Fatalf("expected store open, got %v", err)
 	}
 	firstCredentialBefore, _ := db.GetProviderCredential(ctx, first.Summary.CredentialID)
-	firstConfigBefore, _ := db.GetProviderConfigSet(ctx, first.Summary.ConfigSetID)
+	firstConfigBefore, _ := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, first.Summary.ConfigSetID)
 	secondCredentialBefore, _ := db.GetProviderCredential(ctx, second.Summary.CredentialID)
-	secondConfigBefore, _ := db.GetProviderConfigSet(ctx, second.Summary.ConfigSetID)
+	secondConfigBefore, _ := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, second.Summary.ConfigSetID)
 	_ = db.Close()
 	writeCodexProfileFixture(t, codexDir, secondConfigBefore.PayloadText, secondCredentialBefore.PayloadJSON)
 
@@ -222,9 +222,9 @@ func TestCodexSwitchDoesNotCaptureKnownOtherProfileIntoActiveProfile(t *testing.
 	}
 	defer db.Close()
 	firstCredentialAfter, _ := db.GetProviderCredential(ctx, first.Summary.CredentialID)
-	firstConfigAfter, _ := db.GetProviderConfigSet(ctx, first.Summary.ConfigSetID)
+	firstConfigAfter, _ := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, first.Summary.ConfigSetID)
 	secondCredentialAfter, _ := db.GetProviderCredential(ctx, second.Summary.CredentialID)
-	secondConfigAfter, _ := db.GetProviderConfigSet(ctx, second.Summary.ConfigSetID)
+	secondConfigAfter, _ := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, second.Summary.ConfigSetID)
 	if firstCredentialAfter.PayloadSHA256 != firstCredentialBefore.PayloadSHA256 || firstConfigAfter.PayloadSHA256 != firstConfigBefore.PayloadSHA256 ||
 		secondCredentialAfter.PayloadSHA256 != secondCredentialBefore.PayloadSHA256 || secondConfigAfter.PayloadSHA256 != secondConfigBefore.PayloadSHA256 {
 		t.Fatalf("expected Codex Profile resources to remain distinct")
@@ -311,7 +311,7 @@ func TestCodexSwitchDoesNotCaptureInvalidOrMissingWorkingCopies(t *testing.T) {
 		t.Fatalf("expected store open, got %v", err)
 	}
 	credentialBefore, _ := db.GetProviderCredential(ctx, second.Summary.CredentialID)
-	configBefore, _ := db.GetProviderConfigSet(ctx, second.Summary.ConfigSetID)
+	configBefore, _ := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, second.Summary.ConfigSetID)
 	_ = db.Close()
 	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.ConfigFileName), []byte("[invalid"), 0o600); err != nil {
 		t.Fatalf("expected invalid config setup, got %v", err)
@@ -339,7 +339,7 @@ func TestCodexSwitchDoesNotCaptureInvalidOrMissingWorkingCopies(t *testing.T) {
 	}
 	defer db.Close()
 	credentialAfter, _ := db.GetProviderCredential(ctx, second.Summary.CredentialID)
-	configAfter, _ := db.GetProviderConfigSet(ctx, second.Summary.ConfigSetID)
+	configAfter, _ := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, second.Summary.ConfigSetID)
 	if credentialAfter.PayloadSHA256 != credentialBefore.PayloadSHA256 || configAfter.PayloadSHA256 != configBefore.PayloadSHA256 {
 		t.Fatalf("expected invalid and missing working copies not to update outgoing resources")
 	}

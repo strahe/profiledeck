@@ -11,6 +11,7 @@ func TestUsageIntegrityRejectsCodexCursorBoundToAnotherProvider(t *testing.T) {
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
+	createUsageProviderFixture(t, ctx, db, "future-agent")
 	source, err := db.BeginUsageSync(ctx, "future-agent", "local-log", 1)
 	if err != nil {
 		t.Fatalf("begin non-Codex usage sync: %v", err)
@@ -34,6 +35,7 @@ func TestCodexUsageImportFileUsesCompareAndSwap(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("expected usage source, got %v", err)
@@ -73,6 +75,7 @@ func TestCodexUsageFinalizationCountsOnlyPersistedCursors(t *testing.T) {
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("begin usage sync: %v", err)
@@ -111,6 +114,7 @@ func TestCommitCodexUsageImportIsAtomicAndIdempotent(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("expected usage source, got %v", err)

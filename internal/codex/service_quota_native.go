@@ -81,7 +81,7 @@ func (service *Service) runCredentialJob(ctx context.Context, req RunCodexCreden
 			return err
 		}
 		defer db.Close()
-		if _, err := requireEnabledProvider(ctx, db); err != nil {
+		if _, err := requireCodexProvider(ctx, db); err != nil {
 			return err
 		}
 		var runErr error

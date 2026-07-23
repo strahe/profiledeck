@@ -2,11 +2,16 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 
 	bunmigrate "github.com/uptrace/bun/migrate"
 
 	"github.com/strahe/profiledeck/internal/store/migrations"
+	"github.com/strahe/profiledeck/internal/targetformat"
 )
 
 const (
@@ -16,6 +21,9 @@ const (
 	IntegrityIssueJSON        = "json"
 	IntegrityIssueReferences  = "references"
 	IntegrityIssueSystemState = "system_state"
+	IntegrityIssueContentHash = "content_hash"
+	IntegrityIssueMetadata    = "metadata"
+	IntegrityIssueTarget      = "target_registry"
 )
 
 type IntegrityScope string
@@ -47,14 +55,19 @@ type IntegrityReport struct {
 	Issues    []IntegrityIssue
 }
 
+// schemaContract is the complete immutable baseline after one migration.
+// Existing objects must be copied into later contracts before their specs change.
 type schemaContract struct {
-	migrationKey     string
-	tables           []string
-	indexes          []string
-	triggers         []string
-	jsonQueries      []string
-	referenceQueries []string
-	stateQueries     []string
+	migrationKey                   string
+	tableSpecs                     []tableSpec
+	indexSpecs                     []indexSpec
+	triggerSpecs                   []triggerSpec
+	jsonQueries                    []string
+	referenceQueries               []string
+	stateQueries                   []string
+	checkContentHashes             bool
+	operationMetadataSchemaVersion int
+	checkTargetRegistry            bool
 }
 
 var (
@@ -97,74 +110,70 @@ var (
 
 var schemaContracts = []schemaContract{
 	{
-		migrationKey: "initial_schema",
-		tables: []string{
-			"providers", "profiles", "provider_profile_settings", "settings",
-			"active_states", "operations", "provider_credentials",
-			"provider_config_sets", "profile_credential_bindings",
-			"profile_config_set_bindings",
-		},
-		indexes: []string{
-			"idx_providers_adapter_id", "idx_providers_enabled",
-			"idx_provider_profile_settings_provider_id", "idx_operations_status",
-			"idx_operations_operation_type", "idx_provider_credentials_provider_id",
-			"idx_provider_credentials_kind", "idx_provider_credentials_provider_id_id",
-			"idx_provider_config_sets_provider_id", "idx_provider_config_sets_kind",
-			"idx_provider_config_sets_provider_id_id",
-			"idx_profile_credential_bindings_provider_id",
-			"idx_profile_credential_bindings_credential_id",
-			"idx_profile_config_set_bindings_provider_id",
-			"idx_profile_config_set_bindings_config_set_id",
-		},
+		migrationKey: "stable_baseline",
+		tableSpecs:   stableBaselineTableSpecs,
+		indexSpecs:   stableBaselineIndexSpecs,
+		triggerSpecs: stableBaselineTriggerSpecs,
 		jsonQueries: []string{
 			`SELECT COUNT(1) FROM providers WHERE NOT (` + jsonObjectExpression("metadata_json") + `)`,
 			`SELECT COUNT(1) FROM profiles WHERE NOT (` + jsonObjectExpression("metadata_json") + `)`,
 			`SELECT COUNT(1) FROM settings WHERE json_valid(value_json) = 0`,
+			`SELECT COUNT(1) FROM provider_settings WHERE NOT (` + jsonObjectExpression("settings_json") + `)`,
+			`SELECT COUNT(1) FROM provider_profile_settings WHERE NOT (` + jsonObjectExpression("settings_json") + `)`,
 			`SELECT COUNT(1) FROM operations WHERE NOT (` + jsonObjectExpression("metadata_json") + `)`,
-			`SELECT COUNT(1) FROM provider_credentials WHERE NOT (` + jsonObjectExpression("payload_json") + `) OR NOT (` + jsonObjectExpression("metadata_json") + `)`,
+			`SELECT COUNT(1) FROM provider_credentials
+				WHERE NOT (` + jsonObjectExpression("payload_json") + `)
+					OR NOT (` + jsonObjectExpression("metadata_json") + `)`,
 			`SELECT COUNT(1) FROM provider_config_sets WHERE NOT (` + jsonObjectExpression("metadata_json") + `)`,
+			`SELECT COUNT(1) FROM profile_targets
+				WHERE NOT (` + jsonObjectExpression("value_json") + `)
+					OR NOT (` + jsonObjectExpression("metadata_json") + `)`,
+			`SELECT COUNT(1) FROM system_state WHERE json_valid(value_json) = 0`,
 		},
 		referenceQueries: []string{
+			`SELECT COUNT(1) FROM provider_settings AS value
+				WHERE NOT EXISTS (SELECT 1 FROM providers WHERE providers.id = value.provider_id)`,
 			`SELECT COUNT(1) FROM provider_profile_settings AS value
 				WHERE NOT EXISTS (SELECT 1 FROM profiles WHERE profiles.id = value.profile_id)
 					OR NOT EXISTS (SELECT 1 FROM providers WHERE providers.id = value.provider_id)`,
-			`SELECT COUNT(1) FROM active_states AS value
-				WHERE value.scope_type <> 'provider'
-					OR NOT EXISTS (SELECT 1 FROM providers WHERE providers.id = value.scope_id)
-					OR (value.profile_id <> '' AND NOT EXISTS (SELECT 1 FROM profiles WHERE profiles.id = value.profile_id))
-					OR (value.operation_id <> '' AND NOT EXISTS (SELECT 1 FROM operations WHERE operations.id = value.operation_id))`,
+			`SELECT COUNT(1) FROM provider_active_states AS value
+				WHERE NOT EXISTS (SELECT 1 FROM providers WHERE providers.id = value.provider_id)
+					OR NOT EXISTS (SELECT 1 FROM profiles WHERE profiles.id = value.profile_id)`,
+			`SELECT COUNT(1) FROM operations AS value
+				WHERE NOT EXISTS (SELECT 1 FROM providers WHERE providers.id = value.provider_id)
+					OR (value.source_operation_id IS NOT NULL AND NOT EXISTS (
+						SELECT 1 FROM operations AS source
+						WHERE source.id = value.source_operation_id
+							AND source.provider_id = value.provider_id
+					))`,
+			`SELECT COUNT(1) FROM operation_profiles AS value
+				WHERE NOT EXISTS (SELECT 1 FROM operations WHERE operations.id = value.operation_id)
+					OR NOT EXISTS (SELECT 1 FROM profiles WHERE profiles.id = value.profile_id)`,
 			`SELECT COUNT(1) FROM provider_credentials AS value
 				WHERE NOT EXISTS (SELECT 1 FROM providers WHERE providers.id = value.provider_id)`,
 			`SELECT COUNT(1) FROM provider_config_sets AS value
 				WHERE NOT EXISTS (SELECT 1 FROM providers WHERE providers.id = value.provider_id)`,
-		},
-	},
-	{
-		migrationKey: "profile_targets",
-		tables:       []string{"profile_targets"},
-		indexes:      []string{"idx_profile_targets_profile_id", "idx_profile_targets_provider_id", "idx_profile_targets_enabled", "idx_profile_targets_unique_path"},
-		triggers:     []string{"trg_profile_targets_path_owner_insert", "trg_profile_targets_path_owner_update"},
-		jsonQueries: []string{
-			`SELECT COUNT(1) FROM profile_targets WHERE NOT (` + jsonObjectExpression("value_json") + `) OR NOT (` + jsonObjectExpression("metadata_json") + `)`,
-		},
-		referenceQueries: []string{
+			`SELECT COUNT(1) FROM profile_credential_bindings AS value
+				WHERE NOT EXISTS (SELECT 1 FROM profiles WHERE profiles.id = value.profile_id)
+					OR NOT EXISTS (SELECT 1 FROM providers WHERE providers.id = value.provider_id)
+					OR NOT EXISTS (
+						SELECT 1 FROM provider_credentials
+						WHERE provider_credentials.provider_id = value.provider_id
+							AND provider_credentials.id = value.credential_id
+					)`,
+			`SELECT COUNT(1) FROM profile_config_set_bindings AS value
+				WHERE NOT EXISTS (SELECT 1 FROM profiles WHERE profiles.id = value.profile_id)
+					OR NOT EXISTS (SELECT 1 FROM providers WHERE providers.id = value.provider_id)
+					OR NOT EXISTS (
+						SELECT 1 FROM provider_config_sets
+						WHERE provider_config_sets.provider_id = value.provider_id
+							AND provider_config_sets.id = value.config_set_id
+					)`,
 			`SELECT COUNT(1) FROM profile_targets AS value
 				WHERE NOT EXISTS (SELECT 1 FROM profiles WHERE profiles.id = value.profile_id)
 					OR NOT EXISTS (SELECT 1 FROM providers WHERE providers.id = value.provider_id)`,
-		},
-	},
-	{
-		migrationKey: "usage",
-		tables: []string{
-			"usage_sources", "usage_sessions", "usage_models", "usage_facts",
-			"codex_usage_import_files",
-		},
-		indexes: []string{
-			"idx_usage_sources_provider_source", "idx_usage_sessions_source_session",
-			"idx_usage_models_source_model", "idx_usage_facts_event_key",
-			"idx_usage_facts_source_time", "idx_usage_facts_source_cost_model_id",
-		},
-		referenceQueries: []string{
+			`SELECT COUNT(1) FROM usage_sources AS value
+				WHERE NOT EXISTS (SELECT 1 FROM providers WHERE providers.id = value.provider_id)`,
 			`SELECT COUNT(1) FROM usage_sessions AS value
 				WHERE NOT EXISTS (SELECT 1 FROM usage_sources WHERE usage_sources.id = value.source_id)`,
 			`SELECT COUNT(1) FROM usage_models AS value
@@ -173,11 +182,13 @@ var schemaContracts = []schemaContract{
 				WHERE NOT EXISTS (SELECT 1 FROM usage_sources WHERE usage_sources.id = value.source_id)
 					OR (value.session_id IS NOT NULL AND NOT EXISTS (
 						SELECT 1 FROM usage_sessions
-						WHERE usage_sessions.id = value.session_id AND usage_sessions.source_id = value.source_id
+						WHERE usage_sessions.id = value.session_id
+							AND usage_sessions.source_id = value.source_id
 					))
 					OR NOT EXISTS (
 						SELECT 1 FROM usage_models
-						WHERE usage_models.id = value.model_id AND usage_models.source_id = value.source_id
+						WHERE usage_models.id = value.model_id
+							AND usage_models.source_id = value.source_id
 					)`,
 			`SELECT COUNT(1) FROM codex_usage_import_files AS value
 				WHERE NOT EXISTS (
@@ -187,14 +198,18 @@ var schemaContracts = []schemaContract{
 						AND usage_sources.identity_revision = value.identity_revision
 				)`,
 		},
-	},
-	{
-		migrationKey: "system_state",
-		tables:       []string{"system_state"},
-		jsonQueries: []string{
-			`SELECT COUNT(1) FROM system_state WHERE json_valid(value_json) = 0`,
-		},
 		stateQueries: []string{
+			fmt.Sprintf(`SELECT COUNT(1) FROM provider_settings
+				WHERE schema_version <> %d`, stableBaselineProviderSettingsSchemaVersion),
+			fmt.Sprintf(`SELECT COUNT(1) FROM provider_profile_settings
+				WHERE schema_version <> %d`, stableBaselineProviderSettingsSchemaVersion),
+			`SELECT COUNT(1) FROM provider_active_states
+				WHERE revision <= 0`,
+			fmt.Sprintf(`SELECT COUNT(1) FROM operations
+				WHERE metadata_schema_version <> %d
+					OR (operation_type = 'recovery' AND source_operation_id IS NULL)
+					OR (operation_type <> 'recovery' AND source_operation_id IS NOT NULL)`,
+				stableBaselineOperationMetadataSchemaVersion),
 			`SELECT COUNT(1) FROM system_state
 				WHERE key <> 'recovery.cleanup_required'
 					OR CASE
@@ -203,10 +218,9 @@ var schemaContracts = []schemaContract{
 						ELSE 1
 					END = 1`,
 		},
-	},
-	{
-		migrationKey: "profile_target_path_lookup",
-		indexes:      []string{"idx_profile_targets_path_key"},
+		checkContentHashes:             true,
+		operationMetadataSchemaVersion: stableBaselineOperationMetadataSchemaVersion,
+		checkTargetRegistry:            true,
 	},
 }
 
@@ -349,76 +363,268 @@ func (s *Store) InspectIntegrity(ctx context.Context, scope IntegrityScope) (Int
 	if err != nil {
 		return IntegrityReport{}, err
 	}
-	report := IntegrityReport{Healthy: true, Migration: state, Issues: []IntegrityIssue{}}
-	addIssue := func(kind string, count int) {
-		if count <= 0 {
-			return
-		}
-		for _, issue := range report.Issues {
-			if issue.Kind == kind {
-				return
-			}
-		}
-		report.Healthy = false
-		report.Issues = append(report.Issues, IntegrityIssue{Kind: kind, Count: count})
-	}
-
-	if err := s.QuickCheck(ctx); err != nil {
-		if !errors.Is(err, ErrQuickCheckFailed) {
-			return IntegrityReport{}, err
-		}
-		addIssue(IntegrityIssueQuickCheck, 1)
-		return report, nil
-	}
-
-	contractCount := state.Applied
-	if scope == IntegrityCurrentBaseline {
-		contractCount = len(schemaContracts)
-		if !state.Current {
-			addIssue(IntegrityIssueSchema, 1)
-		}
-	} else if scope != IntegrityAppliedBaseline {
+	var contract *schemaContract
+	switch scope {
+	case IntegrityAppliedBaseline:
+		contract, err = schemaContractForApplied(state.Applied)
+	case IntegrityCurrentBaseline:
+		contract, err = schemaContractForApplied(len(schemaContracts))
+	default:
 		return IntegrityReport{}, errors.New("unknown integrity scope")
 	}
-	schemaHealthy, err := s.schemaHealthyForApplied(ctx, contractCount)
 	if err != nil {
 		return IntegrityReport{}, err
 	}
-	if !schemaHealthy {
-		addIssue(IntegrityIssueSchema, 1)
-		return report, nil
+	issues, err := s.inspectContractIntegrity(ctx, contract)
+	if err != nil {
+		return IntegrityReport{}, err
+	}
+	if scope == IntegrityCurrentBaseline && !state.Current {
+		issues = addIntegrityIssue(issues, IntegrityIssueSchema, 1)
+	}
+	return IntegrityReport{
+		Healthy:   len(issues) == 0,
+		Migration: state,
+		Issues:    issues,
+	}, nil
+}
+
+func (s *Store) inspectContractIntegrity(
+	ctx context.Context,
+	contract *schemaContract,
+) ([]IntegrityIssue, error) {
+	issues := []IntegrityIssue{}
+	if err := s.QuickCheck(ctx); err != nil {
+		if !errors.Is(err, ErrQuickCheckFailed) {
+			return nil, err
+		}
+		issues = addIntegrityIssue(issues, IntegrityIssueQuickCheck, 1)
+	}
+
+	if contract != nil {
+		schemaHealthy, err := s.schemaContractHealthy(ctx, *contract)
+		if err != nil {
+			return nil, err
+		}
+		if !schemaHealthy {
+			return addIntegrityIssue(issues, IntegrityIssueSchema, 1), nil
+		}
 	}
 
 	foreignKeys, err := s.foreignKeyViolationCount(ctx)
 	if err != nil {
-		return IntegrityReport{}, err
+		return nil, err
 	}
-	addIssue(IntegrityIssueForeignKeys, foreignKeys)
+	issues = addIntegrityIssue(issues, IntegrityIssueForeignKeys, foreignKeys)
+	if contract == nil {
+		return issues, nil
+	}
 
-	jsonInvalid, err := s.contractQueryCount(ctx, contractCount, func(contract schemaContract) []string {
-		return contract.jsonQueries
-	})
-	if err != nil {
-		return IntegrityReport{}, err
+	for _, check := range []struct {
+		kind    string
+		queries []string
+	}{
+		{kind: IntegrityIssueJSON, queries: contract.jsonQueries},
+		{kind: IntegrityIssueReferences, queries: contract.referenceQueries},
+		{kind: IntegrityIssueSystemState, queries: contract.stateQueries},
+	} {
+		count, err := s.queryViolationCount(ctx, check.queries)
+		if err != nil {
+			return nil, err
+		}
+		issues = addIntegrityIssue(issues, check.kind, count)
 	}
-	addIssue(IntegrityIssueJSON, jsonInvalid)
 
-	referencesInvalid, err := s.contractQueryCount(ctx, contractCount, func(contract schemaContract) []string {
-		return contract.referenceQueries
-	})
-	if err != nil {
-		return IntegrityReport{}, err
+	if contract.checkContentHashes {
+		hashInvalid, err := s.contentHashViolationCount(ctx)
+		if err != nil {
+			return nil, err
+		}
+		issues = addIntegrityIssue(issues, IntegrityIssueContentHash, hashInvalid)
 	}
-	addIssue(IntegrityIssueReferences, referencesInvalid)
 
-	stateInvalid, err := s.contractQueryCount(ctx, contractCount, func(contract schemaContract) []string {
-		return contract.stateQueries
-	})
-	if err != nil {
-		return IntegrityReport{}, err
+	if contract.operationMetadataSchemaVersion > 0 {
+		metadataInvalid, err := s.operationMetadataViolationCount(
+			ctx,
+			contract.operationMetadataSchemaVersion,
+		)
+		if err != nil {
+			return nil, err
+		}
+		issues = addIntegrityIssue(issues, IntegrityIssueMetadata, metadataInvalid)
 	}
-	addIssue(IntegrityIssueSystemState, stateInvalid)
-	return report, nil
+
+	if contract.checkTargetRegistry {
+		targetInvalid, err := s.profileTargetRegistryViolationCount(ctx)
+		if err != nil {
+			return nil, err
+		}
+		issues = addIntegrityIssue(issues, IntegrityIssueTarget, targetInvalid)
+	}
+	return issues, nil
+}
+
+func addIntegrityIssue(issues []IntegrityIssue, kind string, count int) []IntegrityIssue {
+	if count <= 0 {
+		return issues
+	}
+	for _, issue := range issues {
+		if issue.Kind == kind {
+			return issues
+		}
+	}
+	return append(issues, IntegrityIssue{Kind: kind, Count: count})
+}
+
+func (s *Store) contentHashViolationCount(ctx context.Context) (int, error) {
+	count := 0
+	for _, query := range []string{
+		`SELECT payload_json, payload_sha256 FROM provider_credentials`,
+		`SELECT payload_text, payload_sha256 FROM provider_config_sets`,
+	} {
+		rows, err := s.executor().QueryContext(ctx, query)
+		if err != nil {
+			return 0, err
+		}
+		for rows.Next() {
+			var payload, storedHash string
+			if err := rows.Scan(&payload, &storedHash); err != nil {
+				_ = rows.Close()
+				return 0, err
+			}
+			sum := sha256.Sum256([]byte(payload))
+			if hex.EncodeToString(sum[:]) != storedHash {
+				count++
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		if err := rows.Close(); err != nil {
+			return 0, err
+		}
+	}
+	return count, nil
+}
+
+func (s *Store) operationMetadataViolationCount(
+	ctx context.Context,
+	expectedSchemaVersion int,
+) (int, error) {
+	// Each metadata version needs its own decoder before it can become part of
+	// a later integrity contract; never interpret an unknown version as V1.
+	if expectedSchemaVersion != stableBaselineOperationMetadataSchemaVersion {
+		return 0, ErrUnsupportedSchema
+	}
+	type operationMetadataRecord struct {
+		id         string
+		providerID string
+		version    int
+		raw        string
+	}
+	rows, err := s.executor().QueryContext(
+		ctx,
+		`SELECT id, provider_id, metadata_schema_version, metadata_json
+		FROM operations
+		ORDER BY id ASC`,
+	)
+	if err != nil {
+		return 0, err
+	}
+	records := []operationMetadataRecord{}
+	for rows.Next() {
+		var record operationMetadataRecord
+		if err := rows.Scan(&record.id, &record.providerID, &record.version, &record.raw); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+
+	profileIDsByOperation := make(map[string][]string)
+	rows, err = s.executor().QueryContext(
+		ctx,
+		`SELECT operation_id, profile_id
+		FROM operation_profiles
+		ORDER BY operation_id ASC, profile_id ASC`,
+	)
+	if err != nil {
+		return 0, err
+	}
+	for rows.Next() {
+		var operationID, profileID string
+		if err := rows.Scan(&operationID, &profileID); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		profileIDsByOperation[operationID] = append(profileIDsByOperation[operationID], profileID)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for _, record := range records {
+		if record.version != expectedSchemaVersion {
+			count++
+			continue
+		}
+		var metadata struct {
+			ProviderID        string   `json:"provider_id"`
+			RelatedProfileIDs []string `json:"related_profile_ids"`
+		}
+		if err := json.Unmarshal([]byte(record.raw), &metadata); err != nil ||
+			metadata.ProviderID != record.providerID {
+			count++
+			continue
+		}
+		profileIDs := profileIDsByOperation[record.id]
+		// The normalized comparison checks set equality; the raw length check
+		// rejects duplicates or blank values that normalization would hide.
+		if !equalStrings(uniqueNonEmptyStrings(metadata.RelatedProfileIDs), profileIDs) ||
+			len(metadata.RelatedProfileIDs) != len(profileIDs) {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (s *Store) profileTargetRegistryViolationCount(ctx context.Context) (int, error) {
+	rows, err := s.executor().QueryContext(
+		ctx,
+		`SELECT format, strategy
+		FROM profile_targets
+		ORDER BY profile_id, provider_id, target_id`,
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	registry := targetformat.BuiltinRegistry()
+	count := 0
+	for rows.Next() {
+		var format, strategy string
+		if err := rows.Scan(&format, &strategy); err != nil {
+			return 0, err
+		}
+		if !registry.AllowsCanonical(format, strategy) {
+			count++
+		}
+	}
+	return count, rows.Err()
 }
 
 func (s *Store) foreignKeyViolationCount(ctx context.Context) (int, error) {
@@ -440,30 +646,32 @@ func (s *Store) foreignKeyViolationCount(ctx context.Context) (int, error) {
 	return count, rows.Err()
 }
 
-func (s *Store) contractQueryCount(
-	ctx context.Context,
-	contractCount int,
-	queries func(schemaContract) []string,
-) (int, error) {
+func (s *Store) queryViolationCount(ctx context.Context, queries []string) (int, error) {
 	total := 0
-	if contractCount > len(schemaContracts) {
-		return 0, ErrUnsupportedSchema
-	}
-	for _, contract := range schemaContracts[:contractCount] {
-		for _, query := range queries(contract) {
-			var count int
-			if err := s.executor().QueryRowContext(ctx, query).Scan(&count); err != nil {
-				return 0, err
-			}
-			total += count
+	for _, query := range queries {
+		var count int
+		if err := s.executor().QueryRowContext(ctx, query).Scan(&count); err != nil {
+			return 0, err
 		}
+		total += count
 	}
 	return total, nil
 }
 
-func (s *Store) schemaHealthyForApplied(ctx context.Context, applied int) (bool, error) {
+func schemaContractForApplied(applied int) (*schemaContract, error) {
 	if applied < 0 || applied > len(schemaContracts) {
-		return false, ErrUnsupportedSchema
+		return nil, ErrUnsupportedSchema
+	}
+	if applied == 0 {
+		return nil, nil
+	}
+	return &schemaContracts[applied-1], nil
+}
+
+func (s *Store) schemaHealthyForApplied(ctx context.Context, applied int) (bool, error) {
+	contract, err := schemaContractForApplied(applied)
+	if err != nil {
+		return false, err
 	}
 	if applied > 0 {
 		ok, err := s.objectExists(ctx, "table", "bun_migrations")
@@ -471,64 +679,89 @@ func (s *Store) schemaHealthyForApplied(ctx context.Context, applied int) (bool,
 			return false, err
 		}
 	}
-	tables := tableSpecsByName(initialTableSpecs)
-	indexes := indexSpecsByName(initialIndexSpecs)
-	triggers := triggerSpecsByName(initialTriggerSpecs)
-	for _, contract := range schemaContracts[:applied] {
-		for _, name := range contract.tables {
-			spec, ok := tables[name]
-			if !ok {
-				return false, nil
-			}
-			ok, err := s.tableSchemaHealthy(ctx, spec)
-			if err != nil || !ok {
-				return false, err
-			}
+	if contract == nil {
+		return true, nil
+	}
+	return s.schemaContractHealthy(ctx, *contract)
+}
+
+func (s *Store) schemaContractHealthy(ctx context.Context, contract schemaContract) (bool, error) {
+	for _, spec := range contract.tableSpecs {
+		ok, err := s.tableSchemaHealthy(ctx, spec)
+		if err != nil || !ok {
+			return false, err
 		}
-		for _, name := range contract.indexes {
-			spec, ok := indexes[name]
-			if !ok {
-				return false, nil
-			}
-			ok, err := s.indexSchemaHealthy(ctx, spec)
-			if err != nil || !ok {
-				return false, err
-			}
+	}
+	for _, spec := range contract.indexSpecs {
+		ok, err := s.indexSchemaHealthy(ctx, spec)
+		if err != nil || !ok {
+			return false, err
 		}
-		for _, name := range contract.triggers {
-			spec, ok := triggers[name]
-			if !ok {
-				return false, nil
-			}
-			ok, err := s.triggerSchemaHealthy(ctx, spec)
-			if err != nil || !ok {
-				return false, err
-			}
+	}
+	for _, spec := range contract.triggerSpecs {
+		ok, err := s.triggerSchemaHealthy(ctx, spec)
+		if err != nil || !ok {
+			return false, err
 		}
 	}
 	return true, nil
 }
 
-func tableSpecsByName(specs []tableSpec) map[string]tableSpec {
-	result := make(map[string]tableSpec, len(specs))
-	for _, spec := range specs {
-		result[spec.name] = spec
+// validateUnmarkedStableBaseline prevents IF NOT EXISTS from filling in a
+// partial Beta or drifted schema. A missing marker is replay-safe only when
+// every existing application table already forms one valid Stable baseline.
+func (s *Store) validateUnmarkedStableBaseline(ctx context.Context) error {
+	rows, err := s.executor().QueryContext(ctx, `
+		SELECT name
+		FROM sqlite_schema
+		WHERE type = 'table'
+			AND name NOT LIKE 'sqlite_%'
+			AND name NOT IN ('bun_migrations', 'bun_migration_locks')
+		ORDER BY name ASC
+	`)
+	if err != nil {
+		return err
 	}
-	return result
-}
+	tableNames := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		tableNames = append(tableNames, name)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(tableNames) == 0 {
+		return nil
+	}
 
-func indexSpecsByName(specs []indexSpec) map[string]indexSpec {
-	result := make(map[string]indexSpec, len(specs))
-	for _, spec := range specs {
-		result[spec.name] = spec
+	baseline := &schemaContracts[0]
+	expectedTables := make(map[string]struct{}, len(baseline.tableSpecs))
+	for _, spec := range baseline.tableSpecs {
+		expectedTables[spec.name] = struct{}{}
 	}
-	return result
-}
+	if len(tableNames) != len(expectedTables) {
+		return ErrUnsupportedSchema
+	}
+	for _, name := range tableNames {
+		if _, ok := expectedTables[name]; !ok {
+			return ErrUnsupportedSchema
+		}
+	}
 
-func triggerSpecsByName(specs []triggerSpec) map[string]triggerSpec {
-	result := make(map[string]triggerSpec, len(specs))
-	for _, spec := range specs {
-		result[spec.name] = spec
+	issues, err := s.inspectContractIntegrity(ctx, baseline)
+	if err != nil {
+		return err
 	}
-	return result
+	if len(issues) != 0 {
+		return ErrUnsupportedSchema
+	}
+	return nil
 }

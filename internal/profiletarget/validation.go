@@ -11,18 +11,19 @@ import (
 	"strings"
 
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/targetformat"
 )
 
 const (
-	FormatText = "text"
-	FormatJSON = "json"
-	FormatTOML = "toml"
-	FormatEnv  = "env"
+	FormatText = targetformat.FormatText
+	FormatJSON = targetformat.FormatJSON
+	FormatTOML = targetformat.FormatTOML
+	FormatEnv  = targetformat.FormatEnv
 
-	StrategyReplaceFile = "replace-file"
-	StrategyJSONMerge   = "json-merge"
-	StrategyTOMLMerge   = "toml-merge"
-	StrategyEnvMerge    = "env-merge"
+	StrategyReplaceFile = targetformat.StrategyReplaceFile
+	StrategyJSONMerge   = targetformat.StrategyJSONMerge
+	StrategyTOMLMerge   = targetformat.StrategyTOMLMerge
+	StrategyEnvMerge    = targetformat.StrategyEnvMerge
 
 	MaxPreviewBytes = 4096
 	RedactedValue   = "[REDACTED]"
@@ -106,37 +107,22 @@ func Normalize(formatValue, strategyValue, rawValueJSON string) (string, string,
 
 func ValidateFormat(value string) (string, *apperror.Error) {
 	value = strings.TrimSpace(value)
-	switch value {
-	case FormatText, FormatJSON, FormatTOML, FormatEnv:
+	if targetformat.BuiltinRegistry().HasFormat(value) {
 		return value, nil
-	default:
-		return "", apperror.New(apperror.TargetInvalid, "target format is invalid")
 	}
+	return "", apperror.New(apperror.TargetInvalid, "target format is invalid")
 }
 
 func ValidateStrategy(value string) (string, *apperror.Error) {
 	value = strings.TrimSpace(value)
-	switch value {
-	case StrategyReplaceFile, StrategyJSONMerge, StrategyTOMLMerge, StrategyEnvMerge:
+	if targetformat.BuiltinRegistry().HasStrategy(value) {
 		return value, nil
-	default:
-		return "", apperror.New(apperror.TargetInvalid, "target strategy is invalid")
 	}
+	return "", apperror.New(apperror.TargetInvalid, "target strategy is invalid")
 }
 
 func FormatStrategyAllowed(format, strategy string) bool {
-	switch strategy {
-	case StrategyReplaceFile:
-		return format == FormatText || format == FormatJSON || format == FormatTOML || format == FormatEnv
-	case StrategyJSONMerge:
-		return format == FormatJSON
-	case StrategyTOMLMerge:
-		return format == FormatTOML
-	case StrategyEnvMerge:
-		return format == FormatEnv
-	default:
-		return false
-	}
+	return targetformat.BuiltinRegistry().Allows(format, strategy)
 }
 
 // ValidateValueShape rejects ambiguous target values before they reach a target backend.

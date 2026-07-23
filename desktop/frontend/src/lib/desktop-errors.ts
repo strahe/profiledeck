@@ -29,7 +29,6 @@ const userErrorKeys: Record<string, string> = {
 	PROVIDER_IN_USE: "errors.providerInUse",
 	PROVIDER_INVALID: "errors.providerInvalid",
 	PROVIDER_NOT_FOUND: "errors.providerNotFound",
-	PROVIDER_DISABLED: "errors.providerDisabled",
 	PROFILE_EXISTS: "errors.profileExists",
 	PROFILE_IN_USE: "errors.profileInUse",
 	PROFILE_INVALID: "errors.profileInvalid",

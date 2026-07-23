@@ -168,9 +168,6 @@ func (service *Service) buildApplyPlan(ctx context.Context, db *store.Store, pro
 	if err != nil {
 		return applyPlan{}, mapProfileStoreError(err)
 	}
-	if !provider.Enabled {
-		return applyPlan{}, apperror.New(apperror.ProviderDisabled, "provider is disabled")
-	}
 	dependencies := service.dependencies
 	adapter, ok := dependencies.Adapters.ManagedAdapter(provider.ID)
 	if !ok {

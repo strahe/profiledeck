@@ -2,8 +2,10 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,7 +44,7 @@ func newProviderTestEnvironment(t *testing.T, configDir string, access agent.Acc
 	return &providerTestEnvironment{
 		runtime: runtimeService,
 		agents:  agentService,
-		service: NewService(runtimeService.StoreFactory(), maintenance, agentService, registry),
+		service: NewService(runtimeService.StoreFactory(), maintenance, registry),
 	}
 }
 
@@ -50,7 +52,7 @@ func TestServiceRequiresHealthyInitializedStore(t *testing.T) {
 	ctx := context.Background()
 	configDir := filepath.Join(t.TempDir(), "config")
 	environment := newProviderTestEnvironment(t, configDir, agent.AccessUnrestricted)
-	_, err := environment.service.List(ctx, ListRequest{})
+	_, err := environment.service.List(ctx)
 	assertProviderErrorCode(t, err, apperror.StoreNotInitialized)
 	if _, err := os.Stat(configDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("Provider read created runtime directory: %v", err)
@@ -66,7 +68,7 @@ func TestServiceRequiresHealthyInitializedStore(t *testing.T) {
 	if err := file.Close(); err != nil {
 		t.Fatalf("close empty database: %v", err)
 	}
-	_, err = environment.service.List(ctx, ListRequest{})
+	_, err = environment.service.List(ctx)
 	assertProviderErrorCode(t, err, apperror.StoreSchemaInvalid)
 }
 
@@ -133,21 +135,20 @@ func TestServiceCRUDAndSharedLock(t *testing.T) {
 	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
-	disabled := false
 	created, err := environment.service.Create(ctx, CreateRequest{
-		ID: "provider-b", Name: "Provider B", AdapterID: "generic", Enabled: &disabled,
+		ID: "provider-b", Name: "Provider B", AdapterID: "generic",
 	})
-	if err != nil || created.Enabled {
-		t.Fatalf("unexpected disabled Provider create: value=%#v err=%v", created, err)
+	if err != nil || created.ID != "provider-b" {
+		t.Fatalf("create Provider: value=%#v err=%v", created, err)
 	}
-	listed, err := environment.service.List(ctx, ListRequest{})
-	if err != nil || len(listed) != 0 {
-		t.Fatalf("disabled Provider should be hidden: values=%#v err=%v", listed, err)
+	listed, err := environment.service.List(ctx)
+	if err != nil || len(listed) != 1 || listed[0].ID != "provider-b" {
+		t.Fatalf("list Provider: values=%#v err=%v", listed, err)
 	}
-	enabled := true
-	updated, err := environment.service.Update(ctx, UpdateRequest{ID: "provider-b", Enabled: &enabled})
-	if err != nil || !updated.Enabled {
-		t.Fatalf("enable Provider: value=%#v err=%v", updated, err)
+	name := "Provider B Updated"
+	updated, err := environment.service.Update(ctx, UpdateRequest{ID: "provider-b", Name: &name})
+	if err != nil || updated.Name != name {
+		t.Fatalf("update Provider: value=%#v err=%v", updated, err)
 	}
 	_, err = environment.service.Update(ctx, UpdateRequest{ID: "provider-b"})
 	assertProviderErrorCode(t, err, apperror.ProviderInvalid)
@@ -156,7 +157,7 @@ func TestServiceCRUDAndSharedLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire fixture lock: %v", err)
 	}
-	_, err = environment.service.Update(ctx, UpdateRequest{ID: "provider-b", Enabled: &disabled})
+	_, err = environment.service.Update(ctx, UpdateRequest{ID: "provider-b", Name: &name})
 	assertProviderErrorCode(t, err, apperror.LockAcquireFailed)
 	_, err = environment.service.Delete(ctx, "provider-b", true)
 	assertProviderErrorCode(t, err, apperror.LockAcquireFailed)
@@ -180,7 +181,7 @@ func TestServiceRejectsGenericManagedProviderCreate(t *testing.T) {
 	assertProviderErrorCode(t, err, apperror.ProviderInvalid)
 }
 
-func TestDesktopAgentPolicyCoversManagedProviderCRUD(t *testing.T) {
+func TestDesktopAgentPreferenceDoesNotGateProviderData(t *testing.T) {
 	ctx := context.Background()
 	environment := newProviderTestEnvironment(t, t.TempDir(), agent.AccessDesktopPreferences)
 	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
@@ -191,7 +192,7 @@ func TestDesktopAgentPolicyCoversManagedProviderCRUD(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
-		ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: "{}",
+		ID: "codex", Name: "Codex", AdapterID: "codex", MetadataJSON: "{}",
 	}); err != nil {
 		_ = db.Close()
 		t.Fatalf("seed managed Provider: %v", err)
@@ -208,21 +209,19 @@ func TestDesktopAgentPolicyCoversManagedProviderCRUD(t *testing.T) {
 		t.Fatalf("disable Codex Agent: %v", err)
 	}
 
-	_, err = environment.service.Get(ctx, "codex")
-	assertProviderErrorCode(t, err, apperror.AgentDisabled)
-	disabled := false
-	_, err = environment.service.Update(ctx, UpdateRequest{ID: "codex", Enabled: &disabled})
-	assertProviderErrorCode(t, err, apperror.AgentDisabled)
-	_, err = environment.service.Delete(ctx, "codex", true)
-	assertProviderErrorCode(t, err, apperror.AgentDisabled)
-	_, err = environment.service.Create(ctx, CreateRequest{ID: "codex", Name: "Codex", AdapterID: "codex"})
-	assertProviderErrorCode(t, err, apperror.AgentDisabled)
-	listed, err := environment.service.List(ctx, ListRequest{IncludeDisabled: true})
-	if err != nil || len(listed) != 1 || listed[0].ID != "generic-provider" {
-		t.Fatalf("managed Provider gate was bypassed by list: values=%#v err=%v", listed, err)
+	if _, err := environment.service.Get(ctx, "codex"); err != nil {
+		t.Fatalf("Desktop preference gated Provider get: %v", err)
+	}
+	listed, err := environment.service.List(ctx)
+	if err != nil || len(listed) != 2 {
+		t.Fatalf("Desktop preference filtered Provider data: values=%#v err=%v", listed, err)
 	}
 	if _, err := environment.service.Get(ctx, "generic-provider"); err != nil {
-		t.Fatalf("generic Provider was affected by Agent gate: %v", err)
+		t.Fatalf("get generic Provider: %v", err)
+	}
+	deleted, err := environment.service.Delete(ctx, "codex", true)
+	if err != nil || !deleted.Deleted {
+		t.Fatalf("Desktop preference gated Provider delete: value=%#v err=%v", deleted, err)
 	}
 
 	db, err = environment.runtime.StoreFactory().OpenHealthy(ctx, true)
@@ -230,9 +229,166 @@ func TestDesktopAgentPolicyCoversManagedProviderCRUD(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer db.Close()
-	stored, err := db.GetProvider(ctx, "codex")
-	if err != nil || !stored.Enabled {
-		t.Fatalf("Agent toggle changed Provider enabled state: value=%#v err=%v", stored, err)
+	if _, err := db.GetProvider(ctx, "codex"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("deleted Provider remains in the store: %v", err)
+	}
+}
+
+func TestDeleteBlocksUnresolvedRecoveryStateThenRemovesOwnedDataAndHistory(t *testing.T) {
+	ctx := context.Background()
+	environment := newProviderTestEnvironment(t, t.TempDir(), agent.AccessDesktopPreferences)
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+	externalPath := filepath.Join(t.TempDir(), "tool-owned.json")
+	if err := os.WriteFile(externalPath, []byte("external-state\n"), 0o600); err != nil {
+		t.Fatalf("write external fixture: %v", err)
+	}
+	db, err := environment.runtime.StoreFactory().OpenHealthy(ctx, false)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
+		ID: "codex", Name: "Codex", AdapterID: "codex", MetadataJSON: `{}`,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("create Provider: %v", err)
+	}
+	if _, err := db.CreateProfile(ctx, store.CreateProfileParams{
+		ID: "work", Name: "Work", MetadataJSON: `{}`,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("create Profile: %v", err)
+	}
+	if _, err := db.UpsertProviderSetting(ctx, store.UpsertProviderSettingParams{
+		ProviderID: "codex", SchemaVersion: store.ProviderSettingsSchemaVersion,
+		SettingsJSON: `{"usage_sync_interval_seconds":30}`,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("create Provider settings: %v", err)
+	}
+	if _, err := db.UpsertProviderProfileSetting(ctx, store.UpsertProviderProfileSettingParams{
+		ProfileID: "work", ProviderID: "codex", SchemaVersion: store.ProviderSettingsSchemaVersion,
+		SettingsJSON: `{"quota_refresh_interval_seconds":0,"auth_keepalive_enabled":false}`,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("create Provider Profile settings: %v", err)
+	}
+	credentialPayload := `{"token":"saved"}`
+	if _, err := db.UpsertProviderCredential(ctx, store.UpsertProviderCredentialParams{
+		ID: "credential", ProviderID: "codex", CredentialKind: "codex-auth-json",
+		PayloadJSON: credentialPayload, PayloadSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(credentialPayload))),
+		MetadataJSON: `{}`,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("create credential: %v", err)
+	}
+	configPayload := "model = \"saved\"\n"
+	if _, err := db.UpsertProviderConfigSet(ctx, store.UpsertProviderConfigSetParams{
+		ID: "config", ProviderID: "codex", ConfigKind: "codex-config-toml", Name: "Saved",
+		PayloadText: configPayload, PayloadSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(configPayload))),
+		MetadataJSON: `{}`,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("create Config Set: %v", err)
+	}
+	if _, err := db.UpsertProfileCredentialBinding(ctx, store.UpsertProfileCredentialBindingParams{
+		ProfileID: "work", ProviderID: "codex", SlotID: "auth", CredentialID: "credential",
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("bind credential: %v", err)
+	}
+	if _, err := db.UpsertProfileConfigSetBinding(ctx, store.UpsertProfileConfigSetBindingParams{
+		ProfileID: "work", ProviderID: "codex", SlotID: "user-config", ConfigSetID: "config",
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("bind Config Set: %v", err)
+	}
+	if _, err := db.CreateProfileTarget(ctx, store.CreateProfileTargetParams{
+		ProfileID: "work", ProviderID: "codex", TargetID: "generic-file",
+		Path: externalPath, Format: "text", Strategy: "replace-file",
+		ValueJSON: `{"content":"desired-state\n"}`, Enabled: true, MetadataJSON: `{}`,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("create target: %v", err)
+	}
+	if _, err := db.SetProviderActiveState(ctx, "codex", "work"); err != nil {
+		_ = db.Close()
+		t.Fatalf("create active state: %v", err)
+	}
+	if _, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1); err != nil {
+		_ = db.Close()
+		t.Fatalf("create Usage source: %v", err)
+	}
+	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
+		ID: "unfinished-switch", ProviderID: "codex", ProfileIDs: []string{"work"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: `{}`,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("create unfinished operation: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close fixture store: %v", err)
+	}
+	if _, err := environment.agents.SetEnabled(ctx, agent.Codex, false); err != nil {
+		t.Fatalf("disable Desktop Agent: %v", err)
+	}
+
+	_, err = environment.service.Delete(ctx, "codex", true)
+	assertProviderErrorCode(t, err, apperror.ProviderInUse)
+
+	db, err = environment.runtime.StoreFactory().OpenHealthy(ctx, false)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	if err := db.ResolveOperation(ctx, "unfinished-switch", "closed_before_target_writes"); err != nil {
+		_ = db.Close()
+		t.Fatalf("resolve operation: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close resolved store: %v", err)
+	}
+	if result, err := environment.service.Delete(ctx, "codex", true); err != nil || !result.Deleted {
+		t.Fatalf("delete Provider: result=%#v err=%v", result, err)
+	}
+	content, err := os.ReadFile(externalPath)
+	if err != nil || string(content) != "external-state\n" {
+		t.Fatalf("Provider delete changed an external target: content=%q err=%v", content, err)
+	}
+
+	db, err = environment.runtime.StoreFactory().OpenHealthy(ctx, true)
+	if err != nil {
+		t.Fatalf("open deleted state: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.GetProvider(ctx, "codex"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Provider remains after delete: %v", err)
+	}
+	if _, err := db.GetProfile(ctx, "work"); err != nil {
+		t.Fatalf("global Profile was deleted with Provider: %v", err)
+	}
+	for label, err := range map[string]error{
+		"Provider settings":         func() error { _, err := db.GetProviderSetting(ctx, "codex"); return err }(),
+		"Provider Profile settings": func() error { _, err := db.GetProviderProfileSetting(ctx, "work", "codex"); return err }(),
+		"credential":                func() error { _, err := db.GetProviderCredential(ctx, "credential"); return err }(),
+		"Config Set":                func() error { _, err := db.GetProviderConfigSet(ctx, "codex", "config"); return err }(),
+		"target":                    func() error { _, err := db.GetProfileTarget(ctx, "work", "codex", "generic-file"); return err }(),
+		"active state":              func() error { _, err := db.GetActiveState(ctx, "codex"); return err }(),
+		"Usage source":              func() error { _, err := db.GetUsageSource(ctx, "codex", "codex-session-jsonl"); return err }(),
+		"resolved operation":        func() error { _, err := db.GetOperation(ctx, "unfinished-switch"); return err }(),
+	} {
+		if !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("%s remains after Provider delete: %v", label, err)
+		}
+	}
+	states, err := environment.agents.List(ctx)
+	if err != nil {
+		t.Fatalf("list Desktop Agent preferences: %v", err)
+	}
+	for _, state := range states {
+		if state.Manifest.ID == agent.Codex && state.Enabled {
+			t.Fatalf("Provider delete reset the Desktop Agent preference: %#v", state)
+		}
 	}
 }
 

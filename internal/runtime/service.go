@@ -156,7 +156,7 @@ func (service *Service) Status(ctx context.Context) (StatusResult, error) {
 }
 
 func unsupportedSchemaError() *apperror.Error {
-	return apperror.New(apperror.StoreSchemaUnsupported, "this ProfileDeck version cannot open the existing local data; update ProfileDeck and try again")
+	return apperror.New(apperror.StoreSchemaUnsupported, apperror.StoreSchemaUnsupportedMessage)
 }
 
 func (service *Service) leaseForOperation() (*DataLease, bool, error) {

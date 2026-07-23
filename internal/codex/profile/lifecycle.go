@@ -23,7 +23,6 @@ func UpsertProvider(ctx context.Context, db *store.Store, metadataJSON string, e
 			ID:           codexconfig.ProviderID,
 			Name:         codexpreset.ProviderName,
 			AdapterID:    codexconfig.AdapterID,
-			Enabled:      true,
 			MetadataJSON: metadataJSON,
 		})
 		if err != nil {

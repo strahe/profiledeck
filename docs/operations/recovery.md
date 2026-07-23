@@ -48,7 +48,7 @@ Confirm the offered Desktop action, or use the operation ID shown by `doctor`:
 profiledeck recover <operation-id> --yes
 ```
 
-Recovery may restore tool-owned files or the selected system login and then restores the previously current Profile record. If a target was modified by another program, recovery metadata is damaged, or a target cannot be read, ProfileDeck refuses to write and reports what must be checked. A failed attempt can be retried against the same original switch.
+Recovery may restore tool-owned files or the selected system login, but it does not change which Profile is current. If the current Profile changed after the unfinished switch, a target was modified by another program, recovery data is damaged, or a target cannot be read, ProfileDeck refuses to write and reports what must be checked. A failed attempt can be retried against the same original switch.
 
 Successful switches do not retain recovery files and cannot be undone. Choose the intended Profile and switch again if you want a different active setup.
 
@@ -95,3 +95,5 @@ Restore clears every current-Profile marker and closes unresolved operations so 
 After restore commits, ProfileDeck removes obsolete operation recovery files. If that cleanup cannot finish, the restored data remains active and Desktop retries during restart. Switching and another application restore stay paused until cleanup succeeds.
 
 If ProfileDeck cannot open its database at startup, the Desktop recovery screen still lets you import the recovery key, list available backups, and restore one.
+
+If ProfileDeck reports that the local data format is not supported, it cannot update that data in place. Restore a compatible application backup. To start with new local data instead, close every ProfileDeck process, move the entire [ProfileDeck data directory](../reference/data-security.md) to a private location, then reopen ProfileDeck or run `profiledeck init`. Moving the directory keeps the old database and backups available for later inspection; it does not change tool-owned files or system logins.

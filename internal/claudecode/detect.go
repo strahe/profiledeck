@@ -23,7 +23,6 @@ type ClaudeCodeDetectResult struct {
 	ExpiresAtUnixMS               int64    `json:"expires_at_unix_ms,omitempty"`
 	ProfileDeckInitialized        bool     `json:"profiledeck_initialized"`
 	ProviderExists                bool     `json:"provider_exists"`
-	ProviderEnabled               bool     `json:"provider_enabled"`
 	ProviderCompatible            bool     `json:"provider_compatible"`
 	KeychainAuthorizationRequired bool     `json:"keychain_authorization_required"`
 	ObservedAuthOverrideHints     []string `json:"observed_auth_override_hints"`
@@ -36,7 +35,7 @@ func (service *Service) Detect(ctx context.Context, req ClaudeCodeDetectRequest)
 	}
 	result := ClaudeCodeDetectResult{
 		ProviderID: claudecodeconfig.ProviderID, AdapterID: claudecodeconfig.AdapterID,
-		CredentialStatus: claudecodeauth.StatusMissing, ProviderEnabled: true, ProviderCompatible: true,
+		CredentialStatus: claudecodeauth.StatusMissing, ProviderCompatible: true,
 		ObservedAuthOverrideHints: observedClaudeCodeAuthOverrideHints(), Warnings: []string{},
 	}
 	status, err := service.runtime.Status(ctx)
@@ -54,11 +53,6 @@ func (service *Service) Detect(ctx context.Context, req ClaudeCodeDetectRequest)
 		provider, providerErr := db.GetProvider(ctx, claudecodeconfig.ProviderID)
 		if providerErr == nil {
 			result.ProviderExists = true
-			result.ProviderEnabled = provider.Enabled
-			if !provider.Enabled {
-				return ClaudeCodeDetectResult{}, apperror.New(apperror.ProviderDisabled, "Claude Code Provider is disabled").
-					WithDetail("provider_id", claudecodeconfig.ProviderID)
-			}
 			metadata, validationErr := validateClaudeCodeProvider(provider)
 			if validationErr != nil {
 				result.ProviderCompatible = false

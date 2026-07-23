@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"strings"
 
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
@@ -95,11 +94,4 @@ func (service *Service) requireAccess(ctx context.Context) error {
 		return nil
 	}
 	return service.policy.RequireAgent(ctx, agent.Antigravity)
-}
-
-func providerEnabled(provider store.Provider) error {
-	if provider.Enabled {
-		return nil
-	}
-	return apperror.New(apperror.ProviderDisabled, "Antigravity Provider is disabled").WithDetail("provider_id", strings.TrimSpace(provider.ID))
 }

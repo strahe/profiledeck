@@ -33,7 +33,11 @@ func (*pausedUsageIntegration) PricingInfo() UsagePricingInfo {
 	return UsagePricingInfo{}
 }
 
-func (integration *pausedUsageIntegration) Sync(ctx context.Context, stores store.Factory) (UsageSyncResult, error) {
+func (integration *pausedUsageIntegration) Sync(
+	ctx context.Context,
+	stores store.Factory,
+	_ SyncProvisionMode,
+) (UsageSyncResult, error) {
 	close(integration.started)
 	select {
 	case <-ctx.Done():
@@ -51,7 +55,7 @@ func (integration *pausedUsageIntegration) Sync(ctx context.Context, stores stor
 	return UsageSyncResult{ProviderID: ProviderCodex, Source: SourceCodexSessionJSONL}, nil
 }
 
-func TestUsageSyncRejectsProviderDisabledAfterDispatch(t *testing.T) {
+func TestBackgroundUsageSyncDoesNotRecreateProviderDeletedAfterDispatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	configDir := t.TempDir()
@@ -64,7 +68,7 @@ func TestUsageSyncRejectsProviderDisabledAfterDispatch(t *testing.T) {
 		t.Fatalf("open Provider store: %v", err)
 	}
 	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
-		ID: ProviderCodex, Name: "Codex", AdapterID: ProviderCodex, Enabled: true, MetadataJSON: "{}",
+		ID: ProviderCodex, Name: "Codex", AdapterID: ProviderCodex, MetadataJSON: "{}",
 	}); err != nil {
 		_ = db.Close()
 		t.Fatalf("create enabled Provider: %v", err)
@@ -74,10 +78,10 @@ func TestUsageSyncRejectsProviderDisabledAfterDispatch(t *testing.T) {
 	}
 
 	integration := &pausedUsageIntegration{started: make(chan struct{}), resume: make(chan struct{})}
-	service := NewService(environment.runtime.StoreFactory(), MustRegistry(integration), environment.service.policy)
+	service := NewService(environment.runtime.StoreFactory(), MustRegistry(integration))
 	errCh := make(chan error, 1)
 	go func() {
-		_, syncErr := service.SyncCodex(ctx)
+		_, syncErr := service.SyncCodexBackground(ctx)
 		errCh <- syncErr
 	}()
 	select {
@@ -90,13 +94,12 @@ func TestUsageSyncRejectsProviderDisabledAfterDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen Provider store: %v", err)
 	}
-	disabled := false
-	if _, err := db.UpdateProvider(ctx, store.UpdateProviderParams{ID: ProviderCodex, Enabled: &disabled}); err != nil {
+	if err := db.DeleteProvider(ctx, ProviderCodex); err != nil {
 		_ = db.Close()
-		t.Fatalf("disable Provider during sync: %v", err)
+		t.Fatalf("delete Provider during sync: %v", err)
 	}
 	if err := db.Close(); err != nil {
-		t.Fatalf("close disabled Provider store: %v", err)
+		t.Fatalf("close deleted Provider store: %v", err)
 	}
 	close(integration.resume)
 
@@ -104,15 +107,20 @@ func TestUsageSyncRejectsProviderDisabledAfterDispatch(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatalf("sync did not finish: %v", ctx.Err())
 	case err := <-errCh:
-		assertAppErrorCode(t, err, apperror.ProviderDisabled)
+		if err != nil {
+			t.Fatalf("background sync should treat a deleted Provider as inactive: %v", err)
+		}
 	}
 	db, err = environment.runtime.StoreFactory().OpenHealthy(ctx, true)
 	if err != nil {
 		t.Fatalf("inspect usage source: %v", err)
 	}
 	defer db.Close()
+	if _, err := db.GetProvider(ctx, ProviderCodex); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("background sync recreated the deleted Provider: %v", err)
+	}
 	if _, err := db.GetUsageSource(ctx, ProviderCodex, SourceCodexSessionJSONL); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("disabled sync created a usage source: %v", err)
+		t.Fatalf("background sync created a usage source for the deleted Provider: %v", err)
 	}
 }
 
@@ -478,21 +486,19 @@ func TestUsageSyncCodexRejectsIdentityRevisionWithoutWrites(t *testing.T) {
 func TestUsageSyncCodexDoesNotDoubleCountCopiedSessionFiles(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	firstCodexDir := t.TempDir()
-	secondCodexDir := t.TempDir()
+	codexDir := t.TempDir()
 	content := strings.Join([]string{
 		`{"type":"session_meta","session_id":"session-1"}`,
 		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
 		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}}}`,
 	}, "\n")
-	writeAppUsageFixture(t, firstCodexDir, content)
-	writeAppUsageFixture(t, secondCodexDir, content)
+	writeAppUsageFile(t, filepath.Join(codexDir, "sessions", "2026", "07", "01", "original.jsonl"), content)
 
 	if _, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 
-	first, err := newUsageTestEnvironment(t, configDir, firstCodexDir).service.SyncCodex(ctx)
+	first, err := newUsageTestEnvironment(t, configDir, codexDir).service.SyncCodex(ctx)
 	if err != nil {
 		t.Fatalf("expected first usage sync to succeed, got %v", err)
 	}
@@ -500,7 +506,8 @@ func TestUsageSyncCodexDoesNotDoubleCountCopiedSessionFiles(t *testing.T) {
 		t.Fatalf("unexpected first sync result: %#v", first)
 	}
 
-	second, err := newUsageTestEnvironment(t, configDir, secondCodexDir).service.SyncCodex(ctx)
+	writeAppUsageFile(t, filepath.Join(codexDir, "sessions", "2026", "07", "02", "copy.jsonl"), content)
+	second, err := newUsageTestEnvironment(t, configDir, codexDir).service.SyncCodex(ctx)
 	if err != nil {
 		t.Fatalf("expected copied usage sync to succeed, got %v", err)
 	}
@@ -574,9 +581,8 @@ func TestUsageSyncCodexDoesNotDoubleCountMultiLevelForkHistory(t *testing.T) {
 func TestUsageSyncCodexKeepsParentTimestampWhenParentArrivesAfterFork(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	childDir := t.TempDir()
-	parentDir := t.TempDir()
-	writeAppUsageFixture(t, childDir, strings.Join([]string{
+	codexDir := t.TempDir()
+	writeAppUsageFile(t, filepath.Join(codexDir, "sessions", "2026", "07", "02", "child.jsonl"), strings.Join([]string{
 		`{"type":"session_meta","payload":{"id":"session-child","forked_from_id":"session-parent"}}`,
 		`{"type":"session_meta","payload":{"id":"session-parent"}}`,
 		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
@@ -585,21 +591,20 @@ func TestUsageSyncCodexKeepsParentTimestampWhenParentArrivesAfterFork(t *testing
 		`{"type":"session_meta","payload":{"id":"session-child","forked_from_id":"session-parent"}}`,
 		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":30,"cached_input_tokens":5,"output_tokens":3,"total_tokens":33}}},"timestamp":"2026-07-02T00:02:00Z"}`,
 	}, "\n"))
-	writeAppUsageFixture(t, parentDir, strings.Join([]string{
+	initialized, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx)
+	if err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	if result, err := newUsageTestEnvironment(t, configDir, codexDir).service.SyncCodex(ctx); err != nil || result.ImportedEvents != 3 {
+		t.Fatalf("expected child-first import, result=%#v err=%v", result, err)
+	}
+	writeAppUsageFile(t, filepath.Join(codexDir, "sessions", "2026", "07", "01", "parent.jsonl"), strings.Join([]string{
 		`{"type":"session_meta","payload":{"id":"session-parent"}}`,
 		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
 		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}},"timestamp":"2026-07-01T00:00:00Z"}`,
 		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":25,"output_tokens":15,"total_tokens":165}}},"timestamp":"2026-07-01T00:01:00Z"}`,
 	}, "\n"))
-
-	initialized, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx)
-	if err != nil {
-		t.Fatalf("expected init to succeed, got %v", err)
-	}
-	if result, err := newUsageTestEnvironment(t, configDir, childDir).service.SyncCodex(ctx); err != nil || result.ImportedEvents != 3 {
-		t.Fatalf("expected child-first import, result=%#v err=%v", result, err)
-	}
-	if result, err := newUsageTestEnvironment(t, configDir, parentDir).service.SyncCodex(ctx); err != nil || result.ImportedEvents != 0 || result.SkippedDuplicateEvents != 2 {
+	if result, err := newUsageTestEnvironment(t, configDir, codexDir).service.SyncCodex(ctx); err != nil || result.ImportedEvents != 0 || result.SkippedDuplicateEvents != 2 {
 		t.Fatalf("expected later parent import to deduplicate, result=%#v err=%v", result, err)
 	}
 	rawDB, err := sql.Open("sqlite", initialized.DatabasePath)
@@ -623,17 +628,10 @@ func TestUsageSyncCodexKeepsParentTimestampWhenParentArrivesAfterFork(t *testing
 func TestUsageSyncCodexConcurrentRunsRemainIdempotentWhenOneRunIsSuperseded(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	firstCodexDir := t.TempDir()
-	secondCodexDir := t.TempDir()
-	writeAppUsageFixture(t, firstCodexDir, strings.Join([]string{
+	codexDir := t.TempDir()
+	writeAppUsageFixture(t, codexDir, strings.Join([]string{
 		`{"type":"session_meta","session_id":"session-concurrent"}`,
 		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
-		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}}}`,
-	}, "\n"))
-	writeAppUsageFixture(t, secondCodexDir, strings.Join([]string{
-		`{"type":"session_meta","session_id":"session-concurrent"}`,
-		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
-		`{"type":"response_item","payload":{"type":"message"}}`,
 		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110}}}}`,
 	}, "\n"))
 	if _, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx); err != nil {
@@ -643,14 +641,14 @@ func TestUsageSyncCodexConcurrentRunsRemainIdempotentWhenOneRunIsSuperseded(t *t
 	start := make(chan struct{})
 	errorsByRun := make(chan error, 2)
 	var wg sync.WaitGroup
-	for _, codexDir := range []string{firstCodexDir, secondCodexDir} {
+	for range 2 {
 		wg.Add(1)
-		go func(codexDir string) {
+		go func() {
 			defer wg.Done()
 			<-start
 			_, err := newUsageTestEnvironment(t, configDir, codexDir).service.SyncCodex(ctx)
 			errorsByRun <- err
-		}(codexDir)
+		}()
 	}
 	close(start)
 	wg.Wait()
@@ -683,9 +681,14 @@ func TestUsageSyncCodexConcurrentRunsRemainIdempotentWhenOneRunIsSuperseded(t *t
 func TestUsageSyncCodexBackfillsExistingGPT56PartialCost(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	initialized, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx)
+	codexDir := t.TempDir()
+	environment := newUsageTestEnvironment(t, configDir, codexDir)
+	initialized, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx)
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	if _, err := environment.service.SyncCodex(ctx); err != nil {
+		t.Fatalf("expected explicit sync to provision Provider fixture, got %v", err)
 	}
 	db, err := store.Open(ctx, initialized.DatabasePath, false)
 	if err != nil {
@@ -711,7 +714,7 @@ func TestUsageSyncCodexBackfillsExistingGPT56PartialCost(t *testing.T) {
 		t.Fatalf("expected fixture store close, got %v", err)
 	}
 
-	if _, err := newUsageTestEnvironment(t, configDir, t.TempDir()).service.SyncCodex(ctx); err != nil {
+	if _, err := environment.service.SyncCodex(ctx); err != nil {
 		t.Fatalf("expected sync to backfill GPT-5.6 cost, got %v", err)
 	}
 	report, err := newUsageTestEnvironment(t, configDir, "").service.Report(ctx, UsageReportRequest{Range: UsageRangeAll})
@@ -839,77 +842,61 @@ func TestUsageSummaryReportsUnknownCostForUnknownModel(t *testing.T) {
 	}
 }
 
-func TestUsageHistoryRemainsReadableWhenProviderIsDisabledOrDeleted(t *testing.T) {
+func TestProviderDeleteClearsUsageAndOnlyExplicitSyncRecreatesIt(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	environment := newUsageTestEnvironment(t, configDir, t.TempDir())
+	codexDir := t.TempDir()
+	writeAppUsageFixture(t, codexDir, strings.Join([]string{
+		`{"type":"session_meta","session_id":"deleted-provider-session"}`,
+		`{"type":"turn_context","model":"gpt-5.6-sol"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}}`,
+	}, "\n"))
+	environment := newUsageTestEnvironment(t, configDir, codexDir)
 	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("initialize runtime: %v", err)
+	}
+	if _, err := environment.service.SyncCodex(ctx); err != nil {
+		t.Fatalf("explicit sync should provision the Provider: %v", err)
 	}
 	db, err := environment.runtime.StoreFactory().OpenHealthy(ctx, false)
 	if err != nil {
 		t.Fatalf("open usage store: %v", err)
 	}
-	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
-		ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: "{}",
-	}); err != nil {
-		_ = db.Close()
-		t.Fatalf("create disabled Provider: %v", err)
-	}
-	source, err := db.BeginUsageSync(ctx, ProviderCodex, SourceCodexSessionJSONL, CodexUsageIdentityRevision)
-	if err != nil {
-		_ = db.Close()
-		t.Fatalf("create usage source: %v", err)
-	}
-	if _, err := db.InsertUsageFacts(ctx, store.InsertUsageFactsParams{
-		SourceID: source.ID, Generation: source.SyncGeneration, Facts: []store.CreateUsageFactParams{{
-			EventKey: usageTestEventKey("retained-history"), SourceID: source.ID,
-			ModelKey: "gpt-5.3-codex", InputTokens: 10, OutputTokens: 2, TotalTokens: 12,
-			CostStatus: store.UsageCostStatusUnknown,
-		}},
-	}); err != nil {
-		_ = db.Close()
-		t.Fatalf("insert historical usage: %v", err)
-	}
-	disabled := false
-	if _, err := db.UpdateProvider(ctx, store.UpdateProviderParams{ID: ProviderCodex, Enabled: &disabled}); err != nil {
-		_ = db.Close()
-		t.Fatalf("disable Provider: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close usage store: %v", err)
-	}
-
-	if _, err := environment.service.SyncCodex(ctx); err == nil {
-		t.Fatal("disabled Provider allowed usage sync")
-	} else {
-		assertAppErrorCode(t, err, apperror.ProviderDisabled)
-	}
-	assertUsageHistory := func(state string) {
-		t.Helper()
-		summary, err := environment.service.Summary(ctx, UsageSummaryRequest{ProviderID: ProviderCodex})
-		if err != nil || summary.EventCount != 1 || summary.TotalTokens != 12 {
-			t.Fatalf("%s Provider summary=%#v err=%v", state, summary, err)
-		}
-		report, err := environment.service.Report(ctx, UsageReportRequest{ProviderID: ProviderCodex, Range: UsageRangeAll})
-		if err != nil || report.Summary.EventCount != 1 || report.Summary.TotalTokens != 12 {
-			t.Fatalf("%s Provider report=%#v err=%v", state, report, err)
-		}
-	}
-	assertUsageHistory("disabled")
-
-	db, err = environment.runtime.StoreFactory().OpenHealthy(ctx, false)
-	if err != nil {
-		t.Fatalf("reopen usage store: %v", err)
-	}
 	if err := db.DeleteProvider(ctx, ProviderCodex); err != nil {
 		_ = db.Close()
-		t.Fatalf("delete Provider with retained Usage history: %v", err)
+		t.Fatalf("delete Provider with Usage: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close deleted Provider store: %v", err)
 	}
-	assertUsageHistory("deleted")
+
+	summary, err := environment.service.Summary(ctx, UsageSummaryRequest{ProviderID: ProviderCodex})
+	if err != nil || summary.EventCount != 0 || summary.TotalTokens != 0 {
+		t.Fatalf("Provider deletion retained Usage: summary=%#v err=%v", summary, err)
+	}
+	if _, err := environment.service.SyncCodexBackground(ctx); err != nil {
+		t.Fatalf("background sync for a deleted Provider should be a no-op: %v", err)
+	}
+	db, err = environment.runtime.StoreFactory().OpenHealthy(ctx, true)
+	if err != nil {
+		t.Fatalf("inspect background sync: %v", err)
+	}
+	if _, err := db.GetProvider(ctx, ProviderCodex); !errors.Is(err, store.ErrNotFound) {
+		_ = db.Close()
+		t.Fatalf("background sync recreated Provider: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close inspection store: %v", err)
+	}
+
+	result, err := environment.service.SyncCodex(ctx)
+	if err != nil || result.ImportedEvents != 1 {
+		t.Fatalf("explicit sync did not recreate and reimport Provider Usage: result=%#v err=%v", result, err)
+	}
+	summary, err = environment.service.Summary(ctx, UsageSummaryRequest{ProviderID: ProviderCodex})
+	if err != nil || summary.EventCount != 1 || summary.TotalTokens != 12 {
+		t.Fatalf("recreated Provider Usage summary=%#v err=%v", summary, err)
+	}
 }
 
 func TestSummarySourceReflectsAggregatedSources(t *testing.T) {

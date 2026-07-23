@@ -60,7 +60,6 @@ export interface AntigravityProfileSummary {
      */
     "expires_at_unix_ms"?: number;
     "active": boolean;
-    "active_operation_id"?: string;
     "updated_at_unix_ms": number;
     "warnings"?: string[] | null;
 }

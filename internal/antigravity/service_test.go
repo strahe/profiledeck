@@ -99,6 +99,15 @@ func TestAntigravityCreateSwitchAndCapture(t *testing.T) {
 	if !second.Summary.Active {
 		t.Fatalf("expected second profile active")
 	}
+	db, err := openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	operationProfileIDs, relationErr := db.ListOperationProfileIDs(ctx, second.OperationID)
+	_ = db.Close()
+	if relationErr != nil || strings.Join(operationProfileIDs, ",") != "first,second" {
+		t.Fatalf("profile create operation omitted the previous active Profile: ids=%v err=%v", operationProfileIDs, relationErr)
+	}
 	plan, err := environment.switching.BuildPlan(ctx, switching.BuildPlanRequest{ProviderID: agyconfig.ProviderID, ProfileID: "first"})
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
@@ -442,51 +451,6 @@ func TestAntigravityCreateAndSaveRequireCurrentConsumerOAuthLogin(t *testing.T) 
 	assertErrorCode(t, err, apperror.AntigravityInvalid)
 }
 
-func TestAntigravityCreatePreservesDisabledProvider(t *testing.T) {
-	ctx := context.Background()
-	configDir := t.TempDir()
-	if _, err := initAntigravityTestRuntime(ctx, configDir); err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	client := &fakeKeyringClient{value: testAgyPayload("first", "first-refresh"), exists: true}
-	environment := newAntigravityTestEnvironment(t, configDir, client)
-	if _, err := environment.antigravity.CreateProfile(ctx, CreateAntigravityProfileRequest{ProfileID: "first"}); err != nil {
-		t.Fatalf("Create first: %v", err)
-	}
-	db, err := openHealthyStore(ctx, configDir, false)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	disabled := false
-	if _, err := db.UpdateProvider(ctx, store.UpdateProviderParams{ID: agyconfig.ProviderID, Enabled: &disabled}); err != nil {
-		_ = db.Close()
-		t.Fatalf("disable provider: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close store: %v", err)
-	}
-	client.value = testAgyPayload("second", "second-refresh")
-	getCalls := client.getCalls
-	_, err = environment.antigravity.Detect(ctx)
-	assertErrorCode(t, err, apperror.ProviderDisabled)
-	if client.getCalls != getCalls {
-		t.Fatalf("disabled Provider detection read the external Keyring")
-	}
-	_, err = environment.antigravity.GetProfile(ctx, GetAntigravityProfileRequest{ProfileID: "first"})
-	assertErrorCode(t, err, apperror.ProviderDisabled)
-	_, err = environment.antigravity.CreateProfile(ctx, CreateAntigravityProfileRequest{ProfileID: "second"})
-	assertErrorCode(t, err, apperror.ProviderDisabled)
-	db, err = openHealthyStore(ctx, configDir, true)
-	if err != nil {
-		t.Fatalf("reopen store: %v", err)
-	}
-	defer db.Close()
-	provider, err := db.GetProvider(ctx, agyconfig.ProviderID)
-	if err != nil || provider.Enabled {
-		t.Fatalf("expected compatible Antigravity provider to remain disabled, provider=%#v err=%v", provider, err)
-	}
-}
-
 func TestAntigravitySaveCurrentWarnsWhenLoginIsShared(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
@@ -522,6 +486,15 @@ func TestAntigravitySaveCurrentWarnsWhenLoginIsShared(t *testing.T) {
 	}
 	if result.Summary.CredentialReferenceCount != 2 || !hasWarning(result.Warnings, "shared Antigravity login") {
 		t.Fatalf("expected shared login warning, got %#v", result)
+	}
+	db, err = openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	operationProfileIDs, relationErr := db.ListOperationProfileIDs(ctx, result.OperationID)
+	closeErr := db.Close()
+	if relationErr != nil || strings.Join(operationProfileIDs, ",") != "first,second" || closeErr != nil {
+		t.Fatalf("shared Antigravity save operation omitted affected Profiles: ids=%v relationErr=%v closeErr=%v", operationProfileIDs, relationErr, closeErr)
 	}
 }
 

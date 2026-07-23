@@ -32,7 +32,7 @@ func TestInitializeCreatesRuntimeWithoutBackupAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
-	if !first.Initialized || !first.SchemaHealthy || first.MigrationsApplied != 5 {
+	if !first.Initialized || !first.SchemaHealthy || first.MigrationsApplied != 1 {
 		t.Fatalf("unexpected first initialization result: %#v", first)
 	}
 	if backups.calls != 0 {
@@ -171,10 +171,10 @@ func TestStatusDetectsResidualRecoveryEntryWithoutStateKey(t *testing.T) {
 	}
 }
 
-func TestInitializeBacksUpKnownOldBaselineBeforeMigrating(t *testing.T) {
+func TestInitializeBacksUpValidatedMarkerGapBeforeReapplyingMarker(t *testing.T) {
 	ctx := context.Background()
 	runtimeService := newRuntimeService(t)
-	createInitialBaseline(t, ctx, runtimeService)
+	createStableMarkerGap(t, ctx, runtimeService)
 	insertSetting(t, ctx, runtimeService.Paths().Database, "upgrade-data", `{"kept":true}`)
 	backups := &recordingBackupCreator{
 		inspect: func(req appbackup.CreateRequest) {
@@ -182,7 +182,7 @@ func TestInitializeBacksUpKnownOldBaselineBeforeMigrating(t *testing.T) {
 				t.Fatalf("backup request = %#v", req)
 			}
 			snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
-			if len(snapshot.markers) != 1 || snapshot.usageTable {
+			if len(snapshot.markers) != 0 || !snapshot.usageTable || !snapshot.pathKeyIndex {
 				t.Fatalf("database changed before backup: %#v", snapshot)
 			}
 		},
@@ -191,13 +191,13 @@ func TestInitializeBacksUpKnownOldBaselineBeforeMigrating(t *testing.T) {
 
 	result, err := service.Initialize(ctx)
 	if err != nil {
-		t.Fatalf("upgrade old baseline: %v", err)
+		t.Fatalf("reapply Stable marker: %v", err)
 	}
-	if result.MigrationsApplied != 4 || backups.calls != 1 {
+	if result.MigrationsApplied != 1 || backups.calls != 1 {
 		t.Fatalf("upgrade result = %#v, backups = %d", result, backups.calls)
 	}
 	snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
-	if len(snapshot.markers) != 5 || !snapshot.usageTable || !snapshot.pathKeyIndex || snapshot.setting != `{"kept":true}` {
+	if len(snapshot.markers) != 1 || !snapshot.usageTable || !snapshot.pathKeyIndex || snapshot.setting != `{"kept":true}` {
 		t.Fatalf("database after upgrade = %#v", snapshot)
 	}
 	if _, err := service.Initialize(ctx); err != nil || backups.calls != 1 {
@@ -205,10 +205,10 @@ func TestInitializeBacksUpKnownOldBaselineBeforeMigrating(t *testing.T) {
 	}
 }
 
-func TestInitializeBackupFailureLeavesOldBaselineUnchanged(t *testing.T) {
+func TestInitializeBackupFailureLeavesMarkerGapUnchanged(t *testing.T) {
 	ctx := context.Background()
 	runtimeService := newRuntimeService(t)
-	createInitialBaseline(t, ctx, runtimeService)
+	createStableMarkerGap(t, ctx, runtimeService)
 	insertSetting(t, ctx, runtimeService.Paths().Database, "upgrade-data", `{"kept":true}`)
 	before := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
 	backups := &recordingBackupCreator{err: errors.New("SECRET_BACKUP_FAILURE_SENTINEL")}
@@ -224,7 +224,7 @@ func TestInitializeBackupFailureLeavesOldBaselineUnchanged(t *testing.T) {
 	}
 }
 
-func TestInitializeRejectsNonContiguousHistoryBeforeBackup(t *testing.T) {
+func TestInitializeRejectsLegacyBetaMarkerBeforeBackup(t *testing.T) {
 	ctx := context.Background()
 	runtimeService := newRuntimeService(t)
 	if _, err := NewService(runtimeService, nil, nil).Initialize(ctx); err != nil {
@@ -232,12 +232,12 @@ func TestInitializeRejectsNonContiguousHistoryBeforeBackup(t *testing.T) {
 	}
 	registered := storemigrations.Migrations.Sorted()
 	execDatabaseStatements(t, runtimeService.Paths().Database,
-		`DELETE FROM bun_migrations WHERE name = '`+registered[1].Name+`'`,
+		`UPDATE bun_migrations SET name = '202607190001' WHERE name = '`+registered[0].Name+`'`,
 	)
 	backups := &recordingBackupCreator{}
 
 	_, err := NewService(runtimeService, backups, nil).Initialize(ctx)
-	assertAppErrorCode(t, err, apperror.StoreSchemaInvalid)
+	assertAppErrorCode(t, err, apperror.StoreSchemaUnsupported)
 	if backups.calls != 0 {
 		t.Fatalf("invalid migration history created %d backups", backups.calls)
 	}
@@ -246,7 +246,7 @@ func TestInitializeRejectsNonContiguousHistoryBeforeBackup(t *testing.T) {
 func TestInitializeRefusesUpgradeWhenAnotherDataLeaseIsActive(t *testing.T) {
 	ctx := context.Background()
 	runtimeService := newRuntimeService(t)
-	createInitialBaseline(t, ctx, runtimeService)
+	createStableMarkerGap(t, ctx, runtimeService)
 	blocker, err := runtime.AcquireDataLease(runtimeService.Paths().DataLock)
 	if err != nil {
 		t.Fatal(err)
@@ -265,35 +265,21 @@ func TestInitializeRefusesUpgradeWhenAnotherDataLeaseIsActive(t *testing.T) {
 	}
 }
 
-func TestInitializeRejectsPostMigrationSchemaDriftAndKeepsBackup(t *testing.T) {
+func TestInitializeRejectsMarkerGapSchemaDriftBeforeBackup(t *testing.T) {
 	ctx := context.Background()
 	runtimeService := newRuntimeService(t)
-	createInitialBaseline(t, ctx, runtimeService)
-	execDatabaseStatements(t, runtimeService.Paths().Database, `CREATE TABLE profile_targets (
-		profile_id TEXT,
-		provider_id TEXT,
-		target_id TEXT,
-		path TEXT,
-		path_key TEXT,
-		format TEXT,
-		strategy TEXT,
-		value_json TEXT,
-		enabled INTEGER,
-		metadata_json TEXT,
-		created_at_unix_ms INTEGER,
-		updated_at_unix_ms INTEGER,
-		PRIMARY KEY (profile_id, provider_id, target_id)
-	)`)
+	createStableMarkerGap(t, ctx, runtimeService)
+	execDatabaseStatements(t, runtimeService.Paths().Database, `DROP INDEX idx_usage_models_source_model`)
 	backups := &recordingBackupCreator{}
 
 	_, err := NewService(runtimeService, backups, nil).Initialize(ctx)
-	assertAppErrorCode(t, err, apperror.StoreSchemaInvalid)
-	if backups.calls != 1 {
-		t.Fatalf("post-migration validation created %d backups", backups.calls)
+	assertAppErrorCode(t, err, apperror.StoreSchemaUnsupported)
+	if backups.calls != 0 {
+		t.Fatalf("marker-gap preflight created %d backups", backups.calls)
 	}
 	snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
-	if len(snapshot.markers) != 5 {
-		t.Fatalf("post-validation failure masked committed migration state: %#v", snapshot)
+	if len(snapshot.markers) != 0 {
+		t.Fatalf("marker-gap preflight wrote migration state: %#v", snapshot)
 	}
 }
 
@@ -302,7 +288,7 @@ func TestInitializeRejectsInvalidAppliedBaselineBeforeBackup(t *testing.T) {
 		t.Run(defect, func(t *testing.T) {
 			ctx := context.Background()
 			runtimeService := newRuntimeService(t)
-			createInitialBaseline(t, ctx, runtimeService)
+			createCurrentBaseline(t, ctx, runtimeService)
 			applyBaselineIntegrityDefect(t, runtimeService.Paths().Database, defect)
 			before := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
 			backups := &recordingBackupCreator{}
@@ -367,37 +353,22 @@ func newRuntimeService(t *testing.T) *runtime.Service {
 	return runtimeService
 }
 
-func createInitialBaseline(t *testing.T, ctx context.Context, runtimeService *runtime.Service) {
+func createCurrentBaseline(t *testing.T, ctx context.Context, runtimeService *runtime.Service) {
 	t.Helper()
 	if _, err := NewService(runtimeService, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("initialize fixture database: %v", err)
 	}
+}
+
+func createStableMarkerGap(t *testing.T, ctx context.Context, runtimeService *runtime.Service) {
+	t.Helper()
+	createCurrentBaseline(t, ctx, runtimeService)
 	registered := storemigrations.Migrations.Sorted()
-	if len(registered) != 5 {
-		t.Fatalf("registered migrations = %d, want 5", len(registered))
+	if len(registered) != 1 {
+		t.Fatalf("registered migrations = %d, want 1", len(registered))
 	}
 	execDatabaseStatements(t, runtimeService.Paths().Database,
-		`DROP INDEX idx_profile_targets_path_key`,
-		`DROP TABLE system_state`,
-		`DROP TABLE codex_usage_import_files`,
-		`DROP INDEX idx_usage_facts_source_cost_model_id`,
-		`DROP INDEX idx_usage_facts_source_time`,
-		`DROP INDEX idx_usage_facts_event_key`,
-		`DROP TABLE usage_facts`,
-		`DROP INDEX idx_usage_models_source_model`,
-		`DROP TABLE usage_models`,
-		`DROP INDEX idx_usage_sessions_source_session`,
-		`DROP TABLE usage_sessions`,
-		`DROP INDEX idx_usage_sources_provider_source`,
-		`DROP TABLE usage_sources`,
-		`DROP TRIGGER trg_profile_targets_path_owner_update`,
-		`DROP TRIGGER trg_profile_targets_path_owner_insert`,
-		`DROP INDEX idx_profile_targets_unique_path`,
-		`DROP INDEX idx_profile_targets_enabled`,
-		`DROP INDEX idx_profile_targets_provider_id`,
-		`DROP INDEX idx_profile_targets_profile_id`,
-		`DROP TABLE profile_targets`,
-		`DELETE FROM bun_migrations WHERE name IN ('`+registered[1].Name+`', '`+registered[2].Name+`', '`+registered[3].Name+`', '`+registered[4].Name+`')`,
+		`DELETE FROM bun_migrations WHERE name = '`+registered[0].Name+`'`,
 	)
 }
 
@@ -508,18 +479,21 @@ func applyBaselineIntegrityDefect(t *testing.T, path, defect string) {
 			t.Fatal(err)
 		}
 	case "schema":
-		if _, err := db.Exec(`DROP INDEX idx_providers_enabled`); err != nil {
+		if _, err := db.Exec(`DROP INDEX idx_providers_adapter_id`); err != nil {
 			t.Fatal(err)
 		}
 	case "json":
+		if _, err := db.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := db.Exec(`INSERT INTO settings (key, value_json, updated_at_unix_ms)
 			VALUES ('invalid-json', '{"token":"SECRET_INTEGRITY_SENTINEL"', 1)`); err != nil {
 			t.Fatal(err)
 		}
 	case "references":
 		if _, err := db.Exec(`INSERT INTO provider_profile_settings
-			(profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms)
-			VALUES ('missing-profile', 'missing-provider', 0, 0, 1)`); err != nil {
+			(profile_id, provider_id, schema_version, settings_json, updated_at_unix_ms)
+			VALUES ('missing-profile', 'missing-provider', 1, '{}', 1)`); err != nil {
 			t.Fatal(err)
 		}
 	default:

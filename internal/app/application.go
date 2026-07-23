@@ -175,11 +175,11 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 			bootstrap.RecoveryCleanupCoordinator{Cleanup: cleanupService, Locks: switchingService},
 		),
 		agents:    agentService,
-		providers: provider.NewService(stores, switchingService, agentService, dependencies.agents),
+		providers: provider.NewService(stores, switchingService, dependencies.agents),
 		profiles:  profile.NewService(stores, switchingService, profileDeleteRegistry),
 		targets:   profileTargetService,
 		switching: switchingService, doctor: doctorService,
-		usage: usage.NewService(stores, usageRegistry, agentService), settings: settings.NewService(stores),
+		usage: usage.NewService(stores, usageRegistry), settings: settings.NewService(stores),
 		codex: codexService, antigravity: antigravityService, claudeCode: claudeCodeService,
 	}, nil
 }

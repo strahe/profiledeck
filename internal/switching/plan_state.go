@@ -23,7 +23,7 @@ func newPlanInput(provider store.Provider, profile store.Profile, targets []stor
 
 func planProvider(value store.Provider) switchplan.Provider {
 	return switchplan.Provider{
-		ID: value.ID, Name: value.Name, AdapterID: value.AdapterID, Enabled: value.Enabled, MetadataJSON: value.MetadataJSON,
+		ID: value.ID, Name: value.Name, AdapterID: value.AdapterID, MetadataJSON: value.MetadataJSON,
 	}
 }
 
@@ -57,11 +57,11 @@ func planStateError(err error) error {
 }
 
 func (reader planStateReader) GetActiveState(ctx context.Context, providerID string) (switchplan.ActiveState, error) {
-	value, err := reader.store.GetActiveState(ctx, store.ActiveStateScopeProvider, providerID)
+	value, err := reader.store.GetActiveState(ctx, providerID)
 	if err != nil {
 		return switchplan.ActiveState{}, planStateError(err)
 	}
-	return switchplan.ActiveState{ProfileID: value.ProfileID, OperationID: value.OperationID}, nil
+	return switchplan.ActiveState{ProfileID: value.ProfileID, Revision: value.Revision}, nil
 }
 
 func (reader planStateReader) ListTargets(ctx context.Context, profileID, providerID string, includeDisabled bool) ([]switchplan.Target, error) {
@@ -99,8 +99,8 @@ func planCredential(value store.ProviderCredential) switchplan.Credential {
 	}
 }
 
-func (reader planStateReader) GetConfigSet(ctx context.Context, id string) (switchplan.ConfigSet, error) {
-	value, err := reader.store.GetProviderConfigSet(ctx, id)
+func (reader planStateReader) GetConfigSet(ctx context.Context, providerID, id string) (switchplan.ConfigSet, error) {
+	value, err := reader.store.GetProviderConfigSet(ctx, providerID, id)
 	if err != nil {
 		return switchplan.ConfigSet{}, planStateError(err)
 	}

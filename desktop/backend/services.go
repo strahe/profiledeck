@@ -233,7 +233,7 @@ type ApplyCodexProfileImportRequest struct {
 
 func NewServices(application *app.Application, info app.Info, env Environment, startupErr error) Services {
 	changes := NewChangeNotifier()
-	autoSync := newUsageAutoSyncRuntime(application.Codex().GetSettings, application.Usage().SyncCodex)
+	autoSync := newUsageAutoSyncRuntime(application.Codex().GetSettings, application.Usage().SyncCodexBackground)
 	quota := newCodexQuotaRuntime(application.Codex().ListAutomationTargets, application.Codex().RunCredentialJob)
 	backups := newApplicationBackupRuntime(
 		application.Settings().Get,
@@ -364,7 +364,7 @@ func (s *AppService) Dashboard(ctx context.Context) (DashboardResult, error) {
 	}
 	result.Agents = agents
 
-	providers, err := s.application.Providers().List(ctx, provider.ListRequest{IncludeDisabled: true})
+	providers, err := s.application.Providers().List(ctx)
 	if err != nil {
 		return result, err
 	}
@@ -686,7 +686,7 @@ func (s *CodexService) ApplyProfileImport(ctx context.Context, req ApplyCodexPro
 }
 
 func (s *ProfileService) ListProviders(ctx context.Context) ([]provider.Provider, error) {
-	return s.application.Providers().List(ctx, provider.ListRequest{IncludeDisabled: true})
+	return s.application.Providers().List(ctx)
 }
 
 func (s *ProfileService) ListProfiles(ctx context.Context) ([]profile.Profile, error) {

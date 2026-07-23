@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -35,63 +36,18 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
-	if result.Applied != 5 {
-		t.Fatalf("expected 5 migrations to apply, got %d", result.Applied)
+	if result.Applied != 1 {
+		t.Fatalf("expected one Stable baseline migration to apply, got %d", result.Applied)
 	}
 
-	for _, table := range []string{
-		"bun_migrations",
-		"bun_migration_locks",
-		"providers",
-		"profiles",
-		"provider_profile_settings",
-		"settings",
-		"active_states",
-		"operations",
-		"provider_credentials",
-		"provider_config_sets",
-		"profile_targets",
-		"usage_sources",
-		"usage_sessions",
-		"usage_models",
-		"usage_facts",
-		"codex_usage_import_files",
-		"system_state",
-	} {
+	for _, table := range []string{"bun_migrations", "bun_migration_locks"} {
 		assertSQLiteObjectExists(t, ctx, db, "table", table)
 	}
-
-	for _, index := range []string{
-		"bun_migrations_name_unique",
-		"idx_providers_adapter_id",
-		"idx_providers_enabled",
-		"idx_provider_profile_settings_provider_id",
-		"idx_operations_status",
-		"idx_operations_operation_type",
-		"idx_provider_credentials_provider_id",
-		"idx_provider_credentials_kind",
-		"idx_provider_config_sets_provider_id",
-		"idx_provider_config_sets_kind",
-		"idx_profile_targets_profile_id",
-		"idx_profile_targets_provider_id",
-		"idx_profile_targets_enabled",
-		"idx_profile_targets_unique_path",
-		"idx_profile_targets_path_key",
-		"idx_usage_sources_provider_source",
-		"idx_usage_sessions_source_session",
-		"idx_usage_models_source_model",
-		"idx_usage_facts_event_key",
-		"idx_usage_facts_source_time",
-		"idx_usage_facts_source_cost_model_id",
-	} {
-		assertSQLiteObjectExists(t, ctx, db, "index", index)
-	}
-
-	for _, trigger := range []string{
-		"trg_profile_targets_path_owner_insert",
-		"trg_profile_targets_path_owner_update",
-	} {
-		assertSQLiteObjectExists(t, ctx, db, "trigger", trigger)
+	assertSQLiteObjectExists(t, ctx, db, "index", "bun_migrations_name_unique")
+	assertSchemaObjectsMatchContract(t, ctx, db, schemaContracts[0])
+	healthy, err := db.schemaContractHealthy(ctx, schemaContracts[0])
+	if err != nil || !healthy {
+		t.Fatalf("migration output does not match the Stable contract: healthy=%t err=%v", healthy, err)
 	}
 }
 
@@ -138,24 +94,23 @@ func TestMigrationCompatibilityAcceptsKnownSchemas(t *testing.T) {
 		}
 	})
 
-	t.Run("known migration prefix", func(t *testing.T) {
+	t.Run("legacy Beta marker", func(t *testing.T) {
 		db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
 		defer closeTestStore(t, db)
 		createTestMigrationTable(t, ctx, db)
-		registered := storemigrations.Migrations.Sorted()
-		if len(registered) == 0 {
-			t.Fatal("expected registered migrations")
-		}
-		insertTestMigration(t, ctx, db, registered[0].Name)
+		insertTestMigration(t, ctx, db, "202607050001")
 
-		if err := db.CheckMigrationCompatibility(ctx); err != nil {
-			t.Fatalf("expected an older migration prefix to be compatible, got %v", err)
+		if err := db.CheckMigrationCompatibility(ctx); !errors.Is(err, ErrUnsupportedSchema) {
+			t.Fatalf("legacy Beta marker error = %v, want ErrUnsupportedSchema", err)
 		}
 	})
 }
 
-func TestMigrationIntegrityContractRegistryUsesFilenameDerivedSemanticKeys(t *testing.T) {
+func TestMigrationIntegrityContractRegistryUsesFilenameDerivedSemanticKey(t *testing.T) {
 	registered := storemigrations.Migrations.Sorted()
+	if len(registered) != 1 {
+		t.Fatalf("Stable baseline migration count = %d, want 1", len(registered))
+	}
 	for index := range registered {
 		registered[index].Name = fmt.Sprintf("9%013d", index)
 	}
@@ -163,27 +118,22 @@ func TestMigrationIntegrityContractRegistryUsesFilenameDerivedSemanticKeys(t *te
 		t.Fatalf("filename-derived migration keys should not depend on numeric names: %v", err)
 	}
 
-	duplicate := append(bunmigrate.MigrationSlice(nil), registered...)
-	duplicate[1].Comment = duplicate[0].Comment
-	if err := validateMigrationIntegrityContractRegistry(duplicate); err == nil {
-		t.Fatal("duplicate filename-derived migration key was accepted")
+	mismatched := append(bunmigrate.MigrationSlice(nil), registered...)
+	mismatched[0].Comment = "wrong-baseline"
+	if err := validateMigrationIntegrityContractRegistry(mismatched); err == nil {
+		t.Fatal("mismatched filename-derived migration key was accepted")
 	}
 }
 
-func TestMigrationStateRejectsNonContiguousKnownHistory(t *testing.T) {
+func TestMigrationStateRejectsUnknownHistory(t *testing.T) {
 	ctx := context.Background()
 	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
 	defer closeTestStore(t, db)
 	createTestMigrationTable(t, ctx, db)
-	registered := storemigrations.Migrations.Sorted()
-	if len(registered) < 3 {
-		t.Fatalf("registered migrations = %d, want at least 3", len(registered))
-	}
-	insertTestMigration(t, ctx, db, registered[0].Name)
-	insertTestMigration(t, ctx, db, registered[2].Name)
+	insertTestMigration(t, ctx, db, "202607190001")
 
-	if _, err := db.MigrationState(ctx); !errors.Is(err, ErrInvalidMigrationHistory) {
-		t.Fatalf("MigrationState() error = %v, want ErrInvalidMigrationHistory", err)
+	if _, err := db.MigrationState(ctx); !errors.Is(err, ErrUnsupportedSchema) {
+		t.Fatalf("MigrationState() error = %v, want ErrUnsupportedSchema", err)
 	}
 }
 
@@ -245,6 +195,85 @@ func TestMigrateReplaysCommittedSchemaWhenMarkerIsMissing(t *testing.T) {
 	}
 }
 
+func TestAppliedSchemaUsesItsVersionedContract(t *testing.T) {
+	ctx := context.Background()
+	db := migratedTestStore(t, ctx)
+	defer closeTestStore(t, db)
+
+	originalContracts := schemaContracts
+	defer func() { schemaContracts = originalContracts }()
+
+	future := schemaContracts[0]
+	future.migrationKey = "future_contract"
+	future.tableSpecs = append([]tableSpec(nil), future.tableSpecs...)
+	for index, spec := range future.tableSpecs {
+		if spec.name != "providers" {
+			continue
+		}
+		spec.columns = append([]columnSpec(nil), spec.columns...)
+		spec.columns = append(spec.columns, columnSpec{
+			name: "future_column", columnType: "TEXT", notNull: true,
+		})
+		future.tableSpecs[index] = spec
+		break
+	}
+	schemaContracts = append(append([]schemaContract(nil), schemaContracts...), future)
+
+	healthy, err := db.schemaHealthyForApplied(ctx, 1)
+	if err != nil || !healthy {
+		t.Fatalf("V1 database rejected by its own contract: healthy=%t err=%v", healthy, err)
+	}
+	healthy, err = db.schemaHealthyForApplied(ctx, 2)
+	if err != nil || healthy {
+		t.Fatalf("V1 database accepted by the future contract: healthy=%t err=%v", healthy, err)
+	}
+
+	if _, err := db.db.DB.ExecContext(ctx, `DELETE FROM bun_migrations`); err != nil {
+		t.Fatalf("remove Stable marker: %v", err)
+	}
+	if err := db.validateUnmarkedStableBaseline(ctx); err != nil {
+		t.Fatalf("unmarked V1 baseline was checked against future contracts: %v", err)
+	}
+}
+
+func TestMigrateRejectsUnmarkedPartialSchemaBeforeAnyWrite(t *testing.T) {
+	ctx := context.Background()
+	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
+	defer closeTestStore(t, db)
+	if _, err := db.db.DB.ExecContext(ctx, `
+		CREATE TABLE providers (
+			id TEXT PRIMARY KEY NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1
+		) STRICT
+	`); err != nil {
+		t.Fatalf("create partial Beta schema: %v", err)
+	}
+	var schemaVersionBefore int
+	if err := db.db.DB.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&schemaVersionBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.Migrate(ctx); !errors.Is(err, ErrUnsupportedSchema) {
+		t.Fatalf("Migrate() error = %v, want ErrUnsupportedSchema", err)
+	}
+	var schemaVersionAfter int
+	if err := db.db.DB.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&schemaVersionAfter); err != nil {
+		t.Fatal(err)
+	}
+	if schemaVersionAfter != schemaVersionBefore {
+		t.Fatalf("partial schema changed before rejection: before=%d after=%d", schemaVersionBefore, schemaVersionAfter)
+	}
+	for _, table := range []string{"bun_migrations", "bun_migration_locks", "profiles"} {
+		exists, err := db.objectExists(ctx, "table", table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if exists {
+			t.Fatalf("partial schema rejection created %s", table)
+		}
+	}
+}
+
 func TestInspectIntegrityClassifiesVersionedFailuresWithoutStoredValues(t *testing.T) {
 	ctx := context.Background()
 
@@ -261,7 +290,13 @@ func TestInspectIntegrityClassifiesVersionedFailuresWithoutStoredValues(t *testi
 		db := migratedTestStore(t, ctx)
 		defer closeTestStore(t, db)
 		secret := `{"token":"SECRET_INTEGRITY_SENTINEL"`
+		if _, err := db.db.DB.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := db.db.DB.ExecContext(ctx, `INSERT INTO settings (key, value_json, updated_at_unix_ms) VALUES ('invalid-json', ?, 1)`, secret); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.db.DB.ExecContext(ctx, `PRAGMA ignore_check_constraints = OFF`); err != nil {
 			t.Fatal(err)
 		}
 		report := assertIntegrityIssue(t, ctx, db, IntegrityIssueJSON)
@@ -277,24 +312,36 @@ func TestInspectIntegrityClassifiesVersionedFailuresWithoutStoredValues(t *testi
 	t.Run("references", func(t *testing.T) {
 		db := migratedTestStore(t, ctx)
 		defer closeTestStore(t, db)
+		if _, err := db.db.DB.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := db.db.DB.ExecContext(ctx, `
 			INSERT INTO provider_profile_settings
-				(profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms)
-			VALUES ('missing-profile', 'missing-provider', 0, 0, 1)
+				(profile_id, provider_id, schema_version, settings_json, updated_at_unix_ms)
+			VALUES ('missing-profile', 'missing-provider', 1, '{}', 1)
 		`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.db.DB.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
 			t.Fatal(err)
 		}
 		assertIntegrityIssue(t, ctx, db, IntegrityIssueReferences)
 	})
 
-	t.Run("active state scope", func(t *testing.T) {
+	t.Run("active state references", func(t *testing.T) {
 		db := migratedTestStore(t, ctx)
 		defer closeTestStore(t, db)
+		if _, err := db.db.DB.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := db.db.DB.ExecContext(ctx, `
-			INSERT INTO active_states
-				(scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms)
-			VALUES ('unknown', 'unknown', '', '', 1)
+			INSERT INTO provider_active_states
+				(provider_id, profile_id, revision, updated_at_unix_ms)
+			VALUES ('missing-provider', 'missing-profile', 1, 1)
 		`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.db.DB.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
 			t.Fatal(err)
 		}
 		assertIntegrityIssue(t, ctx, db, IntegrityIssueReferences)
@@ -319,30 +366,70 @@ func TestInspectIntegrityClassifiesVersionedFailuresWithoutStoredValues(t *testi
 		assertIntegrityIssue(t, ctx, db, IntegrityIssueForeignKeys)
 	})
 
-	t.Run("historical and usage references are allowed", func(t *testing.T) {
+	t.Run("content hashes", func(t *testing.T) {
 		db := migratedTestStore(t, ctx)
 		defer closeTestStore(t, db)
+		createStoreOperationFixtures(t, ctx, db, "provider-a")
+		payload := `{"token":"SECRET_HASH_SENTINEL"}`
+		if _, err := db.UpsertProviderCredential(ctx, UpsertProviderCredentialParams{
+			ID: "credential-a", ProviderID: "provider-a", CredentialKind: "json",
+			PayloadJSON: payload, PayloadSHA256: testPayloadSHA256(payload), MetadataJSON: `{}`,
+		}); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := db.db.DB.ExecContext(ctx, `
-			INSERT INTO operations
-				(id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
-			VALUES ('historical', 'maintenance', 'applied', 'deleted-profile', '{}', 1, 1)
+			UPDATE provider_credentials SET payload_json = '{"token":"changed"}'
+			WHERE id = 'credential-a'
 		`); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.db.DB.ExecContext(ctx, `
-			INSERT INTO usage_sources (id, provider_id, source_key, identity_revision)
-			VALUES (1, 'unmanaged-provider', 'test', 1);
-			INSERT INTO usage_models (id, source_id, model_key)
-			VALUES (1, 1, 'unknown');
-			INSERT INTO usage_facts (event_key, source_id, model_id, cost_status)
-			VALUES (?, 1, 1, 0)
-		`, testUsageKey("allowed-historical-reference")); err != nil {
+		report := assertIntegrityIssue(t, ctx, db, IntegrityIssueContentHash)
+		encoded, err := json.Marshal(report)
+		if err != nil {
 			t.Fatal(err)
 		}
-		report, err := db.InspectIntegrity(ctx, IntegrityCurrentBaseline)
-		if err != nil || !report.Healthy {
-			t.Fatalf("allowed historical references failed integrity: report=%#v err=%v", report, err)
+		if strings.Contains(string(encoded), "SECRET_HASH_SENTINEL") {
+			t.Fatalf("integrity report exposed stored content: %s", encoded)
 		}
+	})
+
+	t.Run("operation metadata relations", func(t *testing.T) {
+		db := migratedTestStore(t, ctx)
+		defer closeTestStore(t, db)
+		createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-a")
+		if _, err := db.CreateAppliedMaintenanceOperation(ctx, CreateAppliedMaintenanceOperationParams{
+			ID: "operation-a", ProviderID: "provider-a", RelatedProfileIDs: []string{"profile-a"},
+			MetadataSchemaVersion: OperationMetadataSchemaVersion, MetadataJSON: `{}`,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.db.DB.ExecContext(ctx, `
+			UPDATE operations
+			SET metadata_json = '{"provider_id":"provider-a","related_profile_ids":[]}'
+			WHERE id = 'operation-a'
+		`); err != nil {
+			t.Fatal(err)
+		}
+		assertIntegrityIssue(t, ctx, db, IntegrityIssueMetadata)
+	})
+
+	t.Run("target registry", func(t *testing.T) {
+		db := migratedTestStore(t, ctx)
+		defer closeTestStore(t, db)
+		createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-a")
+		if _, err := db.db.DB.ExecContext(ctx, `
+			INSERT INTO profile_targets (
+				profile_id, provider_id, target_id, path, path_key, format,
+				strategy, value_json, metadata_json, created_at_unix_ms, updated_at_unix_ms
+			) VALUES (
+				'profile-a', 'provider-a', 'future-target', '/tmp/future-target',
+				'/tmp/future-target', 'future-format', 'future-strategy',
+				'{"content":"value"}', '{}', 1, 1
+			)
+		`); err != nil {
+			t.Fatal(err)
+		}
+		assertIntegrityIssue(t, ctx, db, IntegrityIssueTarget)
 	})
 }
 
@@ -505,8 +592,8 @@ func TestConcurrentMigrateIsIdempotent(t *testing.T) {
 	if err := db.db.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM bun_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("expected migration count query to succeed, got %v", err)
 	}
-	if migrationCount != 5 {
-		t.Fatalf("expected five migration rows after concurrent migration, got %d", migrationCount)
+	if migrationCount != 1 {
+		t.Fatalf("expected one Stable baseline row after concurrent migration, got %d", migrationCount)
 	}
 }
 
@@ -557,8 +644,8 @@ func TestMigrateRetriesTransientSQLiteBusy(t *testing.T) {
 	if attempts != 2 {
 		t.Fatalf("Migrate() attempts = %d, want 2", attempts)
 	}
-	if result.Applied != 5 {
-		t.Fatalf("Migrate() applied = %d, want 5", result.Applied)
+	if result.Applied != 1 {
+		t.Fatalf("Migrate() applied = %d, want 1", result.Applied)
 	}
 }
 
@@ -621,10 +708,10 @@ func TestProviderConfigSetCRUDAndReferences(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
-	if _, err := db.CreateProvider(ctx, CreateProviderParams{ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: "{}"}); err != nil {
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{ID: "codex", Name: "Codex", AdapterID: "codex", MetadataJSON: "{}"}); err != nil {
 		t.Fatalf("expected provider create to succeed, got %v", err)
 	}
-	if _, err := db.CreateProvider(ctx, CreateProviderParams{ID: "other", Name: "Other", AdapterID: "generic", Enabled: true, MetadataJSON: "{}"}); err != nil {
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{ID: "other", Name: "Other", AdapterID: "generic", MetadataJSON: "{}"}); err != nil {
 		t.Fatalf("expected second provider create to succeed, got %v", err)
 	}
 
@@ -648,17 +735,19 @@ func TestProviderConfigSetCRUDAndReferences(t *testing.T) {
 	if created.MetadataJSON != "{}" {
 		t.Fatalf("expected default metadata object, got %q", created.MetadataJSON)
 	}
-	if _, err := db.UpsertProviderConfigSet(ctx, UpsertProviderConfigSetParams{
+	otherCreated, err := db.UpsertProviderConfigSet(ctx, UpsertProviderConfigSetParams{
 		ID: created.ID, ProviderID: "other", ConfigKind: created.ConfigKind, Name: created.Name,
 		PayloadText: payload, PayloadSHA256: digest,
-	}); err == nil {
-		t.Fatalf("expected config set provider identity change to be rejected")
+	})
+	if err != nil || otherCreated.ProviderID != "other" || otherCreated.ID != created.ID {
+		t.Fatalf("same local Config Set id should be valid for another Provider: value=%#v err=%v", otherCreated, err)
 	}
 
 	updatedName := "Default"
 	updatedDescription := "Used by work profiles"
 	updated, err := db.UpdateProviderConfigSet(ctx, UpdateProviderConfigSetParams{
 		ID:          created.ID,
+		ProviderID:  "codex",
 		Name:        &updatedName,
 		Description: &updatedDescription,
 	})
@@ -682,11 +771,11 @@ func TestProviderConfigSetCRUDAndReferences(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("expected profile Config Set binding to succeed, got %v", err)
 	}
-	references, err := db.CountProviderConfigSetReferences(ctx, created.ID)
+	references, err := db.CountProviderConfigSetReferences(ctx, "codex", created.ID)
 	if err != nil || references != 1 {
 		t.Fatalf("expected one config set reference, got count=%d err=%v", references, err)
 	}
-	if err := db.DeleteProviderConfigSet(ctx, created.ID); !errors.Is(err, ErrInUse) {
+	if err := db.DeleteProviderConfigSet(ctx, "codex", created.ID); !errors.Is(err, ErrInUse) {
 		t.Fatalf("expected referenced config set deletion to fail with ErrInUse, got %v", err)
 	}
 	if err := db.DeleteProfileConfigSetBinding(ctx, "profile-a", "codex", "user-config"); err != nil {
@@ -694,15 +783,18 @@ func TestProviderConfigSetCRUDAndReferences(t *testing.T) {
 	}
 	if _, err := db.UpsertProfileConfigSetBinding(ctx, UpsertProfileConfigSetBindingParams{
 		ProfileID: "profile-a", ProviderID: "other", SlotID: "user-config", ConfigSetID: created.ID,
-	}); err == nil {
-		t.Fatalf("expected cross-provider Config Set binding to be rejected")
+	}); err != nil {
+		t.Fatalf("Provider-local Config Set binding should resolve the other Provider's same id: %v", err)
 	}
-	references, err = db.CountProviderConfigSetReferences(ctx, created.ID)
+	references, err = db.CountProviderConfigSetReferences(ctx, "codex", created.ID)
 	if err != nil || references != 0 {
-		t.Fatalf("expected other-provider target not to reference config set, got count=%d err=%v", references, err)
+		t.Fatalf("other Provider binding changed Codex reference count: count=%d err=%v", references, err)
 	}
-	if err := db.DeleteProviderConfigSet(ctx, created.ID); err != nil {
+	if err := db.DeleteProviderConfigSet(ctx, "codex", created.ID); err != nil {
 		t.Fatalf("expected unreferenced config set delete to succeed, got %v", err)
+	}
+	if _, err := db.GetProviderConfigSet(ctx, "other", created.ID); err != nil {
+		t.Fatalf("deleting Codex Config Set removed the other Provider's same id: %v", err)
 	}
 }
 
@@ -750,6 +842,7 @@ func TestProviderCredentialCRUD(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createStoreOperationFixtures(t, ctx, db, "codex")
 
 	createdPayload := `{"tokens":{"account_id":"Team/Shared","access_token":"raw"}}`
 	createdHash := testPayloadSHA256(createdPayload)
@@ -835,8 +928,8 @@ func TestTypedResourceBindingsEnforceProviderAndSharing(t *testing.T) {
 		t.Fatalf("expected SQLite foreign key enforcement, got enabled=%d err=%v", foreignKeysEnabled, err)
 	}
 	for _, provider := range []CreateProviderParams{
-		{ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: "{}"},
-		{ID: "other", Name: "Other", AdapterID: "generic", Enabled: true, MetadataJSON: "{}"},
+		{ID: "codex", Name: "Codex", AdapterID: "codex", MetadataJSON: "{}"},
+		{ID: "other", Name: "Other", AdapterID: "generic", MetadataJSON: "{}"},
 	} {
 		if _, err := db.CreateProvider(ctx, provider); err != nil {
 			t.Fatalf("expected provider create to succeed, got %v", err)
@@ -887,7 +980,7 @@ func TestTypedResourceBindingsEnforceProviderAndSharing(t *testing.T) {
 	if references, err := db.CountProviderCredentialReferences(ctx, "shared-login"); err != nil || references != 1 {
 		t.Fatalf("expected shared credential reference count to decrease, got count=%d err=%v", references, err)
 	}
-	if references, err := db.CountProviderConfigSetReferences(ctx, "shared-config"); err != nil || references != 2 {
+	if references, err := db.CountProviderConfigSetReferences(ctx, "codex", "shared-config"); err != nil || references != 2 {
 		t.Fatalf("expected shared Config Set to have two references, got count=%d err=%v", references, err)
 	}
 	if _, err := db.UpsertProfileCredentialBinding(ctx, UpsertProfileCredentialBindingParams{
@@ -908,8 +1001,14 @@ func TestTypedResourceBindingsEnforceProviderAndSharing(t *testing.T) {
 	if _, err := db.executor().ExecContext(ctx, "DELETE FROM provider_credentials WHERE id = ?", "shared-login"); err == nil {
 		t.Fatalf("expected referenced credential deletion to be rejected by the database")
 	}
-	if err := db.DeleteProvider(ctx, "other"); !errors.Is(err, ErrInUse) {
-		t.Fatalf("expected Provider with an unbound resource to remain in use, got %v", err)
+	if err := db.DeleteProvider(ctx, "other"); err != nil {
+		t.Fatalf("Provider-owned unbound resources should cascade on delete: %v", err)
+	}
+	if _, err := db.GetProviderCredential(ctx, "other-login"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Provider deletion retained owned credential: %v", err)
+	}
+	if _, err := db.GetProviderConfigSet(ctx, "other", "other-config"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Provider deletion retained owned Config Set: %v", err)
 	}
 }
 
@@ -978,6 +1077,7 @@ func TestCompareAndSwapProviderCredentialRejectsStalePayload(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations, got %v", err)
 	}
+	createStoreOperationFixtures(t, ctx, db, "codex")
 	payload := `{"tokens":{"account_id":"display","access_token":"old"}}`
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(payload)))
 	if _, err := db.UpsertProviderCredential(ctx, UpsertProviderCredentialParams{
@@ -1021,7 +1121,7 @@ func TestDeleteProviderCredentialRequiresAllBindingsReleased(t *testing.T) {
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
 	if _, err := db.CreateProvider(ctx, CreateProviderParams{
-		ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: `{}`,
+		ID: "codex", Name: "Codex", AdapterID: "codex", MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("create Provider: %v", err)
 	}
@@ -1069,7 +1169,7 @@ func TestLateInactiveCredentialCASCannotRecreateDeletedProfileCredential(t *test
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
 	if _, err := db.CreateProvider(ctx, CreateProviderParams{
-		ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: `{}`,
+		ID: "codex", Name: "Codex", AdapterID: "codex", MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("create Provider: %v", err)
 	}
@@ -1138,8 +1238,11 @@ func TestDefaultMetadataJSONValuesAreObjects(t *testing.T) {
 		t.Fatalf("expected profile insert to succeed, got %v", err)
 	}
 	_, err = db.db.DB.ExecContext(ctx, `
-		INSERT INTO operations (id, operation_type, status, created_at_unix_ms, updated_at_unix_ms)
-		VALUES ('operation-1', 'maintenance', 'pending', 1, 1)
+		INSERT INTO operations (
+			id, provider_id, operation_type, status,
+			metadata_schema_version, created_at_unix_ms, updated_at_unix_ms
+		)
+		VALUES ('operation-1', 'provider-1', 'maintenance', 'pending', 1, 1, 1)
 	`)
 	if err != nil {
 		t.Fatalf("expected operation insert to succeed, got %v", err)
@@ -1197,10 +1300,10 @@ func TestWithTransactionRollsBackCRUD(t *testing.T) {
 	errRollback := errors.New("rollback")
 	err := db.WithTransaction(ctx, func(txStore *Store) error {
 		if _, err := txStore.CreateProvider(ctx, CreateProviderParams{
-			ID:        "provider-1",
-			Name:      "Provider 1",
-			AdapterID: "adapter-1",
-			Enabled:   true,
+			ID:           "provider-1",
+			Name:         "Provider 1",
+			AdapterID:    "adapter-1",
+			MetadataJSON: `{}`,
 		}); err != nil {
 			return err
 		}
@@ -1273,13 +1376,17 @@ func TestStatusCountsPendingAndFailedOperations(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createStoreOperationFixtures(t, ctx, db, "provider-a")
 
 	_, err := db.db.DB.ExecContext(ctx, `
-		INSERT INTO operations (id, operation_type, status, created_at_unix_ms, updated_at_unix_ms)
+		INSERT INTO operations (
+			id, provider_id, operation_type, status,
+			metadata_schema_version, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		)
 		VALUES
-			('operation-1', 'maintenance', 'pending', 1, 1),
-			('operation-2', 'maintenance', 'failed', 1, 1),
-			('operation-3', 'maintenance', 'applied', 1, 1)
+			('operation-1', 'provider-a', 'maintenance', 'pending', 1, '{}', 1, 1),
+			('operation-2', 'provider-a', 'maintenance', 'failed', 1, '{}', 1, 1),
+			('operation-3', 'provider-a', 'maintenance', 'applied', 1, '{}', 1, 1)
 	`)
 	if err != nil {
 		t.Fatalf("expected operation insert to succeed, got %v", err)
@@ -1304,14 +1411,18 @@ func TestListIncompleteOperationsFiltersAndSorts(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createStoreOperationFixtures(t, ctx, db, "provider-a")
 
 	_, err := db.db.DB.ExecContext(ctx, `
-		INSERT INTO operations (id, operation_type, status, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		INSERT INTO operations (
+			id, provider_id, operation_type, status,
+			metadata_schema_version, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		)
 		VALUES
-			('operation-applied', 'maintenance', 'applied', '{}', 1, 1),
-			('operation-failed-b', 'maintenance', 'failed', '{}', 1, 20),
-			('operation-pending-a', 'maintenance', 'pending', '{}', 1, 10),
-			('operation-failed-a', 'maintenance', 'failed', '{}', 1, 20)
+			('operation-applied', 'provider-a', 'maintenance', 'applied', 1, '{}', 1, 1),
+			('operation-failed-b', 'provider-a', 'maintenance', 'failed', 1, '{}', 1, 20),
+			('operation-pending-a', 'provider-a', 'maintenance', 'pending', 1, '{}', 1, 10),
+			('operation-failed-a', 'provider-a', 'maintenance', 'failed', 1, '{}', 1, 20)
 	`)
 	if err != nil {
 		t.Fatalf("expected operation setup to succeed, got %v", err)
@@ -1334,8 +1445,10 @@ func TestUnresolvedSwitchOperationGateAndPreWriteRejection(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
+	createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-a")
 	if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
-		ID: "switch-blocked", ProfileID: "profile-a", MetadataJSON: `{"checkpoint":"created"}`,
+		ID: "switch-blocked", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: OperationMetadataSchemaVersion, MetadataJSON: `{"checkpoint":"created"}`,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1377,30 +1490,39 @@ func TestSwitchOperationLifecycle(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-a", "profile-b")
 
 	operation, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
-		ID:           "switch-1",
-		ProfileID:    "profile-a",
-		MetadataJSON: `{"checkpoint":"created"}`,
+		ID: "switch-1", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: OperationMetadataSchemaVersion,
+		MetadataJSON:          `{"checkpoint":"created"}`,
 	})
 	if err != nil {
 		t.Fatalf("expected pending switch operation create to succeed, got %v", err)
 	}
-	if operation.OperationType != OperationTypeSwitch || operation.Status != OperationStatusPending || operation.ProfileID != "profile-a" {
+	if operation.OperationType != OperationTypeSwitch || operation.Status != OperationStatusPending ||
+		operation.ProviderID != "provider-a" || operation.MetadataSchemaVersion != OperationMetadataSchemaVersion {
 		t.Fatalf("unexpected pending operation: %#v", operation)
 	}
-	if operation.MetadataJSON != `{"checkpoint":"created"}` {
+	if !strings.Contains(operation.MetadataJSON, `"checkpoint":"created"`) ||
+		!strings.Contains(operation.MetadataJSON, `"provider_id":"provider-a"`) {
 		t.Fatalf("unexpected operation metadata: %s", operation.MetadataJSON)
 	}
+	if profileIDs, err := db.ListOperationProfileIDs(ctx, "switch-1"); err != nil || strings.Join(profileIDs, ",") != "profile-a" {
+		t.Fatalf("unexpected operation Profile relations: ids=%v err=%v", profileIDs, err)
+	}
 
-	if err := db.UpdateOperationMetadata(ctx, "switch-1", `{"checkpoint":"backup"}`); err != nil {
+	if err := db.UpdateOperationMetadata(
+		ctx, "switch-1", OperationMetadataSchemaVersion,
+		`{"checkpoint":"backup"}`, []string{"profile-a"},
+	); err != nil {
 		t.Fatalf("expected metadata update to succeed, got %v", err)
 	}
 	operation, err = db.GetOperation(ctx, "switch-1")
 	if err != nil {
 		t.Fatalf("expected operation read to succeed, got %v", err)
 	}
-	if operation.MetadataJSON != `{"checkpoint":"backup"}` || operation.Status != OperationStatusPending {
+	if !strings.Contains(operation.MetadataJSON, `"checkpoint":"backup"`) || operation.Status != OperationStatusPending {
 		t.Fatalf("unexpected operation after metadata update: %#v", operation)
 	}
 
@@ -1408,10 +1530,11 @@ func TestSwitchOperationLifecycle(t *testing.T) {
 	configHash := fmt.Sprintf("%x", sha256.Sum256([]byte(configPayload)))
 	credentialPayload := `{"token":"hidden"}`
 	if err := db.CompleteSwitchOperation(ctx, CompleteSwitchOperationParams{
-		ID:           "switch-1",
-		ProfileID:    "profile-a",
-		ProviderID:   "provider-a",
-		MetadataJSON: `{"checkpoint":"complete"}`,
+		ID:                    "switch-1",
+		ProfileID:             "profile-a",
+		ProviderID:            "provider-a",
+		MetadataSchemaVersion: OperationMetadataSchemaVersion,
+		MetadataJSON:          `{"checkpoint":"complete"}`,
 		CredentialUpdates: []UpsertProviderCredentialParams{{
 			ID: "credential-a", ProviderID: "provider-a", CredentialKind: "json", PayloadJSON: credentialPayload, PayloadSHA256: testPayloadSHA256(credentialPayload),
 		}},
@@ -1425,21 +1548,22 @@ func TestSwitchOperationLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected operation read after completion to succeed, got %v", err)
 	}
-	if operation.Status != OperationStatusApplied || operation.ErrorCode != "" || operation.ErrorMessage != "" || operation.MetadataJSON != `{"checkpoint":"complete"}` {
+	if operation.Status != OperationStatusApplied || operation.ErrorCode != "" || operation.ErrorMessage != "" ||
+		!strings.Contains(operation.MetadataJSON, `"checkpoint":"complete"`) {
 		t.Fatalf("unexpected completed operation: %#v", operation)
 	}
 
-	activeState, err := db.GetActiveState(ctx, ActiveStateScopeProvider, "provider-a")
+	activeState, err := db.GetActiveState(ctx, "provider-a")
 	if err != nil {
 		t.Fatalf("expected active state read to succeed, got %v", err)
 	}
-	if activeState.ProfileID != "profile-a" || activeState.OperationID != "switch-1" {
+	if activeState.ProfileID != "profile-a" || activeState.Revision != 1 {
 		t.Fatalf("unexpected active state: %#v", activeState)
 	}
 	if credential, err := db.GetProviderCredential(ctx, "credential-a"); err != nil || credential.PayloadJSON != `{"token":"hidden"}` {
 		t.Fatalf("expected credential update to commit with switch, got %#v err=%v", credential, err)
 	}
-	if configSet, err := db.GetProviderConfigSet(ctx, "config-a"); err != nil || configSet.PayloadText != configPayload {
+	if configSet, err := db.GetProviderConfigSet(ctx, "provider-a", "config-a"); err != nil || configSet.PayloadText != configPayload {
 		t.Fatalf("expected config set update to commit with switch, got %#v err=%v", configSet, err)
 	}
 	if required, err := db.RecoveryCleanupRequired(ctx); err != nil || !required {
@@ -1447,9 +1571,8 @@ func TestSwitchOperationLifecycle(t *testing.T) {
 	}
 
 	if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
-		ID:           "switch-2",
-		ProfileID:    "profile-b",
-		MetadataJSON: `{}`,
+		ID: "switch-2", ProviderID: "provider-a", ProfileIDs: []string{"profile-b"},
+		MetadataSchemaVersion: OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("expected second pending switch operation create to succeed, got %v", err)
 	}
@@ -1466,12 +1589,55 @@ func TestSwitchOperationLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected failed operation read to succeed, got %v", err)
 	}
-	if operation.Status != OperationStatusFailed || operation.ErrorCode != "TARGET_WRITE_FAILED" || operation.ErrorMessage != "write failed" || operation.MetadataJSON != failedMetadata {
+	if operation.Status != OperationStatusFailed || operation.ErrorCode != "TARGET_WRITE_FAILED" ||
+		operation.ErrorMessage != "write failed" ||
+		!strings.Contains(operation.MetadataJSON, `"checkpoint":"failed"`) {
 		t.Fatalf("unexpected failed operation: %#v", operation)
 	}
 }
 
-func TestRecoveryOperationAtomicallyResolvesSourceAndRestoresActiveState(t *testing.T) {
+func TestMaintenanceOperationSeparatesActiveProfileFromRelations(t *testing.T) {
+	ctx := context.Background()
+	db := migratedTestStore(t, ctx)
+	defer closeTestStore(t, db)
+	createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-before", "profile-next")
+	if _, err := db.SetProviderActiveState(ctx, "provider-a", "profile-before"); err != nil {
+		t.Fatalf("set previous active Profile: %v", err)
+	}
+
+	if _, err := db.CreateAppliedMaintenanceOperation(ctx, CreateAppliedMaintenanceOperationParams{
+		ID: "maintenance-active", ProviderID: "provider-a",
+		RelatedProfileIDs:     []string{"profile-next"},
+		ActiveProfileID:       "profile-next",
+		MetadataSchemaVersion: OperationMetadataSchemaVersion,
+		MetadataJSON:          `{}`,
+	}); err != nil {
+		t.Fatalf("create active maintenance operation: %v", err)
+	}
+	active, err := db.GetActiveState(ctx, "provider-a")
+	if err != nil || active.ProfileID != "profile-next" {
+		t.Fatalf("active state = %#v, %v", active, err)
+	}
+	profileIDs, err := db.ListOperationProfileIDs(ctx, "maintenance-active")
+	if err != nil || strings.Join(profileIDs, ",") != "profile-before,profile-next" {
+		t.Fatalf("operation Profiles = %v, %v", profileIDs, err)
+	}
+
+	if _, err := db.CreateAppliedMaintenanceOperation(ctx, CreateAppliedMaintenanceOperationParams{
+		ID: "maintenance-invalid", ProviderID: "provider-a",
+		RelatedProfileIDs:     []string{"profile-before"},
+		ActiveProfileID:       "profile-next",
+		MetadataSchemaVersion: OperationMetadataSchemaVersion,
+		MetadataJSON:          `{}`,
+	}); err == nil {
+		t.Fatal("active Profile outside the operation relations was accepted")
+	}
+	if _, err := db.GetOperation(ctx, "maintenance-invalid"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("invalid maintenance operation was persisted: %v", err)
+	}
+}
+
+func TestRecoveryOperationAtomicallyResolvesSourceWithoutRewritingActiveState(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
 
@@ -1481,11 +1647,16 @@ func TestRecoveryOperationAtomicallyResolvesSourceAndRestoresActiveState(t *test
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-next", "profile-a")
+	activeBefore, err := db.SetProviderActiveState(ctx, "provider-a", "profile-a")
+	if err != nil {
+		t.Fatalf("create active state fixture: %v", err)
+	}
 
 	if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
-		ID:           "switch-source",
-		ProfileID:    "profile-next",
-		MetadataJSON: `{"checkpoint":"recovery_created"}`,
+		ID: "switch-source", ProviderID: "provider-a", ProfileIDs: []string{"profile-next", "profile-a"},
+		MetadataSchemaVersion: OperationMetadataSchemaVersion,
+		MetadataJSON:          `{"checkpoint":"recovery_created"}`,
 	}); err != nil {
 		t.Fatalf("create source switch operation: %v", err)
 	}
@@ -1497,24 +1668,22 @@ func TestRecoveryOperationAtomicallyResolvesSourceAndRestoresActiveState(t *test
 	}
 
 	operation, err := db.CreatePendingRecoveryOperation(ctx, CreateRecoveryOperationParams{
-		ID:           "recovery-1",
-		ProfileID:    "profile-a",
-		MetadataJSON: `{"checkpoint":"created"}`,
+		ID: "recovery-1", ProviderID: "provider-a", SourceOperationID: "switch-source",
+		ProfileIDs:            []string{"profile-next", "profile-a"},
+		MetadataSchemaVersion: OperationMetadataSchemaVersion,
+		MetadataJSON:          `{"checkpoint":"created"}`,
 	})
 	if err != nil {
 		t.Fatalf("create pending recovery operation: %v", err)
 	}
-	if operation.OperationType != OperationTypeRecovery || operation.Status != OperationStatusPending || operation.ProfileID != "profile-a" {
+	if operation.OperationType != OperationTypeRecovery || operation.Status != OperationStatusPending ||
+		operation.ProviderID != "provider-a" || operation.SourceOperationID != "switch-source" {
 		t.Fatalf("unexpected pending recovery operation: %#v", operation)
 	}
 
 	if err := db.CompleteRecoveryOperation(ctx, CompleteRecoveryOperationParams{
 		ID: "recovery-1", SourceOperationID: "switch-source", ResolutionKind: "recovered_pre_switch",
-		ProfileID: "profile-a", ProviderID: "provider-a",
-		RestoredActiveState: &RecoveryActiveStateParams{
-			ProfileID:   "profile-a",
-			OperationID: "switch-previous",
-		},
+		ProviderID: "provider-a", MetadataSchemaVersion: OperationMetadataSchemaVersion,
 		MetadataJSON: `{"checkpoint":"applied"}`,
 	}); err != nil {
 		t.Fatalf("complete recovery operation: %v", err)
@@ -1523,19 +1692,19 @@ func TestRecoveryOperationAtomicallyResolvesSourceAndRestoresActiveState(t *test
 	if err != nil {
 		t.Fatalf("read recovery operation: %v", err)
 	}
-	if operation.Status != OperationStatusApplied || operation.ProfileID != "profile-a" || operation.MetadataJSON != `{"checkpoint":"applied"}` {
+	if operation.Status != OperationStatusApplied || !strings.Contains(operation.MetadataJSON, `"checkpoint":"applied"`) {
 		t.Fatalf("unexpected completed recovery operation: %#v", operation)
 	}
 	source, err := db.GetOperation(ctx, "switch-source")
 	if err != nil || source.Status != OperationStatusFailed || source.ResolutionKind != "recovered_pre_switch" || source.ResolvedAtUnixMS == 0 {
 		t.Fatalf("source failure and resolution were not retained: %#v error=%v", source, err)
 	}
-	activeState, err := db.GetActiveState(ctx, ActiveStateScopeProvider, "provider-a")
+	activeState, err := db.GetActiveState(ctx, "provider-a")
 	if err != nil {
 		t.Fatalf("expected restored active state read to succeed, got %v", err)
 	}
-	if activeState.ProfileID != "profile-a" || activeState.OperationID != "switch-previous" {
-		t.Fatalf("unexpected restored active state: %#v", activeState)
+	if activeState.ProfileID != activeBefore.ProfileID || activeState.Revision != activeBefore.Revision {
+		t.Fatalf("recovery rewrote active state: before=%#v after=%#v", activeBefore, activeState)
 	}
 	if required, err := db.RecoveryCleanupRequired(ctx); err != nil || !required {
 		t.Fatalf("recovery completion cleanup state = %t, %v", required, err)
@@ -1546,12 +1715,48 @@ func TestRecoveryOperationAtomicallyResolvesSourceAndRestoresActiveState(t *test
 	}
 }
 
+func TestRecoveryOperationRequiresSourceFromSameProviderAndCascadesWithSource(t *testing.T) {
+	ctx := context.Background()
+	db := migratedTestStore(t, ctx)
+	defer closeTestStore(t, db)
+	createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-a")
+	createStoreOperationFixtures(t, ctx, db, "provider-b", "profile-b")
+	if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
+		ID: "switch-a", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: OperationMetadataSchemaVersion, MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreatePendingRecoveryOperation(ctx, CreateRecoveryOperationParams{
+		ID: "recovery-b", ProviderID: "provider-b", SourceOperationID: "switch-a",
+		ProfileIDs: []string{"profile-b"}, MetadataSchemaVersion: OperationMetadataSchemaVersion,
+		MetadataJSON: `{}`,
+	}); !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("cross-Provider recovery error = %v, want a constraint rejection", err)
+	}
+	if _, err := db.CreatePendingRecoveryOperation(ctx, CreateRecoveryOperationParams{
+		ID: "recovery-a", ProviderID: "provider-a", SourceOperationID: "switch-a",
+		ProfileIDs: []string{"profile-a"}, MetadataSchemaVersion: OperationMetadataSchemaVersion,
+		MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("same-Provider recovery create: %v", err)
+	}
+	if _, err := db.executor().ExecContext(ctx, `DELETE FROM operations WHERE id = 'switch-a'`); err != nil {
+		t.Fatalf("delete source operation: %v", err)
+	}
+	if _, err := db.GetOperation(ctx, "recovery-a"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("source operation deletion retained recovery child: %v", err)
+	}
+}
+
 func TestSwitchCompletionRollsBackWhenCleanupRegistrationFails(t *testing.T) {
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
+	createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-a")
 	if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
-		ID: "switch-rollback", ProfileID: "profile-a", MetadataJSON: `{}`,
+		ID: "switch-rollback", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1559,7 +1764,8 @@ func TestSwitchCompletionRollsBackWhenCleanupRegistrationFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := db.CompleteSwitchOperation(ctx, CompleteSwitchOperationParams{
-		ID: "switch-rollback", ProfileID: "profile-a", ProviderID: "provider-a", MetadataJSON: `{}`,
+		ID: "switch-rollback", ProfileID: "profile-a", ProviderID: "provider-a",
+		MetadataSchemaVersion: OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 	}); err == nil {
 		t.Fatal("CompleteSwitchOperation() succeeded without cleanup registration")
 	}
@@ -1567,7 +1773,7 @@ func TestSwitchCompletionRollsBackWhenCleanupRegistrationFails(t *testing.T) {
 	if err != nil || operation.Status != OperationStatusPending {
 		t.Fatalf("operation after rollback = %#v, %v", operation, err)
 	}
-	if _, err := db.GetActiveState(ctx, ActiveStateScopeProvider, "provider-a"); !errors.Is(err, ErrNotFound) {
+	if _, err := db.GetActiveState(ctx, "provider-a"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("active state committed without cleanup registration: %v", err)
 	}
 }
@@ -1578,20 +1784,21 @@ func TestOtherCleanupRegistrationPointsRollBackAtomically(t *testing.T) {
 	t.Run("recovery completion", func(t *testing.T) {
 		db := migratedTestStore(t, ctx)
 		defer closeTestStore(t, db)
+		createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-next", "profile-before", "profile-restored")
 		if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
-			ID: "switch-source", ProfileID: "profile-next", MetadataJSON: `{}`,
+			ID: "switch-source", ProviderID: "provider-a", ProfileIDs: []string{"profile-next", "profile-before"},
+			MetadataSchemaVersion: OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 		}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := db.CreatePendingRecoveryOperation(ctx, CreateRecoveryOperationParams{
-			ID: "recovery-attempt", ProfileID: "profile-next", MetadataJSON: `{}`,
+			ID: "recovery-attempt", ProviderID: "provider-a", SourceOperationID: "switch-source",
+			ProfileIDs:            []string{"profile-next", "profile-before"},
+			MetadataSchemaVersion: OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.db.DB.ExecContext(ctx, `
-			INSERT INTO active_states (scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms)
-			VALUES (?, ?, ?, ?, 1)
-		`, ActiveStateScopeProvider, "provider-a", "profile-before", "switch-before"); err != nil {
+		if _, err := db.SetProviderActiveState(ctx, "provider-a", "profile-before"); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := db.db.DB.ExecContext(ctx, `DROP TABLE system_state`); err != nil {
@@ -1600,19 +1807,18 @@ func TestOtherCleanupRegistrationPointsRollBackAtomically(t *testing.T) {
 
 		err := db.CompleteRecoveryOperation(ctx, CompleteRecoveryOperationParams{
 			ID: "recovery-attempt", SourceOperationID: "switch-source", ResolutionKind: "recovered_pre_switch",
-			ProfileID: "profile-restored", ProviderID: "provider-a",
-			RestoredActiveState: &RecoveryActiveStateParams{ProfileID: "profile-restored", OperationID: "switch-restored"},
-			MetadataJSON:        `{}`,
+			ProviderID: "provider-a", MetadataSchemaVersion: OperationMetadataSchemaVersion,
+			MetadataJSON: `{}`,
 		})
 		if err == nil {
 			t.Fatal("CompleteRecoveryOperation() succeeded without cleanup registration")
 		}
 		recovery, recoveryErr := db.GetOperation(ctx, "recovery-attempt")
 		source, sourceErr := db.GetOperation(ctx, "switch-source")
-		active, activeErr := db.GetActiveState(ctx, ActiveStateScopeProvider, "provider-a")
+		active, activeErr := db.GetActiveState(ctx, "provider-a")
 		if recoveryErr != nil || recovery.Status != OperationStatusPending ||
 			sourceErr != nil || source.ResolvedAtUnixMS != 0 ||
-			activeErr != nil || active.ProfileID != "profile-before" || active.OperationID != "switch-before" {
+			activeErr != nil || active.ProfileID != "profile-before" || active.Revision != 1 {
 			t.Fatalf("recovery rollback = recovery %#v/%v source %#v/%v active %#v/%v", recovery, recoveryErr, source, sourceErr, active, activeErr)
 		}
 	})
@@ -1620,8 +1826,10 @@ func TestOtherCleanupRegistrationPointsRollBackAtomically(t *testing.T) {
 	t.Run("source closure", func(t *testing.T) {
 		db := migratedTestStore(t, ctx)
 		defer closeTestStore(t, db)
+		createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-a")
 		if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
-			ID: "switch-close", ProfileID: "profile-a", MetadataJSON: `{}`,
+			ID: "switch-close", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+			MetadataSchemaVersion: OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -1640,15 +1848,14 @@ func TestOtherCleanupRegistrationPointsRollBackAtomically(t *testing.T) {
 	t.Run("application restore preparation", func(t *testing.T) {
 		db := migratedTestStore(t, ctx)
 		defer closeTestStore(t, db)
+		createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-a")
 		if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
-			ID: "switch-restore", ProfileID: "profile-a", MetadataJSON: `{}`,
+			ID: "switch-restore", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+			MetadataSchemaVersion: OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.db.DB.ExecContext(ctx, `
-			INSERT INTO active_states (scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms)
-			VALUES (?, ?, ?, ?, 1)
-		`, ActiveStateScopeProvider, "provider-a", "profile-a", "switch-restore"); err != nil {
+		if _, err := db.SetProviderActiveState(ctx, "provider-a", "profile-a"); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := db.db.DB.ExecContext(ctx, `DROP TABLE system_state`); err != nil {
@@ -1658,9 +1865,9 @@ func TestOtherCleanupRegistrationPointsRollBackAtomically(t *testing.T) {
 			t.Fatal("PrepareForApplicationRestore() succeeded without cleanup registration")
 		}
 		operation, operationErr := db.GetOperation(ctx, "switch-restore")
-		active, activeErr := db.GetActiveState(ctx, ActiveStateScopeProvider, "provider-a")
+		active, activeErr := db.GetActiveState(ctx, "provider-a")
 		if operationErr != nil || operation.ResolvedAtUnixMS != 0 ||
-			activeErr != nil || active.ProfileID != "profile-a" || active.OperationID != "switch-restore" {
+			activeErr != nil || active.ProfileID != "profile-a" || active.Revision != 1 {
 			t.Fatalf("restore preparation rollback = operation %#v/%v active %#v/%v", operation, operationErr, active, activeErr)
 		}
 	})
@@ -1670,9 +1877,11 @@ func TestCleanupRegistrationIsLimitedToDedicatedResolutionPaths(t *testing.T) {
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
+	createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-a")
 	for _, id := range []string{"switch-generic", "switch-cleanup"} {
 		if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
-			ID: id, ProfileID: "profile-a", MetadataJSON: `{}`,
+			ID: id, ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+			MetadataSchemaVersion: OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -1737,14 +1946,14 @@ func TestSettingCRUD(t *testing.T) {
 	}
 }
 
-func TestProviderProfileSettingsDefaultsValidationAndProfileDeleteCleanup(t *testing.T) {
+func TestProviderProfileSettingsVersionedJSONAndProfileDeleteCleanup(t *testing.T) {
 	ctx := context.Background()
 	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
 	defer closeTestStore(t, db)
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations, got %v", err)
 	}
-	if _, err := db.CreateProvider(ctx, CreateProviderParams{ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: `{}`}); err != nil {
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{ID: "codex", Name: "Codex", AdapterID: "codex", MetadataJSON: `{}`}); err != nil {
 		t.Fatalf("expected provider fixture, got %v", err)
 	}
 	if _, err := db.CreateProfile(ctx, CreateProfileParams{ID: "work", Name: "Work", MetadataJSON: `{}`}); err != nil {
@@ -1754,15 +1963,18 @@ func TestProviderProfileSettingsDefaultsValidationAndProfileDeleteCleanup(t *tes
 		t.Fatalf("expected absent settings to represent defaults, got %v", err)
 	}
 	created, err := db.UpsertProviderProfileSetting(ctx, UpsertProviderProfileSettingParams{
-		ProfileID: "work", ProviderID: "codex", QuotaRefreshIntervalSeconds: 600, AuthKeepaliveEnabled: true,
+		ProfileID: "work", ProviderID: "codex", SchemaVersion: ProviderSettingsSchemaVersion,
+		SettingsJSON: `{"quota_refresh_interval_seconds":600,"auth_keepalive_enabled":true}`,
 	})
-	if err != nil || created.QuotaRefreshIntervalSeconds != 600 || !created.AuthKeepaliveEnabled {
+	if err != nil || created.SchemaVersion != ProviderSettingsSchemaVersion ||
+		created.SettingsJSON != `{"quota_refresh_interval_seconds":600,"auth_keepalive_enabled":true}` {
 		t.Fatalf("unexpected provider Profile setting: %#v, %v", created, err)
 	}
 	if _, err := db.UpsertProviderProfileSetting(ctx, UpsertProviderProfileSettingParams{
-		ProfileID: "work", ProviderID: "codex", QuotaRefreshIntervalSeconds: 900,
+		ProfileID: "work", ProviderID: "codex", SchemaVersion: ProviderSettingsSchemaVersion,
+		SettingsJSON: `{"invalid":`,
 	}); err == nil {
-		t.Fatal("expected unsupported interval rejection")
+		t.Fatal("malformed settings JSON was accepted")
 	}
 	if err := db.DeleteProfile(ctx, "work"); err != nil {
 		t.Fatalf("expected profile delete with local settings cleanup, got %v", err)
@@ -1787,7 +1999,6 @@ func TestProviderCRUD(t *testing.T) {
 		ID:           "provider-b",
 		Name:         "Provider B",
 		AdapterID:    "adapter-b",
-		Enabled:      false,
 		MetadataJSON: `{"region":"us"}`,
 	}); err != nil {
 		t.Fatalf("expected disabled provider create to succeed, got %v", err)
@@ -1796,36 +2007,26 @@ func TestProviderCRUD(t *testing.T) {
 		ID:           "provider-a",
 		Name:         "Provider A",
 		AdapterID:    "adapter-a",
-		Enabled:      true,
 		MetadataJSON: `{}`,
 	})
 	if err != nil {
 		t.Fatalf("expected provider create to succeed, got %v", err)
 	}
-	if provider.ID != "provider-a" || !provider.Enabled || provider.MetadataJSON != "{}" {
+	if provider.ID != "provider-a" || provider.MetadataJSON != "{}" {
 		t.Fatalf("unexpected created provider: %#v", provider)
 	}
 	if _, err := db.CreateProvider(ctx, CreateProviderParams{
 		ID:           "provider-a",
 		Name:         "Duplicate",
 		AdapterID:    "adapter-a",
-		Enabled:      true,
 		MetadataJSON: `{}`,
 	}); !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("expected duplicate provider error, got %v", err)
 	}
 
-	enabledOnly, err := db.ListProviders(ctx, false)
+	all, err := db.ListProviders(ctx)
 	if err != nil {
 		t.Fatalf("expected provider list to succeed, got %v", err)
-	}
-	if gotIDs(enabledOnly) != "provider-a" {
-		t.Fatalf("expected enabled provider list to contain provider-a, got %#v", enabledOnly)
-	}
-
-	all, err := db.ListProviders(ctx, true)
-	if err != nil {
-		t.Fatalf("expected all provider list to succeed, got %v", err)
 	}
 	if gotIDs(all) != "provider-a,provider-b" {
 		t.Fatalf("expected id-sorted provider list, got %#v", all)
@@ -1833,19 +2034,17 @@ func TestProviderCRUD(t *testing.T) {
 
 	name := "Provider A Updated"
 	adapterID := "adapter-updated"
-	enabled := false
 	metadata := `{"tier":"paid"}`
 	updated, err := db.UpdateProvider(ctx, UpdateProviderParams{
 		ID:           "provider-a",
 		Name:         &name,
 		AdapterID:    &adapterID,
-		Enabled:      &enabled,
 		MetadataJSON: &metadata,
 	})
 	if err != nil {
 		t.Fatalf("expected provider update to succeed, got %v", err)
 	}
-	if updated.Name != name || updated.AdapterID != adapterID || updated.Enabled || updated.MetadataJSON != metadata {
+	if updated.Name != name || updated.AdapterID != adapterID || updated.MetadataJSON != metadata {
 		t.Fatalf("unexpected updated provider: %#v", updated)
 	}
 	metadataOnly := `{"region":"eu"}`
@@ -1856,7 +2055,7 @@ func TestProviderCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected provider partial update to succeed, got %v", err)
 	}
-	if updated.Name != name || updated.AdapterID != adapterID || updated.Enabled || updated.MetadataJSON != metadataOnly {
+	if updated.Name != name || updated.AdapterID != adapterID || updated.MetadataJSON != metadataOnly {
 		t.Fatalf("expected provider partial update to preserve omitted fields, got %#v", updated)
 	}
 
@@ -1868,7 +2067,7 @@ func TestProviderCRUD(t *testing.T) {
 	}
 }
 
-func TestProviderDeleteInUseProtection(t *testing.T) {
+func TestProviderDeleteCascadesOwnedStateButOperationsRestrictBypass(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
 
@@ -1882,38 +2081,47 @@ func TestProviderDeleteInUseProtection(t *testing.T) {
 		ID:           "provider-active",
 		Name:         "Provider Active",
 		AdapterID:    "generic",
-		Enabled:      true,
 		MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("expected active provider create to succeed, got %v", err)
 	}
-	if _, err := db.db.DB.ExecContext(ctx, `
-		INSERT INTO active_states (scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms)
-		VALUES (?, ?, ?, ?, ?)
-	`, ActiveStateScopeProvider, "provider-active", "profile-a", "switch-a", 1); err != nil {
+	if _, err := db.CreateProfile(ctx, CreateProfileParams{
+		ID: "profile-a", Name: "Profile A", MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("create Profile fixture: %v", err)
+	}
+	if _, err := db.SetProviderActiveState(ctx, "provider-active", "profile-a"); err != nil {
 		t.Fatalf("expected active state setup to succeed, got %v", err)
 	}
-	if err := db.DeleteProvider(ctx, "provider-active"); !errors.Is(err, ErrInUse) {
-		t.Fatalf("expected active provider delete to fail, got %v", err)
+	if err := db.DeleteProvider(ctx, "provider-active"); err != nil {
+		t.Fatalf("active state should cascade with Provider deletion: %v", err)
+	}
+	if _, err := db.GetActiveState(ctx, "provider-active"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Provider deletion retained active state: %v", err)
 	}
 
 	if _, err := db.CreateProvider(ctx, CreateProviderParams{
 		ID:           "provider-history",
 		Name:         "Provider History",
 		AdapterID:    "generic",
-		Enabled:      true,
 		MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("expected history provider create to succeed, got %v", err)
 	}
-	if _, err := db.db.DB.ExecContext(ctx, `
-		INSERT INTO operations (id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, "switch-history", OperationTypeSwitch, OperationStatusApplied, "profile-a", `{"provider_id":"provider-history"}`, 1, 1); err != nil {
+	if _, err := db.CreateAppliedMaintenanceOperation(ctx, CreateAppliedMaintenanceOperationParams{
+		ID: "provider-history-operation", ProviderID: "provider-history", RelatedProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: OperationMetadataSchemaVersion, MetadataJSON: `{}`,
+	}); err != nil {
 		t.Fatalf("expected operation setup to succeed, got %v", err)
 	}
 	if err := db.DeleteProvider(ctx, "provider-history"); !errors.Is(err, ErrInUse) {
 		t.Fatalf("expected operation-referenced provider delete to fail, got %v", err)
+	}
+	if err := db.DeleteResolvedProviderOperations(ctx, "provider-history"); err != nil {
+		t.Fatalf("delete resolved Provider operation history: %v", err)
+	}
+	if err := db.DeleteProvider(ctx, "provider-history"); err != nil {
+		t.Fatalf("delete Provider after explicit history cleanup: %v", err)
 	}
 }
 
@@ -1951,6 +2159,7 @@ func TestProfileCRUDAndInUseDelete(t *testing.T) {
 			t.Fatalf("expected profile create to succeed, got %v", err)
 		}
 	}
+	createStoreOperationFixtures(t, ctx, db, "provider-a")
 	if _, err := db.CreateProfile(ctx, CreateProfileParams{
 		ID:           "profile-a",
 		Name:         "Duplicate",
@@ -1993,29 +2202,33 @@ func TestProfileCRUDAndInUseDelete(t *testing.T) {
 		t.Fatalf("expected profile partial update to preserve omitted fields, got %#v", updated)
 	}
 
-	_, err = db.db.DB.ExecContext(ctx, `
-		INSERT INTO active_states (scope_type, scope_id, profile_id, updated_at_unix_ms)
-		VALUES ('global', 'default', 'profile-a', 1)
-	`)
-	if err != nil {
+	if _, err = db.SetProviderActiveState(ctx, "provider-a", "profile-a"); err != nil {
 		t.Fatalf("expected active state setup to succeed, got %v", err)
 	}
 	if err := db.DeleteProfile(ctx, "profile-a"); !errors.Is(err, ErrInUse) {
 		t.Fatalf("expected in-use profile delete to fail, got %v", err)
 	}
 
-	_, err = db.db.DB.ExecContext(ctx, `
-		INSERT INTO operations (id, operation_type, status, profile_id, created_at_unix_ms, updated_at_unix_ms)
-		VALUES ('operation-c', 'switch', 'applied', 'profile-c', 1, 1)
-	`)
-	if err != nil {
+	if _, err = db.CreateAppliedMaintenanceOperation(ctx, CreateAppliedMaintenanceOperationParams{
+		ID:                    "operation-c",
+		ProviderID:            "provider-a",
+		RelatedProfileIDs:     []string{"profile-c"},
+		MetadataSchemaVersion: OperationMetadataSchemaVersion,
+		MetadataJSON:          `{}`,
+	}); err != nil {
 		t.Fatalf("expected operation setup to succeed, got %v", err)
 	}
-	if err := db.DeleteProfile(ctx, "profile-c"); err != nil {
-		t.Fatalf("expected historical operation to allow Profile deletion, got %v", err)
+	if err := db.DeleteProfile(ctx, "profile-c"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("expected operation-referenced Profile delete to fail, got %v", err)
 	}
-	if _, err := db.GetOperation(ctx, "operation-c"); err != nil {
-		t.Fatalf("expected historical operation to remain after Profile deletion, got %v", err)
+	if err := db.DeleteResolvedProfileOperations(ctx, "profile-c"); err != nil {
+		t.Fatalf("delete resolved Profile operations: %v", err)
+	}
+	if err := db.DeleteProfile(ctx, "profile-c"); err != nil {
+		t.Fatalf("delete Profile after explicit operation cleanup: %v", err)
+	}
+	if _, err := db.GetOperation(ctx, "operation-c"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected related operation to be deleted, got %v", err)
 	}
 
 	if err := db.DeleteProfile(ctx, "profile-b"); err != nil {
@@ -2040,7 +2253,6 @@ func TestProfileTargetCRUDAndReferences(t *testing.T) {
 		ID:           "provider-a",
 		Name:         "Provider A",
 		AdapterID:    "generic",
-		Enabled:      true,
 		MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("expected provider create to succeed, got %v", err)
@@ -2128,18 +2340,77 @@ func TestProfileTargetCRUDAndReferences(t *testing.T) {
 	if providerRefs != 2 || profileRefs != 2 {
 		t.Fatalf("unexpected target references: provider=%d profile=%d", providerRefs, profileRefs)
 	}
-	if err := db.DeleteProvider(ctx, "provider-a"); !errors.Is(err, ErrInUse) {
-		t.Fatalf("expected target-referenced provider delete to fail, got %v", err)
-	}
-	if err := db.DeleteProfile(ctx, "profile-a"); !errors.Is(err, ErrInUse) {
-		t.Fatalf("expected target-referenced profile delete to fail, got %v", err)
-	}
-
 	if err := db.DeleteProfileTarget(ctx, "profile-a", "provider-a", "target-a"); err != nil {
 		t.Fatalf("expected profile target delete to succeed, got %v", err)
 	}
 	if _, err := db.GetProfileTarget(ctx, "profile-a", "provider-a", "target-a"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected deleted target to be missing, got %v", err)
+	}
+	if err := db.DeleteProvider(ctx, "provider-a"); err != nil {
+		t.Fatalf("expected Provider-owned targets to cascade on Provider delete, got %v", err)
+	}
+	if _, err := db.GetProfileTarget(ctx, "profile-a", "provider-a", "target-b"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected Provider delete to remove target, got %v", err)
+	}
+	if _, err := db.GetProfile(ctx, "profile-a"); err != nil {
+		t.Fatalf("expected Provider delete to preserve global Profile, got %v", err)
+	}
+
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{
+		ID: "provider-b", Name: "Provider B", AdapterID: "generic", MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("create second Provider: %v", err)
+	}
+	if _, err := db.CreateProfileTarget(ctx, CreateProfileTargetParams{
+		ProfileID: "profile-a", ProviderID: "provider-b", TargetID: "target-c",
+		Path: filepath.Join(t.TempDir(), "target-c.txt"), Format: "text", Strategy: "replace-file",
+		ValueJSON: `{"content":"c"}`, Enabled: true, MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatalf("create Profile-owned target: %v", err)
+	}
+	if err := db.DeleteProfile(ctx, "profile-a"); err != nil {
+		t.Fatalf("expected Profile-owned targets to cascade on Profile delete, got %v", err)
+	}
+	if _, err := db.GetProfileTarget(ctx, "profile-a", "provider-b", "target-c"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected Profile delete to remove target, got %v", err)
+	}
+	if _, err := db.GetProvider(ctx, "provider-b"); err != nil {
+		t.Fatalf("expected Profile delete to preserve Provider, got %v", err)
+	}
+}
+
+func TestProfileTargetWritesUseRuntimeFormatRegistry(t *testing.T) {
+	ctx := context.Background()
+	db := migratedTestStore(t, ctx)
+	defer closeTestStore(t, db)
+	createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-a")
+
+	path := filepath.Join(t.TempDir(), "target.json")
+	if _, err := db.CreateProfileTarget(ctx, CreateProfileTargetParams{
+		ProfileID: "profile-a", ProviderID: "provider-a", TargetID: "unknown",
+		Path: path, Format: "future-json", Strategy: "future-merge",
+		ValueJSON: `{}`, Enabled: true, MetadataJSON: `{}`,
+	}); err == nil {
+		t.Fatal("Store accepted an unregistered target format/strategy")
+	}
+	target, err := db.CreateProfileTarget(ctx, CreateProfileTargetParams{
+		ProfileID: "profile-a", ProviderID: "provider-a", TargetID: "known",
+		Path: path, Format: "json", Strategy: "json-merge",
+		ValueJSON: `{}`, Enabled: true, MetadataJSON: `{}`,
+	})
+	if err != nil {
+		t.Fatalf("create registered target: %v", err)
+	}
+	futureStrategy := "future-merge"
+	if _, err := db.UpdateProfileTarget(ctx, UpdateProfileTargetParams{
+		ProfileID: target.ProfileID, ProviderID: target.ProviderID, TargetID: target.TargetID,
+		Strategy: &futureStrategy,
+	}); err == nil {
+		t.Fatal("Store accepted an unregistered target strategy update")
+	}
+	unchanged, err := db.GetProfileTarget(ctx, target.ProfileID, target.ProviderID, target.TargetID)
+	if err != nil || unchanged.Format != "json" || unchanged.Strategy != "json-merge" {
+		t.Fatalf("rejected registry update changed target: target=%#v err=%v", unchanged, err)
 	}
 }
 
@@ -2157,7 +2428,6 @@ func TestProfileTargetUniquePath(t *testing.T) {
 		ID:           "provider-a",
 		Name:         "Provider A",
 		AdapterID:    "generic",
-		Enabled:      true,
 		MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("expected first provider create to succeed, got %v", err)
@@ -2166,7 +2436,6 @@ func TestProfileTargetUniquePath(t *testing.T) {
 		ID:           "provider-b",
 		Name:         "Provider B",
 		AdapterID:    "generic",
-		Enabled:      true,
 		MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatalf("expected second provider create to succeed, got %v", err)
@@ -2229,6 +2498,8 @@ func TestProfileTargetPathKeyPreventsCaseVariantOwnershipBypass(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-a")
+	createStoreOperationFixtures(t, ctx, db, "provider-b", "profile-b")
 
 	targetDir := t.TempDir()
 	lowerPath := filepath.Join(targetDir, "settings.json")
@@ -2269,14 +2540,23 @@ func TestProfileTargetPathKeyPreventsCaseVariantOwnershipBypass(t *testing.T) {
 func TestConcurrentProfileTargetPathOwnerConflict(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+	const workers = 8
 
 	db := openTestStore(t, ctx, dbPath, false)
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	for i := range workers {
+		createStoreOperationFixtures(
+			t,
+			ctx,
+			db,
+			fmt.Sprintf("provider-%d", i),
+			fmt.Sprintf("profile-%d", i),
+		)
+	}
 	closeTestStore(t, db)
 
-	const workers = 8
 	path := filepath.Join(t.TempDir(), "shared-target.txt")
 	errs := make(chan error, workers)
 	var wg sync.WaitGroup
@@ -2377,10 +2657,13 @@ func TestDriftedIndexIsUnhealthy(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
-	if _, err := db.db.DB.ExecContext(ctx, "DROP INDEX idx_operations_status"); err != nil {
+	if _, err := db.db.DB.ExecContext(ctx, "DROP INDEX idx_operations_provider_status_updated"); err != nil {
 		t.Fatalf("expected index drop to succeed, got %v", err)
 	}
-	if _, err := db.db.DB.ExecContext(ctx, "CREATE INDEX idx_operations_status ON operations(operation_type)"); err != nil {
+	if _, err := db.db.DB.ExecContext(
+		ctx,
+		"CREATE INDEX idx_operations_provider_status_updated ON operations(operation_type)",
+	); err != nil {
 		t.Fatalf("expected drifted index setup to succeed, got %v", err)
 	}
 
@@ -2475,10 +2758,10 @@ func TestExpressionIndexForRequiredNameIsUnhealthy(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
-	if _, err := db.db.DB.ExecContext(ctx, "DROP INDEX idx_providers_enabled"); err != nil {
+	if _, err := db.db.DB.ExecContext(ctx, "DROP INDEX idx_providers_adapter_id"); err != nil {
 		t.Fatalf("expected index drop to succeed, got %v", err)
 	}
-	if _, err := db.db.DB.ExecContext(ctx, "CREATE INDEX idx_providers_enabled ON providers(lower(name))"); err != nil {
+	if _, err := db.db.DB.ExecContext(ctx, "CREATE INDEX idx_providers_adapter_id ON providers(lower(adapter_id))"); err != nil {
 		t.Fatalf("expected expression index setup to succeed, got %v", err)
 	}
 
@@ -2509,6 +2792,28 @@ func migratedTestStore(t *testing.T, ctx context.Context) *Store {
 		t.Fatalf("migrate test store: %v", err)
 	}
 	return db
+}
+
+func createStoreOperationFixtures(
+	t *testing.T,
+	ctx context.Context,
+	db *Store,
+	providerID string,
+	profileIDs ...string,
+) {
+	t.Helper()
+	if _, err := db.CreateProvider(ctx, CreateProviderParams{
+		ID: providerID, Name: providerID, AdapterID: "generic", MetadataJSON: `{}`,
+	}); err != nil && !errors.Is(err, ErrAlreadyExists) {
+		t.Fatalf("create operation Provider fixture %q: %v", providerID, err)
+	}
+	for _, profileID := range profileIDs {
+		if _, err := db.CreateProfile(ctx, CreateProfileParams{
+			ID: profileID, Name: profileID, MetadataJSON: `{}`,
+		}); err != nil && !errors.Is(err, ErrAlreadyExists) {
+			t.Fatalf("create operation Profile fixture %q: %v", profileID, err)
+		}
+	}
 }
 
 func assertIntegrityIssue(t *testing.T, ctx context.Context, db *Store, kind string) IntegrityReport {
@@ -2546,6 +2851,78 @@ func assertSQLiteObjectExists(t *testing.T, ctx context.Context, db *Store, obje
 	}
 	if !exists {
 		t.Fatalf("expected %s %s to exist", objectType, name)
+	}
+}
+
+func assertSchemaObjectsMatchContract(t *testing.T, ctx context.Context, db *Store, contract schemaContract) {
+	t.Helper()
+
+	expectedTables := make([]string, 0, len(contract.tableSpecs))
+	for _, spec := range contract.tableSpecs {
+		expectedTables = append(expectedTables, spec.name)
+	}
+	expectedIndexes := make([]string, 0, len(contract.indexSpecs))
+	for _, spec := range contract.indexSpecs {
+		expectedIndexes = append(expectedIndexes, spec.name)
+	}
+	expectedTriggers := make([]string, 0, len(contract.triggerSpecs))
+	for _, spec := range contract.triggerSpecs {
+		expectedTriggers = append(expectedTriggers, spec.name)
+	}
+
+	for _, testCase := range []struct {
+		objectType string
+		query      string
+		expected   []string
+	}{
+		{
+			objectType: "tables",
+			query: `SELECT name FROM sqlite_schema
+				WHERE type = 'table'
+					AND name NOT LIKE 'sqlite_%'
+					AND name NOT IN ('bun_migrations', 'bun_migration_locks')
+				ORDER BY name`,
+			expected: expectedTables,
+		},
+		{
+			objectType: "indexes",
+			query: `SELECT name FROM sqlite_schema
+				WHERE type = 'index'
+					AND sql IS NOT NULL
+					AND name <> 'bun_migrations_name_unique'
+				ORDER BY name`,
+			expected: expectedIndexes,
+		},
+		{
+			objectType: "triggers",
+			query:      `SELECT name FROM sqlite_schema WHERE type = 'trigger' ORDER BY name`,
+			expected:   expectedTriggers,
+		},
+	} {
+		sort.Strings(testCase.expected)
+		rows, err := db.executor().QueryContext(ctx, testCase.query)
+		if err != nil {
+			t.Fatalf("list Stable %s: %v", testCase.objectType, err)
+		}
+		actual := []string{}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				_ = rows.Close()
+				t.Fatalf("scan Stable %s: %v", testCase.objectType, err)
+			}
+			actual = append(actual, name)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			t.Fatalf("iterate Stable %s: %v", testCase.objectType, err)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatalf("close Stable %s query: %v", testCase.objectType, err)
+		}
+		if !equalStrings(actual, testCase.expected) {
+			t.Fatalf("Stable %s = %v, contract declares %v", testCase.objectType, actual, testCase.expected)
+		}
 	}
 }
 
@@ -2607,7 +2984,6 @@ func assertConcurrentProviderCreate(t *testing.T, ctx context.Context, dbPath st
 				ID:           "provider-concurrent",
 				Name:         "Provider Concurrent",
 				AdapterID:    "adapter-concurrent",
-				Enabled:      true,
 				MetadataJSON: `{}`,
 			})
 			if closeErr := db.Close(); err == nil {

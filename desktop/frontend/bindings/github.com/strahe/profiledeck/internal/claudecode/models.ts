@@ -12,7 +12,6 @@ export interface ClaudeCodeDetectResult {
     "expires_at_unix_ms"?: number;
     "profiledeck_initialized": boolean;
     "provider_exists": boolean;
-    "provider_enabled": boolean;
     "provider_compatible": boolean;
     "keychain_authorization_required": boolean;
     "observed_auth_override_hints": string[] | null;
@@ -41,7 +40,6 @@ export interface ClaudeCodeProfileSummary {
     "credential_reference_count": number;
     "expires_at_unix_ms"?: number;
     "active": boolean;
-    "active_operation_id"?: string;
     "updated_at_unix_ms": number;
     "warnings"?: string[] | null;
 }

@@ -33,7 +33,7 @@ func TestClaudeCodeFirstCapturePersistsFileLocatorAcrossEnvironmentChanges(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detect.CredentialStatus != "valid" || !detect.ProviderEnabled || !strings.Contains(strings.Join(detect.Warnings, "\n"), "different CLAUDE_CONFIG_DIR") {
+	if detect.CredentialStatus != "valid" || !strings.Contains(strings.Join(detect.Warnings, "\n"), "different CLAUDE_CONFIG_DIR") {
 		t.Fatalf("detect after environment change = %#v", detect)
 	}
 	plan, err := newClaudeCodeTestEnvironment(t, configDir).switching.BuildPlan(ctx, switching.BuildPlanRequest{ProviderID: claudecodeconfig.ProviderID, ProfileID: "work"})

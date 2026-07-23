@@ -324,7 +324,7 @@ func TestDoctorReportsCodexPresetAndBindingFailures(t *testing.T) {
 	if err := db.DeleteProfileConfigSetBinding(ctx, "work", codexconfig.ProviderID, codexpreset.ConfigSetSlotUserConfig); err != nil {
 		t.Fatalf("expected config binding delete, got %v", err)
 	}
-	if err := db.DeleteProviderConfigSet(ctx, created.Summary.ConfigSetID); err != nil {
+	if err := db.DeleteProviderConfigSet(ctx, codexconfig.ProviderID, created.Summary.ConfigSetID); err != nil {
 		t.Fatalf("expected unbound config set delete, got %v", err)
 	}
 	if err := db.Close(); err != nil {
@@ -386,16 +386,16 @@ func TestDoctorReportsIncompleteOperationsAndRedactsSensitiveMetadata(t *testing
 	db := openWritableAppTestStore(t, ctx, initResult.DatabasePath)
 	defer db.Close()
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID:           "switch-pending",
-		ProfileID:    "profile-a",
-		MetadataJSON: `{"checkpoint":"planned","provider_id":"provider-a","profile_id":"profile-a"}`,
+		ID: "switch-pending", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          `{"checkpoint":"planned","provider_id":"provider-a","profile_id":"profile-a"}`,
 	}); err != nil {
 		t.Fatalf("expected pending switch setup to succeed, got %v", err)
 	}
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID:           "switch-failed",
-		ProfileID:    "profile-a",
-		MetadataJSON: `{"checkpoint":"recovery_created","provider_id":"provider-a","profile_id":"profile-a","recovery_path":"/private/recovery-data"}`,
+		ID: "switch-failed", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          `{"checkpoint":"recovery_created","provider_id":"provider-a","profile_id":"profile-a","recovery_path":"/private/recovery-data"}`,
 	}); err != nil {
 		t.Fatalf("expected failed switch setup to succeed, got %v", err)
 	}
@@ -409,9 +409,9 @@ func TestDoctorReportsIncompleteOperationsAndRedactsSensitiveMetadata(t *testing
 		t.Fatalf("expected switch failure setup to succeed, got %v", err)
 	}
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID:           "switch-malformed",
-		ProfileID:    "profile-a",
-		MetadataJSON: `{"api_key":"raw-secret"}`,
+		ID: "switch-malformed", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          `{"api_key":"raw-secret"}`,
 	}); err != nil {
 		t.Fatalf("expected malformed switch setup to succeed, got %v", err)
 	}
@@ -466,9 +466,9 @@ func TestDoctorReportsActiveLockAndPendingOperationAsWarning(t *testing.T) {
 	db := openWritableAppTestStore(t, ctx, initResult.DatabasePath)
 	defer db.Close()
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID:           "switch-active",
-		ProfileID:    "profile-a",
-		MetadataJSON: `{"checkpoint":"planned"}`,
+		ID: "switch-active", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          `{"checkpoint":"planned"}`,
 	}); err != nil {
 		t.Fatalf("expected pending operation setup to succeed, got %v", err)
 	}
@@ -503,9 +503,9 @@ func TestDoctorReportsStaleFailedLockAndRepairRemovesOnlyLock(t *testing.T) {
 	}
 	db := openWritableAppTestStore(t, ctx, initResult.DatabasePath)
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID:           "switch-stale",
-		ProfileID:    "profile-a",
-		MetadataJSON: `{"checkpoint":"backed_up","provider_id":"provider-a","profile_id":"profile-a"}`,
+		ID: "switch-stale", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          `{"checkpoint":"backed_up","provider_id":"provider-a","profile_id":"profile-a"}`,
 	}); err != nil {
 		t.Fatalf("expected failed operation setup to succeed, got %v", err)
 	}
@@ -567,7 +567,7 @@ func TestDoctorReportsFailedSwitchRecoveryStatus(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected init to succeed, got %v", err)
 		}
-		createGenericProviderAndProfile(t, ctx, configDir, true)
+		createGenericProviderAndProfile(t, ctx, configDir)
 		dir := t.TempDir()
 		firstPath := filepath.Join(dir, "target-a.txt")
 		secondPath := filepath.Join(dir, "missing", "target-b.txt")
@@ -596,9 +596,9 @@ func TestDoctorReportsFailedSwitchRecoveryStatus(t *testing.T) {
 		db := openWritableAppTestStore(t, ctx, initResult.DatabasePath)
 		defer db.Close()
 		if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-			ID:           "switch-before-backup",
-			ProfileID:    "profile-a",
-			MetadataJSON: `{"checkpoint":"planned","provider_id":"provider-a","profile_id":"profile-a"}`,
+			ID: "switch-before-backup", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+			MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+			MetadataJSON:          `{"checkpoint":"planned","provider_id":"provider-a","profile_id":"profile-a"}`,
 		}); err != nil {
 			t.Fatalf("expected operation setup to succeed, got %v", err)
 		}
@@ -628,7 +628,7 @@ func TestDoctorReportsFailedSwitchRecoveryStatus(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected init to succeed, got %v", err)
 		}
-		createGenericProviderAndProfile(t, ctx, configDir, true)
+		createGenericProviderAndProfile(t, ctx, configDir)
 		dir := t.TempDir()
 		firstPath := filepath.Join(dir, "target-a.txt")
 		secondPath := filepath.Join(dir, "missing", "target-b.txt")
@@ -682,28 +682,19 @@ func TestDoctorReportsAppliedLockResidueAsOKAndRepairable(t *testing.T) {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	db := openWritableAppTestStore(t, ctx, initResult.DatabasePath)
-	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
-		ID: "provider-a", Name: "Provider A", AdapterID: "generic", Enabled: true, MetadataJSON: `{}`,
-	}); err != nil {
-		t.Fatalf("create provider fixture: %v", err)
-	}
-	if _, err := db.CreateProfile(ctx, store.CreateProfileParams{
-		ID: "profile-a", Name: "Profile A", MetadataJSON: `{}`,
-	}); err != nil {
-		t.Fatalf("create profile fixture: %v", err)
-	}
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID:           "switch-applied",
-		ProfileID:    "profile-a",
-		MetadataJSON: `{"checkpoint":"planned"}`,
+		ID: "switch-applied", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          `{"checkpoint":"planned"}`,
 	}); err != nil {
 		t.Fatalf("expected pending switch setup to succeed, got %v", err)
 	}
 	if err := db.CompleteSwitchOperation(ctx, store.CompleteSwitchOperationParams{
-		ID:           "switch-applied",
-		ProfileID:    "profile-a",
-		ProviderID:   "provider-a",
-		MetadataJSON: `{"checkpoint":"applied"}`,
+		ID:                    "switch-applied",
+		ProfileID:             "profile-a",
+		ProviderID:            "provider-a",
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          `{"checkpoint":"applied"}`,
 	}); err != nil {
 		t.Fatalf("expected applied switch setup to succeed, got %v", err)
 	}
@@ -817,9 +808,9 @@ func TestDoctorRefusesUnsafeLocks(t *testing.T) {
 		db := openWritableAppTestStore(t, ctx, initResult.DatabasePath)
 		defer db.Close()
 		if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-			ID:           "switch-pending-lock",
-			ProfileID:    "profile-a",
-			MetadataJSON: `{"checkpoint":"planned"}`,
+			ID: "switch-pending-lock", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+			MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+			MetadataJSON:          `{"checkpoint":"planned"}`,
 		}); err != nil {
 			t.Fatalf("expected pending operation setup to succeed, got %v", err)
 		}
@@ -846,9 +837,9 @@ func TestDoctorRefusesUnsafeLocks(t *testing.T) {
 		db := openWritableAppTestStore(t, ctx, initResult.DatabasePath)
 		defer db.Close()
 		if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-			ID:           "switch-pending-reused-pid",
-			ProfileID:    "profile-a",
-			MetadataJSON: `{"checkpoint":"planned"}`,
+			ID: "switch-pending-reused-pid", ProviderID: "provider-a", ProfileIDs: []string{"profile-a"},
+			MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+			MetadataJSON:          `{"checkpoint":"planned"}`,
 		}); err != nil {
 			t.Fatalf("expected pending operation setup to succeed, got %v", err)
 		}
@@ -1102,14 +1093,17 @@ func applyDoctorDatabaseDefect(t *testing.T, path, defect string) {
 			t.Fatal(err)
 		}
 	case "json":
+		if _, err := db.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := db.Exec(`INSERT INTO settings (key, value_json, updated_at_unix_ms)
 			VALUES ('invalid-json', '{"token":"SECRET_INTEGRITY_SENTINEL"', 1)`); err != nil {
 			t.Fatal(err)
 		}
 	case "references":
 		if _, err := db.Exec(`INSERT INTO provider_profile_settings
-			(profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms)
-			VALUES ('missing-profile', 'missing-provider', 0, 0, 1)`); err != nil {
+			(profile_id, provider_id, schema_version, settings_json, updated_at_unix_ms)
+			VALUES ('missing-profile', 'missing-provider', 1, '{}', 1)`); err != nil {
 			t.Fatal(err)
 		}
 	case "system_state":

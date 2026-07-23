@@ -62,6 +62,7 @@ func TestUsageReportAggregatesRangeModelsBucketsAndImportHealth(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("expected usage source, got %v", err)
@@ -145,6 +146,7 @@ func TestUsageSummaryPreservesPersistedCostStatusMeanings(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("migrate usage store: %v", err)
 	}
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("begin usage sync: %v", err)
@@ -193,6 +195,7 @@ func TestUsageSummaryKeepsSourcesAndFactsInOneSnapshot(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("migrate usage store: %v", err)
 	}
+	createUsageProviderFixture(t, ctx, db, "codex")
 	rawDB := db.db.DB
 	rawDB.SetMaxOpenConns(1)
 	var journalMode string
@@ -274,6 +277,7 @@ func TestUsageReportTransactionKeepsAConsistentReadSnapshot(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createUsageProviderFixture(t, ctx, db, "codex")
 	var journalMode string
 	if err := db.db.DB.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&journalMode); err != nil || strings.ToLower(journalMode) != "wal" {
 		t.Fatalf("expected WAL mode for concurrent snapshot test, mode=%q err=%v", journalMode, err)
@@ -339,6 +343,7 @@ func TestUsageReportPreservesSafeAndRejectsUnsafeModelLabels(t *testing.T) {
 	if _, err := db.Migrate(ctx); err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("expected usage source, got %v", err)

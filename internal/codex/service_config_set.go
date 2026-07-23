@@ -60,7 +60,7 @@ func (service *Service) ListConfigSets(ctx context.Context) (CodexConfigSetListR
 		return CodexConfigSetListResult{}, err
 	}
 	defer db.Close()
-	if _, err := requireEnabledProvider(ctx, db); err != nil {
+	if _, err := requireCodexProvider(ctx, db); err != nil {
 		return CodexConfigSetListResult{}, err
 	}
 
@@ -117,7 +117,7 @@ func (service *Service) GetConfigSet(ctx context.Context, rawID string) (CodexCo
 		return CodexConfigSet{}, err
 	}
 	defer db.Close()
-	if _, err := requireEnabledProvider(ctx, db); err != nil {
+	if _, err := requireCodexProvider(ctx, db); err != nil {
 		return CodexConfigSet{}, err
 	}
 	configSet, err := requireCodexConfigSet(ctx, db, id)
@@ -155,7 +155,7 @@ func (service *Service) CreateConfigSet(ctx context.Context, req CreateCodexConf
 		if err != nil {
 			return err
 		}
-		if _, getErr := txStore.GetProviderConfigSet(ctx, id); getErr == nil {
+		if _, getErr := txStore.GetProviderConfigSet(ctx, codexconfig.ProviderID, id); getErr == nil {
 			return apperror.New(apperror.ProfileAlreadyExists, "Codex config set already exists").WithDetail("config_set_id", id)
 		} else if !errors.Is(getErr, store.ErrNotFound) {
 			return mapCodexConfigSetStoreError(getErr)
@@ -204,14 +204,14 @@ func (service *Service) CopyConfigSet(ctx context.Context, req CopyCodexConfigSe
 	err = service.maintenance.RunMaintenance(ctx, maintenance.Request{
 		Operation: "codex-config-set-copy", ProviderID: codexconfig.ProviderID, Record: false,
 	}, func(ctx context.Context, txStore *store.Store, _ string) error {
-		if _, err := requireEnabledProvider(ctx, txStore); err != nil {
+		if _, err := requireCodexProvider(ctx, txStore); err != nil {
 			return err
 		}
 		source, err := requireCodexConfigSet(ctx, txStore, sourceID)
 		if err != nil {
 			return err
 		}
-		if _, getErr := txStore.GetProviderConfigSet(ctx, id); getErr == nil {
+		if _, getErr := txStore.GetProviderConfigSet(ctx, codexconfig.ProviderID, id); getErr == nil {
 			return apperror.New(apperror.ProfileAlreadyExists, "Codex config set already exists").WithDetail("config_set_id", id)
 		} else if !errors.Is(getErr, store.ErrNotFound) {
 			return mapCodexConfigSetStoreError(getErr)
@@ -262,11 +262,16 @@ func (service *Service) UpdateConfigSet(ctx context.Context, req UpdateCodexConf
 	err := service.maintenance.RunMaintenance(ctx, maintenance.Request{
 		Operation: "codex-config-set-update", ProviderID: codexconfig.ProviderID, Record: false,
 	}, func(ctx context.Context, txStore *store.Store, _ string) error {
-		if _, err := requireEnabledProvider(ctx, txStore); err != nil {
+		if _, err := requireCodexProvider(ctx, txStore); err != nil {
 			return err
 		}
 		var err error
-		stored, err = txStore.UpdateProviderConfigSet(ctx, store.UpdateProviderConfigSetParams{ID: id, Name: name, Description: description})
+		stored, err = txStore.UpdateProviderConfigSet(ctx, store.UpdateProviderConfigSetParams{
+			ProviderID:  codexconfig.ProviderID,
+			ID:          id,
+			Name:        name,
+			Description: description,
+		})
 		return mapCodexConfigSetStoreError(err)
 	})
 	if err != nil {
@@ -295,10 +300,10 @@ func (service *Service) DeleteConfigSet(ctx context.Context, rawID string) error
 	return service.maintenance.RunMaintenance(ctx, maintenance.Request{
 		Operation: "codex-config-set-delete", ProviderID: codexconfig.ProviderID, Record: false,
 	}, func(ctx context.Context, txStore *store.Store, _ string) error {
-		if _, err := requireEnabledProvider(ctx, txStore); err != nil {
+		if _, err := requireCodexProvider(ctx, txStore); err != nil {
 			return err
 		}
-		return mapCodexConfigSetStoreError(txStore.DeleteProviderConfigSet(ctx, id))
+		return mapCodexConfigSetStoreError(txStore.DeleteProviderConfigSet(ctx, codexconfig.ProviderID, id))
 	})
 }
 

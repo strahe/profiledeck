@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -17,10 +18,16 @@ import (
 
 const (
 	CodexUsageSyncIntervalDefault = codexautomation.UsageSyncIntervalDefault
-
-	codexUsageSyncIntervalSettingKey         = "codex.usage_sync_interval_seconds"
-	legacyDesktopUsageSyncIntervalSettingKey = "desktop.usage_sync_interval_seconds"
 )
+
+type codexProviderSettingsV1 struct {
+	UsageSyncIntervalSeconds int `json:"usage_sync_interval_seconds"`
+}
+
+type codexProfileSettingsV1 struct {
+	QuotaRefreshIntervalSeconds int  `json:"quota_refresh_interval_seconds"`
+	AuthKeepaliveEnabled        bool `json:"auth_keepalive_enabled"`
+}
 
 type UpdateCodexSettingsRequest struct {
 	ProfileID                   string `json:"profile_id,omitempty"`
@@ -62,23 +69,15 @@ func (service *Service) GetSettings(ctx context.Context) (CodexSettings, error) 
 	if err := service.requireAccess(ctx); err != nil {
 		return CodexSettings{}, err
 	}
-	// The first read performs the one-time legacy key migration. This is local
-	// application state only and does not touch Codex-owned files.
-	db, err := service.openStore(ctx, false)
+	db, err := service.openStore(ctx, true)
 	if err != nil {
 		return CodexSettings{}, err
 	}
 	defer db.Close()
-	if _, err := requireEnabledProviderIfPresent(ctx, db); err != nil {
+	if _, err := requireCodexProviderIfPresent(ctx, db); err != nil {
 		return CodexSettings{}, err
 	}
-	var result CodexSettings
-	err = db.WithTransaction(ctx, func(txStore *store.Store) error {
-		var txErr error
-		result, txErr = getCodexSettings(ctx, txStore, true)
-		return txErr
-	})
-	return result, err
+	return getCodexSettings(ctx, db)
 }
 
 func (service *Service) UpdateSettings(ctx context.Context, req UpdateCodexSettingsRequest) (CodexSettings, error) {
@@ -90,13 +89,12 @@ func (service *Service) UpdateSettings(ctx context.Context, req UpdateCodexSetti
 		return CodexSettings{}, err
 	}
 	defer db.Close()
-	if _, err := requireEnabledProviderIfPresent(ctx, db); err != nil {
-		return CodexSettings{}, err
-	}
-
 	var result CodexSettings
 	err = db.WithTransaction(ctx, func(txStore *store.Store) error {
-		current, err := getCodexSettings(ctx, txStore, false)
+		if _, err := requireCodexProvider(ctx, txStore); err != nil {
+			return err
+		}
+		current, err := getCodexSettings(ctx, txStore)
 		if err != nil {
 			return err
 		}
@@ -105,11 +103,10 @@ func (service *Service) UpdateSettings(ctx context.Context, req UpdateCodexSetti
 			if appErr != nil {
 				return appErr
 			}
-			if err := upsertCodexSetting(ctx, txStore, codexUsageSyncIntervalSettingKey, interval); err != nil {
+			if err := upsertCodexProviderSettings(ctx, txStore, codexProviderSettingsV1{
+				UsageSyncIntervalSeconds: interval,
+			}); err != nil {
 				return err
-			}
-			if err := txStore.DeleteSetting(ctx, legacyDesktopUsageSyncIntervalSettingKey); err != nil && !errors.Is(err, store.ErrNotFound) {
-				return apperror.Wrap(apperror.StoreStatusFailed, "failed to remove migrated Codex usage sync setting", err)
 			}
 		}
 
@@ -143,15 +140,23 @@ func (service *Service) UpdateSettings(ctx context.Context, req UpdateCodexSetti
 			if appErr := codexautomation.ValidateProfileSettings(interval, keepalive, profileSettings.QuotaSupported, profileSettings.AuthKeepaliveSupported); appErr != nil {
 				return appErr.WithDetail("profile_id", profileID)
 			}
+			settingsJSON, err := json.Marshal(codexProfileSettingsV1{
+				QuotaRefreshIntervalSeconds: interval,
+				AuthKeepaliveEnabled:        keepalive,
+			})
+			if err != nil {
+				return apperror.Wrap(apperror.SettingInvalid, "failed to encode Codex profile settings", err)
+			}
 			if _, err := txStore.UpsertProviderProfileSetting(ctx, store.UpsertProviderProfileSettingParams{
 				ProfileID: profileID, ProviderID: codexconfig.ProviderID,
-				QuotaRefreshIntervalSeconds: interval, AuthKeepaliveEnabled: keepalive,
+				SchemaVersion: store.ProviderSettingsSchemaVersion,
+				SettingsJSON:  string(settingsJSON),
 			}); err != nil {
 				return apperror.Wrap(apperror.StoreStatusFailed, "failed to save Codex profile settings", err)
 			}
 		}
 
-		result, err = getCodexSettings(ctx, txStore, false)
+		result, err = getCodexSettings(ctx, txStore)
 		return err
 	})
 	if err != nil {
@@ -169,10 +174,10 @@ func (service *Service) ListAutomationTargets(ctx context.Context) ([]CodexAutom
 		return nil, err
 	}
 	defer db.Close()
-	if _, err := requireEnabledProviderIfPresent(ctx, db); err != nil {
+	if _, err := requireCodexProviderIfPresent(ctx, db); err != nil {
 		return nil, err
 	}
-	settings, err := getCodexSettings(ctx, db, false)
+	settings, err := getCodexSettings(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -212,18 +217,10 @@ func (service *Service) ListAutomationTargets(ctx context.Context) ([]CodexAutom
 	return result, nil
 }
 
-func getCodexSettings(ctx context.Context, db *store.Store, migrateLegacy bool) (CodexSettings, error) {
-	interval, legacy, err := getCodexUsageSyncInterval(ctx, db)
+func getCodexSettings(ctx context.Context, db *store.Store) (CodexSettings, error) {
+	interval, err := getCodexUsageSyncInterval(ctx, db)
 	if err != nil {
 		return CodexSettings{}, err
-	}
-	if migrateLegacy && legacy {
-		if err := upsertCodexSetting(ctx, db, codexUsageSyncIntervalSettingKey, interval); err != nil {
-			return CodexSettings{}, err
-		}
-		if err := db.DeleteSetting(ctx, legacyDesktopUsageSyncIntervalSettingKey); err != nil && !errors.Is(err, store.ErrNotFound) {
-			return CodexSettings{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to remove migrated Codex usage sync setting", err)
-		}
 	}
 	summaries, err := listCodexProfileSummaries(ctx, db)
 	if err != nil {
@@ -251,8 +248,12 @@ func getCodexSettings(ctx context.Context, db *store.Store, migrateLegacy bool) 
 			CredentialReferenceCount: references[summary.CredentialID],
 		}
 		if setting, ok := storedByProfile[summary.Profile.ID]; ok {
-			value.QuotaRefreshIntervalSeconds = setting.QuotaRefreshIntervalSeconds
-			value.AuthKeepaliveEnabled = setting.AuthKeepaliveEnabled
+			payload, err := decodeCodexProfileSettings(setting)
+			if err != nil {
+				return CodexSettings{}, err
+			}
+			value.QuotaRefreshIntervalSeconds = payload.QuotaRefreshIntervalSeconds
+			value.AuthKeepaliveEnabled = payload.AuthKeepaliveEnabled
 			value.UpdatedAtUnixMS = setting.UpdatedAtUnixMS
 		}
 		if summary.CredentialID != "" {
@@ -281,28 +282,26 @@ func getCodexSettings(ctx context.Context, db *store.Store, migrateLegacy bool) 
 	return result, nil
 }
 
-func getCodexUsageSyncInterval(ctx context.Context, db *store.Store) (int, bool, error) {
-	setting, err := db.GetSetting(ctx, codexUsageSyncIntervalSettingKey)
-	legacy := false
+func getCodexUsageSyncInterval(ctx context.Context, db *store.Store) (int, error) {
+	setting, err := db.GetProviderSetting(ctx, codexconfig.ProviderID)
 	if errors.Is(err, store.ErrNotFound) {
-		setting, err = db.GetSetting(ctx, legacyDesktopUsageSyncIntervalSettingKey)
-		legacy = err == nil
-	}
-	if errors.Is(err, store.ErrNotFound) {
-		return CodexUsageSyncIntervalDefault, false, nil
+		return CodexUsageSyncIntervalDefault, nil
 	}
 	if err != nil {
-		return 0, false, apperror.Wrap(apperror.StoreStatusFailed, "failed to load Codex usage sync interval", err)
+		return 0, apperror.Wrap(apperror.StoreStatusFailed, "failed to load Codex usage sync interval", err)
 	}
-	var interval int
-	if err := json.Unmarshal([]byte(setting.ValueJSON), &interval); err != nil {
-		return 0, false, apperror.Wrap(apperror.SettingInvalid, "Codex usage sync interval is invalid", err)
+	if setting.SchemaVersion != store.ProviderSettingsSchemaVersion {
+		return 0, apperror.New(apperror.SettingInvalid, "Codex settings version is unsupported")
 	}
-	normalized, appErr := normalizeCodexUsageSyncInterval(interval)
+	var payload codexProviderSettingsV1
+	if err := decodeStrictSettings(setting.SettingsJSON, &payload); err != nil {
+		return 0, apperror.Wrap(apperror.SettingInvalid, "Codex usage sync interval is invalid", err)
+	}
+	normalized, appErr := normalizeCodexUsageSyncInterval(payload.UsageSyncIntervalSeconds)
 	if appErr != nil {
-		return 0, false, appErr
+		return 0, appErr
 	}
-	return normalized, legacy, nil
+	return normalized, nil
 }
 
 func normalizeCodexUsageSyncInterval(value int) (int, *apperror.Error) {
@@ -313,13 +312,43 @@ func normalizeCodexQuotaRefreshInterval(value int) (int, *apperror.Error) {
 	return codexautomation.NormalizeQuotaRefreshInterval(value)
 }
 
-func upsertCodexSetting(ctx context.Context, db *store.Store, key string, value any) error {
+func upsertCodexProviderSettings(ctx context.Context, db *store.Store, value codexProviderSettingsV1) error {
 	raw, err := json.Marshal(value)
 	if err != nil {
-		return apperror.Wrap(apperror.SettingInvalid, "failed to encode Codex setting", err)
+		return apperror.Wrap(apperror.SettingInvalid, "failed to encode Codex settings", err)
 	}
-	if _, err := db.UpsertSetting(ctx, store.UpsertSettingParams{Key: key, ValueJSON: string(raw)}); err != nil {
+	if _, err := db.UpsertProviderSetting(ctx, store.UpsertProviderSettingParams{
+		ProviderID: codexconfig.ProviderID, SchemaVersion: store.ProviderSettingsSchemaVersion,
+		SettingsJSON: string(raw),
+	}); err != nil {
 		return apperror.Wrap(apperror.StoreStatusFailed, "failed to save Codex setting", err)
+	}
+	return nil
+}
+
+func decodeCodexProfileSettings(setting store.ProviderProfileSetting) (codexProfileSettingsV1, error) {
+	if setting.SchemaVersion != store.ProviderSettingsSchemaVersion {
+		return codexProfileSettingsV1{}, apperror.New(apperror.SettingInvalid, "Codex profile settings version is unsupported")
+	}
+	var payload codexProfileSettingsV1
+	if err := decodeStrictSettings(setting.SettingsJSON, &payload); err != nil {
+		return codexProfileSettingsV1{}, apperror.Wrap(apperror.SettingInvalid, "Codex profile settings are invalid", err)
+	}
+	return payload, nil
+}
+
+func decodeStrictSettings(raw string, value any) error {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err != nil {
+			return err
+		}
+		return errors.New("settings contain extra JSON data")
 	}
 	return nil
 }

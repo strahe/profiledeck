@@ -51,8 +51,13 @@ func TestCodexSettingsDefaultsAndProfileUpdate(t *testing.T) {
 func TestCodexSettingsRejectInvalidIntervalAtomically(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
+	codexDir := t.TempDir()
 	if _, err := initCodexTestRuntime(ctx, configDir); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"auth_mode":"chatgpt","tokens":{"account_id":"display-only","access_token":"token","refresh_token":"refresh"}}`)
+	if _, err := newCodexTestEnvironment(t, configDir, codexDir).codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
+		t.Fatalf("expected Provider fixture, got %v", err)
 	}
 	valid := 30
 	if _, err := newCodexTestEnvironment(t, configDir, "").codex.UpdateSettings(ctx, UpdateCodexSettingsRequest{UsageSyncIntervalSeconds: &valid}); err != nil {
@@ -93,38 +98,136 @@ func TestCodexSettingsRejectsUnsupportedKeepaliveMode(t *testing.T) {
 	}
 }
 
-func TestCodexSettingsMigratesLegacyUsageInterval(t *testing.T) {
+func TestCodexProviderSettingsFailClosedForUnknownVersionAndFields(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	if _, err := initCodexTestRuntime(ctx, configDir); err != nil {
+	codexDir := t.TempDir()
+	initialized, err := initCodexTestRuntime(ctx, configDir)
+	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"auth_mode":"chatgpt","tokens":{"account_id":"display-only","access_token":"token","refresh_token":"refresh"}}`)
+	if _, err := newCodexTestEnvironment(t, configDir, codexDir).codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
+		t.Fatalf("expected profile create, got %v", err)
 	}
 	db, err := openHealthyStore(ctx, configDir, false)
 	if err != nil {
 		t.Fatalf("expected store open, got %v", err)
 	}
-	if _, err := db.UpsertSetting(ctx, store.UpsertSettingParams{Key: legacyDesktopUsageSyncIntervalSettingKey, ValueJSON: "30"}); err != nil {
-		_ = db.Close()
-		t.Fatalf("expected legacy fixture, got %v", err)
-	}
 	if err := db.Close(); err != nil {
-		t.Fatalf("expected legacy fixture store close, got %v", err)
+		t.Fatalf("expected fixture store close, got %v", err)
+	}
+	rawDB, err := sql.Open("sqlite", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open raw fixture database: %v", err)
+	}
+	if _, err := rawDB.ExecContext(ctx, `
+		INSERT INTO provider_settings (
+			provider_id, schema_version, settings_json, updated_at_unix_ms
+		) VALUES ('codex', 2, '{"usage_sync_interval_seconds":30}', 1)
+	`); err != nil {
+		_ = rawDB.Close()
+		t.Fatalf("expected unknown-version fixture, got %v", err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close raw fixture database: %v", err)
 	}
 
-	settings, err := newCodexTestEnvironment(t, configDir, "").codex.GetSettings(ctx)
-	if err != nil || settings.UsageSyncIntervalSeconds != 30 {
-		t.Fatalf("expected migrated interval, settings=%#v err=%v", settings, err)
+	if _, err := newCodexTestEnvironment(t, configDir, "").codex.GetSettings(ctx); err == nil {
+		t.Fatal("unknown Provider settings version was accepted")
+	} else {
+		var appErr *apperror.Error
+		if !errors.As(err, &appErr) || appErr.Code != apperror.SettingInvalid {
+			t.Fatalf("unknown version error = %v", err)
+		}
 	}
-	db, err = openHealthyStore(ctx, configDir, true)
+	db, err = openHealthyStore(ctx, configDir, false)
 	if err != nil {
 		t.Fatalf("expected store reopen, got %v", err)
 	}
-	defer db.Close()
-	if _, err := db.GetSetting(ctx, codexUsageSyncIntervalSettingKey); err != nil {
-		t.Fatalf("expected new setting key, got %v", err)
+	if _, err := db.UpsertProviderSetting(ctx, store.UpsertProviderSettingParams{
+		ProviderID: "codex", SchemaVersion: store.ProviderSettingsSchemaVersion,
+		SettingsJSON: `{"usage_sync_interval_seconds":30,"future_field":true}`,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("expected unknown-field fixture, got %v", err)
 	}
-	if _, err := db.GetSetting(ctx, legacyDesktopUsageSyncIntervalSettingKey); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("expected legacy key removal, got %v", err)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close unknown-field fixture: %v", err)
+	}
+	if _, err := newCodexTestEnvironment(t, configDir, "").codex.GetSettings(ctx); err == nil {
+		t.Fatal("unknown Provider settings field was accepted")
+	} else {
+		var appErr *apperror.Error
+		if !errors.As(err, &appErr) || appErr.Code != apperror.SettingInvalid {
+			t.Fatalf("unknown field error = %v", err)
+		}
+	}
+}
+
+func TestCodexProfileSettingsFailClosedForUnknownVersionAndFields(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	initialized, err := initCodexTestRuntime(ctx, configDir)
+	if err != nil {
+		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"auth_mode":"chatgpt","tokens":{"account_id":"display-only","access_token":"token","refresh_token":"refresh"}}`)
+	if _, err := newCodexTestEnvironment(t, configDir, codexDir).codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
+		t.Fatalf("expected profile create, got %v", err)
+	}
+	rawDB, err := sql.Open("sqlite", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open raw fixture database: %v", err)
+	}
+	if _, err := rawDB.ExecContext(ctx, `
+		INSERT INTO provider_profile_settings (
+			profile_id, provider_id, schema_version, settings_json, updated_at_unix_ms
+		) VALUES (
+			'work', 'codex', 2,
+			'{"quota_refresh_interval_seconds":0,"auth_keepalive_enabled":false}',
+			1
+		)
+	`); err != nil {
+		_ = rawDB.Close()
+		t.Fatalf("expected unknown-version fixture, got %v", err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close raw fixture database: %v", err)
+	}
+
+	if _, err := newCodexTestEnvironment(t, configDir, "").codex.GetSettings(ctx); err == nil {
+		t.Fatal("unknown Profile settings version was accepted")
+	} else {
+		var appErr *apperror.Error
+		if !errors.As(err, &appErr) || appErr.Code != apperror.SettingInvalid {
+			t.Fatalf("unknown version error = %v", err)
+		}
+	}
+	rawDB, err = sql.Open("sqlite", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("reopen raw fixture database: %v", err)
+	}
+	if _, err := rawDB.ExecContext(ctx, `
+		UPDATE provider_profile_settings
+		SET schema_version = 1,
+			settings_json = '{"quota_refresh_interval_seconds":0,"auth_keepalive_enabled":false,"future_field":true}'
+		WHERE profile_id = 'work' AND provider_id = 'codex'
+	`); err != nil {
+		_ = rawDB.Close()
+		t.Fatalf("expected unknown-field fixture, got %v", err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close unknown-field fixture: %v", err)
+	}
+	if _, err := newCodexTestEnvironment(t, configDir, "").codex.GetSettings(ctx); err == nil {
+		t.Fatal("unknown Profile settings field was accepted")
+	} else {
+		var appErr *apperror.Error
+		if !errors.As(err, &appErr) || appErr.Code != apperror.SettingInvalid {
+			t.Fatalf("unknown field error = %v", err)
+		}
 	}
 }
 

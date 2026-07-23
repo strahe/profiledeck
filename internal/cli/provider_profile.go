@@ -45,7 +45,6 @@ func newProviderListCommand() *urfavecli.Command {
 		Name:  "list",
 		Usage: "List providers",
 		Flags: []urfavecli.Flag{
-			boolFlag(allFlagName, "Include disabled providers"),
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
@@ -53,7 +52,7 @@ func newProviderListCommand() *urfavecli.Command {
 			if err != nil {
 				return err
 			}
-			result, err := application.Providers().List(ctx, provider.ListRequest{IncludeDisabled: cmd.Bool(allFlagName)})
+			result, err := application.Providers().List(ctx)
 			if err != nil {
 				return err
 			}
@@ -102,7 +101,6 @@ func newProviderCreateCommand() *urfavecli.Command {
 		Flags: []urfavecli.Flag{
 			stringFlag(nameFlagName, "Provider display name"),
 			stringFlag(adapterFlagName, "Provider adapter ID"),
-			boolFlag(disabledFlagName, "Create the provider disabled"),
 			stringFlag(metadataJSONFlagName, "Provider metadata JSON object"),
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
@@ -111,7 +109,6 @@ func newProviderCreateCommand() *urfavecli.Command {
 			if err != nil {
 				return err
 			}
-			enabled := !cmd.Bool(disabledFlagName)
 			application, err := applicationFor(cmd)
 			if err != nil {
 				return err
@@ -120,7 +117,6 @@ func newProviderCreateCommand() *urfavecli.Command {
 				ID:           id,
 				Name:         cmd.String(nameFlagName),
 				AdapterID:    cmd.String(adapterFlagName),
-				Enabled:      &enabled,
 				MetadataJSON: stringFlagPtr(cmd, metadataJSONFlagName),
 			})
 			if err != nil {
@@ -142,17 +138,11 @@ func newProviderUpdateCommand() *urfavecli.Command {
 		Flags: []urfavecli.Flag{
 			stringFlag(nameFlagName, "Provider display name"),
 			stringFlag(adapterFlagName, "Provider adapter ID"),
-			boolFlag(enabledFlagName, "Enable the provider"),
-			boolFlag(disabledFlagName, "Disable the provider"),
 			stringFlag(metadataJSONFlagName, "Provider metadata JSON object"),
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
 			id, err := singleIDArg(cmd, apperror.ProviderInvalid)
-			if err != nil {
-				return err
-			}
-			enabled, err := enabledFlagPtr(cmd)
 			if err != nil {
 				return err
 			}
@@ -164,7 +154,6 @@ func newProviderUpdateCommand() *urfavecli.Command {
 				ID:           id,
 				Name:         stringFlagPtr(cmd, nameFlagName),
 				AdapterID:    stringFlagPtr(cmd, adapterFlagName),
-				Enabled:      enabled,
 				MetadataJSON: stringFlagPtr(cmd, metadataJSONFlagName),
 			})
 			if err != nil {
@@ -414,10 +403,6 @@ func stringFlagPtr(cmd *urfavecli.Command, name string) *string {
 	return &value
 }
 
-func enabledFlagPtr(cmd *urfavecli.Command) (*bool, error) {
-	return enabledFlagPtrWithCode(cmd, apperror.ProviderInvalid)
-}
-
 func enabledFlagPtrWithCode(cmd *urfavecli.Command, code apperror.Code) (*bool, error) {
 	if cmd.IsSet(enabledFlagName) && cmd.IsSet(disabledFlagName) {
 		return nil, apperror.New(code, "cannot set both enabled and disabled")
@@ -440,7 +425,7 @@ func writeProviderList(w io.Writer, providers []provider.Provider) error {
 	}
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
 	for _, provider := range providers {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\tenabled=%t\n", provider.ID, provider.Name, provider.AdapterID, provider.Enabled); err != nil {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\n", provider.ID, provider.Name, provider.AdapterID); err != nil {
 			return err
 		}
 	}
@@ -454,11 +439,10 @@ func writeProvider(w io.Writer, provider provider.Provider) error {
 	}
 	_, err = fmt.Fprintf(
 		w,
-		"id: %s\nname: %s\nadapter: %s\nenabled: %t\nmetadata: %s\ncreated_at_unix_ms: %d\nupdated_at_unix_ms: %d\n",
+		"id: %s\nname: %s\nadapter: %s\nmetadata: %s\ncreated_at_unix_ms: %d\nupdated_at_unix_ms: %d\n",
 		provider.ID,
 		provider.Name,
 		provider.AdapterID,
-		provider.Enabled,
 		metadata,
 		provider.CreatedAtUnixMS,
 		provider.UpdatedAtUnixMS,

@@ -68,7 +68,7 @@ func newDoctorTestApplication(t *testing.T, configDir, codexDir string) *doctorT
 	)
 	return &doctorTestApplication{
 		runtime: runtimeService, doctor: doctorService,
-		providers: provider.NewService(runtimeService.StoreFactory(), switchingService, agentService, registry),
+		providers: provider.NewService(runtimeService.StoreFactory(), switchingService, registry),
 		profiles:  profile.NewService(runtimeService.StoreFactory(), switchingService, profile.DeleteRegistry{}),
 		targets: profiletarget.NewService(
 			runtimeService.StoreFactory(), switchingService, agentService, registry, codexService.ReservedPaths,
@@ -97,9 +97,22 @@ func TestDisabledAgentSkipsProviderHealthCheckButKeepsOperationInspection(t *tes
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
+	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
+		ID: "codex", Name: "Codex", AdapterID: "codex", MetadataJSON: `{}`,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("create Provider fixture: %v", err)
+	}
+	if _, err := db.CreateProfile(ctx, store.CreateProfileParams{
+		ID: "profile-a", Name: "Profile A", MetadataJSON: `{}`,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("create Profile fixture: %v", err)
+	}
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID: "switch-disabled-agent", ProfileID: "profile-a",
-		MetadataJSON: `{"checkpoint":"planned","provider_id":"codex","profile_id":"profile-a"}`,
+		ID: "switch-disabled-agent", ProviderID: "codex", ProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          `{"checkpoint":"planned","provider_id":"codex","profile_id":"profile-a"}`,
 	}); err != nil {
 		_ = db.Close()
 		t.Fatalf("create pending operation: %v", err)
@@ -226,6 +239,18 @@ func openWritableAppTestStore(t *testing.T, ctx context.Context, databasePath st
 	if err != nil {
 		t.Fatalf("open writable store: %v", err)
 	}
+	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
+		ID: "provider-a", Name: "Provider A", AdapterID: "generic", MetadataJSON: `{}`,
+	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
+		_ = db.Close()
+		t.Fatalf("ensure operation Provider fixture: %v", err)
+	}
+	if _, err := db.CreateProfile(ctx, store.CreateProfileParams{
+		ID: "profile-a", Name: "Profile A", MetadataJSON: `{}`,
+	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
+		_ = db.Close()
+		t.Fatalf("ensure operation Profile fixture: %v", err)
+	}
 	return db
 }
 
@@ -238,11 +263,11 @@ func openAppTestStore(t *testing.T, ctx context.Context, databasePath string) *s
 	return db
 }
 
-func createGenericProviderAndProfile(t *testing.T, ctx context.Context, configDir string, enabled bool) {
+func createGenericProviderAndProfile(t *testing.T, ctx context.Context, configDir string) {
 	t.Helper()
 	application := newDoctorTestApplication(t, configDir, "")
 	if _, err := application.Providers().Create(ctx, provider.CreateRequest{
-		ID: "provider-a", Name: "Provider A", AdapterID: "generic", Enabled: &enabled,
+		ID: "provider-a", Name: "Provider A", AdapterID: "generic",
 	}); err != nil {
 		t.Fatalf("create Provider: %v", err)
 	}

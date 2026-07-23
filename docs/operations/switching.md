@@ -67,4 +67,4 @@ ProfileDeck stops without applying the switch if it cannot verify the current st
 
 An unfinished switch recovery point may contain previous Codex files, a Claude Code subscription login, or an Antigravity login. Keep the ProfileDeck data directory private and do not commit, upload, or share recovery files.
 
-Recovery restores an unfinished switch to its pre-switch target and active-Profile state. Updates that were already saved into a Profile remain saved. A successful switch cannot be undone; switch to the intended Profile instead. See [Diagnostics, backups, and recovery](./recovery.md) for the available actions.
+Recovery returns targets affected by an unfinished switch to their pre-switch state without changing the current Profile. If the current Profile changed after the unfinished switch, ProfileDeck refuses recovery before writing. Updates that were already saved into a Profile remain saved. A successful switch cannot be undone; switch to the intended Profile instead. See [Diagnostics, backups, and recovery](./recovery.md) for the available actions.

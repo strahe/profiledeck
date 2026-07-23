@@ -89,7 +89,7 @@ func InspectHealth(ctx context.Context, db *store.Store, inspect TargetInspector
 		}
 	}
 	activeProfileID := ""
-	if active, activeErr := db.GetActiveState(ctx, store.ActiveStateScopeProvider, claudecodeconfig.ProviderID); activeErr == nil {
+	if active, activeErr := db.GetActiveState(ctx, claudecodeconfig.ProviderID); activeErr == nil {
 		activeProfileID = active.ProfileID
 		if _, ok := grouped[active.ProfileID]; !ok {
 			grouped[active.ProfileID] = nil

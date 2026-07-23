@@ -44,7 +44,7 @@ func newSwitchingTestEnvironmentWithTargets(t *testing.T, configDir string, targ
 	return &switchingTestEnvironment{
 		runtime:   runtimeService,
 		service:   service,
-		providers: provider.NewService(runtimeService.StoreFactory(), service, agentService, agentRegistry),
+		providers: provider.NewService(runtimeService.StoreFactory(), service, agentRegistry),
 		profiles:  profile.NewService(runtimeService.StoreFactory(), service, profile.DeleteRegistry{}),
 		targets:   profiletarget.NewService(runtimeService.StoreFactory(), service, agentService, agentRegistry),
 	}
@@ -66,11 +66,11 @@ func openHealthyStore(ctx context.Context, configDir string, readOnly bool) (*st
 	return runtimeService.StoreFactory().OpenHealthy(ctx, readOnly)
 }
 
-func createGenericProviderAndProfile(t *testing.T, ctx context.Context, configDir string, providerEnabled bool) {
+func createGenericProviderAndProfile(t *testing.T, ctx context.Context, configDir string) {
 	t.Helper()
 	environment := newSwitchingTestEnvironment(t, configDir)
 	if _, err := environment.providers.Create(ctx, provider.CreateRequest{
-		ID: "provider-a", Name: "Provider A", AdapterID: "generic", Enabled: &providerEnabled,
+		ID: "provider-a", Name: "Provider A", AdapterID: "generic",
 	}); err != nil {
 		t.Fatalf("expected Provider create, got %v", err)
 	}

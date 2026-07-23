@@ -30,6 +30,7 @@ type recoveryOperationMetadata struct {
 	SourceOperationID string                   `json:"source_operation_id"`
 	ProviderID        string                   `json:"provider_id"`
 	ProfileID         string                   `json:"profile_id"`
+	RelatedProfiles   []string                 `json:"related_profile_ids,omitempty"`
 	RestoredProfileID string                   `json:"restored_profile_id,omitempty"`
 	Counts            RecoveryCounts           `json:"counts"`
 	Targets           []recoveryTargetMetadata `json:"targets,omitempty"`
@@ -404,7 +405,13 @@ func (service *Service) applyRecoveryTargets(
 		if err != nil {
 			return counts, processed, failRecoveryOperation(ctx, db, operationID, lastMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode recovery operation metadata", err))
 		}
-		if err := db.UpdateOperationMetadata(ctx, operationID, metadataJSON); err != nil {
+		if err := db.UpdateOperationMetadata(
+			ctx,
+			operationID,
+			store.OperationMetadataSchemaVersion,
+			metadataJSON,
+			recoveryRelatedProfileIDs(metadataBase),
+		); err != nil {
 			return counts, processed, failRecoveryOperation(ctx, db, operationID, metadataJSON, apperror.Wrap(apperror.OperationUpdateFailed, "failed to update recovery operation metadata", err))
 		}
 		lastMetadata = metadataJSON
@@ -442,9 +449,16 @@ func recoveryMetadata(source recoverySource) recoveryOperationMetadata {
 		SourceOperationID: source.Operation.ID,
 		ProviderID:        source.Metadata.ProviderID,
 		ProfileID:         source.Metadata.ProfileID,
+		RelatedProfiles:   source.Metadata.RelatedProfiles,
 		RestoredProfileID: restoredProfileID(source.Metadata.PreviousActive),
 		Targets:           recoveryTargetMetadataList(source.Targets),
 	}
+}
+
+func recoveryRelatedProfileIDs(metadata recoveryOperationMetadata) []string {
+	profileIDs := make([]string, 0, len(metadata.RelatedProfiles)+2)
+	profileIDs = append(profileIDs, metadata.RelatedProfiles...)
+	return append(profileIDs, metadata.ProfileID, metadata.RestoredProfileID)
 }
 
 func recoveryTargetMetadataList(targets []recoveryTarget) []recoveryTargetMetadata {
@@ -510,11 +524,4 @@ func restoredProfileID(previous *switchPreviousActiveState) string {
 		return ""
 	}
 	return previous.ProfileID
-}
-
-func restoredStoreActiveState(previous *switchPreviousActiveState) *store.RecoveryActiveStateParams {
-	if previous == nil || !previous.Exists {
-		return nil
-	}
-	return &store.RecoveryActiveStateParams{ProfileID: previous.ProfileID, OperationID: previous.OperationID}
 }

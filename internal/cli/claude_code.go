@@ -183,8 +183,8 @@ func newClaudeCodeProfileSaveCurrentCommand() *urfavecli.Command {
 }
 
 func writeClaudeCodeDetect(w io.Writer, result claudecode.ClaudeCodeDetectResult) error {
-	if _, err := fmt.Fprintf(w, "Claude Code\nlogin: %s\nprovider: %s\nenabled: %t\ncompatible: %t\nexpires: %s\n",
-		result.CredentialStatus, result.ProviderID, result.ProviderEnabled, result.ProviderCompatible, formatClaudeCodeExpiry(result.ExpiresAtUnixMS)); err != nil {
+	if _, err := fmt.Fprintf(w, "Claude Code\nlogin: %s\nprovider: %s\ncompatible: %t\nexpires: %s\n",
+		result.CredentialStatus, result.ProviderID, result.ProviderCompatible, formatClaudeCodeExpiry(result.ExpiresAtUnixMS)); err != nil {
 		return err
 	}
 	if result.KeychainAuthorizationRequired {

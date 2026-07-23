@@ -44,6 +44,7 @@ func TestUsageWritesRejectZeroKeys(t *testing.T) {
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("begin usage sync: %v", err)
@@ -96,6 +97,7 @@ func TestUsageSchemaRejectsZeroKeys(t *testing.T) {
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)
 	defer closeTestStore(t, db)
+	createUsageProviderFixture(t, ctx, db, "codex")
 	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
 	if err != nil {
 		t.Fatalf("begin usage sync: %v", err)

@@ -42,7 +42,6 @@ type ClaudeCodeProfileSummary struct {
 	CredentialReferenceCount int                 `json:"credential_reference_count"`
 	ExpiresAtUnixMS          int64               `json:"expires_at_unix_ms,omitempty"`
 	Active                   bool                `json:"active"`
-	ActiveOperationID        string              `json:"active_operation_id,omitempty"`
 	UpdatedAtUnixMS          int64               `json:"updated_at_unix_ms"`
 	Warnings                 []string            `json:"warnings,omitempty"`
 }
@@ -139,7 +138,7 @@ func (service *Service) CreateProfile(ctx context.Context, req CreateClaudeCodeP
 	operationID := ""
 	err = service.maintenance.RunMaintenance(ctx, maintenance.Request{
 		Operation: "claude-code-profile-create", ProfileID: profileID, ProviderID: claudecodeconfig.ProviderID,
-		MetadataJSON: operationMetadata, SetActive: true, Record: true,
+		ActiveProfileID: profileID, MetadataJSON: operationMetadata, Record: true,
 	}, func(ctx context.Context, tx *store.Store, currentOperationID string) error {
 		operationID = currentOperationID
 		metadata, _, err := resolveClaudeCodeProviderMetadata(ctx, tx)
@@ -313,7 +312,7 @@ func (service *Service) SaveActiveProfile(ctx context.Context, req SaveActiveCla
 		if err != nil {
 			return err
 		}
-		active, err := tx.GetActiveState(ctx, store.ActiveStateScopeProvider, claudecodeconfig.ProviderID)
+		active, err := tx.GetActiveState(ctx, claudecodeconfig.ProviderID)
 		if errors.Is(err, store.ErrNotFound) {
 			return apperror.New(apperror.ProfileNotFound, "no active Claude Code Profile")
 		}
@@ -353,8 +352,18 @@ func (service *Service) SaveActiveProfile(ctx context.Context, req SaveActiveCla
 		if err != nil {
 			return err
 		}
+		relatedProfileIDs, err := tx.ListProviderResourceProfileIDs(
+			ctx,
+			claudecodeconfig.ProviderID,
+			[]string{credential.ID},
+			nil,
+		)
+		if err != nil {
+			return apperror.Wrap(apperror.StoreStatusFailed, "failed to resolve Profiles affected by the saved Claude Code login", err)
+		}
 		_, err = tx.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
-			ID: operationID, ProfileID: profileID, ProviderID: claudecodeconfig.ProviderID, MetadataJSON: operationMetadata,
+			ID: operationID, RelatedProfileIDs: relatedProfileIDs, ProviderID: claudecodeconfig.ProviderID,
+			MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: operationMetadata,
 		})
 		return err
 	})
@@ -471,9 +480,9 @@ func claudeCodeProfileSummary(ctx context.Context, db *store.Store, profileID st
 	if err != nil {
 		return ClaudeCodeProfileSummary{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to count Claude Code login references", err)
 	}
-	active, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, claudecodeconfig.ProviderID)
+	active, err := db.GetActiveState(ctx, claudecodeconfig.ProviderID)
 	if err == nil && active.ProfileID == profileID {
-		summary.Active, summary.ActiveOperationID = true, active.OperationID
+		summary.Active = true
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return ClaudeCodeProfileSummary{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to read active Claude Code Profile", err)
 	}
@@ -487,9 +496,6 @@ func requireClaudeCodeCredential(ctx context.Context, db *store.Store, credentia
 func resolveClaudeCodeProviderMetadata(ctx context.Context, db *store.Store) (claudeCodeProviderMetadata, bool, error) {
 	provider, err := db.GetProvider(ctx, claudecodeconfig.ProviderID)
 	if err == nil {
-		if !provider.Enabled {
-			return claudeCodeProviderMetadata{}, true, apperror.New(apperror.ProviderDisabled, "Claude Code Provider is disabled")
-		}
 		metadata, err := validateClaudeCodeProvider(provider)
 		return metadata, true, err
 	}
@@ -517,7 +523,7 @@ func createClaudeCodeProvider(ctx context.Context, db *store.Store, metadata cla
 	}
 	_, err = db.CreateProvider(ctx, store.CreateProviderParams{
 		ID: claudecodeconfig.ProviderID, Name: claudecodeconfig.ProviderName, AdapterID: claudecodeconfig.AdapterID,
-		Enabled: true, MetadataJSON: string(raw),
+		MetadataJSON: string(raw),
 	})
 	if err == nil {
 		return nil
@@ -538,9 +544,6 @@ func ensureClaudeCodeProvider(ctx context.Context, db *store.Store, metadata cla
 	}
 	if _, err := validateClaudeCodeProvider(provider); err != nil {
 		return err
-	}
-	if !provider.Enabled {
-		return apperror.New(apperror.ProviderDisabled, "Claude Code Provider is disabled")
 	}
 	name := claudecodeconfig.ProviderName
 	if _, err := db.UpdateProvider(ctx, store.UpdateProviderParams{ID: provider.ID, Name: &name}); err != nil {
@@ -567,9 +570,6 @@ func requireClaudeCodeProvider(ctx context.Context, db *store.Store) (store.Prov
 	}
 	if _, err := validateClaudeCodeProvider(provider); err != nil {
 		return store.Provider{}, err
-	}
-	if !provider.Enabled {
-		return store.Provider{}, apperror.New(apperror.ProviderDisabled, "Claude Code Provider is disabled")
 	}
 	return provider, nil
 }

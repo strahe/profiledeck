@@ -71,7 +71,8 @@ func TestReconcilePreservesUnresolvedSwitchAndRemovesOtherEntryTypes(t *testing.
 	service, db, paths := newTestService(t, ctx)
 	defer db.Close()
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID: "switch-pending", ProfileID: "profile-a", MetadataJSON: `{}`,
+		ID: "switch-pending", ProviderID: "generic", ProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +214,8 @@ func TestReconcileRejectsUnsafeOperationIDBeforeChangingRecoveryEntries(t *testi
 	service, db, paths := newTestService(t, ctx)
 	defer db.Close()
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID: "../escape", ProfileID: "profile-a", MetadataJSON: `{}`,
+		ID: "../escape", ProviderID: "generic", ProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -282,6 +284,18 @@ func newTestService(t *testing.T, ctx context.Context) (*Service, *store.Store, 
 		t.Fatal(err)
 	}
 	if _, err := db.Migrate(ctx); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
+		ID: "generic", Name: "Generic", AdapterID: "generic", MetadataJSON: `{}`,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.CreateProfile(ctx, store.CreateProfileParams{
+		ID: "profile-a", Name: "Profile A", MetadataJSON: `{}`,
+	}); err != nil {
 		_ = db.Close()
 		t.Fatal(err)
 	}

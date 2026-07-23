@@ -210,6 +210,9 @@ func inspectDatabase(ctx context.Context, stores store.Factory) (store.Migration
 		return store.MigrationState{}, err
 	}
 	defer db.Close()
+	if err := db.CheckMigrationCompatibility(ctx); err != nil {
+		return store.MigrationState{}, err
+	}
 	report, err := db.InspectIntegrity(ctx, store.IntegrityAppliedBaseline)
 	if err != nil {
 		return store.MigrationState{}, err
@@ -257,7 +260,7 @@ func databaseInspectionError(err error) error {
 }
 
 func unsupportedSchemaError() *apperror.Error {
-	return apperror.New(apperror.StoreSchemaUnsupported, "this ProfileDeck version cannot open the existing local data; update ProfileDeck and try again")
+	return apperror.New(apperror.StoreSchemaUnsupported, apperror.StoreSchemaUnsupportedMessage)
 }
 
 func invalidSchemaError() *apperror.Error {

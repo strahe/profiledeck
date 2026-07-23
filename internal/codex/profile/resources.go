@@ -58,7 +58,7 @@ func CredentialBindingCount(ctx context.Context, db *store.Store, credentialID s
 
 // ConfigSetBindingCount reports how many Profiles bind a Codex Config Set.
 func ConfigSetBindingCount(ctx context.Context, db *store.Store, configSetID string) (int, error) {
-	count, err := db.CountProviderConfigSetReferences(ctx, configSetID)
+	count, err := db.CountProviderConfigSetReferences(ctx, codexconfig.ProviderID, configSetID)
 	if err != nil {
 		return 0, apperror.Wrap(apperror.StoreStatusFailed, "failed to count Codex config set bindings", err)
 	}
@@ -281,7 +281,7 @@ func RequireAuthCredential(ctx context.Context, db *store.Store, credentialID st
 
 // RequireConfigSet verifies a Codex TOML Config Set before planning.
 func RequireConfigSet(ctx context.Context, db *store.Store, configSetID string) (store.ProviderConfigSet, error) {
-	configSet, err := db.GetProviderConfigSet(ctx, configSetID)
+	configSet, err := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, configSetID)
 	if err != nil {
 		return store.ProviderConfigSet{}, mapConfigSetStoreError(err)
 	}
@@ -321,7 +321,7 @@ func decodeAuthPayload(payload string) (any, error) {
 
 // ActiveBindings reads the active Profile bindings without treating account_id as identity.
 func ActiveBindings(ctx context.Context, db *store.Store) (Bindings, []string, error) {
-	active, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, codexconfig.ProviderID)
+	active, err := db.GetActiveState(ctx, codexconfig.ProviderID)
 	if errors.Is(err, store.ErrNotFound) {
 		return Bindings{}, nil, nil
 	}

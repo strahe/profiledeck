@@ -100,7 +100,7 @@
 			.sort((left, right) => Number(right.active) - Number(left.active) || left.profile.id.localeCompare(right.profile.id))
 			.map((summary) => ({ id: summary.profile.id, name: summary.profile.name || translate("profile.unnamed") }));
 	});
-	let providerReady = $derived(!!detectResult?.profiledeck_initialized && detectResult.provider_enabled && detectResult.provider_compatible);
+	let providerReady = $derived(!!detectResult?.profiledeck_initialized && detectResult.provider_compatible);
 	let sourceReady = $derived(providerReady && ["valid", "expiring", "expired"].includes(detectResult?.credential_status || ""));
 	let keychainAuthorizationRequired = $derived(providerReady && !!detectResult?.keychain_authorization_required);
 	let hasDetectWarning = $derived(providerReady && !!detectResult?.warnings?.length && !["invalid", "unsupported", "unavailable"].includes(detectResult?.credential_status || ""));
@@ -305,13 +305,12 @@
 	}
 	function cancelAction(key: string) { inFlight.get(key)?.cancel("replaced"); inFlight.delete(key); }
 	function cancelAll() { for (const promise of inFlight.values()) promise.cancel("route-change"); inFlight.clear(); }
-	function isSourceReady(value: ClaudeCodeDetectResult | null | undefined) { return !!value?.profiledeck_initialized && value.provider_enabled && value.provider_compatible && ["valid", "expiring", "expired"].includes(value.credential_status); }
+	function isSourceReady(value: ClaudeCodeDetectResult | null | undefined) { return !!value?.profiledeck_initialized && value.provider_compatible && ["valid", "expiring", "expired"].includes(value.credential_status); }
 	function sourceDescription() {
 		if (!detectResult && !detectError) return translate("claudeCode.source.checking");
 		if (!detectResult && detectError) return detectError;
 		if (detectResult && !detectResult.profiledeck_initialized) return translate("claudeCode.source.notInitialized");
 		if (detectResult && !detectResult.provider_compatible) return translate("claudeCode.source.incompatible");
-		if (detectResult?.provider_exists && !detectResult.provider_enabled) return translate("claudeCode.source.disabled");
 		if (keychainAuthorizationRequired) return translate("claudeCode.source.authorizationRequired");
 		return translate(`claudeCode.source.${detectResult?.credential_status || "missing"}`);
 	}

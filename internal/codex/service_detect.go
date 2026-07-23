@@ -90,10 +90,6 @@ func (service *Service) Detect(ctx context.Context) (CodexDetectResult, error) {
 			result.ProviderExists = true
 			result.ProviderAdapterID = provider.AdapterID
 			result.ProviderCompatible = provider.AdapterID == codexconfig.AdapterID
-			if !provider.Enabled {
-				return CodexDetectResult{}, apperror.New(apperror.ProviderDisabled, "Codex Provider is disabled").
-					WithDetail("provider_id", codexconfig.ProviderID)
-			}
 		case !errors.Is(err, store.ErrNotFound):
 			return CodexDetectResult{}, mapProviderStoreError(err)
 		}
@@ -186,10 +182,6 @@ func codexPreflightProvider(ctx context.Context, db *store.Store, home codexconf
 	if provider.AdapterID != codexconfig.AdapterID {
 		return store.Provider{}, false, apperror.New(apperror.CodexInvalid, "existing codex provider uses a different adapter").
 			WithDetail("adapter_id", provider.AdapterID)
-	}
-	if !provider.Enabled {
-		return store.Provider{}, false, apperror.New(apperror.ProviderDisabled, "Codex Provider is disabled").
-			WithDetail("provider_id", codexconfig.ProviderID)
 	}
 	if provider.MetadataJSON != "" {
 		metadata, err := codexpreset.DecodeProviderMetadata(provider.MetadataJSON)

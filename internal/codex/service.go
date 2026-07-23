@@ -71,29 +71,21 @@ func (service *Service) resolveExistingHome() (codexconfig.Home, error) {
 	return home, nil
 }
 
-func requireEnabledProvider(ctx context.Context, db *store.Store) (store.Provider, error) {
+func requireCodexProvider(ctx context.Context, db *store.Store) (store.Provider, error) {
 	stored, err := db.GetProvider(ctx, codexconfig.ProviderID)
 	if err != nil {
 		return store.Provider{}, mapProviderStoreError(err)
 	}
-	if !stored.Enabled {
-		return store.Provider{}, apperror.New(apperror.ProviderDisabled, "Codex Provider is disabled").
-			WithDetail("provider_id", codexconfig.ProviderID)
-	}
 	return stored, nil
 }
 
-func requireEnabledProviderIfPresent(ctx context.Context, db *store.Store) (store.Provider, error) {
+func requireCodexProviderIfPresent(ctx context.Context, db *store.Store) (store.Provider, error) {
 	stored, err := db.GetProvider(ctx, codexconfig.ProviderID)
 	if errors.Is(err, store.ErrNotFound) {
 		return store.Provider{}, nil
 	}
 	if err != nil {
 		return store.Provider{}, mapProviderStoreError(err)
-	}
-	if !stored.Enabled {
-		return store.Provider{}, apperror.New(apperror.ProviderDisabled, "Codex Provider is disabled").
-			WithDetail("provider_id", codexconfig.ProviderID)
 	}
 	return stored, nil
 }

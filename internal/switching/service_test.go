@@ -177,7 +177,7 @@ func TestApplyAllowsOnlyOneConcurrentSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 	backend := &blockingApplyFileBackend{started: make(chan struct{}), release: make(chan struct{})}
 	environment := newSwitchingTestEnvironmentWithTargets(t, configDir, switchtarget.MustRegistry(backend))
 	targetPath := filepath.Join(t.TempDir(), "settings.txt")
@@ -248,7 +248,7 @@ func TestApplySwitchCreateCleansRecoveryPointAndSetsActiveState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	targetPath := filepath.Join(t.TempDir(), "settings.env")
 	rawSecret := "OPENAI_API_KEY=raw-create-secret\n"
@@ -308,11 +308,11 @@ func TestApplySwitchCreateCleansRecoveryPointAndSetsActiveState(t *testing.T) {
 	if metadata.PreviousActive == nil || metadata.PreviousActive.Exists {
 		t.Fatalf("expected switch metadata to record missing previous active state, got %#v", metadata.PreviousActive)
 	}
-	activeState, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, "provider-a")
+	activeState, err := db.GetActiveState(ctx, "provider-a")
 	if err != nil {
 		t.Fatalf("expected active state read to succeed, got %v", err)
 	}
-	if activeState.ProfileID != "profile-a" || activeState.OperationID != result.OperationID {
+	if activeState.ProfileID != "profile-a" || activeState.Revision != 1 {
 		t.Fatalf("unexpected active state: %#v", activeState)
 	}
 
@@ -329,7 +329,7 @@ func TestApplySwitchBlocksBeforeTargetWriteWhenRecoveryCleanupIsUnsafe(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 	environment := newSwitchingTestEnvironment(t, configDir)
 	targetPath := filepath.Join(t.TempDir(), "settings.env")
 	if _, err := environment.targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
@@ -375,7 +375,7 @@ func TestApplySwitchRejectsUnknownSystemStateBeforeCreatingOperation(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 	environment := newSwitchingTestEnvironment(t, configDir)
 	targetPath := filepath.Join(t.TempDir(), "settings.env")
 	if _, err := environment.targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
@@ -417,7 +417,7 @@ func TestApplySwitchRechecksAgentPolicyAfterAcquiringLock(t *testing.T) {
 	if _, err := initSwitchingTestRuntime(ctx, configDir); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 	environment := newSwitchingTestEnvironment(t, configDir)
 	targetPath := filepath.Join(t.TempDir(), "settings.env")
 	if _, err := environment.targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
@@ -440,7 +440,7 @@ func TestApplySwitchRechecksAgentPolicyAfterAcquiringLock(t *testing.T) {
 	}
 }
 
-func TestMaintenanceRechecksAgentPolicyAfterAcquiringLock(t *testing.T) {
+func TestMaintenanceDoesNotApplyDesktopAgentPolicy(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	if _, err := initSwitchingTestRuntime(ctx, configDir); err != nil {
@@ -459,9 +459,11 @@ func TestMaintenanceRechecksAgentPolicyAfterAcquiringLock(t *testing.T) {
 		mutated = true
 		return nil
 	})
-	assertErrorCode(t, err, apperror.AgentDisabled)
-	if mutated {
-		t.Fatal("maintenance mutation ran after Agent disable")
+	if err != nil || !mutated {
+		t.Fatalf("core maintenance was gated by Desktop preference: mutated=%v err=%v", mutated, err)
+	}
+	if policy.calls != 1 {
+		t.Fatalf("maintenance consulted Desktop policy: calls=%d, want 1 explicit fixture call", policy.calls)
 	}
 }
 
@@ -475,7 +477,7 @@ func TestApplySwitchUpdatePreservesPOSIXModeAndCleansRecoveryPoint(t *testing.T)
 	if _, err := initSwitchingTestRuntime(ctx, configDir); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	targetPath := filepath.Join(t.TempDir(), "settings.env")
 	oldContent := "OPENAI_API_KEY=raw-old-secret\n"
@@ -527,7 +529,7 @@ func TestApplySwitchNoopRecordsOperationAndActiveState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	targetPath := filepath.Join(t.TempDir(), "settings.txt")
 	content := "already-current\n"
@@ -561,11 +563,11 @@ func TestApplySwitchNoopRecordsOperationAndActiveState(t *testing.T) {
 
 	db := openAppTestStore(t, ctx, initResult.DatabasePath)
 	defer db.Close()
-	activeState, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, "provider-a")
+	activeState, err := db.GetActiveState(ctx, "provider-a")
 	if err != nil {
 		t.Fatalf("expected active state read to succeed, got %v", err)
 	}
-	if activeState.ProfileID != "profile-a" || activeState.OperationID != result.OperationID {
+	if activeState.ProfileID != "profile-a" || activeState.Revision != 1 {
 		t.Fatalf("unexpected noop active state: %#v", activeState)
 	}
 }
@@ -576,7 +578,7 @@ func TestApplySwitchRejectsStalePlanFingerprintBeforeWriting(t *testing.T) {
 	if _, err := initSwitchingTestRuntime(ctx, configDir); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	targetPath := filepath.Join(t.TempDir(), "settings.txt")
 	if _, err := newSwitchingTestEnvironment(t, configDir).targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
@@ -619,7 +621,7 @@ func TestApplySwitchRejectsUnsupportedSymlinkBeforeBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	dir := t.TempDir()
 	realPath := filepath.Join(dir, "real.txt")
@@ -664,7 +666,7 @@ func TestApplySwitchFailsPartialMultiTargetWriteWithoutActiveState(t *testing.T)
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	dir := t.TempDir()
 	firstPath := filepath.Join(dir, "target-a.txt")
@@ -706,7 +708,7 @@ func TestApplySwitchFailsPartialMultiTargetWriteWithoutActiveState(t *testing.T)
 
 	db := openAppTestStore(t, ctx, initResult.DatabasePath)
 	defer db.Close()
-	if _, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, "provider-a"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := db.GetActiveState(ctx, "provider-a"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("expected no active state after partial failed write, got %v", err)
 	}
 	incompleteBefore, err := db.ListIncompleteOperations(ctx)
@@ -731,7 +733,7 @@ func TestApplySwitchKeepsFailedOperationRecoverableWhenCleanupRegistrationFails(
 	if err != nil {
 		t.Fatal(err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 	environment := newSwitchingTestEnvironment(t, configDir)
 	targetPath := filepath.Join(t.TempDir(), "settings.txt")
 	if _, err := environment.targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
@@ -770,7 +772,7 @@ func TestApplySwitchKeepsFailedOperationRecoverableWhenCleanupRegistrationFails(
 	}
 	db := openAppTestStore(t, ctx, initResult.DatabasePath)
 	defer db.Close()
-	if _, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, "provider-a"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := db.GetActiveState(ctx, "provider-a"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("active state committed after cleanup registration failure: %v", err)
 	}
 	operation := mustOperation(t, ctx, db, failedSwitchID)
@@ -785,7 +787,7 @@ func TestApplySwitchFailsWhenLockExistsAndKeepsLockFile(t *testing.T) {
 	if _, err := initSwitchingTestRuntime(ctx, configDir); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 	targetPath := filepath.Join(t.TempDir(), "settings.txt")
 	if _, err := newSwitchingTestEnvironment(t, configDir).targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
 		ProfileID:  "profile-a",
@@ -829,7 +831,7 @@ func TestSwitchHashGuardDetectsChangedTarget(t *testing.T) {
 	if _, err := initSwitchingTestRuntime(ctx, configDir); err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
-	createGenericProviderAndProfile(t, ctx, configDir, true)
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	targetPath := filepath.Join(t.TempDir(), "settings.txt")
 	if err := os.WriteFile(targetPath, []byte("before\n"), 0o600); err != nil {
@@ -869,6 +871,7 @@ func TestFailSwitchOperationUsesCleanupContextAfterCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
+	createGenericProviderAndProfile(t, ctx, configDir)
 
 	db, err := store.Open(ctx, initResult.DatabasePath, false)
 	if err != nil {
@@ -876,9 +879,11 @@ func TestFailSwitchOperationUsesCleanupContextAfterCancellation(t *testing.T) {
 	}
 	defer db.Close()
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID:           "switch-canceled",
-		ProfileID:    "profile-a",
-		MetadataJSON: `{}`,
+		ID:                    "switch-canceled",
+		ProviderID:            "provider-a",
+		ProfileIDs:            []string{"profile-a"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          `{}`,
 	}); err != nil {
 		t.Fatalf("expected pending operation setup to succeed, got %v", err)
 	}

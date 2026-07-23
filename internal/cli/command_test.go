@@ -272,7 +272,7 @@ func TestClaudeCodeProfileCLIUsesOfficialLoginWithoutExposingTokens(t *testing.T
 		t.Fatal(err)
 	}
 	if _, err := db.CreateProvider(context.Background(), store.CreateProviderParams{
-		ID: claudecodeconfig.ProviderID, Name: claudecodeconfig.ProviderName, Enabled: true,
+		ID: claudecodeconfig.ProviderID, Name: claudecodeconfig.ProviderName,
 		AdapterID: claudecodeconfig.AdapterID, MetadataJSON: metadataJSON,
 	}); err != nil {
 		_ = db.Close()
@@ -483,7 +483,7 @@ func TestCLIRejectsUnsupportedSchemaAndKeepsDoctorAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run CLI Doctor after startup rejection: %v", err)
 	}
-	for _, expected := range []string{"database_schema_unsupported", "update ProfileDeck"} {
+	for _, expected := range []string{"database_schema_unsupported", "unsupported format", "restore a compatible application backup"} {
 		if !strings.Contains(doctorOutput, expected) {
 			t.Fatalf("Doctor output missing %q: %q", expected, doctorOutput)
 		}
@@ -1108,16 +1108,15 @@ func TestProviderCLIJSONFlow(t *testing.T) {
 		"provider", "create", "provider-b",
 		"--name", "Provider B",
 		"--adapter", "adapter-b",
-		"--disabled",
 		"--metadata-json", `{"tier":"paid"}`,
 		"--json",
 	)
 	if err != nil {
-		t.Fatalf("expected disabled provider create to succeed, got %v", err)
+		t.Fatalf("expected provider create to succeed, got %v", err)
 	}
 	var createdProvider provider.Provider
 	decodeCLIJSON(t, []byte(out), &createdProvider)
-	if createdProvider.ID != "provider-b" || createdProvider.Enabled || createdProvider.Metadata["tier"] != "paid" {
+	if createdProvider.ID != "provider-b" || createdProvider.Metadata["tier"] != "paid" {
 		t.Fatalf("unexpected created provider: %#v", createdProvider)
 	}
 
@@ -1128,7 +1127,7 @@ func TestProviderCLIJSONFlow(t *testing.T) {
 		"--adapter", "adapter-a",
 		"--json",
 	); err != nil {
-		t.Fatalf("expected enabled provider create to succeed, got %v", err)
+		t.Fatalf("expected provider create to succeed, got %v", err)
 	}
 
 	out, err = runCLI(t, "--config-dir", configDir, "provider", "list", "--json")
@@ -1137,30 +1136,18 @@ func TestProviderCLIJSONFlow(t *testing.T) {
 	}
 	var providers []provider.Provider
 	decodeCLIJSON(t, []byte(out), &providers)
-	if providerIDs(providers) != "provider-a" {
-		t.Fatalf("expected default list to include only enabled providers, got %#v", providers)
-	}
-
-	out, err = runCLI(t, "--config-dir", configDir, "provider", "list", "--all", "--json")
-	if err != nil {
-		t.Fatalf("expected provider list --all to succeed, got %v", err)
-	}
-	decodeCLIJSON(t, []byte(out), &providers)
 	if providerIDs(providers) != "provider-a,provider-b" {
 		t.Fatalf("expected id-sorted providers, got %#v", providers)
 	}
 
-	out, err = runCLI(t, "--config-dir", configDir, "provider", "update", "provider-b", "--enabled", "--json")
+	out, err = runCLI(t, "--config-dir", configDir, "provider", "update", "provider-b", "--name", "Provider B Updated", "--json")
 	if err != nil {
 		t.Fatalf("expected provider update to succeed, got %v", err)
 	}
 	decodeCLIJSON(t, []byte(out), &createdProvider)
-	if !createdProvider.Enabled {
-		t.Fatalf("expected provider to be enabled after update")
+	if createdProvider.Name != "Provider B Updated" {
+		t.Fatalf("unexpected updated provider: %#v", createdProvider)
 	}
-
-	_, err = runCLI(t, "--config-dir", configDir, "provider", "update", "provider-b", "--enabled", "--disabled", "--json")
-	assertCLIAppErrorCode(t, err, apperror.ProviderInvalid)
 
 	_, err = runCLI(t, "--config-dir", configDir, "provider", "delete", "provider-b", "--json")
 	assertCLIAppErrorCode(t, err, apperror.ConfirmationRequired)
@@ -1271,7 +1258,7 @@ func TestAgentProfileDeleteCommandsDeleteTheGlobalProfile(t *testing.T) {
 	}
 	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
 		ID: claudecodeconfig.ProviderID, Name: claudecodeconfig.ProviderName,
-		AdapterID: claudecodeconfig.AdapterID, Enabled: true, MetadataJSON: `{}`,
+		AdapterID: claudecodeconfig.AdapterID, MetadataJSON: `{}`,
 	}); err != nil {
 		_ = db.Close()
 		application.Close()
@@ -2015,12 +2002,35 @@ func insertFailedOperation(t *testing.T, databasePath, operationID string) {
 		t.Fatalf("expected sqlite open to succeed, got %v", err)
 	}
 	defer db.Close()
-	_, err = db.ExecContext(context.Background(), `
-		INSERT INTO operations (id, operation_type, status, profile_id, metadata_json, error_code, error_message, created_at_unix_ms, updated_at_unix_ms)
-		VALUES (?, 'switch', 'failed', 'profile-a', '{"checkpoint":"backed_up","provider_id":"provider-a","profile_id":"profile-a"}', 'TARGET_WRITE_FAILED', 'write failed', 1, 1)
+	ctx := context.Background()
+	if _, err = db.ExecContext(ctx, `
+		INSERT INTO providers (
+			id, name, adapter_id, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		) VALUES ('provider-a', 'Provider A', 'generic', '{}', 1, 1)
+		ON CONFLICT(id) DO NOTHING;
+		INSERT INTO profiles (
+			id, name, description, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		) VALUES ('profile-a', 'Profile A', '', '{}', 1, 1)
+		ON CONFLICT(id) DO NOTHING
+	`); err != nil {
+		t.Fatalf("expected operation references setup to succeed, got %v", err)
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO operations (
+			id, provider_id, operation_type, status, metadata_schema_version,
+			metadata_json, error_code, error_message, created_at_unix_ms, updated_at_unix_ms
+		)
+		VALUES (?, 'provider-a', 'switch', 'failed', 1,
+			'{"checkpoint":"backed_up","provider_id":"provider-a","profile_id":"profile-a","related_profile_ids":["profile-a"]}',
+			'TARGET_WRITE_FAILED', 'write failed', 1, 1)
 	`, operationID)
 	if err != nil {
 		t.Fatalf("expected failed operation setup to succeed, got %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO operation_profiles (operation_id, profile_id) VALUES (?, 'profile-a')
+	`, operationID); err != nil {
+		t.Fatalf("expected failed operation Profile relation setup to succeed, got %v", err)
 	}
 }
 

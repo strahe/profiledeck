@@ -124,7 +124,7 @@ func (service *Service) ExportProfiles(ctx context.Context, req ExportCodexProfi
 		return CodexProfileExportResult{}, err
 	}
 	defer db.Close()
-	if _, err := requireEnabledProvider(ctx, db); err != nil {
+	if _, err := requireCodexProvider(ctx, db); err != nil {
 		return CodexProfileExportResult{}, err
 	}
 
@@ -174,7 +174,7 @@ func (service *Service) InspectProfileImport(ctx context.Context, req InspectCod
 		return CodexProfileImportPlan{}, err
 	}
 	defer db.Close()
-	if _, err := requireEnabledProviderIfPresent(ctx, db); err != nil {
+	if _, err := requireCodexProviderIfPresent(ctx, db); err != nil {
 		return CodexProfileImportPlan{}, err
 	}
 	var plan CodexProfileImportPlan
@@ -214,7 +214,7 @@ func (service *Service) ImportProfiles(ctx context.Context, req ImportCodexProfi
 		Operation: "codex-profile-import", ProviderID: codexconfig.ProviderID, Record: false,
 	}, func(ctx context.Context, txStore *store.Store, currentOperationID string) error {
 		operationID = currentOperationID
-		if _, err := requireEnabledProviderIfPresent(ctx, txStore); err != nil {
+		if _, err := requireCodexProviderIfPresent(ctx, txStore); err != nil {
 			return err
 		}
 		plan = buildCodexProfileImportPlan(ctx, txStore, home, decoded)
@@ -236,7 +236,16 @@ func (service *Service) ImportProfiles(ctx context.Context, req ImportCodexProfi
 		if err != nil {
 			return err
 		}
-		if _, err := txStore.CreateAppliedImportOperation(ctx, store.CreateAppliedImportOperationParams{ID: operationID, MetadataJSON: metadata}); err != nil {
+		profileIDs := make([]string, 0, plan.ProfileCount)
+		for _, item := range plan.Items {
+			if item.Kind == CodexProfileImportKindProfile && item.Action == CodexProfileImportActionCreate {
+				profileIDs = append(profileIDs, item.ID)
+			}
+		}
+		if _, err := txStore.CreateAppliedImportOperation(ctx, store.CreateAppliedImportOperationParams{
+			ID: operationID, ProviderID: codexconfig.ProviderID, ProfileIDs: profileIDs,
+			MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: metadata,
+		}); err != nil {
 			return apperror.Wrap(apperror.OperationCreateFailed, "failed to record Codex profile import", err)
 		}
 		changed = true
@@ -356,7 +365,7 @@ func planCodexCredentialImport(ctx context.Context, db *store.Store, incoming pr
 
 func planCodexConfigSetImport(ctx context.Context, db *store.Store, incoming profilebundle.ConfigSet) CodexProfileImportItem {
 	item := CodexProfileImportItem{Kind: CodexProfileImportKindConfigSet, ID: incoming.ID, Name: incoming.Name}
-	existing, err := db.GetProviderConfigSet(ctx, incoming.ID)
+	existing, err := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, incoming.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		item.Action = CodexProfileImportActionCreate
 		return item

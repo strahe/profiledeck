@@ -13,9 +13,14 @@ import (
 func TestUsageReportRangesUndatedAndPartialPricing(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	initResult, err := bootstrap.NewService(newUsageTestEnvironment(t, configDir, "").runtime, nil, nil).Initialize(ctx)
+	codexDir := t.TempDir()
+	environment := newUsageTestEnvironment(t, configDir, codexDir)
+	initResult, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx)
 	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
+	}
+	if _, err := environment.service.SyncCodex(ctx); err != nil {
+		t.Fatalf("expected explicit sync to provision Provider fixture, got %v", err)
 	}
 	db, err := store.Open(ctx, initResult.DatabasePath, false)
 	if err != nil {

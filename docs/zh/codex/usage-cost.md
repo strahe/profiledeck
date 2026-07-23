@@ -31,6 +31,8 @@ profiledeck usage sync codex --codex-dir /path/to/codex-home
 
 你可以安全地重复同步，已导入的用量不会再次计数。无效、过大或不支持的记录会被跳过并报告，但其内容不会被保存。
 
+删除 Codex Provider 也会删除其已保存用量报告。桌面端后台同步不会重新创建已删除的 Provider；再次运行这条 CLI 同步属于明确的用户操作，它可以重新建立 Codex Provider，并重新导入本地 Codex 日志中仍然存在的用量。
+
 ## 查看摘要
 
 ```bash

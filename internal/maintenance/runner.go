@@ -8,12 +8,13 @@ import (
 )
 
 type Request struct {
-	Operation    string
-	ProfileID    string
-	ProviderID   string
-	MetadataJSON string
-	SetActive    bool
-	Record       bool
+	Operation         string
+	ProfileID         string
+	ProviderID        string
+	RelatedProfileIDs []string
+	ActiveProfileID   string
+	MetadataJSON      string
+	Record            bool
 }
 
 type Func func(context.Context, *store.Store, string) error

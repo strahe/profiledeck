@@ -36,7 +36,8 @@ func TestCodexProfileExportImportRoundTripIsDeterministicAndInactive(t *testing.
 	}
 	if _, err := sourceDB.UpsertProviderProfileSetting(ctx, store.UpsertProviderProfileSettingParams{
 		ProfileID: "work", ProviderID: codexconfig.ProviderID,
-		QuotaRefreshIntervalSeconds: 300, AuthKeepaliveEnabled: true,
+		SchemaVersion: store.ProviderSettingsSchemaVersion,
+		SettingsJSON:  `{"quota_refresh_interval_seconds":300,"auth_keepalive_enabled":true}`,
 	}); err != nil {
 		_ = sourceDB.Close()
 		t.Fatalf("expected local automation fixture, got %v", err)
@@ -140,12 +141,16 @@ func TestCodexProfileExportImportRoundTripIsDeterministicAndInactive(t *testing.
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, codexconfig.ProviderID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := db.GetActiveState(ctx, codexconfig.ProviderID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("expected import not to restore active state, got %v", err)
 	}
 	operation, err := db.GetOperation(ctx, result.OperationID)
 	if err != nil || operation.OperationType != store.OperationTypeImport || operation.Status != store.OperationStatusApplied {
 		t.Fatalf("expected applied import operation, operation=%#v err=%v", operation, err)
+	}
+	operationProfileIDs, err := db.ListOperationProfileIDs(ctx, result.OperationID)
+	if err != nil || strings.Join(operationProfileIDs, ",") != "personal,work" {
+		t.Fatalf("import operation did not relate every created Profile: ids=%v err=%v", operationProfileIDs, err)
 	}
 	configAfter, _ := os.ReadFile(filepath.Join(codexDir, codexconfig.ConfigFileName))
 	authAfter, _ := os.ReadFile(filepath.Join(codexDir, codexconfig.AuthFileName))
@@ -261,6 +266,15 @@ func TestCodexProfileImportAttachesToExistingGlobalProfile(t *testing.T) {
 	}
 	if detail.Summary.Profile.Name != "Existing global name" || detail.Summary.Profile.Description != "Keep this metadata" {
 		t.Fatalf("expected global Profile metadata to be preserved, got %#v", detail.Summary.Profile)
+	}
+	db, err := openHealthyStore(ctx, targetConfigDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationProfileIDs, relationErr := db.ListOperationProfileIDs(ctx, result.OperationID)
+	closeErr := db.Close()
+	if relationErr != nil || strings.Join(operationProfileIDs, ",") != "shared" || closeErr != nil {
+		t.Fatalf("import operation did not relate attached Profile: ids=%v relationErr=%v closeErr=%v", operationProfileIDs, relationErr, closeErr)
 	}
 	repeat, err := newCodexTestEnvironment(t, targetConfigDir, codexDir).codex.InspectProfileImport(ctx, InspectCodexProfileImportRequest{
 		InputPath: bundlePath,

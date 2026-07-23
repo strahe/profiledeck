@@ -31,7 +31,6 @@ type CodexProfileSummary struct {
 	ModelProvider            string          `json:"model_provider,omitempty"`
 	OpenAIBaseURL            string          `json:"openai_base_url,omitempty"`
 	Active                   bool            `json:"active"`
-	ActiveOperationID        string          `json:"active_operation_id,omitempty"`
 	UpdatedAtUnixMS          int64           `json:"updated_at_unix_ms"`
 	Warnings                 []string        `json:"warnings,omitempty"`
 }
@@ -58,7 +57,7 @@ func (service *Service) ListProfiles(ctx context.Context) (CodexProfileListResul
 		return CodexProfileListResult{}, err
 	}
 	defer db.Close()
-	if _, err := requireEnabledProvider(ctx, db); err != nil {
+	if _, err := requireCodexProvider(ctx, db); err != nil {
 		return CodexProfileListResult{}, err
 	}
 	summaries, err := listCodexProfileSummaries(ctx, db)
@@ -81,7 +80,7 @@ func (service *Service) GetProfile(ctx context.Context, rawProfileID string) (Co
 		return CodexProfileDetail{}, err
 	}
 	defer db.Close()
-	if _, err := requireEnabledProvider(ctx, db); err != nil {
+	if _, err := requireCodexProvider(ctx, db); err != nil {
 		return CodexProfileDetail{}, err
 	}
 	return getCodexProfileFromStore(ctx, db, profileID)
@@ -153,7 +152,7 @@ func listCodexProfileSummaries(ctx context.Context, db *store.Store) ([]CodexPro
 }
 
 func codexActiveState(ctx context.Context, db *store.Store) (store.ActiveState, bool, error) {
-	active, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, codexconfig.ProviderID)
+	active, err := db.GetActiveState(ctx, codexconfig.ProviderID)
 	if errors.Is(err, store.ErrNotFound) {
 		return store.ActiveState{}, false, nil
 	}
@@ -174,7 +173,6 @@ func codexProfileSummaryFromStore(ctx context.Context, db *store.Store, profile 
 	}
 	if activeExists && active.ProfileID == profile.ID {
 		summary.Active = true
-		summary.ActiveOperationID = active.OperationID
 	}
 	var login *CodexLoginStateSummary
 	var publicConfigSet *CodexConfigSet

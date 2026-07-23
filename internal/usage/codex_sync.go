@@ -3,21 +3,29 @@ package usage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"time"
 
 	"github.com/strahe/profiledeck/internal/apperror"
+	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
 const codexHistoryChangedMessage = "This Codex session file changed before the saved import point, so it was skipped to protect existing usage history."
 
 type codexIntegration struct {
-	codexDir string
+	codexDir    string
+	provisioner ProviderProvisioner
 }
 
 func NewCodexIntegration(codexDir string) Integration {
-	return codexIntegration{codexDir: codexDir}
+	return NewCodexIntegrationWithProvisioner(codexDir, codexProviderProvisioner{codexDir: codexDir})
+}
+
+func NewCodexIntegrationWithProvisioner(codexDir string, provisioner ProviderProvisioner) Integration {
+	return codexIntegration{codexDir: codexDir, provisioner: provisioner}
 }
 
 func (codexIntegration) ProviderID() string {
@@ -37,14 +45,18 @@ func (codexIntegration) PricingInfo() UsagePricingInfo {
 	}
 }
 
-func (integration codexIntegration) Sync(ctx context.Context, stores store.Factory) (UsageSyncResult, error) {
+func (integration codexIntegration) Sync(
+	ctx context.Context,
+	stores store.Factory,
+	mode SyncProvisionMode,
+) (UsageSyncResult, error) {
 	db, err := stores.OpenHealthy(ctx, false)
 	if err != nil {
 		return UsageSyncResult{}, err
 	}
 	defer db.Close()
 
-	source, err := beginCodexUsageSync(ctx, db)
+	source, err := beginCodexUsageSync(ctx, db, integration.provisioner, mode)
 	if err != nil {
 		return UsageSyncResult{}, err
 	}
@@ -153,9 +165,20 @@ func (integration codexIntegration) Sync(ctx context.Context, stores store.Facto
 	return result, nil
 }
 
-func beginCodexUsageSync(ctx context.Context, db *store.Store) (store.UsageSource, error) {
+func beginCodexUsageSync(
+	ctx context.Context,
+	db *store.Store,
+	provisioner ProviderProvisioner,
+	mode SyncProvisionMode,
+) (store.UsageSource, error) {
 	var source store.UsageSource
 	err := db.WithTransaction(ctx, func(txStore *store.Store) error {
+		if provisioner == nil {
+			return errors.New("Codex usage Provider provisioner is required")
+		}
+		if err := provisioner.Ensure(ctx, txStore, mode); err != nil {
+			return err
+		}
 		var err error
 		source, err = txStore.BeginUsageSync(ctx, ProviderCodex, SourceCodexSessionJSONL, CodexUsageIdentityRevision)
 		if err != nil {
@@ -166,6 +189,56 @@ func beginCodexUsageSync(ctx context.Context, db *store.Store) (store.UsageSourc
 		return txStore.ValidateCodexUsageImportIdentity(ctx, source.ID, CodexUsageIdentityRevision)
 	})
 	return source, err
+}
+
+type codexProviderProvisioner struct {
+	codexDir string
+}
+
+func (provisioner codexProviderProvisioner) Ensure(
+	ctx context.Context,
+	db *store.Store,
+	mode SyncProvisionMode,
+) error {
+	home, err := codexconfig.ResolveHome(provisioner.codexDir)
+	if err != nil {
+		return err
+	}
+	var provider store.Provider
+	if mode == SyncProvisionProvider {
+		metadataJSON, err := codexpreset.ProviderMetadataJSON(home)
+		if err != nil {
+			return err
+		}
+		provider, _, err = db.CreateProviderIfMissing(ctx, store.CreateProviderParams{
+			ID: ProviderCodex, Name: codexpreset.ProviderName,
+			AdapterID: codexconfig.AdapterID, MetadataJSON: metadataJSON,
+		})
+		if err != nil {
+			return err
+		}
+	} else {
+		provider, err = db.GetProvider(ctx, ProviderCodex)
+		if errors.Is(err, store.ErrNotFound) {
+			return store.ErrUsageProviderMissing
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if provider.AdapterID != codexconfig.AdapterID {
+		return fmt.Errorf("Codex usage Provider adapter does not match the configured integration")
+	}
+	metadata, err := codexpreset.DecodeProviderMetadata(provider.MetadataJSON)
+	if err != nil || !metadata.Compatible() {
+		return fmt.Errorf("Codex usage Provider locator is invalid")
+	}
+	if metadata.CodexDir != home.Dir ||
+		metadata.ConfigPath != home.ConfigPath ||
+		metadata.AuthPath != home.AuthPath {
+		return fmt.Errorf("Codex usage Provider locator does not match the configured Codex home")
+	}
+	return nil
 }
 
 func codexUsageCursor(ctx context.Context, db *store.Store, sourceID int64, fileKey store.UsageKey) (store.CodexUsageImportFile, bool, error) {

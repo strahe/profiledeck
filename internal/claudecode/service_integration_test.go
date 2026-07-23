@@ -83,7 +83,7 @@ func newClaudeCodeTestEnvironment(t *testing.T, configDir string, customBackends
 	)
 	return &claudeCodeTestEnvironment{
 		runtime: runtimeService, claudeCode: claudeCodeService,
-		providers: provider.NewService(runtimeService.StoreFactory(), switchingService, agentService, agentRegistry),
+		providers: provider.NewService(runtimeService.StoreFactory(), switchingService, agentRegistry),
 		profiles:  profile.NewService(runtimeService.StoreFactory(), switchingService, profile.DeleteRegistry{}),
 		targets: profiletarget.NewService(
 			runtimeService.StoreFactory(), switchingService, agentService, agentRegistry, claudeCodeService.ReservedPaths,

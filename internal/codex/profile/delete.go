@@ -40,7 +40,7 @@ func (DeleteParticipant) DeleteProfileData(ctx context.Context, db *store.Store,
 		if binding.SlotID != codexpreset.ConfigSetSlotUserConfig {
 			return globalprofile.UnsupportedManagedDataError()
 		}
-		configSet, err := db.GetProviderConfigSet(ctx, binding.ConfigSetID)
+		configSet, err := db.GetProviderConfigSet(ctx, codexconfig.ProviderID, binding.ConfigSetID)
 		if err != nil {
 			return apperror.Wrap(apperror.StoreStatusFailed, "failed to inspect saved Codex settings", err)
 		}
@@ -61,7 +61,7 @@ func (DeleteParticipant) DeleteProfileData(ctx context.Context, db *store.Store,
 		if err := db.DeleteProfileConfigSetBinding(ctx, profileID, codexconfig.ProviderID, binding.SlotID); err != nil {
 			return apperror.Wrap(apperror.StoreStatusFailed, "failed to delete a Codex Profile settings binding", err)
 		}
-		if err := db.DeleteProviderConfigSet(ctx, binding.ConfigSetID); err != nil && !errors.Is(err, store.ErrInUse) {
+		if err := db.DeleteProviderConfigSet(ctx, codexconfig.ProviderID, binding.ConfigSetID); err != nil && !errors.Is(err, store.ErrInUse) {
 			return apperror.Wrap(apperror.StoreStatusFailed, "failed to delete unshared Codex settings", err)
 		}
 	}

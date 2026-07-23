@@ -587,7 +587,7 @@ func TestRestoreResetsRuntimeStateAndPreservesExternalFiles(t *testing.T) {
 	service, paths, _ := newTestService(t)
 	db := openHealthyStore(t, paths)
 	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
-		ID: "codex", Name: "Codex", AdapterID: "codex", Enabled: true, MetadataJSON: `{}`,
+		ID: "codex", Name: "Codex", AdapterID: "codex", MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -596,21 +596,29 @@ func TestRestoreResetsRuntimeStateAndPreservesExternalFiles(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.CreateProfile(ctx, store.CreateProfileParams{
+		ID: "next-profile", Name: "Next", MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.UpsertSetting(ctx, store.UpsertSettingParams{Key: "restore.value", ValueJSON: `"before"`}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID: "applied-switch", ProfileID: "before-profile", MetadataJSON: `{}`,
+		ID: "applied-switch", ProviderID: "codex", ProfileIDs: []string{"before-profile"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.CompleteSwitchOperation(ctx, store.CompleteSwitchOperationParams{
-		ID: "applied-switch", ProfileID: "before-profile", ProviderID: "codex", MetadataJSON: `{}`,
+		ID: "applied-switch", ProfileID: "before-profile", ProviderID: "codex",
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID: "pending-switch", ProfileID: "next-profile", MetadataJSON: `{}`,
+		ID: "pending-switch", ProviderID: "codex", ProfileIDs: []string{"next-profile"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: `{}`,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -664,7 +672,7 @@ func TestRestoreResetsRuntimeStateAndPreservesExternalFiles(t *testing.T) {
 	if err != nil || setting.ValueJSON != `"before"` {
 		t.Fatalf("restored setting = %#v, err = %v", setting, err)
 	}
-	if _, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, "codex"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := db.GetActiveState(ctx, "codex"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("restored active state was not cleared: %v", err)
 	}
 	operation, err := db.GetOperation(ctx, "pending-switch")
@@ -694,8 +702,20 @@ func TestRestoreBlocksWhilePartialSwitchRecoveryIsUnresolved(t *testing.T) {
 	}
 	setTestSetting(t, paths, "restore.value", `"after"`)
 	db := openHealthyStore(t, paths)
+	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
+		ID: "codex", Name: "Codex", AdapterID: "codex", MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreateProfile(ctx, store.CreateProfileParams{
+		ID: "profile-a", Name: "Profile A", MetadataJSON: `{}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
-		ID: "partial-switch", ProfileID: "profile-a", MetadataJSON: `{"checkpoint":"recovery_created"}`,
+		ID: "partial-switch", ProviderID: "codex", ProfileIDs: []string{"profile-a"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          `{"checkpoint":"recovery_created"}`,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -854,7 +874,7 @@ func TestCommittedRestoreKeepsCleanupRequirementAndBlocksSecondRestore(t *testin
 	}
 }
 
-func TestRestorePreparationMigratesOldSchemaAndRejectsUnsupportedSchema(t *testing.T) {
+func TestRestorePreparationRejectsBetaAndFutureSchemas(t *testing.T) {
 	ctx := context.Background()
 	service, paths, keys := newTestService(t)
 	identity, err := age.GenerateX25519Identity()
@@ -873,10 +893,22 @@ func TestRestorePreparationMigratesOldSchemaAndRejectsUnsupportedSchema(t *testi
 		t.Fatal(err)
 	}
 	oldArchive := writeTestArchive(t, oldDatabasePath, identity, KindManual, ReasonManual)
-	preview, err := service.PreviewRestore(ctx, RestoreSource{FilePath: oldArchive})
-	if err != nil || !preview.SchemaUpgradeRequired {
-		t.Fatalf("old schema preview = %#v, err = %v", preview, err)
+	_, err = service.PreviewRestore(ctx, RestoreSource{FilePath: oldArchive})
+	assertAppErrorCode(t, err, apperror.BackupSchemaUnsupported)
+	if !strings.Contains(err.Error(), "choose a compatible application backup") ||
+		strings.Contains(err.Error(), "update ProfileDeck") {
+		t.Fatalf("unsupported backup guidance = %q", err)
 	}
+	oldArchiveContent, err := os.ReadFile(oldArchive)
+	if err != nil {
+		t.Fatalf("read Beta archive: %v", err)
+	}
+	_, err = service.Restore(ctx, RestoreRequest{
+		Source:              RestoreSource{FilePath: oldArchive},
+		ExpectedFingerprint: fmt.Sprintf("%x", sha256.Sum256(oldArchiveContent)),
+		Confirm:             true,
+	})
+	assertAppErrorCode(t, err, apperror.BackupSchemaUnsupported)
 
 	futureDatabasePath := filepath.Join(t.TempDir(), "future.db")
 	if err := store.NewFactory(paths.Database).CreateSnapshot(ctx, futureDatabasePath); err != nil {
@@ -1119,14 +1151,17 @@ func applyDatabaseIntegrityDefect(t *testing.T, path, defect string) {
 			t.Fatal(err)
 		}
 	case "json":
+		if _, err := db.Exec(`PRAGMA ignore_check_constraints = ON`); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := db.Exec(`INSERT INTO settings (key, value_json, updated_at_unix_ms)
 			VALUES ('invalid-json', '{"token":"SECRET_INTEGRITY_SENTINEL"', 1)`); err != nil {
 			t.Fatal(err)
 		}
 	case "references":
 		if _, err := db.Exec(`INSERT INTO provider_profile_settings
-			(profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms)
-			VALUES ('missing-profile', 'missing-provider', 0, 0, 1)`); err != nil {
+			(profile_id, provider_id, schema_version, settings_json, updated_at_unix_ms)
+			VALUES ('missing-profile', 'missing-provider', 1, '{}', 1)`); err != nil {
 			t.Fatal(err)
 		}
 	default:

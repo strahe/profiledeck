@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -21,6 +22,7 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/strahe/profiledeck/internal/store/migrations"
+	"github.com/strahe/profiledeck/internal/targetformat"
 )
 
 const (
@@ -38,7 +40,13 @@ const (
 	OperationStatusFailed  = "failed"
 	OperationStatusApplied = "applied"
 
-	ActiveStateScopeProvider = "provider"
+	// Stable baseline versions are historical integrity-contract inputs.
+	// Future writers may advance only through an append-only migration.
+	stableBaselineOperationMetadataSchemaVersion = 1
+	stableBaselineProviderSettingsSchemaVersion  = 1
+
+	OperationMetadataSchemaVersion = stableBaselineOperationMetadataSchemaVersion
+	ProviderSettingsSchemaVersion  = stableBaselineProviderSettingsSchemaVersion
 
 	recoveryCleanupStateKey = "recovery.cleanup_required"
 
@@ -80,7 +88,6 @@ type Provider struct {
 	ID              string
 	Name            string
 	AdapterID       string
-	Enabled         bool
 	MetadataJSON    string
 	CreatedAtUnixMS int64
 	UpdatedAtUnixMS int64
@@ -90,7 +97,6 @@ type CreateProviderParams struct {
 	ID           string
 	Name         string
 	AdapterID    string
-	Enabled      bool
 	MetadataJSON string
 }
 
@@ -98,7 +104,6 @@ type UpdateProviderParams struct {
 	ID           string
 	Name         *string
 	AdapterID    *string
-	Enabled      *bool
 	MetadataJSON *string
 }
 
@@ -111,6 +116,8 @@ type Profile struct {
 	UpdatedAtUnixMS int64
 }
 
+// ProfileTarget stores one generic file target. Enabled controls only its
+// participation in switches; it is not Provider or Desktop Agent state.
 type ProfileTarget struct {
 	ProfileID       string
 	ProviderID      string
@@ -127,24 +134,25 @@ type ProfileTarget struct {
 }
 
 type Operation struct {
-	ID               string
-	OperationType    string
-	Status           string
-	ProfileID        string
-	MetadataJSON     string
-	ErrorCode        string
-	ErrorMessage     string
-	ResolutionKind   string
-	ResolvedAtUnixMS int64
-	CreatedAtUnixMS  int64
-	UpdatedAtUnixMS  int64
+	ID                    string
+	ProviderID            string
+	OperationType         string
+	Status                string
+	SourceOperationID     string
+	MetadataSchemaVersion int
+	MetadataJSON          string
+	ErrorCode             string
+	ErrorMessage          string
+	ResolutionKind        string
+	ResolvedAtUnixMS      int64
+	CreatedAtUnixMS       int64
+	UpdatedAtUnixMS       int64
 }
 
 type ActiveState struct {
-	ScopeType       string
-	ScopeID         string
+	ProviderID      string
 	ProfileID       string
-	OperationID     string
+	Revision        int64
 	UpdatedAtUnixMS int64
 }
 
@@ -196,12 +204,19 @@ type Setting struct {
 	UpdatedAtUnixMS int64
 }
 
+type ProviderSetting struct {
+	ProviderID      string
+	SchemaVersion   int
+	SettingsJSON    string
+	UpdatedAtUnixMS int64
+}
+
 type ProviderProfileSetting struct {
-	ProfileID                   string
-	ProviderID                  string
-	QuotaRefreshIntervalSeconds int
-	AuthKeepaliveEnabled        bool
-	UpdatedAtUnixMS             int64
+	ProfileID       string
+	ProviderID      string
+	SchemaVersion   int
+	SettingsJSON    string
+	UpdatedAtUnixMS int64
 }
 
 type CreateProfileParams struct {
@@ -245,28 +260,37 @@ type UpdateProfileTargetParams struct {
 }
 
 type CreateSwitchOperationParams struct {
-	ID           string
-	ProfileID    string
-	MetadataJSON string
+	ID                    string
+	ProviderID            string
+	ProfileIDs            []string
+	MetadataSchemaVersion int
+	MetadataJSON          string
 }
 
 type CreateRecoveryOperationParams struct {
-	ID           string
-	ProfileID    string
-	MetadataJSON string
+	ID                    string
+	ProviderID            string
+	SourceOperationID     string
+	ProfileIDs            []string
+	MetadataSchemaVersion int
+	MetadataJSON          string
 }
 
 type CreateAppliedMaintenanceOperationParams struct {
-	ID           string
-	ProfileID    string
-	ProviderID   string
-	MetadataJSON string
-	SetActive    bool
+	ID                    string
+	ProviderID            string
+	RelatedProfileIDs     []string
+	ActiveProfileID       string
+	MetadataSchemaVersion int
+	MetadataJSON          string
 }
 
 type CreateAppliedImportOperationParams struct {
-	ID           string
-	MetadataJSON string
+	ID                    string
+	ProviderID            string
+	ProfileIDs            []string
+	MetadataSchemaVersion int
+	MetadataJSON          string
 }
 
 type MarkOperationFailedParams struct {
@@ -277,27 +301,22 @@ type MarkOperationFailedParams struct {
 }
 
 type CompleteSwitchOperationParams struct {
-	ID                string
-	ProfileID         string
-	ProviderID        string
-	MetadataJSON      string
-	CredentialUpdates []UpsertProviderCredentialParams
-	ConfigSetUpdates  []UpsertProviderConfigSetParams
-}
-
-type RecoveryActiveStateParams struct {
-	ProfileID   string
-	OperationID string
+	ID                    string
+	ProfileID             string
+	ProviderID            string
+	MetadataSchemaVersion int
+	MetadataJSON          string
+	CredentialUpdates     []UpsertProviderCredentialParams
+	ConfigSetUpdates      []UpsertProviderConfigSetParams
 }
 
 type CompleteRecoveryOperationParams struct {
-	ID                  string
-	SourceOperationID   string
-	ProfileID           string
-	ProviderID          string
-	RestoredActiveState *RecoveryActiveStateParams
-	MetadataJSON        string
-	ResolutionKind      string
+	ID                    string
+	SourceOperationID     string
+	ProviderID            string
+	MetadataSchemaVersion int
+	MetadataJSON          string
+	ResolutionKind        string
 }
 
 type UpsertProviderCredentialParams struct {
@@ -336,6 +355,7 @@ type UpsertProfileConfigSetBindingParams struct {
 
 type UpdateProviderConfigSetParams struct {
 	ID           string
+	ProviderID   string
 	Name         *string
 	Description  *string
 	MetadataJSON *string
@@ -346,11 +366,17 @@ type UpsertSettingParams struct {
 	ValueJSON string
 }
 
+type UpsertProviderSettingParams struct {
+	ProviderID    string
+	SchemaVersion int
+	SettingsJSON  string
+}
+
 type UpsertProviderProfileSettingParams struct {
-	ProfileID                   string
-	ProviderID                  string
-	QuotaRefreshIntervalSeconds int
-	AuthKeepaliveEnabled        bool
+	ProfileID     string
+	ProviderID    string
+	SchemaVersion int
+	SettingsJSON  string
 }
 
 type MigrationResult struct {
@@ -412,376 +438,11 @@ func (s *Store) ClearRecoveryCleanup(ctx context.Context) error {
 	return err
 }
 
-type tableSpec struct {
-	name    string
-	columns []columnSpec
-	checks  []string
-}
-
-type columnSpec struct {
-	name           string
-	columnType     string
-	notNull        bool
-	primaryKey     bool
-	requireDefault bool
-	defaultValue   string
-}
-
 type columnInfo struct {
 	columnType   string
 	notNull      bool
 	primaryKey   bool
 	defaultValue sql.NullString
-}
-
-type indexSpec struct {
-	name    string
-	table   string
-	columns []string
-	unique  bool
-}
-
-type triggerSpec struct {
-	name   string
-	table  string
-	checks []string
-}
-
-var initialTableSpecs = []tableSpec{
-	{
-		name: "providers",
-		columns: []columnSpec{
-			{name: "id", columnType: "TEXT", primaryKey: true},
-			{name: "name", columnType: "TEXT", notNull: true},
-			{name: "adapter_id", columnType: "TEXT", notNull: true},
-			{name: "enabled", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "1"},
-			{name: "metadata_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
-			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
-			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
-		},
-		checks: []string{
-			"CHECK (enabled IN (0, 1))",
-		},
-	},
-	{
-		name: "profiles",
-		columns: []columnSpec{
-			{name: "id", columnType: "TEXT", primaryKey: true},
-			{name: "name", columnType: "TEXT", notNull: true},
-			{name: "description", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
-			{name: "metadata_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
-			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
-			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
-		},
-	},
-	{
-		name: "provider_profile_settings",
-		columns: []columnSpec{
-			{name: "profile_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "provider_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "quota_refresh_interval_seconds", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "auth_keepalive_enabled", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
-		},
-		checks: []string{
-			"CHECK (quota_refresh_interval_seconds IN (0, 300, 600, 1800, 3600))",
-			"CHECK (auth_keepalive_enabled IN (0, 1))",
-		},
-	},
-	{
-		name: "settings",
-		columns: []columnSpec{
-			{name: "key", columnType: "TEXT", primaryKey: true},
-			{name: "value_json", columnType: "TEXT", notNull: true},
-			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
-		},
-	},
-	{
-		name: "system_state",
-		columns: []columnSpec{
-			{name: "key", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "value_json", columnType: "TEXT", notNull: true},
-			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
-			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
-		},
-		checks: []string{"CHECK (json_valid(value_json))"},
-	},
-	{
-		name: "active_states",
-		columns: []columnSpec{
-			{name: "scope_type", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "scope_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "profile_id", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
-			{name: "operation_id", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
-			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
-		},
-	},
-	{
-		name: "operations",
-		columns: []columnSpec{
-			{name: "id", columnType: "TEXT", primaryKey: true},
-			{name: "operation_type", columnType: "TEXT", notNull: true},
-			{name: "status", columnType: "TEXT", notNull: true},
-			{name: "profile_id", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
-			{name: "metadata_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
-			{name: "error_code", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
-			{name: "error_message", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
-			{name: "resolution_kind", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
-			{name: "resolved_at_unix_ms", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
-			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
-		},
-		checks: []string{
-			"CHECK (operation_type IN ('switch', 'recovery', 'import', 'maintenance'))",
-			"CHECK (status IN ('pending', 'failed', 'applied'))",
-		},
-	},
-	{
-		name: "profile_targets",
-		columns: []columnSpec{
-			{name: "profile_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "provider_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "target_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "path", columnType: "TEXT", notNull: true},
-			{name: "path_key", columnType: "TEXT", notNull: true},
-			{name: "format", columnType: "TEXT", notNull: true},
-			{name: "strategy", columnType: "TEXT", notNull: true},
-			{name: "value_json", columnType: "TEXT", notNull: true},
-			{name: "enabled", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "1"},
-			{name: "metadata_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
-			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
-			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
-		},
-		checks: []string{
-			"CHECK (format IN ('text', 'json', 'toml', 'env'))",
-			"CHECK (strategy IN ('replace-file', 'json-merge', 'toml-merge', 'env-merge'))",
-			"CHECK (enabled IN (0, 1))",
-		},
-	},
-	{
-		name: "usage_sources",
-		columns: []columnSpec{
-			{name: "id", columnType: "INTEGER", primaryKey: true},
-			{name: "provider_id", columnType: "TEXT", notNull: true},
-			{name: "source_key", columnType: "TEXT", notNull: true},
-			{name: "identity_revision", columnType: "INTEGER", notNull: true},
-			{name: "sync_generation", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "last_completed_at_unix_ms", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "tracked_units", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "invalid_records", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "unsupported_records", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-		},
-		checks: []string{
-			"CHECK (identity_revision > 0)",
-			"CHECK (sync_generation >= 0)",
-			"CHECK (last_completed_at_unix_ms >= 0)",
-			"CHECK (tracked_units >= 0)",
-			"CHECK (invalid_records >= 0)",
-			"CHECK (unsupported_records >= 0)",
-		},
-	},
-	{
-		name: "usage_sessions",
-		columns: []columnSpec{
-			{name: "id", columnType: "INTEGER", primaryKey: true},
-			{name: "source_id", columnType: "INTEGER", notNull: true},
-			{name: "session_key", columnType: "TEXT", notNull: true},
-		},
-		checks: []string{
-			"CHECK (length(session_key) BETWEEN 1 AND 256)",
-			"FOREIGN KEY (source_id) REFERENCES usage_sources(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
-		},
-	},
-	{
-		name: "usage_models",
-		columns: []columnSpec{
-			{name: "id", columnType: "INTEGER", primaryKey: true},
-			{name: "source_id", columnType: "INTEGER", notNull: true},
-			{name: "model_key", columnType: "TEXT", notNull: true},
-		},
-		checks: []string{
-			"CHECK (length(model_key) BETWEEN 1 AND 200 AND model_key NOT GLOB '*[^A-Za-z0-9._:/@-]*')",
-			"FOREIGN KEY (source_id) REFERENCES usage_sources(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
-		},
-	},
-	{
-		name: "usage_facts",
-		columns: []columnSpec{
-			{name: "id", columnType: "INTEGER", primaryKey: true},
-			{name: "event_key", columnType: "BLOB", notNull: true},
-			{name: "source_id", columnType: "INTEGER", notNull: true},
-			{name: "session_id", columnType: "INTEGER"},
-			{name: "model_id", columnType: "INTEGER", notNull: true},
-			{name: "occurred_at_unix_ms", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "input_tokens", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "cached_input_tokens", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "output_tokens", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "total_tokens", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "estimated_cost_micros", columnType: "INTEGER"},
-			{name: "cost_status", columnType: "INTEGER", notNull: true},
-		},
-		checks: []string{
-			"CHECK (typeof(event_key) = 'blob' AND length(event_key) = 32 AND event_key <> zeroblob(32))",
-			"CHECK (occurred_at_unix_ms >= 0)",
-			"CHECK (input_tokens >= 0)",
-			"CHECK (cached_input_tokens >= 0 AND cached_input_tokens <= input_tokens)",
-			"CHECK (output_tokens >= 0)",
-			"CHECK (total_tokens >= 0)",
-			"CHECK (estimated_cost_micros IS NULL OR estimated_cost_micros >= 0)",
-			"CHECK (cost_status IN (0, 1, 2))",
-			"FOREIGN KEY (source_id) REFERENCES usage_sources(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
-			"FOREIGN KEY (session_id) REFERENCES usage_sessions(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
-			"FOREIGN KEY (model_id) REFERENCES usage_models(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
-			"CHECK ((cost_status IN (1, 2) AND estimated_cost_micros IS NOT NULL) OR (cost_status = 0 AND estimated_cost_micros IS NULL))",
-		},
-	},
-	{
-		name: "codex_usage_import_files",
-		columns: []columnSpec{
-			{name: "source_id", columnType: "INTEGER", notNull: true, primaryKey: true},
-			{name: "file_key", columnType: "BLOB", notNull: true, primaryKey: true},
-			{name: "modified_unix_ms", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "size_bytes", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "imported_facts", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "invalid_lines", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "unsupported_lines", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
-			{name: "parser_revision", columnType: "INTEGER", notNull: true},
-			{name: "identity_revision", columnType: "INTEGER", notNull: true},
-			{name: "event_digest", columnType: "BLOB", notNull: true},
-			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
-		},
-		checks: []string{
-			"CHECK (typeof(file_key) = 'blob' AND length(file_key) = 32 AND file_key <> zeroblob(32))",
-			"CHECK (modified_unix_ms >= 0)",
-			"CHECK (size_bytes >= 0)",
-			"CHECK (imported_facts >= 0)",
-			"CHECK (invalid_lines >= 0)",
-			"CHECK (unsupported_lines >= 0)",
-			"CHECK (parser_revision > 0)",
-			"CHECK (identity_revision > 0)",
-			"CHECK (typeof(event_digest) = 'blob' AND length(event_digest) = 32 AND event_digest <> zeroblob(32))",
-			"CHECK (updated_at_unix_ms >= 0)",
-			"FOREIGN KEY (source_id) REFERENCES usage_sources(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
-			"WITHOUT ROWID",
-		},
-	},
-	{
-		name: "provider_credentials",
-		columns: []columnSpec{
-			{name: "id", columnType: "TEXT", primaryKey: true},
-			{name: "provider_id", columnType: "TEXT", notNull: true},
-			{name: "credential_kind", columnType: "TEXT", notNull: true},
-			{name: "payload_json", columnType: "TEXT", notNull: true},
-			{name: "payload_sha256", columnType: "TEXT", notNull: true},
-			{name: "metadata_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
-			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
-			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
-		},
-	},
-	{
-		name: "provider_config_sets",
-		columns: []columnSpec{
-			{name: "id", columnType: "TEXT", primaryKey: true},
-			{name: "provider_id", columnType: "TEXT", notNull: true},
-			{name: "config_kind", columnType: "TEXT", notNull: true},
-			{name: "name", columnType: "TEXT", notNull: true},
-			{name: "description", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "''"},
-			{name: "payload_text", columnType: "TEXT", notNull: true},
-			{name: "payload_sha256", columnType: "TEXT", notNull: true},
-			{name: "metadata_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
-			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
-			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
-		},
-	},
-	{
-		name: "profile_credential_bindings",
-		columns: []columnSpec{
-			{name: "profile_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "provider_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "slot_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "credential_id", columnType: "TEXT", notNull: true},
-			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
-			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
-		},
-		checks: []string{
-			"FOREIGN KEY (profile_id) REFERENCES profiles(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
-			"FOREIGN KEY (provider_id) REFERENCES providers(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
-			"FOREIGN KEY (provider_id, credential_id) REFERENCES provider_credentials(provider_id, id) ON UPDATE RESTRICT ON DELETE RESTRICT",
-		},
-	},
-	{
-		name: "profile_config_set_bindings",
-		columns: []columnSpec{
-			{name: "profile_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "provider_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "slot_id", columnType: "TEXT", notNull: true, primaryKey: true},
-			{name: "config_set_id", columnType: "TEXT", notNull: true},
-			{name: "created_at_unix_ms", columnType: "INTEGER", notNull: true},
-			{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
-		},
-		checks: []string{
-			"FOREIGN KEY (profile_id) REFERENCES profiles(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
-			"FOREIGN KEY (provider_id) REFERENCES providers(id) ON UPDATE RESTRICT ON DELETE RESTRICT",
-			"FOREIGN KEY (provider_id, config_set_id) REFERENCES provider_config_sets(provider_id, id) ON UPDATE RESTRICT ON DELETE RESTRICT",
-		},
-	},
-}
-
-var initialIndexSpecs = []indexSpec{
-	{name: "idx_providers_adapter_id", table: "providers", columns: []string{"adapter_id"}},
-	{name: "idx_providers_enabled", table: "providers", columns: []string{"enabled"}},
-	{name: "idx_provider_profile_settings_provider_id", table: "provider_profile_settings", columns: []string{"provider_id"}},
-	{name: "idx_operations_status", table: "operations", columns: []string{"status"}},
-	{name: "idx_operations_operation_type", table: "operations", columns: []string{"operation_type"}},
-	{name: "idx_profile_targets_profile_id", table: "profile_targets", columns: []string{"profile_id"}},
-	{name: "idx_profile_targets_provider_id", table: "profile_targets", columns: []string{"provider_id"}},
-	{name: "idx_profile_targets_enabled", table: "profile_targets", columns: []string{"enabled"}},
-	{name: "idx_profile_targets_unique_path", table: "profile_targets", columns: []string{"profile_id", "provider_id", "path_key"}, unique: true},
-	{name: "idx_profile_targets_path_key", table: "profile_targets", columns: []string{"path_key"}},
-	{name: "idx_usage_sources_provider_source", table: "usage_sources", columns: []string{"provider_id", "source_key"}, unique: true},
-	{name: "idx_usage_sessions_source_session", table: "usage_sessions", columns: []string{"source_id", "session_key"}, unique: true},
-	{name: "idx_usage_models_source_model", table: "usage_models", columns: []string{"source_id", "model_key"}, unique: true},
-	{name: "idx_usage_facts_event_key", table: "usage_facts", columns: []string{"event_key"}, unique: true},
-	{name: "idx_usage_facts_source_time", table: "usage_facts", columns: []string{"source_id", "occurred_at_unix_ms"}},
-	{name: "idx_usage_facts_source_cost_model_id", table: "usage_facts", columns: []string{"source_id", "cost_status", "model_id", "id"}},
-	{name: "idx_provider_credentials_provider_id", table: "provider_credentials", columns: []string{"provider_id"}},
-	{name: "idx_provider_credentials_kind", table: "provider_credentials", columns: []string{"credential_kind"}},
-	{name: "idx_provider_credentials_provider_id_id", table: "provider_credentials", columns: []string{"provider_id", "id"}, unique: true},
-	{name: "idx_provider_config_sets_provider_id", table: "provider_config_sets", columns: []string{"provider_id"}},
-	{name: "idx_provider_config_sets_kind", table: "provider_config_sets", columns: []string{"config_kind"}},
-	{name: "idx_provider_config_sets_provider_id_id", table: "provider_config_sets", columns: []string{"provider_id", "id"}, unique: true},
-	{name: "idx_profile_credential_bindings_provider_id", table: "profile_credential_bindings", columns: []string{"provider_id"}},
-	{name: "idx_profile_credential_bindings_credential_id", table: "profile_credential_bindings", columns: []string{"credential_id"}},
-	{name: "idx_profile_config_set_bindings_provider_id", table: "profile_config_set_bindings", columns: []string{"provider_id"}},
-	{name: "idx_profile_config_set_bindings_config_set_id", table: "profile_config_set_bindings", columns: []string{"config_set_id"}},
-}
-
-var initialTriggerSpecs = []triggerSpec{
-	{
-		name:  "trg_profile_targets_path_owner_insert",
-		table: "profile_targets",
-		checks: []string{
-			"BEFORE INSERT ON profile_targets",
-			"path_key = NEW.path_key",
-			"provider_id <> NEW.provider_id",
-			"target_id <> NEW.target_id",
-			"RAISE(ABORT, '" + profileTargetPathOwnerMessage + "')",
-		},
-	},
-	{
-		name:  "trg_profile_targets_path_owner_update",
-		table: "profile_targets",
-		checks: []string{
-			"BEFORE UPDATE OF path, path_key, provider_id, target_id ON profile_targets",
-			"path_key = NEW.path_key",
-			"profile_id = OLD.profile_id",
-			"provider_id = OLD.provider_id",
-			"target_id = OLD.target_id",
-			"provider_id <> NEW.provider_id",
-			"target_id <> NEW.target_id",
-			"RAISE(ABORT, '" + profileTargetPathOwnerMessage + "')",
-		},
-	},
 }
 
 func Open(ctx context.Context, databasePath string, readOnly bool) (*Store, error) {
@@ -882,6 +543,11 @@ func (s *Store) migrateOnce(ctx context.Context) (MigrationResult, error) {
 	state, err := s.MigrationState(ctx)
 	if err != nil {
 		return MigrationResult{}, err
+	}
+	if state.Applied == 0 {
+		if err := s.validateUnmarkedStableBaseline(ctx); err != nil {
+			return MigrationResult{}, err
+		}
 	}
 	if !state.HasMigrationTable {
 		// Establish Bun's infrastructure as one baseline. This prevents concurrent
@@ -991,9 +657,17 @@ func (s *Store) QuickCheck(ctx context.Context) error {
 
 // CheckMigrationCompatibility rejects unknown or invalid migration history
 // before application data is read or migrated.
+// Marked baselines are checked separately by InspectIntegrity, which includes
+// QuickCheck. An unmarked database is validated here only before marker adoption.
 func (s *Store) CheckMigrationCompatibility(ctx context.Context) error {
-	_, err := s.MigrationState(ctx)
-	return err
+	state, err := s.MigrationState(ctx)
+	if err != nil {
+		return err
+	}
+	if state.Applied == 0 {
+		return s.validateUnmarkedStableBaseline(ctx)
+	}
+	return nil
 }
 
 // Checkpoint folds committed WAL pages into the database before a database
@@ -1013,19 +687,12 @@ func (s *Store) Checkpoint(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) ListProviders(ctx context.Context, includeDisabled bool) ([]Provider, error) {
-	query := `
-		SELECT id, name, adapter_id, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms
+func (s *Store) ListProviders(ctx context.Context) ([]Provider, error) {
+	rows, err := s.executor().QueryContext(ctx, `
+		SELECT id, name, adapter_id, metadata_json, created_at_unix_ms, updated_at_unix_ms
 		FROM providers
-	`
-	args := []any{}
-	if !includeDisabled {
-		query += " WHERE enabled = ?"
-		args = append(args, 1)
-	}
-	query += " ORDER BY id ASC"
-
-	rows, err := s.executor().QueryContext(ctx, query, args...)
+		ORDER BY id ASC
+	`)
 	if err != nil {
 		return nil, err
 	}
@@ -1048,7 +715,7 @@ func (s *Store) ListProviders(ctx context.Context, includeDisabled bool) ([]Prov
 func (s *Store) GetProvider(ctx context.Context, id string) (Provider, error) {
 	row := s.executor().QueryRowContext(
 		ctx,
-		`SELECT id, name, adapter_id, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms
+		`SELECT id, name, adapter_id, metadata_json, created_at_unix_ms, updated_at_unix_ms
 		FROM providers
 		WHERE id = ?`,
 		id,
@@ -1062,19 +729,14 @@ func (s *Store) GetProvider(ctx context.Context, id string) (Provider, error) {
 
 func (s *Store) CreateProvider(ctx context.Context, params CreateProviderParams) (Provider, error) {
 	now := time.Now().UnixMilli()
-	enabled := 0
-	if params.Enabled {
-		enabled = 1
-	}
 	_, err := s.executor().ExecContext(
 		ctx,
 		`INSERT INTO providers
-			(id, name, adapter_id, enabled, metadata_json, created_at_unix_ms, updated_at_unix_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			(id, name, adapter_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?)`,
 		params.ID,
 		params.Name,
 		params.AdapterID,
-		enabled,
 		params.MetadataJSON,
 		now,
 		now,
@@ -1088,6 +750,35 @@ func (s *Store) CreateProvider(ctx context.Context, params CreateProviderParams)
 	return s.GetProvider(ctx, params.ID)
 }
 
+// CreateProviderIfMissing is reserved for typed provisioners. A conflicting
+// Provider is returned unchanged so the caller can validate its adapter and
+// locator instead of silently rebinding it.
+func (s *Store) CreateProviderIfMissing(ctx context.Context, params CreateProviderParams) (Provider, bool, error) {
+	now := time.Now().UnixMilli()
+	result, err := s.executor().ExecContext(
+		ctx,
+		`INSERT INTO providers
+			(id, name, adapter_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO NOTHING`,
+		params.ID,
+		params.Name,
+		params.AdapterID,
+		params.MetadataJSON,
+		now,
+		now,
+	)
+	if err != nil {
+		return Provider{}, false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return Provider{}, false, err
+	}
+	provider, err := s.GetProvider(ctx, params.ID)
+	return provider, rows == 1, err
+}
+
 func (s *Store) UpdateProvider(ctx context.Context, params UpdateProviderParams) (Provider, error) {
 	assignments := []string{}
 	args := []any{}
@@ -1098,14 +789,6 @@ func (s *Store) UpdateProvider(ctx context.Context, params UpdateProviderParams)
 	if params.AdapterID != nil {
 		assignments = append(assignments, "adapter_id = ?")
 		args = append(args, *params.AdapterID)
-	}
-	if params.Enabled != nil {
-		enabled := 0
-		if *params.Enabled {
-			enabled = 1
-		}
-		assignments = append(assignments, "enabled = ?")
-		args = append(args, enabled)
 	}
 	if params.MetadataJSON != nil {
 		assignments = append(assignments, "metadata_json = ?")
@@ -1132,44 +815,14 @@ func (s *Store) UpdateProvider(ctx context.Context, params UpdateProviderParams)
 }
 
 func (s *Store) DeleteProvider(ctx context.Context, id string) error {
-	if _, err := s.GetProvider(ctx, id); err != nil {
-		return err
-	}
-	references, err := s.providerReferenceCount(ctx, id)
+	result, err := s.executor().ExecContext(ctx, `DELETE FROM providers WHERE id = ?`, strings.TrimSpace(id))
 	if err != nil {
-		return err
-	}
-	if references > 0 {
-		return ErrInUse
-	}
-
-	result, err := s.executor().ExecContext(ctx, `
-		DELETE FROM providers
-		WHERE id = ?
-			AND NOT EXISTS (SELECT 1 FROM profile_targets WHERE provider_id = ?)
-			AND NOT EXISTS (SELECT 1 FROM provider_credentials WHERE provider_id = ?)
-			AND NOT EXISTS (SELECT 1 FROM provider_config_sets WHERE provider_id = ?)
-			AND NOT EXISTS (SELECT 1 FROM profile_credential_bindings WHERE provider_id = ?)
-			AND NOT EXISTS (SELECT 1 FROM profile_config_set_bindings WHERE provider_id = ?)
-			AND NOT EXISTS (SELECT 1 FROM provider_profile_settings WHERE provider_id = ?)
-			AND NOT EXISTS (SELECT 1 FROM active_states WHERE scope_type = ? AND scope_id = ?)
-	`, id, id, id, id, id, id, id, ActiveStateScopeProvider, id)
-	if err != nil {
+		if isSQLiteConstraintError(err) {
+			return ErrInUse
+		}
 		return err
 	}
 	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
-		if _, getErr := s.GetProvider(ctx, id); errors.Is(getErr, ErrNotFound) {
-			return ErrNotFound
-		} else if getErr != nil {
-			return getErr
-		}
-		references, refErr := s.providerReferenceCount(ctx, id)
-		if refErr != nil {
-			return refErr
-		}
-		if references > 0 {
-			return ErrInUse
-		}
 		return ErrNotFound
 	}
 	return nil
@@ -1275,52 +928,23 @@ func (s *Store) UpdateProfile(ctx context.Context, params UpdateProfileParams) (
 }
 
 func (s *Store) DeleteProfile(ctx context.Context, id string) error {
-	if !s.transactional {
-		return s.WithTransaction(ctx, func(txStore *Store) error {
-			return txStore.DeleteProfile(ctx, id)
-		})
-	}
-	// Profile automation is local runtime preference data. Remove it in the
-	// same transaction as the Profile so failed/in-use deletes keep settings.
-	if _, err := s.executor().ExecContext(ctx, `DELETE FROM provider_profile_settings WHERE profile_id = ?`, id); err != nil {
-		return err
-	}
-	result, err := s.executor().ExecContext(ctx, `
-		DELETE FROM profiles
-		WHERE id = ?
-			AND NOT EXISTS (SELECT 1 FROM active_states WHERE profile_id = ?)
-			AND NOT EXISTS (
-				SELECT 1 FROM operations
-				WHERE profile_id = ?
-					AND status IN (?, ?)
-					AND resolved_at_unix_ms = 0
-			)
-			AND NOT EXISTS (SELECT 1 FROM profile_targets WHERE profile_id = ?)
-			AND NOT EXISTS (SELECT 1 FROM profile_credential_bindings WHERE profile_id = ?)
-			AND NOT EXISTS (SELECT 1 FROM profile_config_set_bindings WHERE profile_id = ?)
-	`, id, id, id, OperationStatusPending, OperationStatusFailed, id, id, id)
+	result, err := s.executor().ExecContext(ctx, `DELETE FROM profiles WHERE id = ?`, strings.TrimSpace(id))
 	if err != nil {
+		if isSQLiteConstraintError(err) {
+			return ErrInUse
+		}
 		return err
 	}
 	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
-		if _, getErr := s.GetProfile(ctx, id); errors.Is(getErr, ErrNotFound) {
-			return ErrNotFound
-		} else if getErr != nil {
-			return getErr
-		}
-		references, refErr := s.profileReferenceCount(ctx, id)
-		if refErr != nil {
-			return refErr
-		}
-		if references > 0 {
-			return ErrInUse
-		}
 		return ErrNotFound
 	}
 	return nil
 }
 
 func (s *Store) CreateProfileTarget(ctx context.Context, params CreateProfileTargetParams) (ProfileTarget, error) {
+	if !targetformat.BuiltinRegistry().AllowsCanonical(params.Format, params.Strategy) {
+		return ProfileTarget{}, errors.New("profile target format and strategy are not registered")
+	}
 	now := time.Now().UnixMilli()
 	enabled := 0
 	if params.Enabled {
@@ -1468,6 +1092,23 @@ func (s *Store) GetProfileTarget(ctx context.Context, profileID, providerID, tar
 }
 
 func (s *Store) UpdateProfileTarget(ctx context.Context, params UpdateProfileTargetParams) (ProfileTarget, error) {
+	if params.Format != nil || params.Strategy != nil {
+		existing, err := s.GetProfileTarget(ctx, params.ProfileID, params.ProviderID, params.TargetID)
+		if err != nil {
+			return ProfileTarget{}, err
+		}
+		format := existing.Format
+		if params.Format != nil {
+			format = *params.Format
+		}
+		strategy := existing.Strategy
+		if params.Strategy != nil {
+			strategy = *params.Strategy
+		}
+		if !targetformat.BuiltinRegistry().AllowsCanonical(format, strategy) {
+			return ProfileTarget{}, errors.New("profile target format and strategy are not registered")
+		}
+	}
 	assignments := []string{}
 	args := []any{}
 	if params.Path != nil {
@@ -1609,9 +1250,49 @@ func (s *Store) DeleteSetting(ctx context.Context, key string) error {
 	return nil
 }
 
+func (s *Store) GetProviderSetting(ctx context.Context, providerID string) (ProviderSetting, error) {
+	row := s.executor().QueryRowContext(ctx, `
+		SELECT provider_id, schema_version, settings_json, updated_at_unix_ms
+		FROM provider_settings
+		WHERE provider_id = ?
+	`, strings.TrimSpace(providerID))
+	setting, err := scanProviderSetting(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ProviderSetting{}, ErrNotFound
+	}
+	return setting, err
+}
+
+func (s *Store) UpsertProviderSetting(ctx context.Context, params UpsertProviderSettingParams) (ProviderSetting, error) {
+	providerID := strings.TrimSpace(params.ProviderID)
+	if providerID == "" {
+		return ProviderSetting{}, errors.New("provider setting provider_id is required")
+	}
+	if params.SchemaVersion != ProviderSettingsSchemaVersion {
+		return ProviderSetting{}, errors.New("provider setting schema version is unsupported")
+	}
+	if err := validateJSONObject(params.SettingsJSON, "provider settings"); err != nil {
+		return ProviderSetting{}, err
+	}
+	now := time.Now().UnixMilli()
+	_, err := s.executor().ExecContext(ctx, `
+		INSERT INTO provider_settings
+			(provider_id, schema_version, settings_json, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(provider_id) DO UPDATE SET
+			schema_version = excluded.schema_version,
+			settings_json = excluded.settings_json,
+			updated_at_unix_ms = excluded.updated_at_unix_ms
+	`, providerID, params.SchemaVersion, params.SettingsJSON, now)
+	if err != nil {
+		return ProviderSetting{}, err
+	}
+	return s.GetProviderSetting(ctx, providerID)
+}
+
 func (s *Store) GetProviderProfileSetting(ctx context.Context, profileID, providerID string) (ProviderProfileSetting, error) {
 	row := s.executor().QueryRowContext(ctx, `
-		SELECT profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms
+		SELECT profile_id, provider_id, schema_version, settings_json, updated_at_unix_ms
 		FROM provider_profile_settings
 		WHERE profile_id = ? AND provider_id = ?
 	`, strings.TrimSpace(profileID), strings.TrimSpace(providerID))
@@ -1624,7 +1305,7 @@ func (s *Store) GetProviderProfileSetting(ctx context.Context, profileID, provid
 
 func (s *Store) ListProviderProfileSettings(ctx context.Context, providerID string) ([]ProviderProfileSetting, error) {
 	rows, err := s.executor().QueryContext(ctx, `
-		SELECT profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms
+		SELECT profile_id, provider_id, schema_version, settings_json, updated_at_unix_ms
 		FROM provider_profile_settings
 		WHERE provider_id = ?
 		ORDER BY profile_id ASC
@@ -1653,31 +1334,22 @@ func (s *Store) UpsertProviderProfileSetting(ctx context.Context, params UpsertP
 	if profileID == "" || providerID == "" {
 		return ProviderProfileSetting{}, errors.New("provider profile setting profile_id and provider_id are required")
 	}
-	switch params.QuotaRefreshIntervalSeconds {
-	case 0, 300, 600, 1800, 3600:
-	default:
-		return ProviderProfileSetting{}, errors.New("provider profile quota refresh interval is unsupported")
+	if params.SchemaVersion != ProviderSettingsSchemaVersion {
+		return ProviderProfileSetting{}, errors.New("provider profile setting schema version is unsupported")
 	}
-	if _, err := s.GetProfile(ctx, profileID); err != nil {
+	if err := validateJSONObject(params.SettingsJSON, "provider profile settings"); err != nil {
 		return ProviderProfileSetting{}, err
-	}
-	if _, err := s.GetProvider(ctx, providerID); err != nil {
-		return ProviderProfileSetting{}, err
-	}
-	keepalive := 0
-	if params.AuthKeepaliveEnabled {
-		keepalive = 1
 	}
 	now := time.Now().UnixMilli()
 	_, err := s.executor().ExecContext(ctx, `
 		INSERT INTO provider_profile_settings
-			(profile_id, provider_id, quota_refresh_interval_seconds, auth_keepalive_enabled, updated_at_unix_ms)
+			(profile_id, provider_id, schema_version, settings_json, updated_at_unix_ms)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(profile_id, provider_id) DO UPDATE SET
-			quota_refresh_interval_seconds = excluded.quota_refresh_interval_seconds,
-			auth_keepalive_enabled = excluded.auth_keepalive_enabled,
+			schema_version = excluded.schema_version,
+			settings_json = excluded.settings_json,
 			updated_at_unix_ms = excluded.updated_at_unix_ms
-	`, profileID, providerID, params.QuotaRefreshIntervalSeconds, keepalive, now)
+	`, profileID, providerID, params.SchemaVersion, params.SettingsJSON, now)
 	if err != nil {
 		return ProviderProfileSetting{}, err
 	}
@@ -1906,15 +1578,14 @@ func (s *Store) UpsertProviderConfigSet(ctx context.Context, params UpsertProvid
 		`INSERT INTO provider_config_sets
 			(id, provider_id, config_kind, name, description, payload_text, payload_sha256, metadata_json, created_at_unix_ms, updated_at_unix_ms)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
+		ON CONFLICT(provider_id, id) DO UPDATE SET
 			name = excluded.name,
 			description = excluded.description,
 			payload_text = excluded.payload_text,
 			payload_sha256 = excluded.payload_sha256,
 			metadata_json = excluded.metadata_json,
 			updated_at_unix_ms = excluded.updated_at_unix_ms
-		WHERE provider_config_sets.provider_id = excluded.provider_id
-			AND provider_config_sets.config_kind = excluded.config_kind`,
+		WHERE provider_config_sets.config_kind = excluded.config_kind`,
 		id,
 		strings.TrimSpace(params.ProviderID),
 		strings.TrimSpace(params.ConfigKind),
@@ -1929,7 +1600,7 @@ func (s *Store) UpsertProviderConfigSet(ctx context.Context, params UpsertProvid
 	if err != nil {
 		return ProviderConfigSet{}, err
 	}
-	configSet, err := s.GetProviderConfigSet(ctx, id)
+	configSet, err := s.GetProviderConfigSet(ctx, params.ProviderID, id)
 	if err != nil {
 		return ProviderConfigSet{}, err
 	}
@@ -1975,12 +1646,13 @@ func validateProviderConfigSetParams(params UpsertProviderConfigSetParams) error
 	return nil
 }
 
-func (s *Store) GetProviderConfigSet(ctx context.Context, id string) (ProviderConfigSet, error) {
+func (s *Store) GetProviderConfigSet(ctx context.Context, providerID, id string) (ProviderConfigSet, error) {
 	row := s.executor().QueryRowContext(
 		ctx,
 		`SELECT id, provider_id, config_kind, name, description, payload_text, payload_sha256, metadata_json, created_at_unix_ms, updated_at_unix_ms
 		FROM provider_config_sets
-		WHERE id = ?`,
+		WHERE provider_id = ? AND id = ?`,
+		strings.TrimSpace(providerID),
 		strings.TrimSpace(id),
 	)
 	configSet, err := scanProviderConfigSet(row)
@@ -2240,6 +1912,53 @@ func (s *Store) ListProfileConfigSetBindingsByProvider(ctx context.Context, prov
 	return bindings, rows.Err()
 }
 
+// ListProviderResourceProfileIDs returns every Profile whose typed binding
+// observes one of the supplied Provider-owned resources. Operation writers use
+// it so shared-resource mutations cannot omit affected Profiles.
+func (s *Store) ListProviderResourceProfileIDs(
+	ctx context.Context,
+	providerID string,
+	credentialIDs []string,
+	configSetIDs []string,
+) ([]string, error) {
+	credentialSet := make(map[string]struct{}, len(credentialIDs))
+	for _, id := range credentialIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			credentialSet[id] = struct{}{}
+		}
+	}
+	configSetSet := make(map[string]struct{}, len(configSetIDs))
+	for _, id := range configSetIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			configSetSet[id] = struct{}{}
+		}
+	}
+	profileIDs := []string{}
+	if len(credentialSet) > 0 {
+		bindings, err := s.ListProfileCredentialBindingsByProvider(ctx, providerID)
+		if err != nil {
+			return nil, err
+		}
+		for _, binding := range bindings {
+			if _, ok := credentialSet[binding.CredentialID]; ok {
+				profileIDs = append(profileIDs, binding.ProfileID)
+			}
+		}
+	}
+	if len(configSetSet) > 0 {
+		bindings, err := s.ListProfileConfigSetBindingsByProvider(ctx, providerID)
+		if err != nil {
+			return nil, err
+		}
+		for _, binding := range bindings {
+			if _, ok := configSetSet[binding.ConfigSetID]; ok {
+				profileIDs = append(profileIDs, binding.ProfileID)
+			}
+		}
+	}
+	return uniqueNonEmptyStrings(profileIDs), nil
+}
+
 func (s *Store) DeleteProfileConfigSetBinding(ctx context.Context, profileID, providerID, slotID string) error {
 	result, err := s.executor().ExecContext(ctx, `DELETE FROM profile_config_set_bindings WHERE profile_id = ? AND provider_id = ? AND slot_id = ?`, profileID, providerID, slotID)
 	if err != nil {
@@ -2278,13 +1997,13 @@ func (s *Store) UpdateProviderConfigSet(ctx context.Context, params UpdateProvid
 		args = append(args, *params.MetadataJSON)
 	}
 	if len(assignments) == 0 {
-		return s.GetProviderConfigSet(ctx, params.ID)
+		return s.GetProviderConfigSet(ctx, params.ProviderID, params.ID)
 	}
 	assignments = append(assignments, "updated_at_unix_ms = ?")
-	args = append(args, time.Now().UnixMilli(), strings.TrimSpace(params.ID))
+	args = append(args, time.Now().UnixMilli(), strings.TrimSpace(params.ProviderID), strings.TrimSpace(params.ID))
 	result, err := s.executor().ExecContext(
 		ctx,
-		`UPDATE provider_config_sets SET `+strings.Join(assignments, ", ")+` WHERE id = ?`,
+		`UPDATE provider_config_sets SET `+strings.Join(assignments, ", ")+` WHERE provider_id = ? AND id = ?`,
 		args...,
 	)
 	if err != nil {
@@ -2297,30 +2016,33 @@ func (s *Store) UpdateProviderConfigSet(ctx context.Context, params UpdateProvid
 	if rows == 0 {
 		return ProviderConfigSet{}, ErrNotFound
 	}
-	return s.GetProviderConfigSet(ctx, params.ID)
+	return s.GetProviderConfigSet(ctx, params.ProviderID, params.ID)
 }
 
-func (s *Store) CountProviderConfigSetReferences(ctx context.Context, id string) (int, error) {
+func (s *Store) CountProviderConfigSetReferences(ctx context.Context, providerID, id string) (int, error) {
 	var count int
 	err := s.executor().QueryRowContext(ctx, `
-		SELECT COUNT(1) FROM profile_config_set_bindings WHERE config_set_id = ?
-	`, strings.TrimSpace(id)).Scan(&count)
+		SELECT COUNT(1) FROM profile_config_set_bindings
+		WHERE provider_id = ? AND config_set_id = ?
+	`, strings.TrimSpace(providerID), strings.TrimSpace(id)).Scan(&count)
 	return count, err
 }
 
-func (s *Store) DeleteProviderConfigSet(ctx context.Context, id string) error {
+func (s *Store) DeleteProviderConfigSet(ctx context.Context, providerID, id string) error {
+	providerID = strings.TrimSpace(providerID)
 	id = strings.TrimSpace(id)
 	// Config Sets may outlive one Profile when another binding still shares
 	// them, so the final delete repeats the reference check atomically.
 	result, err := s.executor().ExecContext(
 		ctx,
 		`DELETE FROM provider_config_sets
-		WHERE id = ?
+		WHERE provider_id = ? AND id = ?
 			AND NOT EXISTS (
 				SELECT 1 FROM profile_config_set_bindings AS binding
 				WHERE binding.provider_id = provider_config_sets.provider_id
 					AND binding.config_set_id = provider_config_sets.id
 			)`,
+		providerID,
 		id,
 	)
 	if err != nil {
@@ -2331,7 +2053,7 @@ func (s *Store) DeleteProviderConfigSet(ctx context.Context, id string) error {
 		return err
 	}
 	if rows == 0 {
-		if _, getErr := s.GetProviderConfigSet(ctx, id); errors.Is(getErr, ErrNotFound) {
+		if _, getErr := s.GetProviderConfigSet(ctx, providerID, id); errors.Is(getErr, ErrNotFound) {
 			return ErrNotFound
 		} else if getErr != nil {
 			return getErr
@@ -2361,65 +2083,124 @@ func validateJSONObject(valueJSON, label string) error {
 }
 
 func (s *Store) CreatePendingSwitchOperation(ctx context.Context, params CreateSwitchOperationParams) (Operation, error) {
-	now := time.Now().UnixMilli()
-	_, err := s.executor().ExecContext(
-		ctx,
-		`INSERT INTO operations
-			(id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		params.ID,
-		OperationTypeSwitch,
-		OperationStatusPending,
-		params.ProfileID,
-		params.MetadataJSON,
-		now,
-		now,
-	)
-	if err != nil {
-		if isSQLiteConstraintError(err) {
-			return Operation{}, ErrAlreadyExists
-		}
-		return Operation{}, err
-	}
-	return s.GetOperation(ctx, params.ID)
+	return s.createOperation(ctx, createOperationParams{
+		ID: params.ID, ProviderID: params.ProviderID, OperationType: OperationTypeSwitch,
+		Status: OperationStatusPending, ProfileIDs: params.ProfileIDs,
+		MetadataSchemaVersion: params.MetadataSchemaVersion, MetadataJSON: params.MetadataJSON,
+	})
 }
 
 func (s *Store) CreatePendingRecoveryOperation(ctx context.Context, params CreateRecoveryOperationParams) (Operation, error) {
-	now := time.Now().UnixMilli()
-	_, err := s.executor().ExecContext(
-		ctx,
-		`INSERT INTO operations
-			(id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		params.ID,
-		OperationTypeRecovery,
-		OperationStatusPending,
-		params.ProfileID,
-		params.MetadataJSON,
-		now,
-		now,
-	)
-	if err != nil {
-		if isSQLiteConstraintError(err) {
-			return Operation{}, ErrAlreadyExists
-		}
-		return Operation{}, err
-	}
-	return s.GetOperation(ctx, params.ID)
+	return s.createOperation(ctx, createOperationParams{
+		ID: params.ID, ProviderID: params.ProviderID, OperationType: OperationTypeRecovery,
+		Status: OperationStatusPending, SourceOperationID: params.SourceOperationID,
+		ProfileIDs: params.ProfileIDs, MetadataSchemaVersion: params.MetadataSchemaVersion,
+		MetadataJSON: params.MetadataJSON,
+	})
 }
 
 func (s *Store) CreateAppliedMaintenanceOperation(ctx context.Context, params CreateAppliedMaintenanceOperationParams) (Operation, error) {
+	relatedProfileIDs := uniqueNonEmptyStrings(params.RelatedProfileIDs)
+	activeProfileID := strings.TrimSpace(params.ActiveProfileID)
+	if activeProfileID != "" && !containsString(relatedProfileIDs, activeProfileID) {
+		return Operation{}, errors.New("active maintenance Profile must be related to the operation")
+	}
+	var operation Operation
+	err := s.withTransactionIfNeeded(ctx, func(tx *Store) error {
+		if activeProfileID != "" {
+			// Active state and disposable history have different lifecycles.
+			// Capture both endpoints before changing active state so deleting
+			// either Profile removes the complete maintenance operation.
+			previous, err := tx.GetActiveState(ctx, params.ProviderID)
+			if err == nil {
+				relatedProfileIDs = uniqueNonEmptyStrings(append(relatedProfileIDs, previous.ProfileID))
+			} else if !errors.Is(err, ErrNotFound) {
+				return err
+			}
+		}
+		var err error
+		operation, err = tx.createOperationRecord(ctx, createOperationParams{
+			ID: params.ID, ProviderID: params.ProviderID, OperationType: OperationTypeMaintenance,
+			Status: OperationStatusApplied, ProfileIDs: relatedProfileIDs,
+			MetadataSchemaVersion: params.MetadataSchemaVersion, MetadataJSON: params.MetadataJSON,
+		})
+		if err != nil {
+			return err
+		}
+		if activeProfileID != "" {
+			_, err = tx.SetProviderActiveState(ctx, params.ProviderID, activeProfileID)
+		}
+		return err
+	})
+	return operation, err
+}
+
+func (s *Store) CreateAppliedImportOperation(ctx context.Context, params CreateAppliedImportOperationParams) (Operation, error) {
+	return s.createOperation(ctx, createOperationParams{
+		ID: params.ID, ProviderID: params.ProviderID, OperationType: OperationTypeImport,
+		Status: OperationStatusApplied, ProfileIDs: params.ProfileIDs,
+		MetadataSchemaVersion: params.MetadataSchemaVersion, MetadataJSON: params.MetadataJSON,
+	})
+}
+
+type createOperationParams struct {
+	ID                    string
+	ProviderID            string
+	OperationType         string
+	Status                string
+	SourceOperationID     string
+	ProfileIDs            []string
+	MetadataSchemaVersion int
+	MetadataJSON          string
+}
+
+func (s *Store) createOperation(ctx context.Context, params createOperationParams) (Operation, error) {
+	var operation Operation
+	err := s.withTransactionIfNeeded(ctx, func(tx *Store) error {
+		var err error
+		operation, err = tx.createOperationRecord(ctx, params)
+		return err
+	})
+	return operation, err
+}
+
+func (s *Store) createOperationRecord(ctx context.Context, params createOperationParams) (Operation, error) {
+	if !s.transactional {
+		return Operation{}, errors.New("operation creation requires a transaction")
+	}
+	if strings.TrimSpace(params.ID) == "" || strings.TrimSpace(params.ProviderID) == "" {
+		return Operation{}, errors.New("operation id and provider_id are required")
+	}
+	if params.MetadataSchemaVersion != OperationMetadataSchemaVersion {
+		return Operation{}, errors.New("operation metadata schema version is unsupported")
+	}
+	profileIDs := uniqueNonEmptyStrings(params.ProfileIDs)
+	metadataJSON, err := normalizeOperationMetadataJSON(
+		params.MetadataJSON,
+		strings.TrimSpace(params.ProviderID),
+		profileIDs,
+	)
+	if err != nil {
+		return Operation{}, err
+	}
 	now := time.Now().UnixMilli()
-	_, err := s.executor().ExecContext(
+	var sourceOperationID any
+	if source := strings.TrimSpace(params.SourceOperationID); source != "" {
+		sourceOperationID = source
+	}
+	_, err = s.executor().ExecContext(
 		ctx,
 		`INSERT INTO operations
-			(id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		params.ID,
-		OperationTypeMaintenance,
-		OperationStatusApplied,
-		params.ProfileID,
-		params.MetadataJSON,
+			(id, provider_id, operation_type, status, source_operation_id,
+				metadata_schema_version, metadata_json, created_at_unix_ms, updated_at_unix_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		strings.TrimSpace(params.ID),
+		strings.TrimSpace(params.ProviderID),
+		params.OperationType,
+		params.Status,
+		sourceOperationID,
+		params.MetadataSchemaVersion,
+		metadataJSON,
 		now,
 		now,
 	)
@@ -2429,57 +2210,136 @@ func (s *Store) CreateAppliedMaintenanceOperation(ctx context.Context, params Cr
 		}
 		return Operation{}, err
 	}
-	if params.SetActive {
-		// Maintenance capture adopts the current working copy. Its operation and
-		// active state must be committed by the caller's surrounding transaction.
-		_, err = s.executor().ExecContext(
-			ctx,
-			`INSERT INTO active_states (scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms)
-			VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT(scope_type, scope_id) DO UPDATE SET
-				profile_id = excluded.profile_id,
-				operation_id = excluded.operation_id,
-				updated_at_unix_ms = excluded.updated_at_unix_ms`,
-			ActiveStateScopeProvider,
-			params.ProviderID,
-			params.ProfileID,
-			params.ID,
-			now,
-		)
-		if err != nil {
-			return Operation{}, err
-		}
+	if err := s.replaceOperationProfiles(ctx, params.ID, profileIDs); err != nil {
+		return Operation{}, err
 	}
 	return s.GetOperation(ctx, params.ID)
 }
 
-func (s *Store) CreateAppliedImportOperation(ctx context.Context, params CreateAppliedImportOperationParams) (Operation, error) {
-	now := time.Now().UnixMilli()
-	_, err := s.executor().ExecContext(
-		ctx,
-		`INSERT INTO operations
-			(id, operation_type, status, profile_id, metadata_json, created_at_unix_ms, updated_at_unix_ms)
-		VALUES (?, ?, ?, '', ?, ?, ?)`,
-		params.ID,
-		OperationTypeImport,
-		OperationStatusApplied,
-		params.MetadataJSON,
-		now,
-		now,
-	)
-	if err != nil {
-		if isSQLiteConstraintError(err) {
-			return Operation{}, ErrAlreadyExists
-		}
-		return Operation{}, err
+func (s *Store) withTransactionIfNeeded(ctx context.Context, fn func(*Store) error) error {
+	if s.transactional {
+		return fn(s)
 	}
-	return s.GetOperation(ctx, params.ID)
+	return s.WithTransaction(ctx, fn)
+}
+
+func (s *Store) replaceOperationProfiles(ctx context.Context, operationID string, profileIDs []string) error {
+	if !s.transactional {
+		return errors.New("operation Profile update requires a transaction")
+	}
+	if _, err := s.executor().ExecContext(ctx, `DELETE FROM operation_profiles WHERE operation_id = ?`, operationID); err != nil {
+		return err
+	}
+	for _, profileID := range uniqueNonEmptyStrings(profileIDs) {
+		if _, err := s.executor().ExecContext(
+			ctx,
+			`INSERT INTO operation_profiles (operation_id, profile_id) VALUES (?, ?)`,
+			operationID,
+			profileID,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func normalizeOperationMetadataJSON(raw, providerID string, profileIDs []string) (string, error) {
+	providerID = strings.TrimSpace(providerID)
+	if providerID == "" {
+		return "", errors.New("operation metadata provider_id is required")
+	}
+	var metadata map[string]any
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	if err := decoder.Decode(&metadata); err != nil {
+		return "", fmt.Errorf("operation metadata must be a JSON object: %w", err)
+	}
+	if metadata == nil {
+		return "", errors.New("operation metadata must be a JSON object")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return "", errors.New("operation metadata must contain one JSON object")
+	}
+	if value, exists := metadata["provider_id"]; exists {
+		stored, ok := value.(string)
+		if !ok || stored != providerID {
+			return "", errors.New("operation metadata provider_id does not match the operation")
+		}
+	}
+	sortedProfileIDs := uniqueNonEmptyStrings(profileIDs)
+	if value, exists := metadata["related_profile_ids"]; exists {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return "", errors.New("operation metadata related_profile_ids is invalid")
+		}
+		var stored []string
+		if err := json.Unmarshal(encoded, &stored); err != nil ||
+			!equalStrings(uniqueNonEmptyStrings(stored), sortedProfileIDs) {
+			return "", errors.New("operation metadata related_profile_ids do not match the operation")
+		}
+	}
+	metadata["provider_id"] = providerID
+	metadata["related_profile_ids"] = sortedProfileIDs
+	normalized, err := json.Marshal(metadata)
+	if err != nil {
+		return "", fmt.Errorf("encode operation metadata: %w", err)
+	}
+	return string(normalized), nil
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func containsString(values []string, value string) bool {
+	value = strings.TrimSpace(value)
+	index := sort.SearchStrings(values, value)
+	return index < len(values) && values[index] == value
+}
+
+func (s *Store) operationMetadataContext(ctx context.Context, operationID string) (string, []string, error) {
+	operation, err := s.GetOperation(ctx, operationID)
+	if err != nil {
+		return "", nil, err
+	}
+	profileIDs, err := s.ListOperationProfileIDs(ctx, operationID)
+	if err != nil {
+		return "", nil, err
+	}
+	return operation.ProviderID, profileIDs, nil
 }
 
 func (s *Store) GetOperation(ctx context.Context, id string) (Operation, error) {
 	row := s.executor().QueryRowContext(
 		ctx,
-		`SELECT id, operation_type, status, profile_id, metadata_json, error_code, error_message,
+		`SELECT id, provider_id, operation_type, status, source_operation_id,
+			metadata_schema_version, metadata_json, error_code, error_message,
 			resolution_kind, resolved_at_unix_ms, created_at_unix_ms, updated_at_unix_ms
 		FROM operations
 		WHERE id = ?`,
@@ -2495,7 +2355,8 @@ func (s *Store) GetOperation(ctx context.Context, id string) (Operation, error) 
 func (s *Store) ListIncompleteOperations(ctx context.Context) ([]Operation, error) {
 	rows, err := s.executor().QueryContext(
 		ctx,
-		`SELECT id, operation_type, status, profile_id, metadata_json, error_code, error_message,
+		`SELECT id, provider_id, operation_type, status, source_operation_id,
+			metadata_schema_version, metadata_json, error_code, error_message,
 			resolution_kind, resolved_at_unix_ms, created_at_unix_ms, updated_at_unix_ms
 		FROM operations
 		WHERE status IN (?, ?) AND resolved_at_unix_ms = 0
@@ -2576,23 +2437,44 @@ func (s *Store) RejectPendingSwitchOperation(ctx context.Context, id, errorCode,
 	return nil
 }
 
-func (s *Store) UpdateOperationMetadata(ctx context.Context, id, metadataJSON string) error {
-	result, err := s.executor().ExecContext(
-		ctx,
-		`UPDATE operations
-		SET metadata_json = ?, updated_at_unix_ms = ?
-		WHERE id = ?`,
-		metadataJSON,
-		time.Now().UnixMilli(),
-		id,
-	)
-	if err != nil {
-		return err
+func (s *Store) UpdateOperationMetadata(
+	ctx context.Context,
+	id string,
+	metadataSchemaVersion int,
+	metadataJSON string,
+	profileIDs []string,
+) error {
+	if metadataSchemaVersion != OperationMetadataSchemaVersion {
+		return errors.New("operation metadata schema version is unsupported")
 	}
-	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return s.withTransactionIfNeeded(ctx, func(tx *Store) error {
+		providerID, _, err := tx.operationMetadataContext(ctx, id)
+		if err != nil {
+			return err
+		}
+		profileIDs = uniqueNonEmptyStrings(profileIDs)
+		normalizedMetadata, err := normalizeOperationMetadataJSON(metadataJSON, providerID, profileIDs)
+		if err != nil {
+			return err
+		}
+		result, err := tx.executor().ExecContext(
+			ctx,
+			`UPDATE operations
+			SET metadata_schema_version = ?, metadata_json = ?, updated_at_unix_ms = ?
+			WHERE id = ?`,
+			metadataSchemaVersion,
+			normalizedMetadata,
+			time.Now().UnixMilli(),
+			id,
+		)
+		if err != nil {
+			return err
+		}
+		if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+			return ErrNotFound
+		}
+		return tx.replaceOperationProfiles(ctx, id, profileIDs)
+	})
 }
 
 func (s *Store) MarkOperationFailed(ctx context.Context, params MarkOperationFailedParams) error {
@@ -2603,8 +2485,16 @@ func (s *Store) MarkOperationFailed(ctx context.Context, params MarkOperationFai
 	}
 	args := []any{OperationStatusFailed, params.ErrorCode, params.ErrorMessage}
 	if params.MetadataJSON != nil {
+		providerID, profileIDs, err := s.operationMetadataContext(ctx, params.ID)
+		if err != nil {
+			return err
+		}
+		metadataJSON, err := normalizeOperationMetadataJSON(*params.MetadataJSON, providerID, profileIDs)
+		if err != nil {
+			return err
+		}
 		assignments = append(assignments, "metadata_json = ?")
-		args = append(args, *params.MetadataJSON)
+		args = append(args, metadataJSON)
 	}
 	assignments = append(assignments, "updated_at_unix_ms = ?")
 	args = append(args, time.Now().UnixMilli(), params.ID)
@@ -2624,6 +2514,9 @@ func (s *Store) MarkOperationFailed(ctx context.Context, params MarkOperationFai
 }
 
 func (s *Store) CompleteSwitchOperation(ctx context.Context, params CompleteSwitchOperationParams) error {
+	if params.MetadataSchemaVersion != OperationMetadataSchemaVersion {
+		return errors.New("operation metadata schema version is unsupported")
+	}
 	for _, update := range params.CredentialUpdates {
 		if err := validateProviderCredentialParams(update); err != nil {
 			return err
@@ -2645,6 +2538,14 @@ func (s *Store) CompleteSwitchOperation(ctx context.Context, params CompleteSwit
 		}
 	}()
 	txStore := &Store{db: s.db, exec: tx, transactional: true}
+	_, profileIDs, err := txStore.operationMetadataContext(ctx, params.ID)
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := normalizeOperationMetadataJSON(params.MetadataJSON, params.ProviderID, profileIDs)
+	if err != nil {
+		return err
+	}
 	for _, update := range params.CredentialUpdates {
 		if _, err := txStore.UpsertProviderCredential(ctx, update); err != nil {
 			return err
@@ -2660,13 +2561,15 @@ func (s *Store) CompleteSwitchOperation(ctx context.Context, params CompleteSwit
 	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE operations
-		SET status = ?, profile_id = ?, metadata_json = ?, error_code = '', error_message = '', updated_at_unix_ms = ?
-		WHERE id = ? AND operation_type = ?`,
+		SET status = ?, metadata_schema_version = ?, metadata_json = ?,
+			error_code = '', error_message = '', updated_at_unix_ms = ?
+		WHERE id = ? AND provider_id = ? AND operation_type = ?`,
 		OperationStatusApplied,
-		params.ProfileID,
-		params.MetadataJSON,
+		params.MetadataSchemaVersion,
+		metadataJSON,
 		now,
 		params.ID,
+		params.ProviderID,
 		OperationTypeSwitch,
 	)
 	if err != nil {
@@ -2676,23 +2579,9 @@ func (s *Store) CompleteSwitchOperation(ctx context.Context, params CompleteSwit
 		return ErrNotFound
 	}
 
-	// Completing a switch is a DB-level invariant: the active provider state and
-	// applied operation must be committed together.
-	_, err = tx.ExecContext(
-		ctx,
-		`INSERT INTO active_states (scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(scope_type, scope_id) DO UPDATE SET
-			profile_id = excluded.profile_id,
-			operation_id = excluded.operation_id,
-			updated_at_unix_ms = excluded.updated_at_unix_ms`,
-		ActiveStateScopeProvider,
-		params.ProviderID,
-		params.ProfileID,
-		params.ID,
-		now,
-	)
-	if err != nil {
+	// The active revision is live concurrency state, not a pointer to audit
+	// history. Commit it with captures and the applied operation.
+	if _, err := txStore.SetProviderActiveState(ctx, params.ProviderID, params.ProfileID); err != nil {
 		return err
 	}
 	if err := txStore.RequireRecoveryCleanup(ctx); err != nil {
@@ -2706,6 +2595,9 @@ func (s *Store) CompleteSwitchOperation(ctx context.Context, params CompleteSwit
 }
 
 func (s *Store) CompleteRecoveryOperation(ctx context.Context, params CompleteRecoveryOperationParams) error {
+	if params.MetadataSchemaVersion != OperationMetadataSchemaVersion {
+		return errors.New("operation metadata schema version is unsupported")
+	}
 	tx, err := s.db.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -2717,19 +2609,30 @@ func (s *Store) CompleteRecoveryOperation(ctx context.Context, params CompleteRe
 		}
 	}()
 	txStore := &Store{db: s.db, exec: tx, transactional: true}
+	_, profileIDs, err := txStore.operationMetadataContext(ctx, params.ID)
+	if err != nil {
+		return err
+	}
+	metadataJSON, err := normalizeOperationMetadataJSON(params.MetadataJSON, params.ProviderID, profileIDs)
+	if err != nil {
+		return err
+	}
 
 	now := time.Now().UnixMilli()
 	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE operations
-		SET status = ?, profile_id = ?, metadata_json = ?, error_code = '', error_message = '', updated_at_unix_ms = ?
-		WHERE id = ? AND operation_type = ?`,
+		SET status = ?, metadata_schema_version = ?, metadata_json = ?,
+			error_code = '', error_message = '', updated_at_unix_ms = ?
+		WHERE id = ? AND provider_id = ? AND operation_type = ? AND source_operation_id = ?`,
 		OperationStatusApplied,
-		params.ProfileID,
-		params.MetadataJSON,
+		params.MetadataSchemaVersion,
+		metadataJSON,
 		now,
 		params.ID,
+		params.ProviderID,
 		OperationTypeRecovery,
+		params.SourceOperationID,
 	)
 	if err != nil {
 		return err
@@ -2745,11 +2648,12 @@ func (s *Store) CompleteRecoveryOperation(ctx context.Context, params CompleteRe
 		ctx,
 		`UPDATE operations
 		SET resolution_kind = ?, resolved_at_unix_ms = ?, updated_at_unix_ms = ?
-		WHERE id = ? AND operation_type = ? AND resolved_at_unix_ms = 0`,
+		WHERE id = ? AND provider_id = ? AND operation_type = ? AND resolved_at_unix_ms = 0`,
 		params.ResolutionKind,
 		now,
 		now,
 		params.SourceOperationID,
+		params.ProviderID,
 		OperationTypeSwitch,
 	)
 	if err != nil {
@@ -2759,37 +2663,8 @@ func (s *Store) CompleteRecoveryOperation(ctx context.Context, params CompleteRe
 		return ErrNotFound
 	}
 
-	// Completing recovery is atomic with source resolution and active-state
-	// restoration so callers never observe a resolved source with stale state.
-	if params.RestoredActiveState == nil {
-		if _, err := tx.ExecContext(
-			ctx,
-			`DELETE FROM active_states
-			WHERE scope_type = ? AND scope_id = ?`,
-			ActiveStateScopeProvider,
-			params.ProviderID,
-		); err != nil {
-			return err
-		}
-	} else {
-		_, err = tx.ExecContext(
-			ctx,
-			`INSERT INTO active_states (scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms)
-			VALUES (?, ?, ?, ?, ?)
-			ON CONFLICT(scope_type, scope_id) DO UPDATE SET
-				profile_id = excluded.profile_id,
-				operation_id = excluded.operation_id,
-				updated_at_unix_ms = excluded.updated_at_unix_ms`,
-			ActiveStateScopeProvider,
-			params.ProviderID,
-			params.RestoredActiveState.ProfileID,
-			params.RestoredActiveState.OperationID,
-			now,
-		)
-		if err != nil {
-			return err
-		}
-	}
+	// A failed switch never commits active state. Recovery verifies the captured
+	// revision before writes and therefore leaves the live state unchanged.
 	if err := txStore.RequireRecoveryCleanup(ctx); err != nil {
 		return err
 	}
@@ -2860,7 +2735,7 @@ func (s *Store) ResolveSwitchOperationForCleanup(ctx context.Context, id, resolu
 // without also mutating tool-owned targets.
 func (s *Store) PrepareForApplicationRestore(ctx context.Context) error {
 	return s.WithTransaction(ctx, func(tx *Store) error {
-		if _, err := tx.executor().ExecContext(ctx, `DELETE FROM active_states`); err != nil {
+		if _, err := tx.executor().ExecContext(ctx, `DELETE FROM provider_active_states`); err != nil {
 			return err
 		}
 		now := time.Now().UnixMilli()
@@ -2881,14 +2756,36 @@ func (s *Store) PrepareForApplicationRestore(ctx context.Context) error {
 	})
 }
 
-func (s *Store) GetActiveState(ctx context.Context, scopeType, scopeID string) (ActiveState, error) {
+func (s *Store) SetProviderActiveState(ctx context.Context, providerID, profileID string) (ActiveState, error) {
+	providerID = strings.TrimSpace(providerID)
+	profileID = strings.TrimSpace(profileID)
+	if providerID == "" || profileID == "" {
+		return ActiveState{}, errors.New("active Provider and Profile ids are required")
+	}
 	row := s.executor().QueryRowContext(
 		ctx,
-		`SELECT scope_type, scope_id, profile_id, operation_id, updated_at_unix_ms
-		FROM active_states
-		WHERE scope_type = ? AND scope_id = ?`,
-		scopeType,
-		scopeID,
+		`INSERT INTO provider_active_states
+			(provider_id, profile_id, revision, updated_at_unix_ms)
+		VALUES (?, ?, 1, ?)
+		ON CONFLICT(provider_id) DO UPDATE SET
+			profile_id = excluded.profile_id,
+			revision = provider_active_states.revision + 1,
+			updated_at_unix_ms = excluded.updated_at_unix_ms
+		RETURNING provider_id, profile_id, revision, updated_at_unix_ms`,
+		providerID,
+		profileID,
+		time.Now().UnixMilli(),
+	)
+	return scanActiveState(row)
+}
+
+func (s *Store) GetActiveState(ctx context.Context, providerID string) (ActiveState, error) {
+	row := s.executor().QueryRowContext(
+		ctx,
+		`SELECT provider_id, profile_id, revision, updated_at_unix_ms
+		FROM provider_active_states
+		WHERE provider_id = ?`,
+		strings.TrimSpace(providerID),
 	)
 	activeState, err := scanActiveState(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -2967,6 +2864,9 @@ func (s *Store) tableSchemaHealthy(ctx context.Context, spec tableSpec) (bool, e
 	if err != nil {
 		return false, err
 	}
+	if len(columns) != len(spec.columns) {
+		return false, nil
+	}
 	for _, want := range spec.columns {
 		got, ok := columns[want.name]
 		if !ok {
@@ -2991,7 +2891,7 @@ func (s *Store) tableSchemaHealthy(ctx context.Context, spec tableSpec) (bool, e
 		}
 	}
 
-	if len(spec.checks) == 0 {
+	if len(spec.checks) == 0 && !spec.strict {
 		return true, nil
 	}
 
@@ -3000,6 +2900,10 @@ func (s *Store) tableSchemaHealthy(ctx context.Context, spec tableSpec) (bool, e
 		return false, err
 	}
 	compactCreateSQL := compactSQL(createSQL)
+	if spec.strict && !strings.HasSuffix(compactCreateSQL, ")strict") &&
+		!strings.HasSuffix(compactCreateSQL, ")strict,withoutrowid") {
+		return false, nil
+	}
 	for _, check := range spec.checks {
 		if !strings.Contains(compactCreateSQL, compactSQL(check)) {
 			return false, nil
@@ -3176,39 +3080,11 @@ func (s *Store) countOperations(ctx context.Context, status string) (int, error)
 	return count, nil
 }
 
-func (s *Store) profileReferenceCount(ctx context.Context, profileID string) (int, error) {
-	activeStateCount, err := s.CountActiveProfileReferences(ctx, profileID)
-	if err != nil {
-		return 0, err
-	}
-
-	operationCount, err := s.CountUnresolvedProfileOperations(ctx, profileID)
-	if err != nil {
-		return 0, err
-	}
-
-	targetCount, err := s.CountProfileTargetReferences(ctx, profileID)
-	if err != nil {
-		return 0, err
-	}
-
-	var credentialBindingCount int
-	if err := s.executor().QueryRowContext(ctx, "SELECT COUNT(1) FROM profile_credential_bindings WHERE profile_id = ?", profileID).Scan(&credentialBindingCount); err != nil {
-		return 0, err
-	}
-	var configSetBindingCount int
-	if err := s.executor().QueryRowContext(ctx, "SELECT COUNT(1) FROM profile_config_set_bindings WHERE profile_id = ?", profileID).Scan(&configSetBindingCount); err != nil {
-		return 0, err
-	}
-
-	return activeStateCount + operationCount + targetCount + credentialBindingCount + configSetBindingCount, nil
-}
-
 func (s *Store) CountActiveProfileReferences(ctx context.Context, profileID string) (int, error) {
 	var count int
 	err := s.executor().QueryRowContext(
 		ctx,
-		"SELECT COUNT(1) FROM active_states WHERE profile_id = ?",
+		"SELECT COUNT(1) FROM provider_active_states WHERE profile_id = ?",
 		strings.TrimSpace(profileID),
 	).Scan(&count)
 	return count, err
@@ -3218,10 +3094,12 @@ func (s *Store) CountUnresolvedProfileOperations(ctx context.Context, profileID 
 	var count int
 	err := s.executor().QueryRowContext(
 		ctx,
-		`SELECT COUNT(1) FROM operations
-		WHERE profile_id = ?
-			AND status IN (?, ?)
-			AND resolved_at_unix_ms = 0`,
+		`SELECT COUNT(1)
+		FROM operations AS o
+		JOIN operation_profiles AS op ON op.operation_id = o.id
+		WHERE op.profile_id = ?
+			AND o.status IN (?, ?)
+			AND o.resolved_at_unix_ms = 0`,
 		strings.TrimSpace(profileID),
 		OperationStatusPending,
 		OperationStatusFailed,
@@ -3229,79 +3107,79 @@ func (s *Store) CountUnresolvedProfileOperations(ctx context.Context, profileID 
 	return count, err
 }
 
-func (s *Store) providerReferenceCount(ctx context.Context, providerID string) (int, error) {
-	targetCount, err := s.CountProviderTargetReferences(ctx, providerID)
-	if err != nil {
-		return 0, err
-	}
-
-	var activeStateCount int
-	if err := s.executor().QueryRowContext(
+func (s *Store) CountUnresolvedProviderOperations(ctx context.Context, providerID string) (int, error) {
+	var count int
+	err := s.executor().QueryRowContext(
 		ctx,
-		"SELECT COUNT(1) FROM active_states WHERE scope_type = ? AND scope_id = ?",
-		ActiveStateScopeProvider,
-		providerID,
-	).Scan(&activeStateCount); err != nil {
-		return 0, err
-	}
-
-	operationCount, err := s.providerOperationReferenceCount(ctx, providerID)
-	if err != nil {
-		return 0, err
-	}
-
-	var settingCount int
-	if err := s.executor().QueryRowContext(ctx, "SELECT COUNT(1) FROM provider_profile_settings WHERE provider_id = ?", providerID).Scan(&settingCount); err != nil {
-		return 0, err
-	}
-
-	var credentialBindingCount int
-	if err := s.executor().QueryRowContext(ctx, "SELECT COUNT(1) FROM profile_credential_bindings WHERE provider_id = ?", providerID).Scan(&credentialBindingCount); err != nil {
-		return 0, err
-	}
-	var configSetBindingCount int
-	if err := s.executor().QueryRowContext(ctx, "SELECT COUNT(1) FROM profile_config_set_bindings WHERE provider_id = ?", providerID).Scan(&configSetBindingCount); err != nil {
-		return 0, err
-	}
-	var credentialCount int
-	if err := s.executor().QueryRowContext(ctx, "SELECT COUNT(1) FROM provider_credentials WHERE provider_id = ?", providerID).Scan(&credentialCount); err != nil {
-		return 0, err
-	}
-	var configSetCount int
-	if err := s.executor().QueryRowContext(ctx, "SELECT COUNT(1) FROM provider_config_sets WHERE provider_id = ?", providerID).Scan(&configSetCount); err != nil {
-		return 0, err
-	}
-
-	return targetCount + activeStateCount + operationCount + settingCount + credentialCount + configSetCount + credentialBindingCount + configSetBindingCount, nil
+		`SELECT COUNT(1)
+		FROM operations
+		WHERE provider_id = ?
+			AND status IN (?, ?)
+			AND resolved_at_unix_ms = 0`,
+		strings.TrimSpace(providerID),
+		OperationStatusPending,
+		OperationStatusFailed,
+	).Scan(&count)
+	return count, err
 }
 
-func (s *Store) providerOperationReferenceCount(ctx context.Context, providerID string) (int, error) {
-	rows, err := s.executor().QueryContext(ctx, "SELECT metadata_json FROM operations")
+func (s *Store) DeleteResolvedProviderOperations(ctx context.Context, providerID string) error {
+	_, err := s.executor().ExecContext(
+		ctx,
+		`DELETE FROM operations
+		WHERE provider_id = ?
+			AND NOT (status IN (?, ?) AND resolved_at_unix_ms = 0)`,
+		strings.TrimSpace(providerID),
+		OperationStatusPending,
+		OperationStatusFailed,
+	)
+	return err
+}
+
+func (s *Store) DeleteResolvedProfileOperations(ctx context.Context, profileID string) error {
+	_, err := s.executor().ExecContext(
+		ctx,
+		`DELETE FROM operations
+		WHERE id IN (
+			SELECT o.id
+			FROM operations AS o
+			JOIN operation_profiles AS op ON op.operation_id = o.id
+			WHERE op.profile_id = ?
+				AND NOT (o.status IN (?, ?) AND o.resolved_at_unix_ms = 0)
+		)`,
+		strings.TrimSpace(profileID),
+		OperationStatusPending,
+		OperationStatusFailed,
+	)
+	return err
+}
+
+func (s *Store) ListOperationProfileIDs(ctx context.Context, operationID string) ([]string, error) {
+	rows, err := s.executor().QueryContext(
+		ctx,
+		`SELECT profile_id
+		FROM operation_profiles
+		WHERE operation_id = ?
+		ORDER BY profile_id ASC`,
+		strings.TrimSpace(operationID),
+	)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer rows.Close()
 
-	count := 0
+	profileIDs := []string{}
 	for rows.Next() {
-		var metadataJSON string
-		if err := rows.Scan(&metadataJSON); err != nil {
-			return 0, err
+		var profileID string
+		if err := rows.Scan(&profileID); err != nil {
+			return nil, err
 		}
-		var metadata struct {
-			ProviderID string `json:"provider_id"`
-		}
-		if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
-			continue
-		}
-		if metadata.ProviderID == providerID {
-			count++
-		}
+		profileIDs = append(profileIDs, profileID)
 	}
 	if err := rows.Err(); err != nil {
-		return 0, err
+		return nil, err
 	}
-	return count, nil
+	return profileIDs, nil
 }
 
 type rowScanner interface {
@@ -3310,19 +3188,16 @@ type rowScanner interface {
 
 func scanProvider(row rowScanner) (Provider, error) {
 	var provider Provider
-	var enabled int
 	if err := row.Scan(
 		&provider.ID,
 		&provider.Name,
 		&provider.AdapterID,
-		&enabled,
 		&provider.MetadataJSON,
 		&provider.CreatedAtUnixMS,
 		&provider.UpdatedAtUnixMS,
 	); err != nil {
 		return Provider{}, err
 	}
-	provider.Enabled = enabled != 0
 	return provider, nil
 }
 
@@ -3343,17 +3218,28 @@ func scanProfile(row rowScanner) (Profile, error) {
 
 func scanProviderProfileSetting(row rowScanner) (ProviderProfileSetting, error) {
 	var setting ProviderProfileSetting
-	var keepalive int
 	if err := row.Scan(
 		&setting.ProfileID,
 		&setting.ProviderID,
-		&setting.QuotaRefreshIntervalSeconds,
-		&keepalive,
+		&setting.SchemaVersion,
+		&setting.SettingsJSON,
 		&setting.UpdatedAtUnixMS,
 	); err != nil {
 		return ProviderProfileSetting{}, err
 	}
-	setting.AuthKeepaliveEnabled = keepalive != 0
+	return setting, nil
+}
+
+func scanProviderSetting(row rowScanner) (ProviderSetting, error) {
+	var setting ProviderSetting
+	if err := row.Scan(
+		&setting.ProviderID,
+		&setting.SchemaVersion,
+		&setting.SettingsJSON,
+		&setting.UpdatedAtUnixMS,
+	); err != nil {
+		return ProviderSetting{}, err
+	}
 	return setting, nil
 }
 
@@ -3430,11 +3316,14 @@ func scanSetting(row rowScanner) (Setting, error) {
 
 func scanOperation(row rowScanner) (Operation, error) {
 	var operation Operation
+	var sourceOperationID sql.NullString
 	if err := row.Scan(
 		&operation.ID,
+		&operation.ProviderID,
 		&operation.OperationType,
 		&operation.Status,
-		&operation.ProfileID,
+		&sourceOperationID,
+		&operation.MetadataSchemaVersion,
 		&operation.MetadataJSON,
 		&operation.ErrorCode,
 		&operation.ErrorMessage,
@@ -3445,16 +3334,16 @@ func scanOperation(row rowScanner) (Operation, error) {
 	); err != nil {
 		return Operation{}, err
 	}
+	operation.SourceOperationID = sourceOperationID.String
 	return operation, nil
 }
 
 func scanActiveState(row rowScanner) (ActiveState, error) {
 	var activeState ActiveState
 	if err := row.Scan(
-		&activeState.ScopeType,
-		&activeState.ScopeID,
+		&activeState.ProviderID,
 		&activeState.ProfileID,
-		&activeState.OperationID,
+		&activeState.Revision,
 		&activeState.UpdatedAtUnixMS,
 	); err != nil {
 		return ActiveState{}, err

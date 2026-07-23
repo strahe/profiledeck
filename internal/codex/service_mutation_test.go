@@ -173,6 +173,15 @@ func TestCreateCodexProfileReusesCurrentConfigSetWithIndependentCredential(t *te
 	if firstDetail.Summary.Model != "gpt-5-mini" {
 		t.Fatalf("expected current config to be checked into shared set, got %#v", firstDetail.Summary)
 	}
+	db, err := openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer db.Close()
+	operationProfileIDs, err := db.ListOperationProfileIDs(ctx, second.OperationID)
+	if err != nil || strings.Join(operationProfileIDs, ",") != "first,second" {
+		t.Fatalf("profile create operation omitted affected Profiles: ids=%v err=%v", operationProfileIDs, err)
+	}
 }
 
 func TestForkCodexProfileRequiresAtLeastOneCopiedBinding(t *testing.T) {
@@ -309,6 +318,10 @@ func TestSaveActiveCodexProfileStateUpdatesSharedResources(t *testing.T) {
 	}
 	if credential.CredentialKind != codexpreset.CredentialKindAuthJSON || credential.ProviderID != codexconfig.ProviderID {
 		t.Fatalf("unexpected credential metadata: %#v", credential)
+	}
+	operationProfileIDs, err := db.ListOperationProfileIDs(ctx, result.OperationID)
+	if err != nil || strings.Join(operationProfileIDs, ",") != "shared-config,shared-login,work" {
+		t.Fatalf("shared Codex save operation omitted affected Profiles: ids=%v err=%v", operationProfileIDs, err)
 	}
 }
 

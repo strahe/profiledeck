@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
 	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
@@ -35,14 +34,11 @@ func newUsageTestEnvironment(t *testing.T, configDir, codexDir string) *usageTes
 	if err != nil {
 		t.Fatalf("create runtime service: %v", err)
 	}
-	registry := agent.BuiltinRegistry()
-	policy := agent.NewService(registry, runtimeService.StoreFactory(), agent.AccessUnrestricted)
 	return &usageTestEnvironment{
 		runtime: runtimeService,
 		service: NewService(
 			runtimeService.StoreFactory(),
 			MustRegistry(NewCodexIntegration(codexDir)),
-			policy,
 		),
 	}
 }

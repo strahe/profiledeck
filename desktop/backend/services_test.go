@@ -203,10 +203,9 @@ func TestDisabledAgentsRejectStaticServiceCallsButKeepSafetyServices(t *testing.
 		_, err := services.Codex.QuotaRuntimeStatus(ctx)
 		return err
 	}(), apperror.AgentDisabled)
-	assertDesktopServiceErrorCode(t, func() error {
-		_, err := services.Usage.Summary(ctx, codexconfig.ProviderID)
-		return err
-	}(), apperror.AgentDisabled)
+	if summary, err := services.Usage.Summary(ctx, codexconfig.ProviderID); err != nil || summary.ProviderID != codexconfig.ProviderID {
+		t.Fatalf("Desktop preference blocked shared Usage service: summary=%#v err=%v", summary, err)
+	}
 	assertDesktopServiceErrorCode(t, func() error {
 		_, err := services.Usage.AutoSyncStatus(ctx)
 		return err
@@ -421,9 +420,15 @@ func TestSettingsServicePersistsDesktopPreferences(t *testing.T) {
 
 func TestCodexSettingsServiceKeepsConcurrentUsageIntervalUpdatesConsistent(t *testing.T) {
 	ctx := context.Background()
-	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: t.TempDir()}, nil)
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	writeDesktopCodexFiles(t, codexDir, `model = "gpt-5"`+"\n", `{"tokens":{"account_id":"settings","access_token":"token"}}`)
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
 	if _, err := services.App.Initialize(ctx); err != nil {
 		t.Fatalf("expected initialize to succeed, got %v", err)
+	}
+	if _, err := services.Codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "settings"}); err != nil {
+		t.Fatalf("expected Codex Provider fixture, got %v", err)
 	}
 
 	start := make(chan struct{})

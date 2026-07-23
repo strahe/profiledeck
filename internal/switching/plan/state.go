@@ -13,7 +13,6 @@ type Provider struct {
 	ID           string
 	Name         string
 	AdapterID    string
-	Enabled      bool
 	MetadataJSON string
 }
 
@@ -37,8 +36,8 @@ type Target struct {
 }
 
 type ActiveState struct {
-	ProfileID   string
-	OperationID string
+	ProfileID string
+	Revision  int64
 }
 
 type Credential struct {
@@ -102,7 +101,7 @@ type StateReader interface {
 	ListTargets(context.Context, string, string, bool) ([]Target, error)
 	GetCredential(context.Context, string) (Credential, error)
 	ListCredentials(context.Context, string) ([]Credential, error)
-	GetConfigSet(context.Context, string) (ConfigSet, error)
+	GetConfigSet(context.Context, string, string) (ConfigSet, error)
 	ListConfigSets(context.Context, string, string) ([]ConfigSet, error)
 	GetCredentialBinding(context.Context, string, string, string) (CredentialBinding, error)
 	ListCredentialBindings(context.Context, string, string) ([]CredentialBinding, error)

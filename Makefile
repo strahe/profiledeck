@@ -40,7 +40,7 @@ RELEASE_KEYCHAIN ?=
 UPDATE_SIGNING_KEY ?=
 RELEASES_DIR ?= $(CURDIR)/.task/releases
 
-.PHONY: fmt vet lint lint-core lint-desktop test build core-boundary core-check security-check check clean desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-build release-tools-check release-github-check release-build release-build-macos release-assemble release-draft verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-check ci-core-check ci-desktop-check ci-security-check ci-release-build-macos ci-release-assemble ci-release-draft
+.PHONY: fmt vet lint lint-core lint-desktop test build source-hygiene core-boundary core-check security-check check clean desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-build release-tools-check release-github-check release-build release-build-macos release-assemble release-draft verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-check ci-core-check ci-desktop-check ci-security-check ci-release-build-macos ci-release-assemble ci-release-draft
 
 fmt:
 	$(GOLANGCI_LINT) fmt $(GO_PKGS)
@@ -64,10 +64,13 @@ build:
 	mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/$(BINARY) $(CMD)
 
+source-hygiene:
+	scripts/check-source-hygiene.sh
+
 core-boundary:
 	go test ./internal/architecture
 
-core-check: lint-core core-boundary test build
+core-check: source-hygiene lint-core core-boundary test build
 
 security-check: $(GOVULNCHECK) $(ACTIONLINT)
 	$(GOVULNCHECK) ./...

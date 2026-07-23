@@ -103,13 +103,18 @@ func (service *Service) RunMaintenance(ctx context.Context, req maintenance.Requ
 		return err
 	}
 	defer lock.Release()
-	if req.ProviderID != "" {
-		if err := service.requireProviderWithStore(ctx, db, req.ProviderID); err != nil {
-			return err
-		}
+	if err := service.reconcileRecoveryCleanupLocked(ctx, db); err != nil {
+		return err
 	}
 
 	return db.WithTransaction(ctx, func(tx *store.Store) error {
+		relatedProfileIDs := append([]string(nil), req.RelatedProfileIDs...)
+		if strings.TrimSpace(req.ProfileID) != "" {
+			relatedProfileIDs = append(relatedProfileIDs, req.ProfileID)
+		}
+		if strings.TrimSpace(req.ActiveProfileID) != "" {
+			relatedProfileIDs = append(relatedProfileIDs, req.ActiveProfileID)
+		}
 		if err := mutation(ctx, tx, operationID); err != nil {
 			return err
 		}
@@ -121,7 +126,11 @@ func (service *Service) RunMaintenance(ctx context.Context, req maintenance.Requ
 			metadata = "{}"
 		}
 		if _, err := tx.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
-			ID: operationID, ProfileID: req.ProfileID, ProviderID: req.ProviderID, MetadataJSON: metadata, SetActive: req.SetActive,
+			ID: operationID, ProviderID: req.ProviderID,
+			RelatedProfileIDs:     relatedProfileIDs,
+			ActiveProfileID:       req.ActiveProfileID,
+			MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+			MetadataJSON:          metadata,
 		}); err != nil {
 			return apperror.Wrap(apperror.OperationCreateFailed, "failed to record maintenance operation", err)
 		}

@@ -112,6 +112,15 @@ func TestClaudeCodeCreateSwitchCaptureAndKnownMatch(t *testing.T) {
 	if err != nil || !second.Summary.Active {
 		t.Fatalf("Create second = %#v, error = %v", second, err)
 	}
+	db, err := openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	operationProfileIDs, relationErr := db.ListOperationProfileIDs(ctx, second.OperationID)
+	_ = db.Close()
+	if relationErr != nil || strings.Join(operationProfileIDs, ",") != "first,second" {
+		t.Fatalf("profile create operation omitted the previous active Profile: ids=%v err=%v", operationProfileIDs, relationErr)
+	}
 
 	plan, err := newClaudeCodeTestEnvironment(t, configDir).switching.BuildPlan(ctx, switching.BuildPlanRequest{ProviderID: claudecodeconfig.ProviderID, ProfileID: "first"})
 	if err != nil {
@@ -136,7 +145,7 @@ func TestClaudeCodeCreateSwitchCaptureAndKnownMatch(t *testing.T) {
 	if !strings.HasPrefix(result.OperationID, "switch-") {
 		t.Fatalf("operation id = %q", result.OperationID)
 	}
-	db, err := openHealthyStore(ctx, configDir, true)
+	db, err = openHealthyStore(ctx, configDir, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +234,7 @@ func TestClaudeCodeFilePostVerifyFailureDoesNotCommitActiveState(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	active, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, claudecodeconfig.ProviderID)
+	active, err := db.GetActiveState(ctx, claudecodeconfig.ProviderID)
 	if err != nil || active.ProfileID != "second" {
 		t.Fatalf("active state advanced after failed post-verify: active=%#v error=%v", active, err)
 	}
@@ -284,6 +293,18 @@ func TestClaudeCodeExpiredWorkingCopyDoesNotAutoOverwriteAndSharedSaveRequiresCo
 	if !strings.HasPrefix(saved.OperationID, "claude-code-profile-save-current-") {
 		t.Fatalf("save-current operation id = %q", saved.OperationID)
 	}
+	db, err = openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationProfileIDs, relationErr := db.ListOperationProfileIDs(ctx, saved.OperationID)
+	if relationErr != nil || strings.Join(operationProfileIDs, ",") != "shared,work" {
+		_ = db.Close()
+		t.Fatalf("shared save operation omitted affected Profiles: ids=%v err=%v", operationProfileIDs, relationErr)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
 	shared, err := newClaudeCodeTestEnvironment(t, configDir).claudeCode.GetProfile(ctx, GetClaudeCodeProfileRequest{ProfileID: "shared"})
 	if err != nil || shared.Summary.CredentialStatus != "expired" || shared.Summary.CredentialReferenceCount != 2 {
 		t.Fatalf("shared summary = %#v, error = %v", shared, err)
@@ -295,6 +316,22 @@ func TestClaudeCodeExpiredWorkingCopyDoesNotAutoOverwriteAndSharedSaveRequiresCo
 	}
 	if len(sharedCapturePlan.StateCaptures) != 1 || !strings.Contains(strings.Join(sharedCapturePlan.Warnings, "\n"), "shared by 2 Profiles") {
 		t.Fatalf("shared automatic capture warning = %#v, captures = %#v", sharedCapturePlan.Warnings, sharedCapturePlan.StateCaptures)
+	}
+	switched, err := newClaudeCodeTestEnvironment(t, configDir).switching.Apply(ctx, switching.ApplySwitchRequest{
+		ProviderID: claudecodeconfig.ProviderID, ProfileID: "work", Confirm: true,
+		ExpectedPlanFingerprint: sharedCapturePlan.PlanFingerprint,
+	})
+	if err != nil {
+		t.Fatalf("apply shared capture switch: %v", err)
+	}
+	db, err = openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationProfileIDs, relationErr = db.ListOperationProfileIDs(ctx, switched.OperationID)
+	closeErr := db.Close()
+	if relationErr != nil || strings.Join(operationProfileIDs, ",") != "shared,work" || closeErr != nil {
+		t.Fatalf("shared capture switch omitted affected Profiles: ids=%v relationErr=%v closeErr=%v", operationProfileIDs, relationErr, closeErr)
 	}
 }
 
@@ -605,50 +642,6 @@ func TestClaudeCodeObservedAuthOverrideHintsExposeNamesOnly(t *testing.T) {
 	}
 }
 
-func TestClaudeCodeCreatePreservesDisabledManagedProvider(t *testing.T) {
-	ctx := context.Background()
-	configDir := t.TempDir()
-	credentialPath := filepath.Join(t.TempDir(), claudecodeconfig.CredentialsFile)
-	if _, err := initClaudeCodeTestRuntime(ctx, configDir); err != nil {
-		t.Fatal(err)
-	}
-	seedClaudeCodeFileProvider(t, ctx, configDir, credentialPath)
-	db, err := openHealthyStore(ctx, configDir, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	disabled, customName := false, "Custom"
-	if _, err := db.UpdateProvider(ctx, store.UpdateProviderParams{ID: claudecodeconfig.ProviderID, Name: &customName, Enabled: &disabled}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	writeClaudeCodeCredential(t, credentialPath, testClaudeCodePayload("access", "refresh", 4102444800000))
-	_, err = newClaudeCodeTestEnvironment(t, configDir).claudeCode.Detect(ctx, ClaudeCodeDetectRequest{})
-	assertErrorCode(t, err, apperror.ProviderDisabled)
-	_, err = newClaudeCodeTestEnvironment(t, configDir).claudeCode.GetProfile(ctx, GetClaudeCodeProfileRequest{ProfileID: "missing"})
-	assertErrorCode(t, err, apperror.ProviderDisabled)
-	_, err = newClaudeCodeTestEnvironment(t, configDir).claudeCode.CreateProfile(ctx, CreateClaudeCodeProfileRequest{ProfileID: "work"})
-	assertErrorCode(t, err, apperror.ProviderDisabled)
-	storedProvider, err := newClaudeCodeTestEnvironment(t, configDir).providers.Get(ctx, claudecodeconfig.ProviderID)
-	if err != nil || storedProvider.Enabled || storedProvider.Name != customName {
-		t.Fatalf("managed provider = %#v, error = %v", storedProvider, err)
-	}
-	enabled := true
-	if _, err := newClaudeCodeTestEnvironment(t, configDir).providers.Update(ctx, provider.UpdateRequest{ID: claudecodeconfig.ProviderID, Enabled: &enabled}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := newClaudeCodeTestEnvironment(t, configDir).claudeCode.CreateProfile(ctx, CreateClaudeCodeProfileRequest{ProfileID: "work"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := newClaudeCodeTestEnvironment(t, configDir).providers.Update(ctx, provider.UpdateRequest{ID: claudecodeconfig.ProviderID, Enabled: &disabled}); err != nil {
-		t.Fatal(err)
-	}
-	_, err = newClaudeCodeTestEnvironment(t, configDir).claudeCode.SaveActiveProfile(ctx, SaveActiveClaudeCodeProfileRequest{})
-	assertErrorCode(t, err, apperror.ProviderDisabled)
-}
-
 func TestClaudeCodeFileTargetOwnershipBlocksGenericPathReuseInBothDirections(t *testing.T) {
 	ctx := context.Background()
 
@@ -932,7 +925,7 @@ func seedClaudeCodeFileProvider(t *testing.T, ctx context.Context, configDir, cr
 	}
 	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
 		ID: claudecodeconfig.ProviderID, Name: claudecodeconfig.ProviderName, AdapterID: claudecodeconfig.AdapterID,
-		Enabled: true, MetadataJSON: string(raw),
+		MetadataJSON: string(raw),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -954,7 +947,7 @@ func seedClaudeCodeKeychainProvider(t *testing.T, ctx context.Context, configDir
 	}
 	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
 		ID: claudecodeconfig.ProviderID, Name: claudecodeconfig.ProviderName, AdapterID: claudecodeconfig.AdapterID,
-		Enabled: true, MetadataJSON: string(raw),
+		MetadataJSON: string(raw),
 	}); err != nil {
 		t.Fatal(err)
 	}

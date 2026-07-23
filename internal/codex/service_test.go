@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -100,7 +101,8 @@ func TestCodexProfileCreateRejectsInvalidProviderMetadata(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
-	if _, err := initCodexTestRuntime(ctx, configDir); err != nil {
+	initialized, err := initCodexTestRuntime(ctx, configDir)
+	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
 	writeCodexProfileFixture(t, codexDir, `model = "gpt-5-codex"`+"\n", `{"tokens":{"account_id":"remote-work","access_token":"secret"}}`)
@@ -115,15 +117,25 @@ func TestCodexProfileCreateRejectsInvalidProviderMetadata(t *testing.T) {
 		t.Fatalf("expected healthy store to open, got %v", err)
 	}
 	badMetadata := "{"
-	if _, err := db.UpdateProvider(ctx, store.UpdateProviderParams{
-		ID:           codexconfig.ProviderID,
-		MetadataJSON: &badMetadata,
-	}); err != nil {
-		_ = db.Close()
-		t.Fatalf("expected provider metadata mutation setup to succeed, got %v", err)
-	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("expected store close to succeed, got %v", err)
+	}
+	rawDB, err := sql.Open("sqlite", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open raw fixture database: %v", err)
+	}
+	if _, err := rawDB.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
+		_ = rawDB.Close()
+		t.Fatalf("disable fixture constraints: %v", err)
+	}
+	if _, err := rawDB.ExecContext(ctx, `
+		UPDATE providers SET metadata_json = ? WHERE id = ?
+	`, badMetadata, codexconfig.ProviderID); err != nil {
+		_ = rawDB.Close()
+		t.Fatalf("expected provider metadata mutation setup to succeed, got %v", err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close raw fixture database: %v", err)
 	}
 
 	result, err := newCodexTestEnvironment(t, configDir, codexDir).codex.Detect(ctx)
@@ -269,7 +281,7 @@ func TestCodexProfileCreateRejectsConflictingProviderAndHome(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	if _, err := db.CreateProvider(ctx, store.CreateProviderParams{
-		ID: codexconfig.ProviderID, Name: "Codex", AdapterID: "generic", Enabled: true, MetadataJSON: "{}",
+		ID: codexconfig.ProviderID, Name: "Codex", AdapterID: "generic", MetadataJSON: "{}",
 	}); err != nil {
 		_ = db.Close()
 		t.Fatalf("seed conflicting Provider: %v", err)
@@ -322,7 +334,6 @@ func TestCodexGenericManagedTargetIsNotAProfileBinding(t *testing.T) {
 		ID:           codexconfig.ProviderID,
 		Name:         codexpreset.ProviderName,
 		AdapterID:    codexconfig.AdapterID,
-		Enabled:      true,
 		MetadataJSON: providerMetadata,
 	}); err != nil {
 		t.Fatalf("expected provider setup to succeed, got %v", err)
@@ -412,7 +423,6 @@ func TestCodexGenericAccountRefTargetIsNotAProfileBinding(t *testing.T) {
 		ID:           codexconfig.ProviderID,
 		Name:         codexpreset.ProviderName,
 		AdapterID:    codexconfig.AdapterID,
-		Enabled:      true,
 		MetadataJSON: providerMetadata,
 	}); err != nil {
 		t.Fatalf("expected provider setup to succeed, got %v", err)
