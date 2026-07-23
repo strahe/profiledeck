@@ -2,9 +2,11 @@ package backend
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -275,6 +277,63 @@ func TestSwitchApplyRequiresExpectedPlanFingerprint(t *testing.T) {
 	var appErr *apperror.Error
 	if !errors.As(err, &appErr) || appErr.Code != apperror.ConfirmationRequired {
 		t.Fatalf("expected missing fingerprint to fail with confirmation error, got %v", err)
+	}
+}
+
+func TestDesktopSwitchPlanDoesNotExposeSensitiveContentOrHashes(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	services := newTestServices(t, app.DefaultInfo(), Environment{ConfigDir: configDir, CodexDir: codexDir}, nil)
+	if _, err := services.App.Initialize(ctx); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	writeDesktopCodexFiles(
+		t,
+		codexDir,
+		`model = "gpt-5-codex"`+"\n",
+		`{"tokens":{"account_id":"work","access_token":"initial-secret"}}`,
+	)
+	if _, err := services.Codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
+		t.Fatalf("create Codex Profile: %v", err)
+	}
+	const secret = "desktop-plan-fixture-secret"
+	desiredContent := `{"tokens":{"account_id":"work","access_token":"` + secret + `"}}`
+	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.AuthFileName), []byte(desiredContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := services.Switch.BuildPlan(ctx, codexconfig.ProviderID, "work")
+	if err != nil {
+		t.Fatalf("build Desktop plan: %v", err)
+	}
+	credentialOperationFound := false
+	for _, operation := range plan.Operations {
+		if operation.TargetID != codexconfig.AuthTargetID {
+			continue
+		}
+		credentialOperationFound = true
+		if operation.DesiredSHA256 != "" || operation.BeforeSHA256 != "" {
+			t.Fatalf("Desktop plan exposed sensitive hashes: %#v", operation)
+		}
+	}
+	if !credentialOperationFound {
+		t.Fatalf("Desktop plan omitted Codex credential operation: %#v", plan.Operations)
+	}
+	for _, capture := range plan.StateCaptures {
+		if capture.StoredSHA256 != "" || capture.CurrentSHA256 != "" {
+			t.Fatalf("Desktop plan exposed sensitive capture hashes: %#v", capture)
+		}
+	}
+	digest := sha256.Sum256([]byte(desiredContent))
+	raw, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{secret, fmt.Sprintf("%x", digest)} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Fatalf("Desktop plan exposed %q: %s", forbidden, raw)
+		}
 	}
 }
 

@@ -89,7 +89,12 @@
 			</div>
 		</Card.Action>
 	</Card.Header>
-	<Card.Content>
+	<Card.Content class="flex flex-col gap-4">
+		<Alert.Root>
+			<TriangleAlertIcon data-icon="inline-start" />
+			<Alert.Title>{$_("antigravity.quota.riskTitle")}</Alert.Title>
+			<Alert.Description>{$_("antigravity.quota.riskDescription")}</Alert.Description>
+		</Alert.Root>
 		{#if loading && !quota?.snapshot}
 			<div class="flex flex-col gap-4">
 				<Skeleton class="h-5 w-28" />

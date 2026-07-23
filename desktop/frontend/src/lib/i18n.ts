@@ -238,6 +238,8 @@ const messages = {
 			quota: {
 				title: "Usage limits",
 				description: "Check the current Antigravity limits for this Profile.",
+				riskTitle: "Limit checks use an unpublished service",
+				riskDescription: "ProfileDeck sends this Profile's access token to Google's Cloud Code service during automatic checks and manual refreshes. Because this service is unpublished, using it may carry account risk. ProfileDeck does not save, refresh, or write back the token during the check.",
 				notLoadedTitle: "Usage limits not checked",
 				notLoadedDescription: "Refresh to check this Profile's current limits.",
 				noSnapshotTitle: "No session snapshot",
@@ -803,6 +805,7 @@ const messages = {
 				upToDateTitle: "ProfileDeck is up to date",
 				state: {
 					unavailable: "App updates are unavailable.",
+					configurationInvalid: "This installation cannot verify app updates. Install ProfileDeck from an official release to receive updates.",
 					idle: "Ready to check for an update.",
 					checking: "Checking for updates…",
 					upToDate: "You are using the latest version.",
@@ -954,6 +957,8 @@ const messages = {
 		errors: {
 			desktopUnavailable: "Desktop services are unavailable.",
 			operationFailed: "ProfileDeck could not complete this action. Try again or open Diagnostics if the problem continues.",
+			operationRecoveryRequired: "Finish the incomplete Profile change in Diagnostics, then try again.",
+			operationRecoveryCleanupRequired: "Temporary recovery files still need attention. Open Diagnostics and retry cleanup.",
 			dataFolderInvalid: "ProfileDeck cannot use the selected data folder. Choose a local folder you can access.",
 			localDataUnavailable: "ProfileDeck cannot read its local data. Open Diagnostics for details.",
 			localDataUnsupported: "This ProfileDeck version cannot open the existing local data. Update ProfileDeck and try again.",
@@ -1236,6 +1241,8 @@ const messages = {
 			quota: {
 				title: "使用限额",
 				description: "检查此 Profile 当前的 Antigravity 限额。",
+				riskTitle: "限额检查使用未公开服务",
+				riskDescription: "自动检查或手动刷新限额时，ProfileDeck 会将此 Profile 的访问令牌发送到 Google Cloud Code 服务。该服务未公开，使用它可能带来账号风险。检查期间，ProfileDeck 不会保存、刷新或回写令牌。",
 				notLoadedTitle: "尚未检查使用限额",
 				notLoadedDescription: "点击刷新，检查此 Profile 当前的限额。",
 				noSnapshotTitle: "本次会话中没有快照",
@@ -1801,6 +1808,7 @@ const messages = {
 				upToDateTitle: "ProfileDeck 已是最新版本",
 				state: {
 					unavailable: "应用更新当前不可用。",
+					configurationInvalid: "当前安装无法验证应用更新。请安装官方发布的 ProfileDeck 以接收更新。",
 					idle: "可以检查更新。",
 					checking: "正在检查更新…",
 					upToDate: "你已在使用最新版本。",
@@ -1952,6 +1960,8 @@ const messages = {
 		errors: {
 			desktopUnavailable: "桌面服务不可用。",
 			operationFailed: "ProfileDeck 无法完成此操作。请重试；如果问题持续存在，请打开诊断页面。",
+			operationRecoveryRequired: "请先在诊断页面处理未完成的 Profile 更改，然后重试。",
+			operationRecoveryCleanupRequired: "临时恢复文件仍需处理。请打开诊断页面并重试清理。",
 			dataFolderInvalid: "ProfileDeck 无法使用所选数据目录，请选择当前用户可以访问的本地目录。",
 			localDataUnavailable: "ProfileDeck 无法读取本地数据，请打开诊断页面查看详情。",
 			localDataUnsupported: "当前 ProfileDeck 版本无法打开现有本地数据。请更新 ProfileDeck 后重试。",

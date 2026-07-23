@@ -3,123 +3,37 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
 
-const testReleaseCommit = "0123456789abcdef0123456789abcdef01234567"
-
-func TestAssembleReleaseBuildsVerifiedMacOSBundle(t *testing.T) {
+func TestAssembleAndVerifyReleaseBundle(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	version, _ := parseReleaseVersion("1.2.3-beta.4")
-	definitions, err := parseReleasePlatforms(macOSPlatform, version)
+	handoff := createTestHandoff(t, root, macOSPlatform, version, 17, testReleaseCommit)
+	inputs, err := parsePlatformInputs([]string{macOSPlatform + "=" + handoff}, version)
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeMacOSPlatformHandoff(t, root, version, 17, testReleaseCommit)
-
-	bundle, err := assembleRelease(root, version, 17, testReleaseCommit, definitions)
-	if err != nil {
+	output := filepath.Join(root, "bundle")
+	if err := assembleRelease(output, version, 17, testReleaseCommit, inputs); err != nil {
 		t.Fatal(err)
 	}
-	metadata, err := verifyReleaseBundle(
-		bundle,
-		version,
-		17,
-		testReleaseCommit,
-		definitions,
-	)
+	definitions, _ := parseReleasePlatforms(macOSPlatform, version)
+	metadata, err := verifyReleaseBundle(output, version, 17, testReleaseCommit, definitions)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(metadata.Platforms) != 1 || metadata.Platforms[0].Platform != macOSPlatform {
-		t.Fatalf("unexpected platform metadata: %#v", metadata.Platforms)
+		t.Fatalf("unexpected platforms: %#v", metadata.Platforms)
 	}
-	assertDirectoryNames(t, bundle, []string{
-		installerDMGName(version),
-		updaterZIPName(version),
-		"SHA256SUMS",
-		"release-metadata.json",
-	})
-
-	if err := os.WriteFile(
-		filepath.Join(bundle, installerDMGName(version)),
-		[]byte("tampered"),
-		0o600,
-	); err != nil {
+	if err := os.WriteFile(filepath.Join(output, installerDMGName(version)), []byte("tampered"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := verifyReleaseBundle(
-		bundle,
-		version,
-		17,
-		testReleaseCommit,
-		definitions,
-	); err == nil {
+	if _, err := verifyReleaseBundle(output, version, 17, testReleaseCommit, definitions); err == nil {
 		t.Fatal("tampered release bundle passed verification")
 	}
-}
-
-func TestAssembleReleaseRequiresExactPlatformSet(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	version, _ := parseReleaseVersion("1.2.3")
-	definitions, _ := parseReleasePlatforms(macOSPlatform, version)
-	writeMacOSPlatformHandoff(t, root, version, 3, testReleaseCommit)
-	if err := os.Mkdir(
-		filepath.Join(root, version.tag(), "platforms", "unexpected"),
-		0o700,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := assembleRelease(root, version, 3, testReleaseCommit, definitions); err == nil {
-		t.Fatal("unexpected platform passed release assembly")
-	}
-}
-
-func TestAssembleReleaseRejectsInconsistentMetadataAndUnsafeAssets(t *testing.T) {
-	t.Parallel()
-	version, _ := parseReleaseVersion("1.2.3")
-	definitions, _ := parseReleasePlatforms(macOSPlatform, version)
-
-	t.Run("build number", func(t *testing.T) {
-		root := t.TempDir()
-		writeMacOSPlatformHandoff(t, root, version, 9, testReleaseCommit)
-		if _, err := assembleRelease(root, version, 10, testReleaseCommit, definitions); err == nil {
-			t.Fatal("inconsistent platform build number passed release assembly")
-		}
-	})
-
-	t.Run("commit", func(t *testing.T) {
-		root := t.TempDir()
-		writeMacOSPlatformHandoff(
-			t,
-			root,
-			version,
-			10,
-			"ffffffffffffffffffffffffffffffffffffffff",
-		)
-		if _, err := assembleRelease(root, version, 10, testReleaseCommit, definitions); err == nil {
-			t.Fatal("inconsistent platform commit passed release assembly")
-		}
-	})
-
-	t.Run("symlink", func(t *testing.T) {
-		root := t.TempDir()
-		directory := writeMacOSPlatformHandoff(t, root, version, 10, testReleaseCommit)
-		asset := filepath.Join(directory, installerDMGName(version))
-		if err := os.Remove(asset); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink("SHA256SUMS", asset); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := assembleRelease(root, version, 10, testReleaseCommit, definitions); err == nil {
-			t.Fatal("symlinked platform asset passed release assembly")
-		}
-	})
 }
 
 func TestAssembleReleaseSupportsSyntheticMultiplePlatforms(t *testing.T) {
@@ -127,61 +41,71 @@ func TestAssembleReleaseSupportsSyntheticMultiplePlatforms(t *testing.T) {
 	root := t.TempDir()
 	version, _ := parseReleaseVersion("2.0.0-beta.1")
 	definitions := []releasePlatformDefinition{
-		{
-			Name: "linux",
-			Specs: []releaseAssetSpec{{
-				Name: "ProfileDeck_2.0.0-beta.1_linux_amd64.tar.gz",
-				Role: "archive",
-			}},
-		},
-		{
-			Name: "windows",
-			Specs: []releaseAssetSpec{{
-				Name: "ProfileDeck_2.0.0-beta.1_windows_amd64.zip",
-				Role: "archive",
-			}},
-		},
+		{Name: "linux", Specs: []releaseAssetSpec{{Name: "ProfileDeck_2.0.0-beta.1_linux_amd64.tar.gz", Role: "archive"}}},
+		{Name: "windows", Specs: []releaseAssetSpec{{Name: "ProfileDeck_2.0.0-beta.1_windows_amd64.zip", Role: "archive"}}},
 	}
+	inputs := make([]releasePlatformInput, 0, len(definitions))
 	for _, definition := range definitions {
-		writeSyntheticPlatformHandoff(
-			t,
-			root,
-			version,
-			definition,
-			23,
-			testReleaseCommit,
-		)
+		directory := createSyntheticHandoff(t, root, definition, version, 23, testReleaseCommit)
+		inputs = append(inputs, releasePlatformInput{releasePlatformDefinition: definition, Directory: directory})
 	}
-
-	bundle, err := assembleRelease(root, version, 23, testReleaseCommit, definitions)
+	output := filepath.Join(root, "bundle")
+	if err := assembleRelease(output, version, 23, testReleaseCommit, inputs); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := verifyReleaseBundle(output, version, 23, testReleaseCommit, definitions)
 	if err != nil {
 		t.Fatal(err)
 	}
-	metadata, err := verifyReleaseBundle(
-		bundle,
-		version,
-		23,
-		testReleaseCommit,
-		definitions,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := metadata.Platforms[0].Platform + "," + metadata.Platforms[1].Platform; got != "linux,windows" {
-		t.Fatalf("platforms = %q", got)
-	}
-	if len(metadata.Assets) != 2 {
-		t.Fatalf("bundle assets = %#v", metadata.Assets)
+	if len(metadata.Platforms) != 2 || metadata.Platforms[0].Platform != "linux" || metadata.Platforms[1].Platform != "windows" {
+		t.Fatalf("unexpected synthetic platforms: %#v", metadata.Platforms)
 	}
 }
 
-func TestParseReleasePlatformsRejectsUnknownDuplicateAndEmptyPlatforms(t *testing.T) {
+func TestAssembleReleaseRejectsInconsistentHandoffAndExistingOutput(t *testing.T) {
 	t.Parallel()
+	root := t.TempDir()
 	version, _ := parseReleaseVersion("1.2.3")
-	for _, value := range []string{"", "macos,macos", "windows", "macos,"} {
-		if _, err := parseReleasePlatforms(value, version); err == nil {
-			t.Fatalf("parseReleasePlatforms(%q) succeeded, want error", value)
-		}
+	handoff := createTestHandoff(t, root, macOSPlatform, version, 8, testReleaseCommit)
+	inputs, _ := parsePlatformInputs([]string{macOSPlatform + "=" + handoff}, version)
+	if err := assembleRelease(filepath.Join(root, "bundle-a"), version, 9, testReleaseCommit, inputs); err == nil {
+		t.Fatal("inconsistent build number passed assembly")
+	}
+	output := filepath.Join(root, "bundle-b")
+	if err := os.Mkdir(output, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := assembleRelease(output, version, 8, testReleaseCommit, inputs); err == nil {
+		t.Fatal("existing output passed assembly")
+	}
+}
+
+func TestVerifyReleaseBundleRejectsMetadataConflict(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	version, _ := parseReleaseVersion("1.2.3")
+	handoff := createTestHandoff(t, root, macOSPlatform, version, 8, testReleaseCommit)
+	inputs, _ := parsePlatformInputs([]string{macOSPlatform + "=" + handoff}, version)
+	output := filepath.Join(root, "bundle")
+	if err := assembleRelease(output, version, 8, testReleaseCommit, inputs); err != nil {
+		t.Fatal(err)
+	}
+	metadataPath := filepath.Join(output, "release-metadata.json")
+	content, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata releaseBundleMetadata
+	if err := decodeStrictJSON(content, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	metadata.Platforms[0].Commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := writeJSONFile(metadataPath, metadata); err != nil {
+		t.Fatal(err)
+	}
+	definitions, _ := parseReleasePlatforms(macOSPlatform, version)
+	if _, err := verifyReleaseBundle(output, version, 8, testReleaseCommit, definitions); err == nil {
+		t.Fatal("conflicting platform metadata passed verification")
 	}
 }
 
@@ -196,92 +120,63 @@ func TestCombinedAssetSpecsRejectsDuplicateAssets(t *testing.T) {
 	}
 }
 
-func writeMacOSPlatformHandoff(
+func createTestHandoff(
 	t *testing.T,
 	root string,
+	platform string,
 	version releaseVersion,
 	buildNumber int,
 	commit string,
 ) string {
 	t.Helper()
-	directory := filepath.Join(root, version.tag(), "platforms", macOSPlatform)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	writeTestZIP(t, filepath.Join(directory, updaterZIPName(version)), []string{
-		"ProfileDeck.app/",
-		"ProfileDeck.app/Contents/",
-		"ProfileDeck.app/Contents/Info.plist",
-	})
-	if err := os.WriteFile(
-		filepath.Join(directory, installerDMGName(version)),
-		[]byte("signed notarized dmg"),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
-	specs, _ := platformAssetSpecs(macOSPlatform, version)
-	if _, err := writeChecksums(directory, specs); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeMetadata(
-		directory,
-		macOSPlatform,
+	input := filepath.Join(root, "raw-"+platform)
+	writeRawPlatformAssets(t, input, version)
+	output := filepath.Join(root, "handoff-"+platform)
+	if err := createPlatformHandoff(
+		input,
+		output,
+		platform,
 		version,
 		buildNumber,
 		commit,
-		time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 22, 12, 30, 0, 0, time.UTC),
 	); err != nil {
 		t.Fatal(err)
 	}
-	return directory
+	return output
 }
 
-func writeSyntheticPlatformHandoff(
+func createSyntheticHandoff(
 	t *testing.T,
 	root string,
-	version releaseVersion,
 	definition releasePlatformDefinition,
+	version releaseVersion,
 	buildNumber int,
 	commit string,
-) {
+) string {
 	t.Helper()
-	directory := filepath.Join(root, version.tag(), "platforms", definition.Name)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
+	directory := filepath.Join(root, "handoff-"+definition.Name)
+	if err := os.Mkdir(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	for _, spec := range definition.Specs {
-		if err := os.WriteFile(filepath.Join(directory, spec.Name), []byte(spec.Name), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(directory, spec.Name), []byte("synthetic "+definition.Name), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if _, err := writeChecksums(directory, definition.Specs); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeMetadataWithSpecs(
+	if err := writeMetadata(
 		directory,
 		definition.Name,
 		version,
 		buildNumber,
 		commit,
-		time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 22, 12, 30, 0, 0, time.UTC),
 		definition.Specs,
 	); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func assertDirectoryNames(t *testing.T, directory string, expected []string) {
-	t.Helper()
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	actual := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		actual = append(actual, entry.Name())
-	}
-	if strings.Join(actual, "\n") != strings.Join(expected, "\n") {
-		t.Fatalf("directory entries = %q, want %q", actual, expected)
-	}
+	return directory
 }

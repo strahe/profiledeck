@@ -23,19 +23,14 @@ import (
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/app"
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/settings"
 )
 
 var (
-	version   = app.DefaultVersion
-	commit    = app.UnknownBuildValue
-	buildDate = app.UnknownBuildValue
-)
-
-const (
-	trayDashboardUnavailableLabel           = "Dashboard unavailable. Open ProfileDeck for details."
-	trayCodexProfilesUnavailableLabel       = "Unable to load Codex profiles. Open ProfileDeck for details."
-	trayAntigravityProfilesUnavailableLabel = "Unable to load Antigravity profiles. Open ProfileDeck for details."
-	trayClaudeCodeProfilesUnavailableLabel  = "Unable to load Claude Code profiles. Open ProfileDeck for details."
+	version               = app.DefaultVersion
+	commit                = app.UnknownBuildValue
+	buildDate             = app.UnknownBuildValue
+	updatePublicKeyBase64 string
 )
 
 //go:embed all:frontend/dist
@@ -69,8 +64,11 @@ func main() {
 	startupErr := backend.Bootstrap(desktopCtx, core)
 	services := backend.NewServices(core, info, env, startupErr)
 	updates := desktopupdate.NewService(desktopCtx, core, desktopupdate.BuildConfig{
-		CurrentVersion: version,
+		CurrentVersion: version, PublicKeyBase64: updatePublicKeyBase64,
 	})
+	if updates.Status(desktopCtx).ErrorCode == desktopupdate.ErrorConfigurationInvalid {
+		log.Print("profiledeck: automatic updates are unavailable (verification configuration is invalid)")
+	}
 
 	wailsApp := application.New(application.Options{
 		Name:        app.ProductName,
@@ -241,17 +239,43 @@ func setupTray(ctx context.Context, wailsApp *application.App, mainWindow *appli
 	tray.SetTooltip(app.ProductName)
 	tray.AttachWindow(mainWindow).WindowOffset(10)
 
+	initialLocale := loadInitialTrayLocale(ctx, services.Settings, systemPreferredTrayLanguage())
 	controller := newTrayController(ctx, services, wailsTrayUI{
 		app:    wailsApp,
 		window: mainWindow,
 		tray:   tray,
-	})
+	}, initialLocale)
 	tray.OnClick(func() {
 		runTrayAction(controller.openMainWindow)
 	})
+	removeLocaleHandler := wailsApp.Event.On(trayLocaleChangedEventName, func(event *application.CustomEvent) {
+		if locale, ok := event.Data.(string); ok {
+			controller.SetLocale(locale)
+		}
+	})
 	controller.Refresh(nil, false)
 	cleanupTrayRefresh := subscribeTrayRefresh(services, controller)
-	wailsApp.OnShutdown(cleanupTrayRefresh)
+	wailsApp.OnShutdown(func() {
+		removeLocaleHandler()
+		cleanupTrayRefresh()
+	})
+}
+
+func loadInitialTrayLocale(
+	ctx context.Context,
+	settingsService *backend.SettingsService,
+	systemLanguage string,
+) trayLocale {
+	preference := settings.DesktopLanguageAuto
+	if settingsService != nil {
+		desktopSettings, err := settingsService.Get(ctx)
+		if err != nil {
+			log.Print("profiledeck: tray language setting is unavailable")
+		} else {
+			preference = desktopSettings.Language
+		}
+	}
+	return resolveTrayLocale(preference, systemLanguage)
 }
 
 func hideMainWindowOnUserClose(window *application.WebviewWindow) {

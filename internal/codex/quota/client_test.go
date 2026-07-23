@@ -12,7 +12,7 @@ import (
 
 func TestClientReadsCodexQuotaAndMapsRemainingPercent(t *testing.T) {
 	const accessToken = "raw-access-token"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/wham/usage" {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -36,10 +36,13 @@ func TestClientReadsCodexQuotaAndMapsRemainingPercent(t *testing.T) {
 			"additional_rate_limits":[{"limit_name":"Spark","metered_feature":"codex_spark","rate_limit":{"allowed":true,"limit_reached":false,"primary_window":{"used_percent":10,"limit_window_seconds":3600,"reset_after_seconds":600,"reset_at":1780000600}}}],
 			"rate_limit_reset_credits":{"available_count":2}
 		}`))
-	}))
-	defer server.Close()
+	})
 
-	client := &Client{httpClient: server.Client(), endpoint: server.URL + "/wham/usage", now: func() time.Time { return time.Unix(1780000000, 0) }}
+	client := &Client{
+		httpClient: &http.Client{Transport: handlerRoundTripper{handler: handler}},
+		endpoint:   "https://quota.test/wham/usage",
+		now:        func() time.Time { return time.Unix(1780000000, 0) },
+	}
 	snapshot, err := client.Read(context.Background(), Credentials{AccessToken: accessToken, AccountID: "workspace-1", FedRAMP: true})
 	if err != nil {
 		t.Fatalf("expected quota read to succeed, got %v", err)
@@ -62,6 +65,16 @@ func TestClientReadsCodexQuotaAndMapsRemainingPercent(t *testing.T) {
 	if snapshot.ResetCreditsAvailable == nil || *snapshot.ResetCreditsAvailable != 2 {
 		t.Fatalf("unexpected reset credits: %#v", snapshot.ResetCreditsAvailable)
 	}
+}
+
+type handlerRoundTripper struct {
+	handler http.Handler
+}
+
+func (transport handlerRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	recorder := httptest.NewRecorder()
+	transport.handler.ServeHTTP(recorder, request)
+	return recorder.Result(), nil
 }
 
 func TestClientClassifiesFailuresWithoutLeakingResponseBody(t *testing.T) {

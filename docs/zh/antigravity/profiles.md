@@ -75,6 +75,8 @@ profiledeck antigravity profile delete work --yes
 
 桌面端会在启动时检查一次当前 Antigravity Profile，并在成功切换后检查一次新 Profile。需要再次检查时，请在当前 Profile 上选择**刷新限额**。ProfileDeck 不会在后台轮询。
 
+这些检查会将当前 Profile 的访问令牌发送到 Google Cloud Code 服务。该服务契约未公开，使用它可能带来账号风险。检查期间，ProfileDeck 不会刷新、保存或回写令牌。
+
 Profile 列表显示紧凑摘要；Profile 详情显示各分组的 5 小时和每周窗口、剩余百分比、重置时间与检查时间。非当前 Profile 可以保留本次应用会话中较早检查的快照，但必须先使用该 Profile，才能刷新结果。
 
 限额快照只存在于内存，不会写入用量报告、导出、备份或 ProfileDeck 数据库，也不能用来判断此前的 Antigravity 活动属于哪个 Profile。

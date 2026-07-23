@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 var releaseVersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-beta\.([1-9][0-9]*))?$`)
@@ -100,10 +103,35 @@ func parseBuildNumber(value string) (int, error) {
 	return number, nil
 }
 
+func requireNewerVersion(candidate releaseVersion, tags io.Reader) error {
+	scanner := bufio.NewScanner(tags)
+	for scanner.Scan() {
+		tag := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(tag, "v") {
+			continue
+		}
+		published, err := parseReleaseVersion(strings.TrimPrefix(tag, "v"))
+		if err != nil {
+			continue
+		}
+		if candidate.compare(published) <= 0 {
+			return fmt.Errorf("%s must be newer than published release %s", candidate, published)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read published release tags: %w", err)
+	}
+	return nil
+}
+
 func updaterZIPName(version releaseVersion) string {
-	return fmt.Sprintf("ProfileDeck_%s_macos_universal.zip", version)
+	return fmt.Sprintf("%s_%s_macos_universal.zip", productName, version)
+}
+
+func updaterSignatureName(version releaseVersion) string {
+	return updaterZIPName(version) + ".sig"
 }
 
 func installerDMGName(version releaseVersion) string {
-	return fmt.Sprintf("ProfileDeck_%s_macos_universal.dmg", version)
+	return fmt.Sprintf("%s_%s_macos_universal.dmg", productName, version)
 }

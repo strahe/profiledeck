@@ -1,148 +1,33 @@
 package main
 
 import (
-	"context"
+	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
+	"strings"
 	"time"
 )
 
 func main() {
-	if err := run(context.Background(), os.Args[1:]); err != nil {
+	if err := run(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "releasetool: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, args []string) error {
+func run(args []string, stdout io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("a command is required")
 	}
-	runner := systemCommandRunner{}
 	switch args[0] {
-	case "identity":
-		flags := newFlagSet("identity")
-		requested := flags.String("requested", "", "Developer ID identity override")
-		keychain := flags.String("keychain", "", "Keychain containing the signing identity")
-		output := flags.String("output", "fingerprint", "identity output: fingerprint or name")
-		interactive := flags.Bool("interactive", false, "prompt when multiple signing identities are available")
-		if err := flags.Parse(args[1:]); err != nil {
-			return err
-		}
-		identities, err := inspectDeveloperIDIdentities(ctx, runner, cleanOptionalPath(*keychain))
-		if err != nil {
-			return err
-		}
-		var identity developerIDIdentity
-		if *interactive && *requested == "" && len(identities) > 1 {
-			// The controlling terminal keeps prompts out of stdout and prevents automation from waiting on stdin.
-			terminal, openErr := os.OpenFile("/dev/tty", os.O_RDWR, 0)
-			if openErr != nil {
-				return developerIDIdentityCountError(len(identities))
-			}
-			defer terminal.Close()
-			identity, err = promptDeveloperIDIdentity(identities, terminal, terminal)
-		} else {
-			identity, err = selectDeveloperIDIdentity(identities, *requested)
-		}
-		if err != nil {
-			return err
-		}
-		value, err := formatDeveloperIDIdentity(identity, *output)
-		if err != nil {
-			return err
-		}
-		fmt.Println(value)
-		return nil
-
-	case "preflight":
-		options, err := parseReleaseOptions("preflight", args[1:], true)
-		if err != nil {
-			return err
-		}
-		workspace, err := newReleaseWorkspace(
-			options.releasesDirectory,
-			options.version,
-			options.platform,
-		)
-		if err != nil {
-			return err
-		}
-		return preflight(
-			ctx,
-			runner,
-			options.version,
-			options.buildNumber,
-			workspace,
-			options.identity,
-			options.notaryProfile,
-			options.keychain,
-		)
-
-	case "prepare":
-		version, releasesDirectory, platform, err := parseWorkspaceOptions("prepare", args[1:])
-		if err != nil {
-			return err
-		}
-		workspace, err := newReleaseWorkspace(releasesDirectory, version, platform)
-		if err != nil {
-			return err
-		}
-		return workspace.prepare()
-
-	case "cleanup":
-		version, releasesDirectory, platform, err := parseWorkspaceOptions("cleanup", args[1:])
-		if err != nil {
-			return err
-		}
-		workspace, err := newReleaseWorkspace(releasesDirectory, version, platform)
-		if err != nil {
-			return err
-		}
-		return workspace.cleanup()
-
-	case "plist":
-		flags := newFlagSet("plist")
+	case "contract":
+		flags := newFlagSet("contract")
 		versionValue := flags.String("version", "", "release version")
-		buildValue := flags.String("build-number", "", "bundle build number")
-		templatePath := flags.String("template", "", "Info.plist template path")
-		outputPath := flags.String("output", "", "Info.plist output path")
-		if err := flags.Parse(args[1:]); err != nil {
-			return err
-		}
-		version, err := parseReleaseVersion(*versionValue)
-		if err != nil {
-			return err
-		}
-		buildNumber, err := parseBuildNumber(*buildValue)
-		if err != nil {
-			return err
-		}
-		if *templatePath == "" || *outputPath == "" {
-			return fmt.Errorf("template and output paths for Info.plist are required")
-		}
-		return writeInfoPlist(*templatePath, *outputPath, version, buildNumber)
-
-	case "notarize":
-		flags := newFlagSet("notarize")
-		input := flags.String("input", "", "artifact to submit")
-		profile := flags.String("profile", "", "notarytool Keychain profile")
-		keychain := flags.String("keychain", "", "Keychain containing the notary profile")
-		if err := flags.Parse(args[1:]); err != nil {
-			return err
-		}
-		_, err := notarize(ctx, runner, *input, *profile, cleanOptionalPath(*keychain))
-		return err
-
-	case "github-check":
-		flags := newFlagSet("github-check")
-		versionValue := flags.String("version", "", "release version")
-		repository := flags.String("repo", "", "GitHub owner/repository")
-		commit := flags.String("commit", "", "release Git commit")
 		platforms := flags.String("platforms", macOSPlatform, "comma-separated release platforms")
+		field := flags.String("field", "", "single contract field")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -150,128 +35,67 @@ func run(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		definitions, err := parseReleasePlatforms(*platforms, version)
+		contract, err := buildReleaseContract(version, *platforms)
 		if err != nil {
 			return err
 		}
-		if err := checkGitHubRelease(
-			ctx,
-			runner,
-			*repository,
-			version,
-			*commit,
-			definitions,
-		); err != nil {
-			return err
+		if *field != "" {
+			return writeContractField(stdout, contract, *field)
 		}
-		fmt.Printf("GitHub release state is ready for %s at %s\n", version.tag(), *commit)
-		return nil
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(contract)
 
-	case "source-check":
-		flags := newFlagSet("source-check")
-		commit := flags.String("commit", "", "built Git commit")
+	case "version-check":
+		flags := newFlagSet("version-check")
+		versionValue := flags.String("version", "", "candidate release version")
+		tagsPath := flags.String("tags", "", "published tag list path or - for stdin")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		return verifySourceState(ctx, runner, *commit)
+		version, err := parseReleaseVersion(*versionValue)
+		if err != nil {
+			return err
+		}
+		reader, closeReader, err := openTagReader(*tagsPath)
+		if err != nil {
+			return err
+		}
+		defer closeReader()
+		if err := requireNewerVersion(version, reader); err != nil {
+			return err
+		}
+		return writeResult(stdout, "%s is newer than every published release.\n", version)
 
-	case "manifest":
-		flags := newFlagSet("manifest")
+	case "handoff":
+		flags := newFlagSet("handoff")
 		versionValue := flags.String("version", "", "release version")
-		buildValue := flags.String("build-number", "", "bundle build number")
-		commit := flags.String("commit", "", "built Git commit")
+		buildValue := flags.String("build-number", "", "release build number")
+		commit := flags.String("commit", "", "release Git commit")
 		builtAtValue := flags.String("built-at", "", "RFC3339 build time")
-		directory := flags.String("directory", "", "artifact directory")
-		platform := flags.String("platform", macOSPlatform, "release platform")
+		platform := flags.String("platform", "", "release platform")
+		input := flags.String("input", "", "raw platform asset directory")
+		output := flags.String("output", "", "final platform handoff directory")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		version, err := parseReleaseVersion(*versionValue)
+		version, buildNumber, builtAt, err := parseBuildIdentity(*versionValue, *buildValue, *builtAtValue)
 		if err != nil {
 			return err
 		}
-		buildNumber, err := parseBuildNumber(*buildValue)
-		if err != nil {
+		if err := createPlatformHandoff(*input, *output, *platform, version, buildNumber, *commit, builtAt); err != nil {
 			return err
 		}
-		builtAt, err := time.Parse(time.RFC3339, *builtAtValue)
-		if err != nil {
-			return fmt.Errorf("built-at must use RFC3339: %w", err)
-		}
-		specs, err := platformAssetSpecs(*platform, version)
-		if err != nil {
-			return err
-		}
-		if _, err := writeChecksums(*directory, specs); err != nil {
-			return err
-		}
-		return writeMetadata(*directory, *platform, version, buildNumber, *commit, builtAt)
-
-	case "verify":
-		options, err := parseReleaseOptions("verify", args[1:], false)
-		if err != nil {
-			return err
-		}
-		directory := options.directory
-		if directory == "" {
-			workspace, err := newReleaseWorkspace(
-				options.releasesDirectory,
-				options.version,
-				options.platform,
-			)
-			if err != nil {
-				return err
-			}
-			directory = workspace.artifacts
-		}
-		_, err = verifyLocalRelease(
-			ctx,
-			runner,
-			directory,
-			options.version,
-			options.buildNumber,
-			true,
-		)
-		if err == nil {
-			fmt.Printf("Verified macOS release artifacts in %s\n", directory)
-		}
-		return err
-
-	case "commit":
-		version, releasesDirectory, platform, err := parseWorkspaceOptions("commit", args[1:])
-		if err != nil {
-			return err
-		}
-		workspace, err := newReleaseWorkspace(releasesDirectory, version, platform)
-		if err != nil {
-			return err
-		}
-		metadata, err := readMetadata(workspace.artifacts, platform, version)
-		if err != nil {
-			return err
-		}
-		if err := verifyPlatformDirectoryLayout(workspace.artifacts, platform, version); err != nil {
-			return err
-		}
-		if err := workspace.commit(); err != nil {
-			return err
-		}
-		fmt.Printf(
-			"%s release %s (build %d) is ready: %s\n",
-			platform,
-			version,
-			metadata.BuildNumber,
-			workspace.final,
-		)
-		return nil
+		return writeResult(stdout, "%s release handoff is ready: %s\n", *platform, *output)
 
 	case "assemble":
 		flags := newFlagSet("assemble")
 		versionValue := flags.String("version", "", "release version")
 		buildValue := flags.String("build-number", "", "release build number")
 		commit := flags.String("commit", "", "release Git commit")
-		platforms := flags.String("platforms", macOSPlatform, "comma-separated release platforms")
-		releasesDirectory := flags.String("releases-dir", ".task/releases", "release output root")
+		output := flags.String("output", "", "final release bundle directory")
+		var handoffs repeatedFlag
+		flags.Var(&handoffs, "handoff", "platform=handoff-directory (repeatable)")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -283,31 +107,22 @@ func run(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		definitions, err := parseReleasePlatforms(*platforms, version)
+		inputs, err := parsePlatformInputs(handoffs, version)
 		if err != nil {
 			return err
 		}
-		directory, err := assembleRelease(
-			*releasesDirectory,
-			version,
-			buildNumber,
-			*commit,
-			definitions,
-		)
-		if err != nil {
+		if err := assembleRelease(*output, version, buildNumber, *commit, inputs); err != nil {
 			return err
 		}
-		fmt.Printf("Release bundle is ready: %s\n", directory)
-		return nil
+		return writeResult(stdout, "Release bundle is ready: %s\n", *output)
 
-	case "draft":
-		flags := newFlagSet("draft")
+	case "verify-bundle":
+		flags := newFlagSet("verify-bundle")
 		versionValue := flags.String("version", "", "release version")
 		buildValue := flags.String("build-number", "", "release build number")
-		repository := flags.String("repo", "", "GitHub owner/repository")
 		commit := flags.String("commit", "", "release Git commit")
-		platforms := flags.String("platforms", macOSPlatform, "comma-separated release platforms")
-		releasesDirectory := flags.String("releases-dir", ".task/releases", "temporary releases directory")
+		platforms := flags.String("platforms", "", "comma-separated release platforms")
+		directory := flags.String("directory", "", "release bundle directory")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -323,127 +138,96 @@ func run(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		bundleDirectory, err := releaseBundlePath(*releasesDirectory, version)
+		if _, err := verifyReleaseBundle(*directory, version, buildNumber, *commit, definitions); err != nil {
+			return err
+		}
+		return writeResult(stdout, "Release bundle verified: %s\n", *directory)
+
+	case "update-public-key":
+		flags := newFlagSet("update-public-key")
+		privateKey := flags.String("private-key", "", "PKCS#8 Ed25519 private key")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		publicKey, err := updatePublicKeyBase64(*privateKey)
 		if err != nil {
 			return err
 		}
-		metadata, err := verifyReleaseBundle(
-			bundleDirectory,
-			version,
-			buildNumber,
-			*commit,
-			definitions,
-		)
-		if err != nil {
+		return writeResult(stdout, "%s\n", publicKey)
+
+	case "sign-update":
+		flags := newFlagSet("sign-update")
+		privateKey := flags.String("private-key", "", "PKCS#8 Ed25519 private key")
+		artifact := flags.String("artifact", "", "update artifact")
+		output := flags.String("output", "", "signature sidecar")
+		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		release, err := createDraftRelease(
-			ctx,
-			runner,
-			*repository,
-			version,
-			bundleDirectory,
-			metadata,
-			definitions,
-		)
-		if err != nil {
+		return signUpdateArtifact(*privateKey, *artifact, *output)
+
+	case "verify-update-signature":
+		flags := newFlagSet("verify-update-signature")
+		publicKey := flags.String("public-key", "", "base64 Ed25519 public key")
+		artifact := flags.String("artifact", "", "update artifact")
+		signature := flags.String("signature", "", "signature sidecar")
+		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
-		if err := removeReleaseBundle(*releasesDirectory, version); err != nil {
-			return err
-		}
-		fmt.Printf("Draft Release is ready for review: %s\n", release.URL)
-		return nil
+		return verifyUpdateArtifactSignature(*publicKey, *artifact, *signature)
 
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
 }
 
-type releaseOptions struct {
-	version           releaseVersion
-	buildNumber       int
-	platform          string
-	releasesDirectory string
-	directory         string
-	identity          string
-	notaryProfile     string
-	keychain          string
+func parseBuildIdentity(versionValue, buildValue, builtAtValue string) (releaseVersion, int, time.Time, error) {
+	version, err := parseReleaseVersion(versionValue)
+	if err != nil {
+		return releaseVersion{}, 0, time.Time{}, err
+	}
+	buildNumber, err := parseBuildNumber(buildValue)
+	if err != nil {
+		return releaseVersion{}, 0, time.Time{}, err
+	}
+	builtAt, err := time.Parse(time.RFC3339, builtAtValue)
+	if err != nil || builtAt.Format(time.RFC3339) != builtAtValue {
+		return releaseVersion{}, 0, time.Time{}, fmt.Errorf("built-at must use canonical RFC3339")
+	}
+	return version, buildNumber, builtAt, nil
 }
 
-func parseReleaseOptions(name string, args []string, includeSigning bool) (releaseOptions, error) {
-	flags := newFlagSet(name)
-	versionValue := flags.String("version", "", "release version")
-	buildValue := flags.String("build-number", "", "bundle build number")
-	releasesDirectory := flags.String("releases-dir", ".task/releases", "release output root")
-	directory := flags.String("directory", "", "release artifact directory")
-	identity := flags.String("identity", "", "Developer ID identity")
-	notaryProfile := flags.String("notary-profile", "", "notarytool Keychain profile")
-	keychain := flags.String("keychain", "", "Keychain containing release credentials")
-	platform := flags.String("platform", macOSPlatform, "release platform")
-	if err := flags.Parse(args); err != nil {
-		return releaseOptions{}, err
+func openTagReader(path string) (io.Reader, func(), error) {
+	if path == "-" {
+		return bufio.NewReader(os.Stdin), func() {}, nil
 	}
-	version, err := parseReleaseVersion(*versionValue)
+	if strings.TrimSpace(path) == "" {
+		return nil, nil, fmt.Errorf("tags path is required; use - for stdin")
+	}
+	file, err := os.Open(path)
 	if err != nil {
-		return releaseOptions{}, err
+		return nil, nil, fmt.Errorf("open published tag list: %w", err)
 	}
-	buildNumber, err := parseBuildNumber(*buildValue)
-	if err != nil {
-		return releaseOptions{}, err
-	}
-	if _, err := platformAssetSpecs(*platform, version); err != nil {
-		return releaseOptions{}, err
-	}
-	if includeSigning && (*identity == "" || *notaryProfile == "") {
-		return releaseOptions{}, fmt.Errorf("developer ID identity and notary profile are required")
-	}
-	cleanDirectory := ""
-	if *directory != "" {
-		cleanDirectory = filepath.Clean(*directory)
-	}
-	return releaseOptions{
-		version:           version,
-		buildNumber:       buildNumber,
-		platform:          *platform,
-		releasesDirectory: *releasesDirectory,
-		directory:         cleanDirectory,
-		identity:          *identity,
-		notaryProfile:     *notaryProfile,
-		keychain:          cleanOptionalPath(*keychain),
-	}, nil
+	return file, func() { _ = file.Close() }, nil
 }
 
-func cleanOptionalPath(path string) string {
-	if path == "" {
-		return ""
-	}
-	return filepath.Clean(path)
-}
+type repeatedFlag []string
 
-func parseWorkspaceOptions(
-	name string,
-	args []string,
-) (releaseVersion, string, string, error) {
-	flags := newFlagSet(name)
-	versionValue := flags.String("version", "", "release version")
-	releasesDirectory := flags.String("releases-dir", ".task/releases", "release output root")
-	platform := flags.String("platform", macOSPlatform, "release platform")
-	if err := flags.Parse(args); err != nil {
-		return releaseVersion{}, "", "", err
-	}
-	version, err := parseReleaseVersion(*versionValue)
-	if err != nil {
-		return releaseVersion{}, "", "", err
-	}
-	if _, err := platformAssetSpecs(*platform, version); err != nil {
-		return releaseVersion{}, "", "", err
-	}
-	return version, *releasesDirectory, *platform, nil
+func (value *repeatedFlag) String() string { return strings.Join(*value, ",") }
+
+func (value *repeatedFlag) Set(entry string) error {
+	*value = append(*value, entry)
+	return nil
 }
 
 func newFlagSet(name string) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	return flags
+}
+
+func writeResult(writer io.Writer, format string, arguments ...any) error {
+	if _, err := fmt.Fprintf(writer, format, arguments...); err != nil {
+		return fmt.Errorf("write command result: %w", err)
+	}
+	return nil
 }

@@ -27,8 +27,8 @@ jobs:
   validate:
     runs-on: ${{ vars.MACOS_RUNS_ON || 'macos-26' }}
     outputs:
-      version: ${{ steps.source.outputs.version }}
-      tag: ${{ steps.source.outputs.tag }}
+      version: ${{ steps.contract.outputs.version }}
+      tag: ${{ steps.contract.outputs.tag }}
       commit: ${{ steps.commit.outputs.commit }}
 
     steps:
@@ -54,12 +54,7 @@ jobs:
                 ;;
             esac
           fi
-          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-beta\.([1-9][0-9]*))?$ ]]; then
-            echo "::error::Release version must be X.Y.Z or X.Y.Z-beta.N."
-            exit 1
-          fi
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'tag=v%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'candidate=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
       - name: Checkout release commit
         uses: actions/checkout@v7
@@ -85,6 +80,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Read release contract
+        id: contract
+        shell: bash
+        env:
+          CANDIDATE_VERSION: ${{ steps.source.outputs.candidate }}
+        run: |
+          set -euo pipefail
+          version="$(go run ./scripts/releasetool contract --version "$CANDIDATE_VERSION" --field version)"
+          tag="$(go run ./scripts/releasetool contract --version "$CANDIDATE_VERSION" --field tag)"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
@@ -99,7 +106,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           make release-github-check \
-            VERSION="${{ steps.source.outputs.version }}" \
+            VERSION="${{ steps.contract.outputs.version }}" \
             RELEASE_COMMIT="${{ steps.commit.outputs.commit }}"
 
       - name: Check source
@@ -132,6 +139,7 @@ jobs:
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          PROFILEDECK_UPDATE_SIGNING_KEY_P8_BASE64: ${{ secrets.PROFILEDECK_UPDATE_SIGNING_KEY_P8_BASE64 }}
         run: |
           set -euo pipefail
           missing=0
@@ -140,7 +148,8 @@ jobs:
             APPLE_DEVELOPER_ID_P12_PASSWORD \
             APPLE_NOTARY_ISSUER_ID \
             APPLE_NOTARY_KEY_ID \
-            APPLE_NOTARY_KEY_P8_BASE64; do
+            APPLE_NOTARY_KEY_P8_BASE64 \
+            PROFILEDECK_UPDATE_SIGNING_KEY_P8_BASE64; do
             if [[ -z "${!name-}" ]]; then
               echo "::error::Required Actions secret $name is not configured."
               missing=1
@@ -171,6 +180,7 @@ jobs:
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          PROFILEDECK_UPDATE_SIGNING_KEY_P8_BASE64: ${{ secrets.PROFILEDECK_UPDATE_SIGNING_KEY_P8_BASE64 }}
         run: |
           set -euo pipefail
           umask 077
@@ -178,6 +188,7 @@ jobs:
           echo "::add-mask::$keychain_password"
           p12_path="$RUNNER_TEMP/developer-id.p12"
           p8_path="$RUNNER_TEMP/notary-key.p8"
+          update_signing_key_path="$RUNNER_TEMP/profiledeck-update-signing-key.p8"
           release_keychain="$RUNNER_TEMP/$RELEASE_KEYCHAIN_NAME"
           original_keychains_file="$RUNNER_TEMP/$ORIGINAL_KEYCHAINS_NAME"
           credential_log="$RUNNER_TEMP/$CREDENTIAL_LOG_NAME"
@@ -206,7 +217,8 @@ jobs:
 
           printf '%s' "$APPLE_DEVELOPER_ID_P12_BASE64" | base64 --decode > "$p12_path"
           printf '%s' "$APPLE_NOTARY_KEY_P8_BASE64" | base64 --decode > "$p8_path"
-          chmod 600 "$p12_path" "$p8_path"
+          printf '%s' "$PROFILEDECK_UPDATE_SIGNING_KEY_P8_BASE64" | base64 --decode > "$update_signing_key_path"
+          chmod 600 "$p12_path" "$p8_path" "$update_signing_key_path"
 
           security create-keychain -p "$keychain_password" "$release_keychain"
           security set-keychain-settings -lut 21600 "$release_keychain"
@@ -228,7 +240,7 @@ jobs:
           security list-keychains -d user -s "${original_keychains[@]}" "$release_keychain"
 
           if ! sign_identity="$(
-            go run ./scripts/releasetool identity \
+            scripts/release/resolve-signing-identity.sh \
               --output name \
               --keychain "$release_keychain" \
               2> "$credential_log"
@@ -265,7 +277,8 @@ jobs:
             VERSION="$VERSION" \
             BUILD_NUMBER="$BUILD_NUMBER" \
             RELEASE_COMMIT="$RELEASE_COMMIT" \
-            RELEASE_KEYCHAIN="$release_keychain"
+            RELEASE_KEYCHAIN="$release_keychain" \
+            UPDATE_SIGNING_KEY="$RUNNER_TEMP/profiledeck-update-signing-key.p8"
 
       - name: Upload macOS release handoff
         uses: actions/upload-artifact@v7
@@ -288,6 +301,7 @@ jobs:
           rm -f \
             "$RUNNER_TEMP/developer-id.p12" \
             "$RUNNER_TEMP/notary-key.p8" \
+            "$RUNNER_TEMP/profiledeck-update-signing-key.p8" \
             "$RUNNER_TEMP/$CREDENTIAL_LOG_NAME"
           if [[ -f "$original_keychains_file" ]]; then
             original_keychains=()

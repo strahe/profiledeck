@@ -69,6 +69,8 @@ const userErrorKeys: Record<string, string> = {
 	UPDATE_RESTART_FAILED: "errors.updateRestartFailed",
 	OPERATION_CREATE_FAILED: "errors.operationFailed",
 	OPERATION_UPDATE_FAILED: "errors.operationFailed",
+	OPERATION_RECOVERY_REQUIRED: "errors.operationRecoveryRequired",
+	OPERATION_RECOVERY_CLEANUP_REQUIRED: "errors.operationRecoveryCleanupRequired",
 	COMMAND_FAILED: "errors.operationFailed",
 	DESKTOP_ERROR: "errors.operationFailed",
 };

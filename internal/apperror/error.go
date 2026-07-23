@@ -23,6 +23,7 @@ const (
 	ConfirmationRequired             Code = "CONFIRMATION_REQUIRED"
 	OperationCreateFailed            Code = "OPERATION_CREATE_FAILED"
 	OperationUpdateFailed            Code = "OPERATION_UPDATE_FAILED"
+	OperationRecoveryRequired        Code = "OPERATION_RECOVERY_REQUIRED"
 	OperationRecoveryCleanupRequired Code = "OPERATION_RECOVERY_CLEANUP_REQUIRED"
 	ProviderAlreadyExists            Code = "PROVIDER_EXISTS"
 	ProviderInUse                    Code = "PROVIDER_IN_USE"
@@ -141,6 +142,7 @@ func KnownCode(code Code) bool {
 		ConfirmationRequired,
 		OperationCreateFailed,
 		OperationUpdateFailed,
+		OperationRecoveryRequired,
 		OperationRecoveryCleanupRequired,
 		ProviderAlreadyExists,
 		ProviderInUse,

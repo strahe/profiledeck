@@ -1,8 +1,6 @@
 package main
 
 import (
-	"archive/zip"
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,183 +8,161 @@ import (
 	"time"
 )
 
-func TestChecksumsAndMetadataFailClosed(t *testing.T) {
-	t.Parallel()
-	version, _ := parseReleaseVersion("1.2.3-beta.4")
-	specs, _ := platformAssetSpecs(macOSPlatform, version)
-	directory := t.TempDir()
-	for _, spec := range specs {
-		if err := os.WriteFile(filepath.Join(directory, spec.Name), []byte(spec.Name), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := writeChecksums(directory, specs); err != nil {
-		t.Fatal(err)
-	}
-	const commit = "0123456789abcdef0123456789abcdef01234567"
-	builtAt := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
-	if err := writeMetadata(directory, macOSPlatform, version, 4, commit, builtAt); err != nil {
-		t.Fatal(err)
-	}
-	metadata, err := readMetadata(directory, macOSPlatform, version)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if metadata.SchemaVersion != releaseMetadataSchemaVersion ||
-		metadata.Platform != macOSPlatform || metadata.Channel != "beta" ||
-		metadata.BuildNumber != 4 || metadata.Commit != commit || len(metadata.Assets) != 2 {
-		t.Fatalf("unexpected metadata: %#v", metadata)
-	}
-	for _, asset := range metadata.Assets {
-		if asset.Role == "" {
-			t.Fatalf("asset role is missing: %#v", asset)
-		}
-	}
-	metadataPath := filepath.Join(directory, "release-metadata.json")
-	originalMetadata, err := os.ReadFile(metadataPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tamperedMetadata := bytes.Replace(
-		originalMetadata,
-		[]byte(`"version": "1.2.3-beta.4"`),
-		[]byte(`"version": "1.2.4"`),
-		1,
-	)
-	if bytes.Equal(originalMetadata, tamperedMetadata) {
-		t.Fatal("metadata fixture did not contain the expected version")
-	}
-	if err := os.WriteFile(metadataPath, tamperedMetadata, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readMetadata(directory, macOSPlatform, version); err == nil {
-		t.Fatal("metadata for another version passed verification")
-	}
-	if err := os.WriteFile(metadataPath, originalMetadata, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(directory, updaterZIPName(version)),
-		[]byte("tampered"),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readMetadata(directory, macOSPlatform, version); err == nil {
-		t.Fatal("tampered asset passed metadata verification")
-	}
-}
+const testReleaseCommit = "0123456789abcdef0123456789abcdef01234567"
 
-func TestReadChecksumsRejectsMalformedOrMissingEntries(t *testing.T) {
-	t.Parallel()
-	version, _ := parseReleaseVersion("1.2.3")
-	specs, _ := platformAssetSpecs(macOSPlatform, version)
-	directory := t.TempDir()
-	path := filepath.Join(directory, "SHA256SUMS")
-	hash := strings.Repeat("0", 64)
-	for _, content := range []string{
-		"not-a-checksum\n",
-		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  " +
-			updaterZIPName(version) + "\n",
-		"0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF  " +
-			updaterZIPName(version) + "\n",
-		hash + "  " + updaterZIPName(version) + "\n" +
-			hash + "  " + updaterZIPName(version) + "\n",
-	} {
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := readChecksums(path, specs); err == nil {
-			t.Fatalf("readChecksums accepted %q", content)
-		}
-	}
-}
-
-func TestPlatformMetadataRejectsUnknownFieldsAndPlatforms(t *testing.T) {
-	t.Parallel()
-	version, _ := parseReleaseVersion("1.2.3")
-	if _, err := platformAssetSpecs("windows", version); err == nil {
-		t.Fatal("unsupported platform was accepted")
-	}
-	directory := t.TempDir()
-	if err := os.WriteFile(
-		filepath.Join(directory, "release-metadata.json"),
-		[]byte(`{"schema_version":1,"unexpected":true}`),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readMetadata(directory, macOSPlatform, version); err == nil {
-		t.Fatal("metadata with an unknown field was accepted")
-	}
-}
-
-func TestVerifyZIPLayout(t *testing.T) {
+func TestCreatePlatformHandoffBuildsVerifiedAtomicOutput(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	valid := filepath.Join(root, "valid.zip")
-	writeTestZIP(t, valid, []string{
-		"ProfileDeck.app/",
-		"ProfileDeck.app/Contents/",
-		"ProfileDeck.app/Contents/Info.plist",
-	})
-	if err := verifyZIPLayout(valid); err != nil {
+	version, _ := parseReleaseVersion("1.2.3-beta.4")
+	input := filepath.Join(root, "raw")
+	writeRawPlatformAssets(t, input, version)
+	output := filepath.Join(root, "final", "macos")
+	builtAt := time.Date(2026, 7, 22, 12, 30, 0, 0, time.UTC)
+
+	if err := createPlatformHandoff(input, output, macOSPlatform, version, 17, testReleaseCommit, builtAt); err != nil {
 		t.Fatal(err)
 	}
-	invalid := filepath.Join(root, "invalid.zip")
-	writeTestZIP(t, invalid, []string{
-		"ProfileDeck.app/Contents/Info.plist",
-		"__MACOSX/metadata",
-	})
-	if err := verifyZIPLayout(invalid); err == nil {
-		t.Fatal("ZIP with __MACOSX passed verification")
-	}
-}
-
-func TestVerifyRemoteDirectoryLayoutRejectsExtraFiles(t *testing.T) {
-	t.Parallel()
-	version, _ := parseReleaseVersion("1.2.3")
 	specs, _ := platformAssetSpecs(macOSPlatform, version)
-	directory := t.TempDir()
-	for _, name := range append(assetSpecNames(specs), "SHA256SUMS") {
-		if err := os.WriteFile(filepath.Join(directory, name), []byte(name), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := verifyRemoteDirectoryLayout(directory, specs); err != nil {
+	if err := verifyDirectoryLayout(output, specs, true, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(directory, "release-metadata.json"), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyRemoteDirectoryLayout(directory, specs); err == nil {
-		t.Fatal("downloaded release with an extra file passed verification")
-	}
-}
-
-func writeTestZIP(t *testing.T, path string, names []string) {
-	t.Helper()
-	file, err := os.Create(path)
+	metadata, err := readMetadata(output, macOSPlatform, version, specs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer := zip.NewWriter(file)
-	for _, name := range names {
-		entry, err := writer.Create(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if name[len(name)-1] == '/' {
-			continue
-		}
-		if _, err := entry.Write([]byte("content")); err != nil {
-			t.Fatal(err)
-		}
+	if metadata.BuildNumber != 17 || metadata.Commit != testReleaseCommit || metadata.BuiltAt != builtAt.Format(time.RFC3339) {
+		t.Fatalf("unexpected metadata: %#v", metadata)
 	}
-	if err := writer.Close(); err != nil {
+	if _, err := os.Stat(filepath.Join(input, updaterZIPName(version))); err != nil {
+		t.Fatalf("raw input was changed: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(output))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := file.Close(); err != nil {
+	if len(entries) != 1 || entries[0].Name() != "macos" {
+		t.Fatalf("staging output remained after commit: %#v", entries)
+	}
+}
+
+func TestCreatePlatformHandoffRejectsUnsafeOrUnexpectedInput(t *testing.T) {
+	t.Parallel()
+	version, _ := parseReleaseVersion("1.2.3")
+	builtAt := time.Date(2026, 7, 22, 12, 30, 0, 0, time.UTC)
+
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, input string)
+	}{
+		{
+			name: "unexpected file",
+			mutate: func(t *testing.T, input string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(input, "extra.txt"), []byte("extra"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "missing asset",
+			mutate: func(t *testing.T, input string) {
+				t.Helper()
+				if err := os.Remove(filepath.Join(input, updaterSignatureName(version))); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "empty asset",
+			mutate: func(t *testing.T, input string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(input, installerDMGName(version)), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "symlink asset",
+			mutate: func(t *testing.T, input string) {
+				t.Helper()
+				path := filepath.Join(input, updaterZIPName(version))
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(installerDMGName(version), path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "symlink directory",
+			mutate: func(t *testing.T, input string) {
+				t.Helper()
+				realInput := input + "-real"
+				if err := os.Rename(input, realInput); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(realInput, input); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			input := filepath.Join(root, "raw")
+			writeRawPlatformAssets(t, input, version)
+			test.mutate(t, input)
+			output := filepath.Join(root, "macos")
+			if err := createPlatformHandoff(input, output, macOSPlatform, version, 1, testReleaseCommit, builtAt); err == nil {
+				t.Fatal("unsafe input passed handoff creation")
+			}
+			if _, err := os.Lstat(output); !os.IsNotExist(err) {
+				t.Fatalf("failed handoff left final output: %v", err)
+			}
+		})
+	}
+}
+
+func TestCreatePlatformHandoffDoesNotOverwriteOutput(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	version, _ := parseReleaseVersion("1.2.3")
+	input := filepath.Join(root, "raw")
+	writeRawPlatformAssets(t, input, version)
+	output := filepath.Join(root, "macos")
+	if err := os.Mkdir(output, 0o700); err != nil {
 		t.Fatal(err)
+	}
+	err := createPlatformHandoff(
+		input,
+		output,
+		macOSPlatform,
+		version,
+		1,
+		testReleaseCommit,
+		time.Date(2026, 7, 22, 12, 30, 0, 0, time.UTC),
+	)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("handoff error = %v, want existing output rejection", err)
+	}
+}
+
+func writeRawPlatformAssets(t *testing.T, directory string, version releaseVersion) {
+	t.Helper()
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	specs, err := platformAssetSpecs(macOSPlatform, version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, spec := range specs {
+		if err := os.WriteFile(filepath.Join(directory, spec.Name), []byte("content for "+spec.Name), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

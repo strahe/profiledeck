@@ -3,6 +3,7 @@ package update
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +24,8 @@ const (
 	UpdateRepository = "strahe/profiledeck"
 	UpdatePlatform   = "darwin"
 	ChecksumAsset    = "SHA256SUMS"
+	SignatureSuffix  = ".sig"
+	SignatureAlgo    = "ed25519"
 	ChannelStable    = settings.DesktopUpdateChannelStable
 	ChannelBeta      = settings.DesktopUpdateChannelBeta
 
@@ -103,11 +106,14 @@ type channelGitHubProvider struct {
 }
 
 // verifiedGitHubProvider delegates GitHub API and download behaviour to Wails,
-// then enforces ProfileDeck's immutable asset naming and checksum contract.
+// then requires immutable asset naming, a checksum, and a detached signature.
 type verifiedGitHubProvider struct {
 	delegate      *githubprovider.Provider
+	client        *http.Client
 	channel       string
 	trustedSource bool
+	checkMu       sync.Mutex
+	assetMatcher  *releaseAssetMatcher
 }
 
 func newGitHubProvider(version string, options githubProviderOptions) (*channelGitHubProvider, error) {
@@ -151,11 +157,12 @@ func newVerifiedGitHubProvider(channel string, options githubProviderOptions) (*
 			},
 		}
 	}
+	assetMatcher := &releaseAssetMatcher{}
 	delegate, err := githubprovider.New(githubprovider.Config{
 		Repository:    repository,
 		Prerelease:    channel == ChannelBeta,
 		BaseURL:       options.BaseURL,
-		AssetMatcher:  universalAssetMatcher,
+		AssetMatcher:  assetMatcher.Match,
 		ChecksumAsset: ChecksumAsset,
 		HTTPClient:    client,
 	})
@@ -164,8 +171,10 @@ func newVerifiedGitHubProvider(channel string, options githubProviderOptions) (*
 	}
 	return &verifiedGitHubProvider{
 		delegate:      delegate,
+		client:        client,
 		channel:       channel,
 		trustedSource: repository == UpdateRepository && strings.TrimSpace(options.BaseURL) == "",
+		assetMatcher:  assetMatcher,
 	}, nil
 }
 
@@ -228,6 +237,8 @@ func (provider *verifiedGitHubProvider) Check(
 	if channelForVersion(request.CurrentVersion) == releaseChannelInvalid {
 		return nil, updateError(ErrorFeedInvalid, errors.New("running version is not releasable"))
 	}
+	provider.checkMu.Lock()
+	defer provider.checkMu.Unlock()
 	release, err := provider.delegate.Check(ctx, request)
 	if err != nil {
 		return nil, githubCheckError(err)
@@ -249,17 +260,17 @@ func (provider *verifiedGitHubProvider) Check(
 		release.Artifact.Platform != UpdatePlatform {
 		return nil, updateError(ErrorFeedInvalid, errors.New("release asset does not match the ProfileDeck macOS package"))
 	}
-	if provider.trustedSource {
-		assetURL, _ := release.Metadata["github.asset.url"].(string)
-		parsedURL, err := url.Parse(assetURL)
-		expectedPath := fmt.Sprintf(
-			"/%s/releases/download/v%s/%s",
-			UpdateRepository,
-			release.Version,
-			release.Artifact.Filename,
+	assetURL, _ := release.Metadata["github.asset.url"].(string)
+	signatureURL, ok := provider.assetMatcher.SignatureURL(assetURL)
+	if !ok {
+		return nil, updateError(
+			ErrorArtifactVerificationFailed,
+			errors.New("release asset is missing its unique detached signature"),
 		)
-		if err != nil || parsedURL.Scheme != "https" || parsedURL.Host != "github.com" ||
-			parsedURL.EscapedPath() != expectedPath {
+	}
+	if provider.trustedSource {
+		if !trustedGitHubAssetURL(assetURL, release.Version, release.Artifact.Filename) ||
+			!trustedGitHubAssetURL(signatureURL, release.Version, release.Artifact.Filename+SignatureSuffix) {
 			return nil, updateError(ErrorFeedInvalid, errors.New("release asset URL is not trusted"))
 		}
 	}
@@ -271,7 +282,39 @@ func (provider *verifiedGitHubProvider) Check(
 			errors.New("release asset is missing its SHA-256 checksum"),
 		)
 	}
+	signature, err := provider.fetchSignature(ctx, signatureURL)
+	if err != nil {
+		return nil, updateError(ErrorArtifactVerificationFailed, err)
+	}
+	release.Verification.SignatureAlgo = SignatureAlgo
+	release.Verification.Signature = signature
 	return release, nil
+}
+
+func (provider *verifiedGitHubProvider) fetchSignature(ctx context.Context, signatureURL string) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, signatureURL, nil)
+	if err != nil {
+		return nil, errors.New("release asset signature URL is invalid")
+	}
+	request.Header.Set("Accept", "text/plain")
+	request.Header.Set("User-Agent", "ProfileDeck-Updater/1")
+	response, err := provider.client.Do(request)
+	if err != nil {
+		return nil, errors.New("release asset signature is unavailable")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, errors.New("release asset signature is unavailable")
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 1025))
+	if err != nil || len(raw) > 1024 {
+		return nil, errors.New("release asset signature is invalid")
+	}
+	signature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil || len(signature) != 64 {
+		return nil, errors.New("release asset signature is invalid")
+	}
+	return signature, nil
 }
 
 func githubCheckError(err error) error {
@@ -314,6 +357,63 @@ func universalAssetMatcher(request updater.CheckRequest, assets []githubprovider
 		match = index
 	}
 	return match
+}
+
+// releaseAssetMatcher binds the selected archive to the one same-release
+// detached-signature asset. A reachable sibling URL is not sufficient evidence
+// that the signature was published as part of the release.
+type releaseAssetMatcher struct {
+	artifactURL   string
+	signatureURL  string
+	signatureSeen int
+}
+
+func (matcher *releaseAssetMatcher) Match(
+	request updater.CheckRequest,
+	assets []githubprovider.ReleaseAsset,
+) int {
+	matcher.artifactURL = ""
+	matcher.signatureURL = ""
+	matcher.signatureSeen = 0
+
+	index := universalAssetMatcher(request, assets)
+	if index < 0 {
+		return index
+	}
+	matcher.artifactURL = assets[index].URL
+	signatureName := assets[index].Name + SignatureSuffix
+	for _, asset := range assets {
+		if asset.Name != signatureName {
+			continue
+		}
+		matcher.signatureSeen++
+		matcher.signatureURL = asset.URL
+	}
+	return index
+}
+
+func (matcher *releaseAssetMatcher) SignatureURL(artifactURL string) (string, bool) {
+	if matcher.artifactURL != artifactURL ||
+		matcher.signatureSeen != 1 ||
+		strings.TrimSpace(matcher.signatureURL) == "" {
+		return "", false
+	}
+	return matcher.signatureURL, true
+}
+
+func trustedGitHubAssetURL(assetURL, version, filename string) bool {
+	parsedURL, err := url.Parse(assetURL)
+	if err != nil || parsedURL.Scheme != "https" || parsedURL.Host != "github.com" ||
+		parsedURL.User != nil || parsedURL.RawQuery != "" || parsedURL.Fragment != "" {
+		return false
+	}
+	expectedPath := fmt.Sprintf(
+		"/%s/releases/download/v%s/%s",
+		UpdateRepository,
+		version,
+		filename,
+	)
+	return parsedURL.EscapedPath() == expectedPath
 }
 
 func channelName(channel releaseChannel) string {

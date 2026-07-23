@@ -799,7 +799,8 @@ func TestClaudeCodeDoctorDoesNotRequestKeychainAuthorizationUI(t *testing.T) {
 func TestClaudeCodeKeychainSwitchRejectsReplacedPersistentReference(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
-	if _, err := initClaudeCodeTestRuntime(ctx, configDir); err != nil {
+	initResult, err := initClaudeCodeTestRuntime(ctx, configDir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	seedClaudeCodeKeychainProvider(t, ctx, configDir, "tester")
@@ -839,6 +840,11 @@ func TestClaudeCodeKeychainSwitchRejectsReplacedPersistentReference(t *testing.T
 	assertErrorCode(t, err, apperror.TargetChanged)
 	if len(driver.updates) != updatesBeforeReview {
 		t.Fatal("reviewed plan wrote to a recreated Keychain item")
+	}
+	failedSwitchID := singleOperationIDByTypeStatus(t, initResult.DatabasePath, store.OperationTypeSwitch, store.OperationStatusFailed)
+	closed, err := environment.switching.RecoverOperation(ctx, switching.RecoverOperationParams{OperationID: failedSwitchID, Confirm: true})
+	if err != nil || closed.Action != switching.RecoveryActionClose {
+		t.Fatalf("close no-write switch result = %#v, error = %v", closed, err)
 	}
 	delete(driver.items, string(reviewReplacement))
 	driver.references = []claudekeychain.Reference{{Persistent: reference, Service: claudecodeconfig.KeychainService, Account: "tester"}}

@@ -75,6 +75,8 @@ This deletes the complete global Profile from every Agent, not only its Antigrav
 
 The Desktop app checks the current Antigravity Profile once at startup and after a successful switch. Select **Refresh limits** on the current Profile to check again. ProfileDeck does not poll in the background.
 
+These checks send the current Profile's access token to Google's Cloud Code service. The service contract is unpublished, so using it may carry account risk. ProfileDeck does not refresh, save, or write back the token during a check.
+
 The Profile list shows a compact summary. Profile details show each available group, its 5-hour and weekly windows, remaining percentage, reset time, and check time. A non-current Profile can keep a snapshot checked earlier in the same app session, but you must use that Profile before refreshing it.
 
 Limit snapshots are temporary. They are not saved to usage reports, exports, backups, or the ProfileDeck database, and they do not identify which Profile produced earlier Antigravity activity.

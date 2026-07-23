@@ -4,6 +4,8 @@ Open **Diagnostics** when Profile switching is blocked or a switch did not finis
 
 ## Check an unfinished switch first
 
+An unresolved switch blocks every new Profile switch and application-data restore. Resolve or safely close it in Diagnostics before starting either operation; ProfileDeck will not discard its recovery point to make another operation proceed.
+
 In the Desktop app, Diagnostics shows only unresolved root switch operations and the safe action available for each one.
 
 From the CLI, run:

@@ -17,6 +17,7 @@ func ConfigureForE2E(service *Service, engine *updater.Updater, version, baseURL
 	if err := engine.Init(updater.Config{
 		CurrentVersion: version,
 		Providers:      []updater.Provider{provider},
+		PublicKey:      append([]byte(nil), service.publicKey...),
 		Platform:       UpdatePlatform,
 		Arch:           "arm64",
 		Window:         updater.WindowNone,

@@ -2,6 +2,8 @@ package update
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"log"
 	"os"
@@ -32,6 +34,8 @@ const (
 	StateReady       = "ready"
 	StateError       = "error"
 
+	ErrorConfigurationInvalid = "configuration_invalid"
+
 	defaultCheckInterval = 6 * time.Hour
 )
 
@@ -50,8 +54,9 @@ type UpdateStatus struct {
 }
 
 type BuildConfig struct {
-	CurrentVersion string
-	CheckInterval  time.Duration
+	CurrentVersion  string
+	PublicKeyBase64 string
+	CheckInterval   time.Duration
 }
 
 type updateEngine interface {
@@ -64,6 +69,7 @@ type updateEngine interface {
 type Service struct {
 	application *coreapp.Application
 	provider    *channelGitHubProvider
+	publicKey   ed25519.PublicKey
 	interval    time.Duration
 	now         func() time.Time
 	executable  func() (string, error)
@@ -105,12 +111,19 @@ func NewService(ctx context.Context, application *coreapp.Application, config Bu
 	if err != nil {
 		return service
 	}
+	publicKey, err := base64.StdEncoding.DecodeString(strings.TrimSpace(config.PublicKeyBase64))
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		// A release build must never fail open when its embedded verification key is absent or invalid.
+		service.status.ErrorCode = ErrorConfigurationInvalid
+		return service
+	}
 	channel := provider.Channel()
 	if settings, err := application.Settings().EnsureUpdateChannel(ctx, channel); err == nil {
 		channel = settings.UpdateChannel
 		_ = provider.SetChannel(channel)
 	}
 	service.provider = provider
+	service.publicKey = append(ed25519.PublicKey(nil), publicKey...)
 	service.status.Configured = true
 	service.status.Channel = channel
 	service.status.State = StateIdle
@@ -124,13 +137,14 @@ func Attach(service *Service, wailsApp *application.App) error {
 	if err := wailsApp.Updater.Init(updater.Config{
 		CurrentVersion: service.status.CurrentVersion,
 		Providers:      []updater.Provider{service.provider},
+		PublicKey:      append([]byte(nil), service.publicKey...),
 		Platform:       UpdatePlatform,
 		Window:         updater.WindowNone,
 	}); err != nil {
 		service.setStatus(func(status *UpdateStatus) {
 			status.Configured = false
 			status.State = StateUnavailable
-			status.ErrorCode = "configuration_invalid"
+			status.ErrorCode = ErrorConfigurationInvalid
 		})
 		return err
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/strahe/profiledeck/internal/codex"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/strahe/profiledeck/internal/profile"
+	"github.com/strahe/profiledeck/internal/settings"
 )
 
 func newDesktopTestServices(t *testing.T, env backend.Environment) backend.Services {
@@ -34,6 +35,14 @@ func newDesktopTestServices(t *testing.T, env backend.Environment) backend.Servi
 		t.Fatalf("create test Application: %v", err)
 	}
 	return backend.NewServices(core, app.DefaultInfo(), env, nil)
+}
+
+func buildEnglishTrayMenu(
+	dashboard backend.DashboardResult,
+	dashboardErr error,
+	actions trayMenuActions,
+) *application.Menu {
+	return buildTrayMenu(dashboard, dashboardErr, actions, trayEnglishMessages)
 }
 
 func TestDesktopChangeDebouncerCoalescesLatestEvent(t *testing.T) {
@@ -80,12 +89,12 @@ func TestDesktopChangeDebouncerStopCancelsPendingEvent(t *testing.T) {
 }
 
 func TestBuildTrayMenuUsesDashboardCodexProfiles(t *testing.T) {
-	if item := buildTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{}).FindByLabel("Sync Usage"); item != nil {
+	if item := buildEnglishTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{}).FindByLabel("Sync Usage"); item != nil {
 		t.Fatalf("expected tray menu to omit manual usage sync")
 	}
 
 	t.Run("unavailable", func(t *testing.T) {
-		menu := buildTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{})
+		menu := buildEnglishTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{})
 
 		submenu := requireMenuSubmenu(t, menu, "Codex Profiles")
 		if got := submenu.ItemAt(0).Label(); got != trayCodexProfilesUnavailableLabel {
@@ -94,7 +103,7 @@ func TestBuildTrayMenuUsesDashboardCodexProfiles(t *testing.T) {
 	})
 
 	t.Run("empty", func(t *testing.T) {
-		menu := buildTrayMenu(dashboardWithCodexProfiles(), nil, trayMenuActions{})
+		menu := buildEnglishTrayMenu(dashboardWithCodexProfiles(), nil, trayMenuActions{})
 
 		submenu := requireMenuSubmenu(t, menu, "Codex Profiles")
 		if got := submenu.ItemAt(0).Label(); got != "No Codex profiles" {
@@ -103,7 +112,7 @@ func TestBuildTrayMenuUsesDashboardCodexProfiles(t *testing.T) {
 	})
 
 	t.Run("profiles", func(t *testing.T) {
-		menu := buildTrayMenu(
+		menu := buildEnglishTrayMenu(
 			dashboardWithCodexProfiles(
 				codexProfileSummary("work", "Work", true),
 				codexProfileSummary("personal", "", false),
@@ -128,7 +137,7 @@ func TestBuildTrayMenuUsesDashboardCodexProfiles(t *testing.T) {
 
 func TestBuildTrayMenuUsesDashboardAntigravityProfiles(t *testing.T) {
 	t.Run("unavailable", func(t *testing.T) {
-		menu := buildTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{})
+		menu := buildEnglishTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{})
 		submenu := requireMenuSubmenu(t, menu, "Antigravity Profiles")
 		if got := submenu.ItemAt(0).Label(); got != trayAntigravityProfilesUnavailableLabel {
 			t.Fatalf("expected unavailable Antigravity label, got %q", got)
@@ -136,7 +145,7 @@ func TestBuildTrayMenuUsesDashboardAntigravityProfiles(t *testing.T) {
 	})
 
 	t.Run("profiles", func(t *testing.T) {
-		menu := buildTrayMenu(dashboardWithAntigravityProfiles(
+		menu := buildEnglishTrayMenu(dashboardWithAntigravityProfiles(
 			antigravityProfileSummary("work", "Work", true),
 			antigravityProfileSummary("personal", "", false),
 		), nil, trayMenuActions{})
@@ -152,7 +161,7 @@ func TestBuildTrayMenuUsesDashboardAntigravityProfiles(t *testing.T) {
 
 func TestBuildTrayMenuUsesDashboardClaudeCodeProfiles(t *testing.T) {
 	t.Run("unavailable", func(t *testing.T) {
-		menu := buildTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{})
+		menu := buildEnglishTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{})
 		submenu := requireMenuSubmenu(t, menu, "Claude Code Profiles")
 		if got := submenu.ItemAt(0).Label(); got != trayClaudeCodeProfilesUnavailableLabel {
 			t.Fatalf("expected unavailable Claude Code label, got %q", got)
@@ -160,7 +169,7 @@ func TestBuildTrayMenuUsesDashboardClaudeCodeProfiles(t *testing.T) {
 	})
 
 	t.Run("profiles", func(t *testing.T) {
-		menu := buildTrayMenu(dashboardWithClaudeCodeProfiles(
+		menu := buildEnglishTrayMenu(dashboardWithClaudeCodeProfiles(
 			claudeCodeProfileSummary("work", "Work", true),
 			claudeCodeProfileSummary("personal", "", false),
 		), nil, trayMenuActions{})
@@ -179,7 +188,7 @@ func TestBuildTrayMenuKeepsSafetyActionsWhenAllAgentsDisabled(t *testing.T) {
 	for _, manifest := range agent.BuiltinRegistry().Manifests() {
 		states = append(states, agent.State{Manifest: manifest, Enabled: false})
 	}
-	menu := buildTrayMenu(backend.DashboardResult{Agents: states}, nil, trayMenuActions{})
+	menu := buildEnglishTrayMenu(backend.DashboardResult{Agents: states}, nil, trayMenuActions{})
 
 	for _, label := range []string{"Codex Profiles", "Antigravity Profiles", "Claude Code Profiles"} {
 		if item := menu.FindByLabel(label); item != nil {
@@ -193,11 +202,96 @@ func TestBuildTrayMenuKeepsSafetyActionsWhenAllAgentsDisabled(t *testing.T) {
 	}
 }
 
+func TestBuildTrayMenuSupportsSimplifiedChinese(t *testing.T) {
+	dashboard := dashboardWithCodexProfiles(codexProfileSummary("work", "工作", true))
+	menu := buildTrayMenu(dashboard, nil, trayMenuActions{}, traySimplifiedChineseMessages)
+
+	for _, label := range []string{"当前：Codex 未激活", "打开 ProfileDeck", "运行诊断", "刷新菜单", "退出"} {
+		if item := menu.FindByLabel(label); item == nil {
+			t.Fatalf("expected Simplified Chinese tray item %q", label)
+		}
+	}
+	codexMenu := requireMenuSubmenu(t, menu, "Codex Profile")
+	if got := codexMenu.ItemAt(0).Label(); got != "工作" || !codexMenu.ItemAt(0).Checked() {
+		t.Fatalf("unexpected localized Codex Profile item: label=%q checked=%t", got, codexMenu.ItemAt(0).Checked())
+	}
+	antigravityMenu := requireMenuSubmenu(t, menu, "Antigravity Profile")
+	if got := antigravityMenu.ItemAt(0).Label(); got != traySimplifiedChineseMessages.antigravityUnavailable {
+		t.Fatalf("unexpected localized unavailable label: %q", got)
+	}
+
+	errorMenu := buildTrayMenu(backend.DashboardResult{}, fmt.Errorf("private path"), trayMenuActions{}, traySimplifiedChineseMessages)
+	if errorMenu.FindByLabel("ProfileDeck：不可用") == nil || errorMenu.FindByLabel(traySimplifiedChineseMessages.dashboardUnavailable) == nil {
+		t.Fatal("expected localized tray error without raw details")
+	}
+}
+
+func TestLoadInitialTrayLocaleUsesPersistedPreferenceAndSystemLanguage(t *testing.T) {
+	ctx := context.Background()
+	services := newDesktopTestServices(t, backend.Environment{ConfigDir: t.TempDir()})
+	if _, err := services.App.Initialize(ctx); err != nil {
+		t.Fatalf("initialize test application: %v", err)
+	}
+
+	if got := loadInitialTrayLocale(ctx, services.Settings, "zh-Hans-CN"); got != trayLocaleSimplifiedChinese {
+		t.Fatalf("automatic Chinese locale = %d", got)
+	}
+	language := "en-US"
+	if _, err := services.Settings.Update(ctx, settings.UpdateRequest{Language: &language}); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadInitialTrayLocale(ctx, services.Settings, "zh-Hans-CN"); got != trayLocaleEnglish {
+		t.Fatalf("persisted English locale = %d", got)
+	}
+}
+
+func TestTrayControllerUsesInitialLocaleForFirstMenu(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ui := newFakeTrayUI()
+	controller := newTrayController(
+		ctx,
+		newDesktopTestServices(t, backend.Environment{ConfigDir: t.TempDir()}),
+		ui,
+		trayLocaleSimplifiedChinese,
+	)
+	controller.loadDashboard = func(context.Context) (backend.DashboardResult, error) {
+		return dashboardWithCodexProfiles(codexProfileSummary("work", "工作", true)), nil
+	}
+
+	controller.Refresh(nil, false)
+	if menu := waitForMenu(t, ui); menu.FindByLabel("打开 ProfileDeck") == nil {
+		t.Fatal("first tray menu did not use the initial locale")
+	}
+}
+
+func TestTrayControllerLocaleChangeRebuildsMenu(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ui := newFakeTrayUI()
+	controller := newTrayController(ctx, newDesktopTestServices(t, backend.Environment{ConfigDir: t.TempDir()}), ui, trayLocaleEnglish)
+	controller.loadDashboard = func(context.Context) (backend.DashboardResult, error) {
+		return dashboardWithCodexProfiles(codexProfileSummary("work", "Work", true)), nil
+	}
+
+	controller.SetLocale("zh-CN")
+	menu := waitForMenu(t, ui)
+	if menu.FindByLabel("打开 ProfileDeck") == nil {
+		t.Fatal("locale change did not rebuild the tray menu")
+	}
+	controller.SetLocale("unsupported")
+	select {
+	case unexpected := <-ui.menus:
+		t.Fatalf("unsupported locale rebuilt the tray menu: %#v", unexpected)
+	case <-time.After(80 * time.Millisecond):
+	}
+}
+
 func TestTrayControllerOpensAntigravitySwitch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ui := newFakeTrayUI()
-	controller := newTrayController(ctx, newDesktopTestServices(t, backend.Environment{ConfigDir: t.TempDir()}), ui)
+	controller := newTrayController(ctx, newDesktopTestServices(t, backend.Environment{ConfigDir: t.TempDir()}), ui, trayLocaleEnglish)
 	controller.openSwitch(agyconfig.ProviderID, "work")
 	event := waitForEvent(t, ui)
 	if event.name != "profiledeck:open-switch" || len(event.data) != 1 {
@@ -214,7 +308,7 @@ func TestTrayControllerRefreshDropsStaleDashboard(t *testing.T) {
 	defer cancel()
 	services := newDesktopTestServices(t, backend.Environment{ConfigDir: t.TempDir()})
 	ui := newFakeTrayUI()
-	controller := newTrayController(ctx, services, ui)
+	controller := newTrayController(ctx, services, ui, trayLocaleEnglish)
 
 	firstStarted := make(chan struct{})
 	releaseFirst := make(chan struct{})
@@ -262,7 +356,7 @@ func TestTrayControllerMenuRefreshDoesNotDropPendingDashboardEvent(t *testing.T)
 	defer cancel()
 	services := newDesktopTestServices(t, backend.Environment{ConfigDir: t.TempDir()})
 	ui := newFakeTrayUI()
-	controller := newTrayController(ctx, services, ui)
+	controller := newTrayController(ctx, services, ui, trayLocaleEnglish)
 
 	eventStarted := make(chan struct{})
 	releaseEvent := make(chan struct{})
@@ -325,7 +419,7 @@ func TestTrayControllerRefreshSetsMenuBeforeDashboardEvent(t *testing.T) {
 	defer cancel()
 	services := newDesktopTestServices(t, backend.Environment{ConfigDir: t.TempDir()})
 	ui := newFakeTrayUI()
-	controller := newTrayController(ctx, services, ui)
+	controller := newTrayController(ctx, services, ui, trayLocaleEnglish)
 	controller.loadDashboard = func(context.Context) (backend.DashboardResult, error) {
 		return dashboardWithCodexProfiles(codexProfileSummary("work", "Work", true)), nil
 	}

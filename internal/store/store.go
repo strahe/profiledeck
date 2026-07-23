@@ -2522,6 +2522,60 @@ func (s *Store) ListIncompleteOperations(ctx context.Context) ([]Operation, erro
 	return operations, nil
 }
 
+// HasUnresolvedSwitchOperation reports whether recovery or an explicit close
+// is still required for a root switch operation other than excludeID.
+func (s *Store) HasUnresolvedSwitchOperation(ctx context.Context, excludeID string) (bool, error) {
+	var exists int
+	err := s.executor().QueryRowContext(
+		ctx,
+		`SELECT EXISTS (
+			SELECT 1
+			FROM operations
+			WHERE operation_type = ?
+				AND status IN (?, ?)
+				AND resolved_at_unix_ms = 0
+				AND id <> ?
+		)`,
+		OperationTypeSwitch,
+		OperationStatusPending,
+		OperationStatusFailed,
+		excludeID,
+	).Scan(&exists)
+	return exists != 0, err
+}
+
+// RejectPendingSwitchOperation closes a switch that was blocked before any
+// recovery point or external target write could be created.
+func (s *Store) RejectPendingSwitchOperation(ctx context.Context, id, errorCode, errorMessage, resolutionKind string) error {
+	if strings.TrimSpace(resolutionKind) == "" {
+		return errors.New("operation resolution kind is required")
+	}
+	now := time.Now().UnixMilli()
+	result, err := s.executor().ExecContext(
+		ctx,
+		`UPDATE operations
+		SET status = ?, error_code = ?, error_message = ?, resolution_kind = ?,
+			resolved_at_unix_ms = ?, updated_at_unix_ms = ?
+		WHERE id = ? AND operation_type = ? AND status = ? AND resolved_at_unix_ms = 0`,
+		OperationStatusFailed,
+		errorCode,
+		errorMessage,
+		resolutionKind,
+		now,
+		now,
+		id,
+		OperationTypeSwitch,
+		OperationStatusPending,
+	)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err == nil && rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) UpdateOperationMetadata(ctx context.Context, id, metadataJSON string) error {
 	result, err := s.executor().ExecContext(
 		ctx,

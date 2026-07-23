@@ -1326,6 +1326,47 @@ func TestListIncompleteOperationsFiltersAndSorts(t *testing.T) {
 	}
 }
 
+func TestUnresolvedSwitchOperationGateAndPreWriteRejection(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")
+	db := openTestStore(t, ctx, dbPath, false)
+	defer closeTestStore(t, db)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.CreatePendingSwitchOperation(ctx, CreateSwitchOperationParams{
+		ID: "switch-blocked", ProfileID: "profile-a", MetadataJSON: `{"checkpoint":"created"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if unresolved, err := db.HasUnresolvedSwitchOperation(ctx, ""); err != nil || !unresolved {
+		t.Fatalf("unresolved switch = %t, %v", unresolved, err)
+	}
+	if unresolved, err := db.HasUnresolvedSwitchOperation(ctx, "switch-blocked"); err != nil || unresolved {
+		t.Fatalf("excluded switch = %t, %v", unresolved, err)
+	}
+	if err := db.RejectPendingSwitchOperation(
+		ctx,
+		"switch-blocked",
+		"OPERATION_RECOVERY_REQUIRED",
+		"resolve the unfinished Profile switch before trying again",
+		"blocked_by_unfinished_switch",
+	); err != nil {
+		t.Fatal(err)
+	}
+	operation, err := db.GetOperation(ctx, "switch-blocked")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.Status != OperationStatusFailed || operation.ErrorCode != "OPERATION_RECOVERY_REQUIRED" ||
+		operation.ResolutionKind != "blocked_by_unfinished_switch" || operation.ResolvedAtUnixMS == 0 {
+		t.Fatalf("rejected operation = %#v", operation)
+	}
+	if unresolved, err := db.HasUnresolvedSwitchOperation(ctx, ""); err != nil || unresolved {
+		t.Fatalf("resolved switch = %t, %v", unresolved, err)
+	}
+}
+
 func TestSwitchOperationLifecycle(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "profiledeck.db")

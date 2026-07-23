@@ -151,6 +151,17 @@ func (service *Service) restoreLocked(
 		if inspectErr == nil && inspection.CleanupRequired() {
 			_, inspectErr = service.cleanup.ReconcileLocked(ctx, db)
 		}
+		if inspectErr == nil {
+			// Restore cannot discard the only recovery path for external target writes.
+			var unresolved bool
+			unresolved, inspectErr = db.HasUnresolvedSwitchOperation(ctx, "")
+			if inspectErr == nil && unresolved {
+				inspectErr = apperror.New(
+					apperror.OperationRecoveryRequired,
+					"resolve the unfinished Profile switch before restoring application data",
+				)
+			}
+		}
 		closeErr := db.Close()
 		if inspectErr != nil {
 			return recoveryCleanupGateError(inspectErr)
@@ -209,7 +220,9 @@ func recoveryCleanupGateError(err error) error {
 	}
 	var appErr *apperror.Error
 	if errors.As(err, &appErr) &&
-		(appErr.Code == apperror.StoreSchemaInvalid || appErr.Code == apperror.OperationRecoveryCleanupRequired) {
+		(appErr.Code == apperror.StoreSchemaInvalid ||
+			appErr.Code == apperror.OperationRecoveryRequired ||
+			appErr.Code == apperror.OperationRecoveryCleanupRequired) {
 		return appErr
 	}
 	return apperror.New(

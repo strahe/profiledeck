@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 
 	"github.com/wailsapp/wails/v3/pkg/updater"
 
@@ -19,10 +20,11 @@ import (
 )
 
 var (
-	version       = "dev"
-	githubBaseURL string
-	configDir     string
-	marker        string
+	version               = "dev"
+	githubBaseURL         string
+	configDir             string
+	marker                string
+	updatePublicKeyBase64 string
 )
 
 func main() {
@@ -58,15 +60,18 @@ func runUpdate() error {
 	if err := db.Close(); err != nil {
 		return err
 	}
-	host := headlessHost{}
+	host := &headlessHost{}
 	engine := updater.New(host)
-	service := desktopupdate.NewService(ctx, application, desktopupdate.BuildConfig{CurrentVersion: version})
+	service := desktopupdate.NewService(ctx, application, desktopupdate.BuildConfig{
+		CurrentVersion:  version,
+		PublicKeyBase64: updatePublicKeyBase64,
+	})
 	if err := desktopupdate.ConfigureForE2E(service, engine, version, githubBaseURL); err != nil {
 		return err
 	}
 	status := service.CheckAndDownload(ctx)
 	if status.State != desktopupdate.StateReady {
-		return fmt.Errorf("update did not become ready: %#v", status)
+		return fmt.Errorf("update did not become ready: %#v: %s", status, host.LastError())
 	}
 	return service.Restart(ctx)
 }
@@ -155,12 +160,29 @@ func writeResult(err error) {
 	_ = os.WriteFile(marker, []byte(result), 0o600)
 }
 
-type headlessHost struct{}
+type headlessHost struct {
+	mu        sync.Mutex
+	lastError string
+}
 
-func (headlessHost) Emit(string, ...any) bool                              { return false }
-func (headlessHost) OnEvent(string, func(any)) func()                      { return func() {} }
-func (headlessHost) OpenWindow(updater.WindowOptions) updater.WindowHandle { return headlessWindow{} }
-func (headlessHost) Quit()                                                 { os.Exit(0) }
+func (host *headlessHost) Emit(name string, data ...any) bool {
+	if name == updater.EventError && len(data) > 0 {
+		host.mu.Lock()
+		host.lastError = fmt.Sprint(data[0])
+		host.mu.Unlock()
+	}
+	return false
+}
+
+func (host *headlessHost) LastError() string {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	return host.lastError
+}
+
+func (*headlessHost) OnEvent(string, func(any)) func()                      { return func() {} }
+func (*headlessHost) OpenWindow(updater.WindowOptions) updater.WindowHandle { return headlessWindow{} }
+func (*headlessHost) Quit()                                                 { os.Exit(0) }
 
 type headlessWindow struct{}
 

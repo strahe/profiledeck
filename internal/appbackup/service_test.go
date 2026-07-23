@@ -623,6 +623,9 @@ func TestRestoreResetsRuntimeStateAndPreservesExternalFiles(t *testing.T) {
 		t.Fatalf("create restore source: %v", err)
 	}
 	db = openHealthyStore(t, paths)
+	if err := db.ResolveOperation(ctx, "pending-switch", "closed_before_restore_test"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.UpsertSetting(ctx, store.UpsertSettingParams{Key: "restore.value", ValueJSON: `"after"`}); err != nil {
 		t.Fatal(err)
 	}
@@ -678,6 +681,75 @@ func TestRestoreResetsRuntimeStateAndPreservesExternalFiles(t *testing.T) {
 	externalContent, err := os.ReadFile(externalPath)
 	if err != nil || string(externalContent) != "external state" {
 		t.Fatalf("external file changed: %q, err = %v", externalContent, err)
+	}
+}
+
+func TestRestoreBlocksWhilePartialSwitchRecoveryIsUnresolved(t *testing.T) {
+	ctx := context.Background()
+	service, paths, _ := newTestService(t)
+	setTestSetting(t, paths, "restore.value", `"before"`)
+	created, err := service.Create(ctx, CreateRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setTestSetting(t, paths, "restore.value", `"after"`)
+	db := openHealthyStore(t, paths)
+	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
+		ID: "partial-switch", ProfileID: "profile-a", MetadataJSON: `{"checkpoint":"recovery_created"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	metadata := `{"checkpoint":"recovery_created"}`
+	if err := db.MarkOperationFailed(ctx, store.MarkOperationFailedParams{
+		ID: "partial-switch", ErrorCode: "TARGET_WRITE_FAILED", ErrorMessage: "target could not be updated", MetadataJSON: &metadata,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	recoveryPath := filepath.Join(paths.Recovery, "partial-switch", "target.json")
+	if err := os.MkdirAll(filepath.Dir(recoveryPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(recoveryPath, []byte("pre-switch"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	externalPath := filepath.Join(t.TempDir(), "tool-owned.json")
+	if err := os.WriteFile(externalPath, []byte("partially switched"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := service.PreviewRestore(ctx, RestoreSource{BackupID: created.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Restore(ctx, RestoreRequest{
+		Source: RestoreSource{BackupID: created.ID}, ExpectedFingerprint: preview.Fingerprint, Confirm: true,
+	})
+	assertAppErrorCode(t, err, apperror.OperationRecoveryRequired)
+	db = openHealthyStore(t, paths)
+	defer db.Close()
+	setting, err := db.GetSetting(ctx, "restore.value")
+	if err != nil || setting.ValueJSON != `"after"` {
+		t.Fatalf("blocked restore changed database: %#v, %v", setting, err)
+	}
+	if operation, err := db.GetOperation(ctx, "partial-switch"); err != nil || operation.ResolvedAtUnixMS != 0 {
+		t.Fatalf("blocked restore resolved recovery source: %#v, %v", operation, err)
+	}
+	if raw, err := os.ReadFile(recoveryPath); err != nil || string(raw) != "pre-switch" {
+		t.Fatalf("blocked restore changed recovery material: %q, %v", raw, err)
+	}
+	if raw, err := os.ReadFile(externalPath); err != nil || string(raw) != "partially switched" {
+		t.Fatalf("blocked restore changed external target: %q, %v", raw, err)
+	}
+	list, err := service.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, backup := range list.Backups {
+		if backup.Kind == KindAutomatic {
+			t.Fatalf("blocked restore created safety backup %#v", backup)
+		}
 	}
 }
 

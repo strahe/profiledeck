@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -53,6 +56,11 @@ func run() error {
 	installedDirectory := filepath.Join(workDirectory, "installed")
 	configDirectory := filepath.Join(workDirectory, "config")
 	markerPath := filepath.Join(workDirectory, "result.txt")
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return fmt.Errorf("generate update signing key: %w", err)
+	}
+	publicKeyBase64 := base64.StdEncoding.EncodeToString(publicKey)
 	for _, directory := range []string{serveDirectory, installedDirectory, configDirectory} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return fmt.Errorf("create update test directory: %w", err)
@@ -60,7 +68,7 @@ func run() error {
 	}
 
 	newApp := filepath.Join(workDirectory, "new", "ProfileDeck.app")
-	if err := buildBundle(root, newApp, newVersion, "", configDirectory, markerPath); err != nil {
+	if err := buildBundle(root, newApp, newVersion, "", configDirectory, markerPath, publicKeyBase64); err != nil {
 		return err
 	}
 	artifactPath := filepath.Join(serveDirectory, artifact)
@@ -82,6 +90,9 @@ func run() error {
 	if err := writeChecksum(serveDirectory, artifactPath); err != nil {
 		return err
 	}
+	if err := writeSignature(artifactPath, privateKey); err != nil {
+		return err
+	}
 	server, baseURL, err := startReleaseServer(serveDirectory)
 	if err != nil {
 		return err
@@ -98,6 +109,7 @@ func run() error {
 		baseURL,
 		configDirectory,
 		markerPath,
+		publicKeyBase64,
 	); err != nil {
 		return err
 	}
@@ -144,6 +156,7 @@ func buildBundle(
 	baseURL string,
 	configDirectory string,
 	markerPath string,
+	publicKeyBase64 string,
 ) error {
 	executable := filepath.Join(target, "Contents", "MacOS", "profiledeck-desktop")
 	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
@@ -154,6 +167,7 @@ func buildBundle(
 		"-X main.githubBaseURL=" + baseURL,
 		"-X main.configDir=" + configDirectory,
 		"-X main.marker=" + markerPath,
+		"-X main.updatePublicKeyBase64=" + publicKeyBase64,
 	}, " ")
 	if err := runCommand(
 		root,
@@ -212,6 +226,21 @@ func writeChecksum(directory, artifactPath string) error {
 	return nil
 }
 
+func writeSignature(artifactPath string, privateKey ed25519.PrivateKey) error {
+	content, err := os.ReadFile(artifactPath)
+	if err != nil {
+		return fmt.Errorf("read update artifact for signing: %w", err)
+	}
+	digest := sha256.Sum256(content)
+	signature := ed25519.Sign(privateKey, digest[:])
+	encoded := base64.StdEncoding.AppendEncode(nil, signature)
+	encoded = append(encoded, '\n')
+	if err := os.WriteFile(artifactPath+".sig", encoded, 0o600); err != nil {
+		return fmt.Errorf("write update signature: %w", err)
+	}
+	return nil
+}
+
 func runCommand(directory, name string, args ...string) error {
 	command := exec.Command(name, args...)
 	command.Dir = directory
@@ -258,6 +287,10 @@ func releasePayload(root, baseURL string) map[string]any {
 	if err != nil {
 		panic(err)
 	}
+	signatureInfo, err := os.Stat(filepath.Join(root, artifact+".sig"))
+	if err != nil {
+		panic(err)
+	}
 	return map[string]any{
 		"tag_name":     "v" + newVersion,
 		"name":         "ProfileDeck " + newVersion,
@@ -268,7 +301,8 @@ func releasePayload(root, baseURL string) map[string]any {
 		"html_url":     baseURL + "/release",
 		"assets": []map[string]any{
 			releaseAsset(baseURL, artifact, "application/zip", artifactInfo.Size(), 1),
-			releaseAsset(baseURL, "SHA256SUMS", "text/plain", checksumInfo.Size(), 2),
+			releaseAsset(baseURL, artifact+".sig", "text/plain", signatureInfo.Size(), 2),
+			releaseAsset(baseURL, "SHA256SUMS", "text/plain", checksumInfo.Size(), 3),
 		},
 	}
 }

@@ -5,10 +5,10 @@ includes:
 
 vars:
   MACOS_MIN_VERSION: '14.0'
+  MACOS_BUNDLE_ID: io.github.strahe.profiledeck
   DEFAULT_BINARY: '{{.BIN_DIR}}/{{.APP_NAME}}'
   DEFAULT_UNIVERSAL_DIR: '{{.BIN_DIR}}/darwin-universal'
   DEFAULT_UNIVERSAL_BINARY: '{{.DEFAULT_UNIVERSAL_DIR}}/{{.APP_NAME}}'
-  RELEASES_DIR: '{{.RELEASES_DIR | default ".task/releases"}}'
   RELEASE_PLATFORM: macos
   NOTARY_PROFILE: '{{.NOTARY_PROFILE | default "apple-notary"}}'
   RELEASE_KEYCHAIN: '{{.RELEASE_KEYCHAIN | default ""}}'
@@ -24,7 +24,7 @@ tasks:
       - 'go build {{.BUILD_FLAGS}} -o "{{.OUTPUT_PATH}}" ./desktop'
     vars:
       OUTPUT_PATH: '{{.OUTPUT | default .DEFAULT_BINARY}}'
-      RELEASE_LDFLAGS: '{{if .VERSION}}-w -s -X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.buildDate={{.BUILD_DATE}}{{else}}-w -s{{end}}'
+      RELEASE_LDFLAGS: '{{if .VERSION}}-w -s -X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.buildDate={{.BUILD_DATE}} -X main.updatePublicKeyBase64={{.PROFILEDECK_UPDATE_PUBLIC_KEY_BASE64}}{{else}}-w -s{{end}}'
       BUILD_FLAGS: '{{if eq .DEV "true"}}{{if .EXTRA_TAGS}}-tags {{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="{{.RELEASE_LDFLAGS}}"{{end}}'
     env:
       GOOS: darwin
@@ -55,9 +55,9 @@ tasks:
     cmds:
       - mkdir -p "$(dirname '{{.OUTPUT_PATH}}')"
       - >-
-        "{{.TASK_EXE}}" tool lipo
-        -input "{{.SLICE_DIR}}/{{.APP_NAME}}-arm64"
-        -input "{{.SLICE_DIR}}/{{.APP_NAME}}-amd64"
+        xcrun lipo -create
+        "{{.SLICE_DIR}}/{{.APP_NAME}}-arm64"
+        "{{.SLICE_DIR}}/{{.APP_NAME}}-amd64"
         -output "{{.OUTPUT_PATH}}"
       - xcrun lipo "{{.OUTPUT_PATH}}" -verify_arch arm64 x86_64
     vars:
@@ -84,151 +84,122 @@ tasks:
         if [ -f build/darwin/Assets.car ]; then
           install -m 0644 build/darwin/Assets.car "{{.APP_PATH}}/Contents/Resources/Assets.car";
         fi
-      - >-
-        go run ./scripts/releasetool plist
-        --version "{{.BUNDLE_VERSION}}"
-        --build-number "{{.BUNDLE_BUILD_NUMBER}}"
-        --template build/darwin/Info.plist.tmpl
-        --output "{{.APP_PATH}}/Contents/Info.plist"
+      - cp build/darwin/Info.plist.tmpl "{{.APP_PATH}}/Contents/Info.plist"
+      - plutil -replace CFBundleDisplayName -string "{{.PRODUCT_NAME}}" "{{.APP_PATH}}/Contents/Info.plist"
+      - plutil -replace CFBundleName -string "{{.PRODUCT_NAME}}" "{{.APP_PATH}}/Contents/Info.plist"
+      - plutil -replace CFBundleExecutable -string "{{.APP_NAME}}" "{{.APP_PATH}}/Contents/Info.plist"
+      - plutil -replace CFBundleIdentifier -string "{{.MACOS_BUNDLE_ID}}" "{{.APP_PATH}}/Contents/Info.plist"
+      - plutil -replace CFBundleShortVersionString -string "{{.BUNDLE_VERSION}}" "{{.APP_PATH}}/Contents/Info.plist"
+      - plutil -replace CFBundleVersion -string "{{.BUNDLE_BUILD_NUMBER}}" "{{.APP_PATH}}/Contents/Info.plist"
+      - plutil -replace LSMinimumSystemVersion -string "{{.MACOS_MIN_VERSION}}" "{{.APP_PATH}}/Contents/Info.plist"
+      - scripts/release/check-plist-placeholders.sh "{{.APP_PATH}}/Contents/Info.plist"
       - plutil -lint "{{.APP_PATH}}/Contents/Info.plist"
     vars:
       WORK_DIR: '{{.WORK_DIR | default .DEFAULT_UNIVERSAL_DIR}}'
       UNIVERSAL_BINARY: '{{.UNIVERSAL_BINARY | default .DEFAULT_UNIVERSAL_BINARY}}'
-      BUNDLE_VERSION: '{{.VERSION | default "0.0.0"}}'
       BUNDLE_BUILD_NUMBER: '{{.BUILD_NUMBER | default "1"}}'
+      PRODUCT_NAME: '{{.PRODUCT_NAME | default "ProfileDeck"}}'
     requires:
       vars:
         - APP_PATH
+        - BUNDLE_VERSION
 
   release:
     desc: Build, sign, notarize, package, and verify a macOS release
-    env:
-      PROFILEDECK_RELEASE_SIGN_IDENTITY: '{{.RELEASE_SIGN_IDENTITY}}'
     cmds:
-      - >-
-        go run ./scripts/releasetool preflight
-        --version "{{.VERSION}}"
-        --build-number "{{.BUILD_NUMBER}}"
-        --platform "{{.RELEASE_PLATFORM}}"
-        --releases-dir "{{.RELEASES_DIR}}"
-        --identity "$PROFILEDECK_RELEASE_SIGN_IDENTITY"
-        --notary-profile "{{.NOTARY_PROFILE}}"
-        --keychain "{{.RELEASE_KEYCHAIN}}"
-      - >-
-        go run ./scripts/releasetool prepare
-        --version "{{.VERSION}}"
-        --platform "{{.RELEASE_PLATFORM}}"
-        --releases-dir "{{.RELEASES_DIR}}"
-      - defer: >-
-          go run ./scripts/releasetool cleanup
-          --version "{{.VERSION}}"
-          --platform "{{.RELEASE_PLATFORM}}"
-          --releases-dir "{{.RELEASES_DIR}}"
-      - task: package:universal
-        vars:
-          VERSION: '{{.VERSION}}'
-          BUILD_NUMBER: '{{.BUILD_NUMBER}}'
-          COMMIT: '{{.RELEASE_COMMIT}}'
-          BUILD_DATE: '{{.RELEASE_BUILD_DATE}}'
-          WORK_DIR: '{{.RELEASE_WORK_DIR}}/slices'
-          UNIVERSAL_BINARY: '{{.RELEASE_WORK_DIR}}/{{.APP_NAME}}'
-          APP_PATH: '{{.RELEASE_APP_PATH}}'
-      - >-
-        go run ./scripts/releasetool source-check
-        --commit "{{.RELEASE_COMMIT}}"
-      - >-
-        codesign
-        --force
-        --sign "$PROFILEDECK_RELEASE_SIGN_IDENTITY"
-        --options runtime
-        --timestamp
-        "{{.RELEASE_APP_PATH}}/Contents/MacOS/{{.APP_NAME}}"
-      - >-
-        codesign
-        --force
-        --sign "$PROFILEDECK_RELEASE_SIGN_IDENTITY"
-        --options runtime
-        --timestamp
-        "{{.RELEASE_APP_PATH}}"
-      - codesign --verify --deep --strict --verbose=2 "{{.RELEASE_APP_PATH}}"
-      - >-
-        ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent
-        "{{.RELEASE_APP_PATH}}"
-        "{{.RELEASE_WORK_DIR}}/ProfileDeck-notary.zip"
-      - >-
-        go run ./scripts/releasetool notarize
-        --input "{{.RELEASE_WORK_DIR}}/ProfileDeck-notary.zip"
-        --profile "{{.NOTARY_PROFILE}}"
-        --keychain "{{.RELEASE_KEYCHAIN}}"
-      - xcrun stapler staple "{{.RELEASE_APP_PATH}}"
-      - xcrun stapler validate "{{.RELEASE_APP_PATH}}"
-      - >-
-        ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent
-        "{{.RELEASE_APP_PATH}}"
-        "{{.RELEASE_ARTIFACT_DIR}}/{{.UPDATER_ZIP_NAME}}"
-      - mkdir -p "{{.RELEASE_WORK_DIR}}/dmg"
-      - ditto "{{.RELEASE_APP_PATH}}" "{{.RELEASE_WORK_DIR}}/dmg/ProfileDeck.app"
-      - ln -s /Applications "{{.RELEASE_WORK_DIR}}/dmg/Applications"
-      - >-
-        diskutil image create from
-        --format UDZO
-        --volumeName ProfileDeck
-        "{{.RELEASE_WORK_DIR}}/dmg"
-        "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
-      - >-
-        codesign
-        --force
-        --sign "$PROFILEDECK_RELEASE_SIGN_IDENTITY"
-        --timestamp
-        "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
-      - codesign --verify --verbose=2 "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
-      - >-
-        go run ./scripts/releasetool notarize
-        --input "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
-        --profile "{{.NOTARY_PROFILE}}"
-        --keychain "{{.RELEASE_KEYCHAIN}}"
-      - xcrun stapler staple "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
-      - xcrun stapler validate "{{.RELEASE_ARTIFACT_DIR}}/{{.INSTALLER_DMG_NAME}}"
-      - >-
-        go run ./scripts/releasetool manifest
-        --version "{{.VERSION}}"
-        --build-number "{{.BUILD_NUMBER}}"
-        --commit "{{.RELEASE_COMMIT}}"
-        --built-at "{{.RELEASE_BUILD_DATE}}"
-        --platform "{{.RELEASE_PLATFORM}}"
-        --directory "{{.RELEASE_ARTIFACT_DIR}}"
-      - >-
-        go run ./scripts/releasetool verify
-        --version "{{.VERSION}}"
-        --build-number "{{.BUILD_NUMBER}}"
-        --platform "{{.RELEASE_PLATFORM}}"
-        --directory "{{.RELEASE_ARTIFACT_DIR}}"
-      - >-
-        go run ./scripts/releasetool commit
-        --version "{{.VERSION}}"
-        --platform "{{.RELEASE_PLATFORM}}"
-        --releases-dir "{{.RELEASES_DIR}}"
+      - |
+        set -euo pipefail
+        umask 077
+        if [ "$(git rev-parse HEAD)" != "{{.RELEASE_COMMIT}}" ] || [ -n "$(git status --porcelain)" ]; then
+          echo "The release source must match the requested commit and have no local changes." >&2
+          exit 1
+        fi
+        releases_dir="$(mkdir -p "{{.RELEASES_DIR}}" && cd "{{.RELEASES_DIR}}" && pwd -P)"
+        final_dir="$releases_dir/v{{.VERSION}}/platforms/{{.RELEASE_PLATFORM}}"
+        if [ -e "$final_dir" ]; then
+          echo "The macOS release handoff already exists. Choose another version or remove it before retrying." >&2
+          exit 1
+        fi
+        stage_dir="$(mktemp -d "$releases_dir/.v{{.VERSION}}-{{.RELEASE_PLATFORM}}.XXXXXX")"
+        cleanup() {
+          case "$stage_dir" in
+            "$releases_dir"/.v{{.VERSION}}-{{.RELEASE_PLATFORM}}.*) rm -rf -- "$stage_dir" ;;
+          esac
+        }
+        trap cleanup EXIT HUP INT TERM
+        work_dir="$stage_dir/work"
+        raw_dir="$stage_dir/raw"
+        app_path="$work_dir/{{.PRODUCT_NAME}}.app"
+        built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        mkdir -p "$work_dir" "$raw_dir"
+        sign_identity="$(scripts/release/resolve-signing-identity.sh \
+          --requested "${PROFILEDECK_RELEASE_SIGN_IDENTITY-}" \
+          --keychain "{{.RELEASE_KEYCHAIN}}" --output fingerprint)"
+        scripts/release/notarize-macos.sh check \
+          --profile "{{.NOTARY_PROFILE}}" --keychain "{{.RELEASE_KEYCHAIN}}"
+        "{{.TASK_EXE}}" task darwin:package:universal \
+          VERSION="{{.VERSION}}" BUNDLE_VERSION="{{.SHORT_VERSION}}" BUILD_NUMBER="{{.BUILD_NUMBER}}" \
+          COMMIT="{{.RELEASE_COMMIT}}" BUILD_DATE="$built_at" \
+          PRODUCT_NAME="{{.PRODUCT_NAME}}" WORK_DIR="$work_dir/slices" \
+          UNIVERSAL_BINARY="$work_dir/{{.APP_NAME}}" APP_PATH="$app_path"
+        if [ "$(git rev-parse HEAD)" != "{{.RELEASE_COMMIT}}" ] || [ -n "$(git status --porcelain)" ]; then
+          echo "The release build changed the source tree. Restore it before retrying." >&2
+          exit 1
+        fi
+        codesign --force --sign "$sign_identity" --options runtime --timestamp \
+          "$app_path/Contents/MacOS/{{.APP_NAME}}"
+        codesign --force --sign "$sign_identity" --options runtime --timestamp "$app_path"
+        codesign --verify --deep --strict --verbose=2 "$app_path"
+        ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent \
+          "$app_path" "$work_dir/{{.PRODUCT_NAME}}-notary.zip"
+        scripts/release/notarize-macos.sh submit \
+          --input "$work_dir/{{.PRODUCT_NAME}}-notary.zip" \
+          --profile "{{.NOTARY_PROFILE}}" --keychain "{{.RELEASE_KEYCHAIN}}"
+        xcrun stapler staple "$app_path"
+        xcrun stapler validate "$app_path"
+        ditto -c -k --norsrc --noextattr --noqtn --noacl --keepParent \
+          "$app_path" "$raw_dir/{{.UPDATER_ZIP_NAME}}"
+        go run ./scripts/releasetool sign-update \
+          --private-key "$PROFILEDECK_UPDATE_SIGNING_KEY_FILE" \
+          --artifact "$raw_dir/{{.UPDATER_ZIP_NAME}}" \
+          --output "$raw_dir/{{.UPDATER_SIGNATURE_NAME}}"
+        mkdir "$work_dir/dmg"
+        ditto "$app_path" "$work_dir/dmg/{{.PRODUCT_NAME}}.app"
+        ln -s /Applications "$work_dir/dmg/Applications"
+        hdiutil create -volname "{{.PRODUCT_NAME}}" -srcfolder "$work_dir/dmg" \
+          -format UDZO "$raw_dir/{{.INSTALLER_DMG_NAME}}"
+        codesign --force --sign "$sign_identity" --timestamp "$raw_dir/{{.INSTALLER_DMG_NAME}}"
+        codesign --verify --verbose=2 "$raw_dir/{{.INSTALLER_DMG_NAME}}"
+        scripts/release/notarize-macos.sh submit \
+          --input "$raw_dir/{{.INSTALLER_DMG_NAME}}" \
+          --profile "{{.NOTARY_PROFILE}}" --keychain "{{.RELEASE_KEYCHAIN}}"
+        xcrun stapler staple "$raw_dir/{{.INSTALLER_DMG_NAME}}"
+        xcrun stapler validate "$raw_dir/{{.INSTALLER_DMG_NAME}}"
+        scripts/release/verify-macos.sh \
+          --directory "$raw_dir" --version "{{.VERSION}}" --short-version "{{.SHORT_VERSION}}" \
+          --build-number "{{.BUILD_NUMBER}}" --product "{{.PRODUCT_NAME}}" \
+          --binary "{{.APP_NAME}}" --bundle-id "{{.MACOS_BUNDLE_ID}}" \
+          --min-version "{{.MACOS_MIN_VERSION}}" --public-key "$PROFILEDECK_UPDATE_PUBLIC_KEY_BASE64" \
+          --updater "{{.UPDATER_ZIP_NAME}}" --signature "{{.UPDATER_SIGNATURE_NAME}}" \
+          --installer "{{.INSTALLER_DMG_NAME}}"
+        go run ./scripts/releasetool handoff \
+          --version "{{.VERSION}}" --build-number "{{.BUILD_NUMBER}}" \
+          --commit "{{.RELEASE_COMMIT}}" --built-at "$built_at" \
+          --platform "{{.RELEASE_PLATFORM}}" --input "$raw_dir" --output "$final_dir"
     requires:
       vars:
         - VERSION
         - BUILD_NUMBER
+        - RELEASE_COMMIT
+        - RELEASES_DIR
     vars:
-      RELEASE_STAGE_DIR: '{{.RELEASES_DIR}}/.v{{.VERSION}}-{{.RELEASE_PLATFORM}}.in-progress'
-      RELEASE_WORK_DIR: '{{.RELEASE_STAGE_DIR}}/work'
-      RELEASE_ARTIFACT_DIR: '{{.RELEASE_STAGE_DIR}}/artifacts'
-      RELEASE_APP_PATH: '{{.RELEASE_WORK_DIR}}/ProfileDeck.app'
-      UPDATER_ZIP_NAME: 'ProfileDeck_{{.VERSION}}_macos_universal.zip'
-      INSTALLER_DMG_NAME: 'ProfileDeck_{{.VERSION}}_macos_universal.dmg'
-      RELEASE_COMMIT:
-        sh: git rev-parse HEAD
-      RELEASE_BUILD_DATE:
-        sh: date -u +%Y-%m-%dT%H:%M:%SZ
-      RELEASE_SIGN_IDENTITY:
-        sh: >-
-          go run ./scripts/releasetool identity
-          --output fingerprint
-          --requested "$PROFILEDECK_RELEASE_SIGN_IDENTITY"
-          --keychain "{{.RELEASE_KEYCHAIN}}"
+      RELEASE_CONTRACT:
+        sh: go run ./scripts/releasetool contract --version "{{.VERSION}}" --platforms "{{.RELEASE_PLATFORM}}"
+      PRODUCT_NAME: '{{(.RELEASE_CONTRACT | mustFromJson).product}}'
+      SHORT_VERSION: '{{(.RELEASE_CONTRACT | mustFromJson).short_version}}'
+      UPDATER_ZIP_NAME: '{{(index (.RELEASE_CONTRACT | mustFromJson).platforms 0).asset_names.updater}}'
+      UPDATER_SIGNATURE_NAME: '{{(index (.RELEASE_CONTRACT | mustFromJson).platforms 0).asset_names.signature}}'
+      INSTALLER_DMG_NAME: '{{(index (.RELEASE_CONTRACT | mustFromJson).platforms 0).asset_names.installer}}'
 
   run:
     cmds:

@@ -26,6 +26,28 @@ type failSecondProviderPolicy struct {
 	calls int
 }
 
+type blockingApplyFileBackend struct {
+	switchtarget.FileBackend
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (backend *blockingApplyFileBackend) Apply(
+	ctx context.Context,
+	spec switchtarget.Spec,
+	snapshot switchtarget.Snapshot,
+	desired string,
+	mode os.FileMode,
+	useMode bool,
+) error {
+	backend.once.Do(func() {
+		close(backend.started)
+		<-backend.release
+	})
+	return backend.FileBackend.Apply(ctx, spec, snapshot, desired, mode, useMode)
+}
+
 func TestRunWithSharedLockQueuesConcurrentWork(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
@@ -145,6 +167,65 @@ func TestRunWithSharedLockHonorsCancellationWhileQueued(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for first shared-lock operation to finish")
+	}
+}
+
+func TestApplyAllowsOnlyOneConcurrentSwitch(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	initResult, err := initSwitchingTestRuntime(ctx, configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createGenericProviderAndProfile(t, ctx, configDir, true)
+	backend := &blockingApplyFileBackend{started: make(chan struct{}), release: make(chan struct{})}
+	environment := newSwitchingTestEnvironmentWithTargets(t, configDir, switchtarget.MustRegistry(backend))
+	targetPath := filepath.Join(t.TempDir(), "settings.txt")
+	if _, err := environment.targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
+		ProfileID: "profile-a", ProviderID: "provider-a", TargetID: "target-a",
+		Path: targetPath, Format: "text", Strategy: "replace-file", ValueJSON: contentValueJSON(t, "managed\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(backend.release) }) }
+	t.Cleanup(release)
+	type applyOutcome struct {
+		result ApplySwitchResult
+		err    error
+	}
+	firstDone := make(chan applyOutcome, 1)
+	go func() {
+		result, err := environment.service.Apply(ctx, ApplySwitchRequest{
+			ProviderID: "provider-a", ProfileID: "profile-a", Confirm: true,
+		})
+		firstDone <- applyOutcome{result: result, err: err}
+	}()
+	select {
+	case <-backend.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for the first switch target write")
+	}
+
+	_, err = environment.service.Apply(ctx, ApplySwitchRequest{
+		ProviderID: "provider-a", ProfileID: "profile-a", Confirm: true,
+	})
+	assertErrorCode(t, err, apperror.OperationRecoveryRequired)
+	release()
+	select {
+	case outcome := <-firstDone:
+		if outcome.err != nil || outcome.result.Status != store.OperationStatusApplied {
+			t.Fatalf("first concurrent switch result=%#v error=%v", outcome.result, outcome.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the first concurrent switch")
+	}
+	assertFileContent(t, targetPath, "managed\n")
+	db := openAppTestStore(t, ctx, initResult.DatabasePath)
+	defer db.Close()
+	if incomplete, err := db.ListIncompleteOperations(ctx); err != nil || len(incomplete) != 0 {
+		t.Fatalf("concurrent switches left incomplete operations: %#v, %v", incomplete, err)
 	}
 }
 
@@ -628,6 +709,19 @@ func TestApplySwitchFailsPartialMultiTargetWriteWithoutActiveState(t *testing.T)
 	if _, err := db.GetActiveState(ctx, store.ActiveStateScopeProvider, "provider-a"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("expected no active state after partial failed write, got %v", err)
 	}
+	incompleteBefore, err := db.ListIncompleteOperations(ctx)
+	if err != nil || len(incompleteBefore) != 1 {
+		t.Fatalf("incomplete operations before retry = %#v, %v", incompleteBefore, err)
+	}
+	_, err = newSwitchingTestEnvironment(t, configDir).service.Apply(ctx, ApplySwitchRequest{
+		ProviderID: "provider-a", ProfileID: "profile-a", Confirm: true,
+	})
+	assertErrorCode(t, err, apperror.OperationRecoveryRequired)
+	incompleteAfter, err := db.ListIncompleteOperations(ctx)
+	if err != nil || len(incompleteAfter) != 1 || incompleteAfter[0].ID != incompleteBefore[0].ID {
+		t.Fatalf("blocked retry changed recovery source: before=%#v after=%#v err=%v", incompleteBefore, incompleteAfter, err)
+	}
+	assertFileContent(t, firstPath, "first\n")
 }
 
 func TestApplySwitchKeepsFailedOperationRecoverableWhenCleanupRegistrationFails(t *testing.T) {
@@ -857,6 +951,24 @@ func TestPublicStateCapturesRedactsSensitiveNonFileHashes(t *testing.T) {
 	}
 	if private[0].StoredSHA256 == "" || private[0].CurrentSHA256 == "" {
 		t.Fatalf("expected internal capture hashes to remain available, got %#v", private[0])
+	}
+}
+
+func TestPublicSensitiveFileOperationRedactsHashes(t *testing.T) {
+	private := PlanOperation{
+		BackendID: targetBackendFile, Path: "/safe/display/path", BeforeSHA256: "before-secret-hash",
+		DesiredSHA256: "desired-secret-hash", BeforePreview: TextPreview{Content: "[REDACTED]"}, sensitive: true,
+	}
+	public := publicPlanOperation(private)
+	if public.BeforeSHA256 != "" || public.DesiredSHA256 != "" {
+		t.Fatalf("public sensitive file operation exposed hashes: %#v", public)
+	}
+	if public.Path != private.Path || public.BeforePreview.Content != private.BeforePreview.Content {
+		t.Fatalf("public sensitive file operation lost safe presentation fields: %#v", public)
+	}
+	captures := publicStateCaptures([]StateCapture{{StoredSHA256: "stored", CurrentSHA256: "current"}}, []applyPlanOperation{{PlanOperation: private}})
+	if captures[0].StoredSHA256 != "" || captures[0].CurrentSHA256 != "" {
+		t.Fatalf("public sensitive file capture exposed hashes: %#v", captures[0])
 	}
 }
 

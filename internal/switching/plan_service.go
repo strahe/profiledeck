@@ -255,7 +255,7 @@ func (service *Service) buildApplyPlan(ctx context.Context, db *store.Store, pro
 func publicStateCaptures(captures []StateCapture, operations []applyPlanOperation) []StateCapture {
 	redactHashes := false
 	for _, operation := range operations {
-		if operation.sensitive && operation.BackendID != targetBackendFile {
+		if operation.sensitive {
 			redactHashes = true
 			break
 		}
@@ -273,7 +273,12 @@ func publicStateCaptures(captures []StateCapture, operations []applyPlanOperatio
 }
 
 func publicPlanOperation(operation PlanOperation) PlanOperation {
-	if !operation.sensitive || operation.BackendID == targetBackendFile {
+	if !operation.sensitive {
+		return operation
+	}
+	operation.BeforeSHA256 = ""
+	operation.DesiredSHA256 = ""
+	if operation.BackendID == targetBackendFile {
 		return operation
 	}
 	// Non-file secrets are internal planning inputs. Adapters may provide them
@@ -284,8 +289,6 @@ func publicPlanOperation(operation PlanOperation) PlanOperation {
 	operation.Strategy = ""
 	operation.FileExists = false
 	operation.IsSymlink = false
-	operation.BeforeSHA256 = ""
-	operation.DesiredSHA256 = ""
 	operation.BeforePreview = TextPreview{}
 	operation.DesiredPreview = TextPreview{}
 	operation.AfterPreview = TextPreview{}

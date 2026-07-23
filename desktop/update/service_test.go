@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -21,14 +22,27 @@ import (
 func TestServiceDisablesUnconfiguredBuilds(t *testing.T) {
 	application := newUpdateTestApplication(t)
 	for _, config := range []BuildConfig{
-		{CurrentVersion: "dev"},
-		{CurrentVersion: "not-semver"},
-		{CurrentVersion: "0.1.0-alpha.1"},
-		{CurrentVersion: "0.1.0-beta.0"},
+		{CurrentVersion: "dev", PublicKeyBase64: testUpdatePublicKeyBase64()},
+		{CurrentVersion: "not-semver", PublicKeyBase64: testUpdatePublicKeyBase64()},
+		{CurrentVersion: "0.1.0-alpha.1", PublicKeyBase64: testUpdatePublicKeyBase64()},
+		{CurrentVersion: "0.1.0-beta.0", PublicKeyBase64: testUpdatePublicKeyBase64()},
 	} {
 		status := NewService(context.Background(), application, config).Status(context.Background())
-		if status.Configured || status.State != StateUnavailable {
+		if status.Configured || status.State != StateUnavailable || status.ErrorCode != "" {
 			t.Fatalf("build should be unavailable: config=%#v status=%#v", config, status)
+		}
+	}
+}
+
+func TestServiceReportsInvalidReleaseVerificationConfiguration(t *testing.T) {
+	application := newUpdateTestApplication(t)
+	for _, config := range []BuildConfig{
+		{CurrentVersion: "0.1.0"},
+		{CurrentVersion: "0.1.0", PublicKeyBase64: "invalid"},
+	} {
+		status := NewService(context.Background(), application, config).Status(context.Background())
+		if status.Configured || status.State != StateUnavailable || status.ErrorCode != ErrorConfigurationInvalid {
+			t.Fatalf("invalid release configuration should be visible: config=%#v status=%#v", config, status)
 		}
 	}
 }
@@ -43,7 +57,9 @@ func TestServiceConfiguresStableAndPrereleaseBuilds(t *testing.T) {
 	} {
 		application := newUpdateTestApplication(t)
 		version := test.version
-		status := NewService(context.Background(), application, BuildConfig{CurrentVersion: version}).Status(context.Background())
+		status := NewService(context.Background(), application, BuildConfig{
+			CurrentVersion: version, PublicKeyBase64: testUpdatePublicKeyBase64(),
+		}).Status(context.Background())
 		if !status.Configured || status.State != StateIdle || status.Channel != test.channel {
 			t.Fatalf("build should be configured: version=%q status=%#v", version, status)
 		}
@@ -53,7 +69,9 @@ func TestServiceConfiguresStableAndPrereleaseBuilds(t *testing.T) {
 func TestServicePersistsChannelInsteadOfReplacingItFromBuildVersion(t *testing.T) {
 	ctx := context.Background()
 	application := newUpdateTestApplication(t)
-	service := NewService(ctx, application, BuildConfig{CurrentVersion: "0.1.0-beta.1"})
+	service := NewService(ctx, application, BuildConfig{
+		CurrentVersion: "0.1.0-beta.1", PublicKeyBase64: testUpdatePublicKeyBase64(),
+	})
 	if status := service.Status(ctx); status.Channel != ChannelBeta {
 		t.Fatalf("beta build default channel = %q", status.Channel)
 	}
@@ -61,7 +79,9 @@ func TestServicePersistsChannelInsteadOfReplacingItFromBuildVersion(t *testing.T
 	if err != nil || status.Channel != ChannelStable {
 		t.Fatalf("switch stable: status=%#v err=%v", status, err)
 	}
-	restarted := NewService(ctx, application, BuildConfig{CurrentVersion: "0.2.0-beta.1"})
+	restarted := NewService(ctx, application, BuildConfig{
+		CurrentVersion: "0.2.0-beta.1", PublicKeyBase64: testUpdatePublicKeyBase64(),
+	})
 	if status := restarted.Status(ctx); status.Channel != ChannelStable {
 		t.Fatalf("new beta build replaced persisted channel: %#v", status)
 	}
@@ -434,12 +454,17 @@ func (engine *fakeUpdateEngine) DownloadedPath() string { return engine.download
 func newUpdateTestService(t *testing.T, interval time.Duration) (*Service, *fakeUpdateEngine) {
 	t.Helper()
 	service := NewService(context.Background(), newUpdateTestApplication(t), BuildConfig{
-		CurrentVersion: "0.1.0-beta.1",
-		CheckInterval:  interval,
+		CurrentVersion:  "0.1.0-beta.1",
+		PublicKeyBase64: testUpdatePublicKeyBase64(),
+		CheckInterval:   interval,
 	})
 	engine := &fakeUpdateEngine{}
 	service.engine = engine
 	return service, engine
+}
+
+func testUpdatePublicKeyBase64() string {
+	return base64.StdEncoding.EncodeToString(make([]byte, 32))
 }
 
 func newUpdateTestApplication(t *testing.T) *coreapp.Application {

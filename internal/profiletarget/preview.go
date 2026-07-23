@@ -118,9 +118,7 @@ func RedactSensitiveText(value string) string {
 }
 
 func PreviewSensitiveText(value string) Preview {
-	preview := TruncatePreview(value)
-	preview.Content = RedactSensitiveText(preview.Content)
-	return preview
+	return TruncatePreview(RedactSensitiveText(value))
 }
 
 func redactJSONText(value string) (string, bool) {
@@ -190,9 +188,19 @@ func redactQuotedKeyValueAssignments(value string) (string, bool) {
 		for valueStart < len(value) && (value[valueStart] == ' ' || value[valueStart] == '\t') {
 			valueStart++
 		}
-		if valueStart >= len(value) || value[valueStart] != '"' || !IsSensitiveOutputKey(key) {
+		if valueStart >= len(value) || !IsSensitiveOutputKey(key) {
 			i = keyEnd
 			continue
+		}
+		if value[valueStart] != '"' {
+			if !changed {
+				builder.Grow(len(value))
+			}
+			builder.WriteString(value[last:valueStart])
+			builder.WriteString(`"` + RedactedValue + `"`)
+			last = len(value)
+			changed = true
+			break
 		}
 		valueEnd := jsonStringEndIndex(value, valueStart)
 		if valueEnd < 0 {

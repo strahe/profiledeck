@@ -776,6 +776,23 @@ func TestRedactSensitiveTextHandlesEscapedQuotedValues(t *testing.T) {
 	}
 }
 
+func TestPreviewSensitiveTextRedactsBeforeTruncation(t *testing.T) {
+	rawSecret := "secret-before-long-tail"
+	raw := `{"nested":{"access_token":"` + rawSecret + `"},"padding":"` + strings.Repeat("x", profiletarget.MaxPreviewBytes) + `"}`
+	preview := profiletarget.PreviewSensitiveText(raw)
+	if !preview.Truncated {
+		t.Fatal("expected long preview to be truncated")
+	}
+	if strings.Contains(preview.Content, rawSecret) || !strings.Contains(preview.Content, profiletarget.RedactedValue) {
+		t.Fatalf("sensitive preview was not safely redacted: %q", preview.Content)
+	}
+	malformed := `{"authorization":{"token":"raw-object-secret"`
+	redacted := profiletarget.RedactSensitiveText(malformed)
+	if strings.Contains(redacted, "raw-object-secret") || !strings.Contains(redacted, profiletarget.RedactedValue) {
+		t.Fatalf("malformed structured value was not redacted: %q", redacted)
+	}
+}
+
 func TestBuildPlanErrorsAndSymlinkHandling(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()

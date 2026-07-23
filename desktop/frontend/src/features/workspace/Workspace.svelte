@@ -42,6 +42,7 @@
 	import { desktopErrorMessage, isCancelError } from "$lib/desktop-errors";
 	import {
 		applyDesktopLanguagePreference,
+		currentDesktopLocale,
 		normalizeDesktopLanguage,
 		translate,
 		type DesktopLanguage,
@@ -355,7 +356,7 @@
 	async function loadSettings() {
 		try {
 			const settings = await track("settings", SettingsService.Get());
-			languagePreference = applyDesktopLanguagePreference(settings.language);
+			languagePreference = applyLanguageAndNotifyTray(settings.language);
 			appearance = normalizeAppearance(settings.appearance);
 			persistedAppearance = appearance;
 			setMode(appearance);
@@ -455,18 +456,24 @@
 		const next = normalizeDesktopLanguage(value);
 		if (next === languagePreference || languageBusy) return;
 		const previous = languagePreference;
-		languagePreference = applyDesktopLanguagePreference(next);
+		languagePreference = applyLanguageAndNotifyTray(next);
 		languageBusy = true;
 		try {
 			const settings = await track("settings-language", SettingsService.Update({ language: next }));
-			languagePreference = applyDesktopLanguagePreference(settings.language);
+			languagePreference = applyLanguageAndNotifyTray(settings.language);
 			showNotice(translate("notice.settingsSaved.title"), translate("notice.settingsSaved.description"));
 		} catch (error) {
-			languagePreference = applyDesktopLanguagePreference(previous);
+			languagePreference = applyLanguageAndNotifyTray(previous);
 			if (!isCancelError(error)) showError(error);
 		} finally {
 			languageBusy = false;
 		}
+	}
+
+	function applyLanguageAndNotifyTray(value: string | undefined | null): DesktopLanguage {
+		const preference = applyDesktopLanguagePreference(value);
+		void Events.Emit("profiledeck:locale-changed", currentDesktopLocale());
+		return preference;
 	}
 
 	async function changeAppearance(value: string) {

@@ -109,6 +109,10 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 	if err := service.retryRecoveryCleanup(ctx, db); err != nil {
 		return ApplySwitchResult{}, err
 	}
+	// A new switch must not supersede evidence needed to recover an earlier one.
+	if err := requireNoUnresolvedSwitchOperation(ctx, db, ""); err != nil {
+		return ApplySwitchResult{}, err
+	}
 
 	operationID, err := newSwitchOperationID(time.Now())
 	if err != nil {
@@ -133,6 +137,19 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 	defer lock.Release()
 	if err := service.reconcileRecoveryCleanupLocked(ctx, db); err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, initialMetadata, err)
+	}
+	if err := requireNoUnresolvedSwitchOperation(ctx, db, operationID); err != nil {
+		var appErr *apperror.Error
+		if errors.As(err, &appErr) && appErr.Code == apperror.OperationRecoveryRequired {
+			return ApplySwitchResult{}, rejectBlockedSwitchOperation(ctx, db, operationID)
+		}
+		return ApplySwitchResult{}, failSwitchOperation(
+			ctx,
+			db,
+			operationID,
+			initialMetadata,
+			err,
+		)
 	}
 	// A Desktop Agent may be disabled while this operation waits for the lock.
 	// Once the lock is owned, later preference changes must not interrupt it.
@@ -345,6 +362,40 @@ func failSwitchOperation(ctx context.Context, db *store.Store, operationID, meta
 		return preserveSwitchOperationError(operationErr, err)
 	}
 	return operationErr
+}
+
+func rejectBlockedSwitchOperation(ctx context.Context, db *store.Store, operationID string) error {
+	operationErr := unresolvedSwitchOperationError()
+	cleanupCtx, cancel := switchCleanupContext(ctx)
+	defer cancel()
+	if err := db.RejectPendingSwitchOperation(
+		cleanupCtx,
+		operationID,
+		string(operationErr.Code),
+		operationErr.Message,
+		"blocked_by_unfinished_switch",
+	); err != nil {
+		return preserveSwitchOperationError(operationErr, err)
+	}
+	return operationErr
+}
+
+func requireNoUnresolvedSwitchOperation(ctx context.Context, db *store.Store, excludeID string) error {
+	unresolved, err := db.HasUnresolvedSwitchOperation(ctx, excludeID)
+	if err != nil {
+		return apperror.Wrap(apperror.StoreStatusFailed, "unfinished Profile switches could not be inspected", err)
+	}
+	if unresolved {
+		return unresolvedSwitchOperationError()
+	}
+	return nil
+}
+
+func unresolvedSwitchOperationError() *apperror.Error {
+	return apperror.New(
+		apperror.OperationRecoveryRequired,
+		"resolve the unfinished Profile switch before trying again",
+	)
 }
 
 func switchCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {

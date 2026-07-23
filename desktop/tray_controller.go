@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -58,10 +59,29 @@ type trayController struct {
 	loadDashboard   dashboardLoader
 	menuGeneration  atomic.Uint64
 	eventGeneration atomic.Uint64
+	locale          atomic.Uint32
 }
 
-func newTrayController(ctx context.Context, services backend.Services, ui trayUI) *trayController {
-	return &trayController{
+func (c *trayController) SetLocale(value string) {
+	if c == nil {
+		return
+	}
+	locale, ok := parseTrayLocale(value)
+	if !ok {
+		return
+	}
+	if previous := c.locale.Swap(uint32(locale)); previous != uint32(locale) {
+		// Locale changes invalidate any in-flight menu so stale text cannot replace the rebuilt menu.
+		c.Refresh(nil, false)
+	}
+}
+
+func (c *trayController) messages() trayMessages {
+	return messagesForTrayLocale(trayLocale(c.locale.Load()))
+}
+
+func newTrayController(ctx context.Context, services backend.Services, ui trayUI, initialLocale trayLocale) *trayController {
+	controller := &trayController{
 		ctx:      ctx,
 		services: services,
 		ui:       ui,
@@ -69,6 +89,8 @@ func newTrayController(ctx context.Context, services backend.Services, ui trayUI
 			return services.App.Dashboard(ctx)
 		},
 	}
+	controller.locale.Store(uint32(initialLocale))
+	return controller
 }
 
 func (c *trayController) Refresh(event *backend.DesktopChangeEvent, emit bool) {
@@ -102,7 +124,7 @@ func (c *trayController) refresh(menuGeneration, eventGeneration uint64, event *
 			refresh:        func() { c.Refresh(nil, false) },
 			openSwitch:     c.openSwitch,
 			quit:           c.quit,
-		})
+		}, c.messages())
 		if c.ctx.Err() != nil {
 			return
 		}
@@ -149,30 +171,30 @@ type trayMenuActions struct {
 	quit           func()
 }
 
-func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, actions trayMenuActions) *application.Menu {
+func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, actions trayMenuActions, messages trayMessages) *application.Menu {
 	menu := application.NewMenu()
 	if dashboardErr != nil {
-		menu.Add("ProfileDeck: unavailable").SetEnabled(false)
-		menu.Add(trayErrorLabel(dashboardErr, trayDashboardUnavailableLabel)).SetEnabled(false)
+		menu.Add(messages.profileDeckUnavailable).SetEnabled(false)
+		menu.Add(trayErrorLabel(dashboardErr, messages.dashboardUnavailable)).SetEnabled(false)
 	} else {
 		if trayAgentEnabled(dashboard, agent.Codex) {
-			menu.Add(currentProfileLabel(dashboard)).SetEnabled(false)
+			menu.Add(currentProfileLabel(dashboard, messages)).SetEnabled(false)
 		}
 		if trayAgentEnabled(dashboard, agent.Antigravity) {
-			menu.Add(providerCurrentProfileLabel(dashboard, agyconfig.ProviderID, "Antigravity")).SetEnabled(false)
+			menu.Add(providerCurrentProfileLabel(dashboard, agyconfig.ProviderID, "Antigravity", messages)).SetEnabled(false)
 		}
 		if trayAgentEnabled(dashboard, agent.ClaudeCode) {
-			menu.Add(providerCurrentProfileLabel(dashboard, claudecodeconfig.ProviderID, "Claude Code")).SetEnabled(false)
+			menu.Add(providerCurrentProfileLabel(dashboard, claudecodeconfig.ProviderID, "Claude Code", messages)).SetEnabled(false)
 		}
-		for _, missing := range missingActiveProfileLabels(dashboard) {
+		for _, missing := range missingActiveProfileLabels(dashboard, messages) {
 			menu.Add(missing).SetEnabled(false)
 		}
 	}
 	menu.AddSeparator()
-	menu.Add("Open ProfileDeck").OnClick(func(*application.Context) {
+	menu.Add(messages.openProfileDeck).OnClick(func(*application.Context) {
 		runTrayAction(actions.openMainWindow)
 	})
-	menu.Add("Run Doctor").OnClick(func(*application.Context) {
+	menu.Add(messages.runDoctor).OnClick(func(*application.Context) {
 		runTrayAction(actions.runDoctor)
 	})
 	var codexProfiles []trayProfile
@@ -182,7 +204,7 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 		}
 	}
 	if trayAgentEnabled(dashboard, agent.Codex) {
-		addTrayProfilesMenu(menu, "Codex Profiles", codexconfig.ProviderID, codexProfiles, dashboard.CodexProfiles != nil, "No Codex profiles", trayCodexProfilesUnavailableLabel, actions)
+		addTrayProfilesMenu(menu, messages.codexProfiles, codexconfig.ProviderID, codexProfiles, dashboard.CodexProfiles != nil, messages.noCodexProfiles, messages.codexProfilesUnavailable, actions)
 	}
 
 	var antigravityProfiles []trayProfile
@@ -192,7 +214,7 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 		}
 	}
 	if trayAgentEnabled(dashboard, agent.Antigravity) {
-		addTrayProfilesMenu(menu, "Antigravity Profiles", agyconfig.ProviderID, antigravityProfiles, dashboard.AntigravityProfiles != nil, "No Antigravity profiles", trayAntigravityProfilesUnavailableLabel, actions)
+		addTrayProfilesMenu(menu, messages.antigravityProfiles, agyconfig.ProviderID, antigravityProfiles, dashboard.AntigravityProfiles != nil, messages.noAntigravityProfiles, messages.antigravityUnavailable, actions)
 	}
 
 	var claudeCodeProfiles []trayProfile
@@ -202,14 +224,14 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 		}
 	}
 	if trayAgentEnabled(dashboard, agent.ClaudeCode) {
-		addTrayProfilesMenu(menu, "Claude Code Profiles", claudecodeconfig.ProviderID, claudeCodeProfiles, dashboard.ClaudeCodeProfiles != nil, "No Claude Code profiles", trayClaudeCodeProfilesUnavailableLabel, actions)
+		addTrayProfilesMenu(menu, messages.claudeCodeProfiles, claudecodeconfig.ProviderID, claudeCodeProfiles, dashboard.ClaudeCodeProfiles != nil, messages.noClaudeCodeProfiles, messages.claudeCodeUnavailable, actions)
 	}
 
 	menu.AddSeparator()
-	menu.Add("Refresh Menu").OnClick(func(*application.Context) {
+	menu.Add(messages.refreshMenu).OnClick(func(*application.Context) {
 		runTrayAction(actions.refresh)
 	})
-	menu.Add("Quit").OnClick(func(*application.Context) {
+	menu.Add(messages.quit).OnClick(func(*application.Context) {
 		runTrayAction(actions.quit)
 	})
 	return menu
@@ -290,7 +312,7 @@ func trayErrorLabel(err error, fallback string) string {
 	return fallback
 }
 
-func currentProfileLabel(dashboard backend.DashboardResult) string {
+func currentProfileLabel(dashboard backend.DashboardResult, messages trayMessages) string {
 	for _, state := range dashboard.ActiveStates {
 		if state.ProviderID != codexconfig.ProviderID {
 			continue
@@ -300,17 +322,17 @@ func currentProfileLabel(dashboard backend.DashboardResult) string {
 			name = state.ProfileID
 		}
 		if name == "" {
-			return "Current: Codex not active"
+			return messages.codexNotActive
 		}
 		if !state.ProfileAvailable {
-			return "Current: missing profile " + name
+			return fmt.Sprintf(messages.codexMissing, name)
 		}
-		return "Current: " + name
+		return fmt.Sprintf(messages.codexCurrent, name)
 	}
-	return "Current: Codex not active"
+	return messages.codexNotActive
 }
 
-func providerCurrentProfileLabel(dashboard backend.DashboardResult, providerID, providerName string) string {
+func providerCurrentProfileLabel(dashboard backend.DashboardResult, providerID, providerName string, messages trayMessages) string {
 	for _, state := range dashboard.ActiveStates {
 		if state.ProviderID != providerID {
 			continue
@@ -320,17 +342,17 @@ func providerCurrentProfileLabel(dashboard backend.DashboardResult, providerID, 
 			name = state.ProfileID
 		}
 		if name == "" {
-			return providerName + ": not active"
+			return fmt.Sprintf(messages.providerNotActive, providerName)
 		}
 		if !state.ProfileAvailable {
-			return providerName + ": missing profile " + name
+			return fmt.Sprintf(messages.providerMissing, providerName, name)
 		}
-		return providerName + ": " + name
+		return fmt.Sprintf(messages.providerCurrent, providerName, name)
 	}
-	return providerName + ": not active"
+	return fmt.Sprintf(messages.providerNotActive, providerName)
 }
 
-func missingActiveProfileLabels(dashboard backend.DashboardResult) []string {
+func missingActiveProfileLabels(dashboard backend.DashboardResult, messages trayMessages) []string {
 	labels := []string{}
 	for _, state := range dashboard.ActiveStates {
 		if state.ProfileID == "" || state.ProfileAvailable {
@@ -345,7 +367,7 @@ func missingActiveProfileLabels(dashboard backend.DashboardResult) []string {
 		case claudecodeconfig.ProviderID:
 			providerName = "Claude Code"
 		}
-		labels = append(labels, "Missing "+providerName+" profile: "+state.ProfileID)
+		labels = append(labels, fmt.Sprintf(messages.missingActiveProfile, providerName, state.ProfileID))
 	}
 	return labels
 }

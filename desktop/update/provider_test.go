@@ -3,7 +3,9 @@ package update
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -323,6 +325,104 @@ func TestGitHubProviderDownloadsChecksumVerifiedArtifact(t *testing.T) {
 	if !bytes.Equal(release.Verification.Digest, digest[:]) {
 		t.Fatalf("release digest = %x, want %x", release.Verification.Digest, digest)
 	}
+	if release.Verification.SignatureAlgo != SignatureAlgo ||
+		!ed25519.Verify(fixture.publicKey, digest[:], release.Verification.Signature) {
+		t.Fatalf("release signature is not valid: %#v", release.Verification)
+	}
+}
+
+func TestGitHubProviderRequiresValidArtifactSignature(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name          string
+		signatureBody string
+	}{
+		{name: "malformed", signatureBody: "not-base64"},
+		{name: "wrong size", signatureBody: base64.StdEncoding.EncodeToString([]byte("short"))},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newGitHubFixture(t, githubFixtureConfig{
+				Version: "1.0.1", Checksum: true,
+				SignatureBody: test.signatureBody,
+			})
+			_, err := fixture.provider(t, "1.0.0").Check(context.Background(), updater.CheckRequest{
+				CurrentVersion: "1.0.0", Platform: UpdatePlatform, Arch: "arm64",
+			})
+			if ErrorCode(err) != ErrorArtifactVerificationFailed {
+				t.Fatalf("error = %v, code = %q", err, ErrorCode(err))
+			}
+		})
+	}
+}
+
+func TestGitHubProviderRequiresListedUniqueArtifactSignature(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name               string
+		missingSignature   bool
+		unlistedSignature  bool
+		duplicateSignature bool
+	}{
+		{name: "missing", missingSignature: true},
+		{name: "reachable but unlisted", unlistedSignature: true},
+		{name: "duplicate", duplicateSignature: true},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newGitHubFixture(t, githubFixtureConfig{
+				Version:            "1.0.1",
+				Checksum:           true,
+				MissingSignature:   test.missingSignature,
+				UnlistedSignature:  test.unlistedSignature,
+				DuplicateSignature: test.duplicateSignature,
+			})
+			_, err := fixture.provider(t, "1.0.0").Check(context.Background(), updater.CheckRequest{
+				CurrentVersion: "1.0.0", Platform: UpdatePlatform, Arch: "arm64",
+			})
+			if ErrorCode(err) != ErrorArtifactVerificationFailed {
+				t.Fatalf("error = %v, code = %q", err, ErrorCode(err))
+			}
+		})
+	}
+}
+
+func TestGitHubProviderFetchesSignatureFromListedAssetURL(t *testing.T) {
+	t.Parallel()
+	fixture := newGitHubFixture(t, githubFixtureConfig{
+		Version:       "1.0.1",
+		Checksum:      true,
+		SignaturePath: "/release-assets/detached-signature",
+	})
+	release, err := fixture.provider(t, "1.0.0").Check(context.Background(), updater.CheckRequest{
+		CurrentVersion: "1.0.0", Platform: UpdatePlatform, Arch: "arm64",
+	})
+	if err != nil || release == nil {
+		t.Fatalf("listed signature URL was not used: release=%#v err=%v", release, err)
+	}
+}
+
+func TestGitHubProviderRejectsSignatureFromAnotherKey(t *testing.T) {
+	t.Parallel()
+	fixture := newGitHubFixture(t, githubFixtureConfig{Version: "1.0.1", Checksum: true})
+	provider := fixture.provider(t, "1.0.0")
+	engine := updater.New(silentUpdaterHost{})
+	wrongSeed := sha256.Sum256([]byte("another updater key"))
+	wrongKey := ed25519.NewKeyFromSeed(wrongSeed[:]).Public().(ed25519.PublicKey)
+	if err := engine.Init(updater.Config{
+		CurrentVersion: "1.0.0", Providers: []updater.Provider{provider}, PublicKey: wrongKey,
+		Platform: UpdatePlatform, Arch: "arm64", Window: updater.WindowNone,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if release, err := engine.Check(context.Background()); err != nil || release == nil {
+		t.Fatalf("check release: release=%#v err=%v", release, err)
+	}
+	if err := engine.DownloadAndInstall(context.Background()); err == nil || !strings.Contains(err.Error(), "signature") {
+		t.Fatalf("DownloadAndInstall() error = %v, want signature failure", err)
+	}
 }
 
 func TestGitHubProviderDigestMismatchFailsClosed(t *testing.T) {
@@ -339,6 +439,7 @@ func TestGitHubProviderDigestMismatchFailsClosed(t *testing.T) {
 	if err := engine.Init(updater.Config{
 		CurrentVersion: "1.0.1-beta.1",
 		Providers:      []updater.Provider{provider},
+		PublicKey:      fixture.publicKey,
 		Platform:       UpdatePlatform,
 		Arch:           "arm64",
 		Window:         updater.WindowNone,
@@ -355,16 +456,22 @@ func TestGitHubProviderDigestMismatchFailsClosed(t *testing.T) {
 }
 
 type githubFixtureConfig struct {
-	Version      string
-	Prerelease   bool
-	Checksum     bool
-	ChecksumBody string
-	ArtifactName string
+	Version            string
+	Prerelease         bool
+	Checksum           bool
+	ChecksumBody       string
+	ArtifactName       string
+	MissingSignature   bool
+	UnlistedSignature  bool
+	DuplicateSignature bool
+	SignatureBody      string
+	SignaturePath      string
 }
 
 type githubFixture struct {
 	server      *httptest.Server
 	artifact    []byte
+	publicKey   ed25519.PublicKey
 	lastAPIPath chan string
 }
 
@@ -374,9 +481,21 @@ func newGitHubFixture(t *testing.T, config githubFixtureConfig) *githubFixture {
 		artifact:    []byte("notarized universal application archive"),
 		lastAPIPath: make(chan string, 1),
 	}
+	seed := sha256.Sum256([]byte("ProfileDeck updater fixture key"))
+	privateKey := ed25519.NewKeyFromSeed(seed[:])
+	fixture.publicKey = append(ed25519.PublicKey(nil), privateKey.Public().(ed25519.PublicKey)...)
 	artifactFilename := config.ArtifactName
 	if artifactFilename == "" {
 		artifactFilename = artifactName(config.Version)
+	}
+	digest := sha256.Sum256(fixture.artifact)
+	signatureBody := config.SignatureBody
+	if signatureBody == "" {
+		signatureBody = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, digest[:])) + "\n"
+	}
+	signaturePath := config.SignaturePath
+	if signaturePath == "" {
+		signaturePath = "/downloads/" + artifactFilename + SignatureSuffix
 	}
 	fixture.server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		switch {
@@ -412,6 +531,18 @@ func newGitHubFixture(t *testing.T, config githubFixtureConfig) *githubFixture {
 					"browser_download_url": fixture.server.URL + "/downloads/" + ChecksumAsset,
 				})
 			}
+			if !config.MissingSignature && !config.UnlistedSignature {
+				payload["assets"] = append(payload["assets"].([]map[string]any), map[string]any{
+					"id": 3, "name": artifactFilename + SignatureSuffix, "content_type": "text/plain",
+					"size": len(signatureBody), "browser_download_url": fixture.server.URL + signaturePath,
+				})
+			}
+			if config.DuplicateSignature {
+				payload["assets"] = append(payload["assets"].([]map[string]any), map[string]any{
+					"id": 4, "name": artifactFilename + SignatureSuffix, "content_type": "text/plain",
+					"size": len(signatureBody), "browser_download_url": fixture.server.URL + signaturePath + "-duplicate",
+				})
+			}
 			response.Header().Set("Content-Type", "application/json")
 			if strings.HasSuffix(request.URL.Path, "/releases") {
 				_ = json.NewEncoder(response).Encode([]any{payload})
@@ -428,6 +559,8 @@ func newGitHubFixture(t *testing.T, config githubFixtureConfig) *githubFixture {
 				body = fmt.Sprintf("%s  %s\n", hex.EncodeToString(digest[:]), artifactFilename)
 			}
 			_, _ = io.WriteString(response, body)
+		case request.URL.Path == signaturePath && !config.MissingSignature:
+			_, _ = io.WriteString(response, signatureBody)
 		default:
 			http.NotFound(response, request)
 		}

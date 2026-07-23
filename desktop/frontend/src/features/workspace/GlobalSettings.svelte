@@ -58,7 +58,10 @@
 
 	function updateStateDescription(): string {
 		switch (updateStatus.state) {
-			case "unavailable": return $_("settings.updates.state.unavailable");
+			case "unavailable":
+				return updateStatus.error_code === "configuration_invalid"
+					? $_("settings.updates.state.configurationInvalid")
+					: $_("settings.updates.state.unavailable");
 			case "checking": return $_("settings.updates.state.checking");
 			case "up_to_date": return $_("settings.updates.state.upToDate");
 			case "downloading": return $_("settings.updates.state.downloading", {
