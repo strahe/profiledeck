@@ -126,11 +126,15 @@ func TestBuildTrayMenuUsesDashboardCodexProfiles(t *testing.T) {
 		if got := work.Label(); got != "Work" {
 			t.Fatalf("expected named profile label, got %q", got)
 		}
-		if !work.Checked() {
-			t.Fatalf("expected active profile to be checked")
+		if !work.Checked() || !work.IsRadio() {
+			t.Fatalf("expected active profile to be a checked radio item")
 		}
-		if got := submenu.ItemAt(1).Label(); got != "personal" {
+		personal := submenu.ItemAt(1)
+		if got := personal.Label(); got != "personal" {
 			t.Fatalf("expected profile id fallback label, got %q", got)
+		}
+		if personal.Checked() || !personal.IsRadio() {
+			t.Fatalf("expected inactive profile to be an unchecked radio item")
 		}
 	})
 }
@@ -150,8 +154,8 @@ func TestBuildTrayMenuUsesDashboardAntigravityProfiles(t *testing.T) {
 			antigravityProfileSummary("personal", "", false),
 		), nil, trayMenuActions{})
 		submenu := requireMenuSubmenu(t, menu, "Antigravity Profiles")
-		if got := submenu.ItemAt(0).Label(); got != "Work" || !submenu.ItemAt(0).Checked() {
-			t.Fatalf("expected active Antigravity Profile, got label=%q checked=%t", got, submenu.ItemAt(0).Checked())
+		if got := submenu.ItemAt(0).Label(); got != "Work" || !submenu.ItemAt(0).Checked() || !submenu.ItemAt(0).IsRadio() {
+			t.Fatalf("expected active Antigravity Profile radio, got label=%q checked=%t radio=%t", got, submenu.ItemAt(0).Checked(), submenu.ItemAt(0).IsRadio())
 		}
 		if got := submenu.ItemAt(1).Label(); got != "personal" {
 			t.Fatalf("expected Antigravity Profile id fallback, got %q", got)
@@ -174,8 +178,8 @@ func TestBuildTrayMenuUsesDashboardClaudeCodeProfiles(t *testing.T) {
 			claudeCodeProfileSummary("personal", "", false),
 		), nil, trayMenuActions{})
 		submenu := requireMenuSubmenu(t, menu, "Claude Code Profiles")
-		if got := submenu.ItemAt(0).Label(); got != "Work" || !submenu.ItemAt(0).Checked() {
-			t.Fatalf("expected active Claude Code Profile, got label=%q checked=%t", got, submenu.ItemAt(0).Checked())
+		if got := submenu.ItemAt(0).Label(); got != "Work" || !submenu.ItemAt(0).Checked() || !submenu.ItemAt(0).IsRadio() {
+			t.Fatalf("expected active Claude Code Profile radio, got label=%q checked=%t radio=%t", got, submenu.ItemAt(0).Checked(), submenu.ItemAt(0).IsRadio())
 		}
 		if got := submenu.ItemAt(1).Label(); got != "personal" {
 			t.Fatalf("expected Claude Code Profile id fallback, got %q", got)
@@ -206,14 +210,19 @@ func TestBuildTrayMenuSupportsSimplifiedChinese(t *testing.T) {
 	dashboard := dashboardWithCodexProfiles(codexProfileSummary("work", "工作", true))
 	menu := buildTrayMenu(dashboard, nil, trayMenuActions{}, traySimplifiedChineseMessages)
 
-	for _, label := range []string{"当前：Codex 未激活", "打开 ProfileDeck", "运行诊断", "刷新菜单", "退出"} {
+	for _, label := range []string{"打开 ProfileDeck", "运行诊断", "刷新菜单", "退出"} {
 		if item := menu.FindByLabel(label); item == nil {
 			t.Fatalf("expected Simplified Chinese tray item %q", label)
 		}
 	}
+	for _, label := range []string{"当前：Codex 未激活", "Antigravity：未激活", "Claude Code：未激活"} {
+		if item := menu.FindByLabel(label); item != nil {
+			t.Fatalf("tray menu still includes redundant status label %q", label)
+		}
+	}
 	codexMenu := requireMenuSubmenu(t, menu, "Codex Profile")
-	if got := codexMenu.ItemAt(0).Label(); got != "工作" || !codexMenu.ItemAt(0).Checked() {
-		t.Fatalf("unexpected localized Codex Profile item: label=%q checked=%t", got, codexMenu.ItemAt(0).Checked())
+	if got := codexMenu.ItemAt(0).Label(); got != "工作" || !codexMenu.ItemAt(0).Checked() || !codexMenu.ItemAt(0).IsRadio() {
+		t.Fatalf("unexpected localized Codex Profile item: label=%q checked=%t radio=%t", got, codexMenu.ItemAt(0).Checked(), codexMenu.ItemAt(0).IsRadio())
 	}
 	antigravityMenu := requireMenuSubmenu(t, menu, "Antigravity Profile")
 	if got := antigravityMenu.ItemAt(0).Label(); got != traySimplifiedChineseMessages.antigravityUnavailable {
@@ -300,6 +309,25 @@ func TestTrayControllerOpensAntigravitySwitch(t *testing.T) {
 	payload, ok := event.data[0].(map[string]string)
 	if !ok || payload["provider_id"] != agyconfig.ProviderID || payload["profile_id"] != "work" {
 		t.Fatalf("unexpected Antigravity switch payload: %#v", event.data)
+	}
+}
+
+func TestTrayControllerRebuildTrayMenuIsSynchronous(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ui := newFakeTrayUI()
+	controller := newTrayController(ctx, newDesktopTestServices(t, backend.Environment{ConfigDir: t.TempDir()}), ui, trayLocaleEnglish)
+	controller.loadDashboard = func(context.Context) (backend.DashboardResult, error) {
+		return dashboardWithCodexProfiles(codexProfileSummary("work", "Work", true)), nil
+	}
+
+	// rebuildTrayMenu runs on the caller goroutine (unlike Refresh which spawns go).
+	controller.rebuildTrayMenu()
+	menu := waitForMenu(t, ui)
+	submenu := requireMenuSubmenu(t, menu, "Codex Profiles")
+	if got := submenu.ItemAt(0).Label(); got != "Work" || !submenu.ItemAt(0).Checked() || !submenu.ItemAt(0).IsRadio() {
+		t.Fatalf("rebuildTrayMenu did not install active radio, label=%q checked=%t radio=%t",
+			submenu.ItemAt(0).Label(), submenu.ItemAt(0).Checked(), submenu.ItemAt(0).IsRadio())
 	}
 }
 

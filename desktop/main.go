@@ -1,13 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
-	"image"
-	"image/color"
-	"image/png"
 	"log"
 	"net/http"
 	"os"
@@ -38,6 +34,9 @@ var assets embed.FS
 
 //go:embed assets/appicon.png
 var appIcon []byte
+
+//go:embed assets/menubar-template.png
+var menuBarTemplateIcon []byte
 
 func main() {
 	// The detached update helper must swap the application before runtime or
@@ -234,11 +233,14 @@ func marshalWailsError(err error) []byte {
 
 func setupTray(ctx context.Context, wailsApp *application.App, mainWindow *application.WebviewWindow, services backend.Services) {
 	tray := wailsApp.SystemTray.New()
-	tray.SetTemplateIcon(trayTemplateIcon())
+	// Template icons follow the menu bar appearance; use the designed
+	// monochrome asset rather than a runtime-drawn placeholder.
+	tray.SetTemplateIcon(menuBarTemplateIcon)
 	tray.SetIconPosition(application.NSImageOnly)
 	tray.SetTooltip(app.ProductName)
-	tray.AttachWindow(mainWindow).WindowOffset(10)
-
+	// Do not AttachWindow the main window: that API is for tray popovers and on
+	// macOS elevates the window to NSPopUpMenuWindowLevel, so it stays above
+	// other apps. Open/focus via OnClick and the tray menu instead.
 	initialLocale := loadInitialTrayLocale(ctx, services.Settings, systemPreferredTrayLanguage())
 	controller := newTrayController(ctx, services, wailsTrayUI{
 		app:    wailsApp,
@@ -285,35 +287,4 @@ func hideMainWindowOnUserClose(window *application.WebviewWindow) {
 		event.Cancel()
 		window.Hide()
 	})
-}
-
-func trayTemplateIcon() []byte {
-	const size = 22
-	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	black := color.RGBA{A: 255}
-	for y := 4; y < 18; y++ {
-		for x := 4; x < 8; x++ {
-			img.SetRGBA(x, y, black)
-		}
-	}
-	for y := 4; y < 9; y++ {
-		for x := 8; x < 17; x++ {
-			img.SetRGBA(x, y, black)
-		}
-	}
-	for y := 10; y < 14; y++ {
-		for x := 8; x < 15; x++ {
-			img.SetRGBA(x, y, black)
-		}
-	}
-	for y := 15; y < 18; y++ {
-		for x := 8; x < 13; x++ {
-			img.SetRGBA(x, y, black)
-		}
-	}
-	var out bytes.Buffer
-	if err := png.Encode(&out, img); err != nil {
-		return nil
-	}
-	return out.Bytes()
 }

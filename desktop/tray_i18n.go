@@ -37,12 +37,6 @@ type trayMessages struct {
 	claudeCodeUnavailable    string
 	refreshMenu              string
 	quit                     string
-	codexCurrent             string
-	codexNotActive           string
-	codexMissing             string
-	providerCurrent          string
-	providerNotActive        string
-	providerMissing          string
 	missingActiveProfile     string
 }
 
@@ -62,12 +56,6 @@ var trayEnglishMessages = trayMessages{
 	claudeCodeUnavailable:    trayClaudeCodeProfilesUnavailableLabel,
 	refreshMenu:              "Refresh Menu",
 	quit:                     "Quit",
-	codexCurrent:             "Current: %s",
-	codexNotActive:           "Current: Codex not active",
-	codexMissing:             "Current: missing profile %s",
-	providerCurrent:          "%s: %s",
-	providerNotActive:        "%s: not active",
-	providerMissing:          "%s: missing profile %s",
 	missingActiveProfile:     "Missing %s profile: %s",
 }
 
@@ -87,12 +75,6 @@ var traySimplifiedChineseMessages = trayMessages{
 	claudeCodeUnavailable:    "无法加载 Claude Code Profile，请打开 ProfileDeck 查看详情。",
 	refreshMenu:              "刷新菜单",
 	quit:                     "退出",
-	codexCurrent:             "当前：%s",
-	codexNotActive:           "当前：Codex 未激活",
-	codexMissing:             "当前：Profile %s 缺失",
-	providerCurrent:          "%s：%s",
-	providerNotActive:        "%s：未激活",
-	providerMissing:          "%s：Profile %s 缺失",
 	missingActiveProfile:     "%s Profile 缺失：%s",
 }
 

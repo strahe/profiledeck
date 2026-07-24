@@ -122,6 +122,7 @@ func (c *trayController) refresh(menuGeneration, eventGeneration uint64, event *
 			openMainWindow: c.openMainWindow,
 			runDoctor:      c.runDoctor,
 			refresh:        func() { c.Refresh(nil, false) },
+			rebuildMenu:    c.rebuildTrayMenu,
 			openSwitch:     c.openSwitch,
 			quit:           c.quit,
 		}, c.messages())
@@ -158,6 +159,17 @@ func (c *trayController) openSwitch(providerID, profileID string) {
 	})
 }
 
+// rebuildTrayMenu reloads the dashboard and replaces the tray menu on the
+// caller's goroutine. Use this when a click must correct radio state before
+// opening UI; Refresh remains the fire-and-forget path for the Refresh item.
+func (c *trayController) rebuildTrayMenu() {
+	if c == nil {
+		return
+	}
+	menuGeneration := c.menuGeneration.Add(1)
+	c.refresh(menuGeneration, 0, nil)
+}
+
 func (c *trayController) quit() {
 	c.ui.HideTray()
 	c.ui.Quit()
@@ -167,30 +179,25 @@ type trayMenuActions struct {
 	openMainWindow func()
 	runDoctor      func()
 	refresh        func()
+	rebuildMenu    func()
 	openSwitch     func(providerID, profileID string)
 	quit           func()
 }
 
 func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, actions trayMenuActions, messages trayMessages) *application.Menu {
 	menu := application.NewMenu()
+	// Status readout is omitted: profile submenus show the active item with a
+	// radio check. Keep only load failures and missing-binding warnings here.
 	if dashboardErr != nil {
 		menu.Add(messages.profileDeckUnavailable).SetEnabled(false)
 		menu.Add(trayErrorLabel(dashboardErr, messages.dashboardUnavailable)).SetEnabled(false)
-	} else {
-		if trayAgentEnabled(dashboard, agent.Codex) {
-			menu.Add(currentProfileLabel(dashboard, messages)).SetEnabled(false)
+		menu.AddSeparator()
+	} else if missing := missingActiveProfileLabels(dashboard, messages); len(missing) > 0 {
+		for _, label := range missing {
+			menu.Add(label).SetEnabled(false)
 		}
-		if trayAgentEnabled(dashboard, agent.Antigravity) {
-			menu.Add(providerCurrentProfileLabel(dashboard, agyconfig.ProviderID, "Antigravity", messages)).SetEnabled(false)
-		}
-		if trayAgentEnabled(dashboard, agent.ClaudeCode) {
-			menu.Add(providerCurrentProfileLabel(dashboard, claudecodeconfig.ProviderID, "Claude Code", messages)).SetEnabled(false)
-		}
-		for _, missing := range missingActiveProfileLabels(dashboard, messages) {
-			menu.Add(missing).SetEnabled(false)
-		}
+		menu.AddSeparator()
 	}
-	menu.AddSeparator()
 	menu.Add(messages.openProfileDeck).OnClick(func(*application.Context) {
 		runTrayAction(actions.openMainWindow)
 	})
@@ -270,16 +277,20 @@ func addTrayProfilesMenu(menu *application.Menu, title, providerID string, profi
 		if label == "" {
 			label = profile.Profile.ID
 		}
-		item := profilesMenu.Add(label)
-		if profile.Active {
-			item.SetChecked(true)
-		}
+		// Radio (not plain text + SetChecked): macOS only paints native check
+		// marks for checkbox/radio items when the tray menu is built.
+		item := profilesMenu.AddRadio(label, profile.Active)
 		item.OnClick(func(*application.Context) {
-			if actions.openSwitch != nil {
-				runTrayAction(func() {
+			// One goroutine, ordered steps: radio clicks auto-check before apply,
+			// so rebuild from the dashboard first, then open the switch UI.
+			runTrayAction(func() {
+				if actions.rebuildMenu != nil {
+					actions.rebuildMenu()
+				}
+				if actions.openSwitch != nil {
 					actions.openSwitch(providerID, profile.Profile.ID)
-				})
-			}
+				}
+			})
 		})
 	}
 }
@@ -310,46 +321,6 @@ func trayErrorLabel(err error, fallback string) string {
 		return ""
 	}
 	return fallback
-}
-
-func currentProfileLabel(dashboard backend.DashboardResult, messages trayMessages) string {
-	for _, state := range dashboard.ActiveStates {
-		if state.ProviderID != codexconfig.ProviderID {
-			continue
-		}
-		name := state.ProfileName
-		if name == "" {
-			name = state.ProfileID
-		}
-		if name == "" {
-			return messages.codexNotActive
-		}
-		if !state.ProfileAvailable {
-			return fmt.Sprintf(messages.codexMissing, name)
-		}
-		return fmt.Sprintf(messages.codexCurrent, name)
-	}
-	return messages.codexNotActive
-}
-
-func providerCurrentProfileLabel(dashboard backend.DashboardResult, providerID, providerName string, messages trayMessages) string {
-	for _, state := range dashboard.ActiveStates {
-		if state.ProviderID != providerID {
-			continue
-		}
-		name := state.ProfileName
-		if name == "" {
-			name = state.ProfileID
-		}
-		if name == "" {
-			return fmt.Sprintf(messages.providerNotActive, providerName)
-		}
-		if !state.ProfileAvailable {
-			return fmt.Sprintf(messages.providerMissing, providerName, name)
-		}
-		return fmt.Sprintf(messages.providerCurrent, providerName, name)
-	}
-	return fmt.Sprintf(messages.providerNotActive, providerName)
 }
 
 func missingActiveProfileLabels(dashboard backend.DashboardResult, messages trayMessages) []string {
