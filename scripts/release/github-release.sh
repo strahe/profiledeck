@@ -97,6 +97,17 @@ read_tag() {
   fi
   tag_commit="$object_sha"
 }
+wait_for_release_tag() {
+  # GitHub may not serve a newly created ref on the first read; match Draft visibility waits.
+  for delay in 0 1 2 4 8 15; do
+    [[ "$delay" -eq 0 ]] || sleep "$delay"
+    read_tag
+    if [[ "$tag_found" == "true" && "$tag_commit" == "$commit" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 release_found="false"
 release_state="$temp_dir/release-state"
 release_assets="$temp_dir/release-assets"
@@ -165,18 +176,18 @@ go run ./scripts/releasetool verify-bundle \
   --version "$version" --build-number "$build_number" --commit "$commit" \
   --platforms "$platforms" --directory "$bundle" >/dev/null
 if [[ "$tag_found" != "true" ]]; then
-  if ! gh api "repos/$repository/git/refs" --method POST \
+  tag_create_succeeded="false"
+  if gh api "repos/$repository/git/refs" --method POST \
     -f "ref=refs/tags/$tag" -f "sha=$commit" --silent >"$private_log" 2>&1; then
-    read_tag
-    if [[ "$tag_found" != "true" || "$tag_commit" != "$commit" ]]; then
-      : >"$private_log"
-      echo "Could not create the release tag. Check GitHub access and try again." >&2
-      exit 1
-    fi
+    tag_create_succeeded="true"
   fi
-  read_tag
-  if [[ "$tag_found" != "true" || "$tag_commit" != "$commit" ]]; then
-    echo "The release tag could not be verified. Check it on GitHub before retrying." >&2
+  : >"$private_log"
+  if ! wait_for_release_tag; then
+    if [[ "$tag_create_succeeded" == "true" ]]; then
+      echo "The release tag could not be verified. Check it on GitHub before retrying." >&2
+    else
+      echo "Could not create the release tag. Check GitHub access and try again." >&2
+    fi
     exit 1
   fi
 fi

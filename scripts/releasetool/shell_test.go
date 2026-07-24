@@ -277,6 +277,37 @@ func TestGitHubScriptCreatesResumesAndVerifiesDraftWithoutClobber(t *testing.T) 
 	}
 }
 
+func TestGitHubScriptWaitsForNewlyCreatedTag(t *testing.T) {
+	requireBash(t)
+	repo := testRepositoryRoot(t)
+	bin := t.TempDir()
+	state := t.TempDir()
+	writeFakeGitHubCLI(t, filepath.Join(bin, "gh"))
+	version, _ := parseReleaseVersion("1.2.3-beta.1")
+	root := t.TempDir()
+	handoff := createTestHandoff(t, root, macOSPlatform, version, 31, testReleaseCommit)
+	inputs, _ := parsePlatformInputs([]string{macOSPlatform + "=" + handoff}, version)
+	bundle := filepath.Join(root, "bundle")
+	if err := assembleRelease(bundle, version, 31, testReleaseCommit, inputs); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{
+		"FAKE_GH_STATE=" + state,
+		"FAKE_GH_LOG=" + filepath.Join(state, "gh.log"),
+		"FAKE_RELEASE_COMMIT=" + testReleaseCommit,
+		"FAKE_GH_TAG_LAG=1",
+		"GOCACHE=" + filepath.Join(t.TempDir(), "go-cache"),
+	}
+	result := runTestScript(t, repo, bin, env,
+		"scripts/release/github-release.sh", "draft",
+		"--version", version.String(), "--build-number", "31", "--repo", "strahe/profiledeck",
+		"--commit", testReleaseCommit, "--platforms", macOSPlatform, "--bundle", bundle,
+	)
+	if result.err != nil || !strings.Contains(result.stdout, "Draft Release is ready for review") {
+		t.Fatalf("draft after delayed tag visibility: err=%v stdout=%q stderr=%q", result.err, result.stdout, result.stderr)
+	}
+}
+
 func TestGitHubScriptRejectsUnsafeRemoteState(t *testing.T) {
 	requireBash(t)
 	repo := testRepositoryRoot(t)
@@ -379,12 +410,23 @@ if [[ "$1" == "api" ]]; then
   case "$endpoint" in
     repos/*/commits/*) exit 0 ;;
     repos/*/git/ref/tags/*)
+      if [[ -f "$state/tag-lag" ]]; then
+        lag="$(cat "$state/tag-lag")"
+        if [[ "$lag" =~ ^[1-9][0-9]*$ ]]; then
+          printf '%s\n' "$((lag - 1))" >"$state/tag-lag"
+          echo "HTTP 404" >&2; exit 1
+        fi
+      fi
       if [[ -f "$state/tag" ]]; then printf 'commit %s\n' "$(cat "$state/tag")"; exit 0; fi
       echo "HTTP 404" >&2; exit 1 ;;
     repos/*/git/refs)
       sha=""
       for value in "$@"; do case "$value" in sha=*) sha="${value#sha=}" ;; esac; done
-      printf '%s\n' "$sha" >"$state/tag"; exit 0 ;;
+      printf '%s\n' "$sha" >"$state/tag"
+      if [[ -n "${FAKE_GH_TAG_LAG-}" ]]; then
+        printf '%s\n' "$FAKE_GH_TAG_LAG" >"$state/tag-lag"
+      fi
+      exit 0 ;;
   esac
 fi
 if [[ "$1 $2" == "release list" ]]; then
