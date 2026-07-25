@@ -16,7 +16,7 @@ Signed Desktop releases can follow the Stable channel or opt into Beta updates f
 | Tool | What you can switch |
 | --- | --- |
 | Codex | Login and settings |
-| Claude Code | Subscription login |
+| Claude Code | Account login |
 | Antigravity | Consumer OAuth login |
 
 You can also view local Codex usage and check usage limits. See [supported tools and limitations](docs/index.md#supported-tools).

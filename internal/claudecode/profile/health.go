@@ -150,7 +150,7 @@ func InspectHealth(ctx context.Context, db *store.Store, inspect TargetInspector
 	if authErr != nil {
 		level, id, message := doctorcore.LevelError, "claude_code_login_invalid", "Claude Code login working copy is invalid"
 		if claudecodeauth.IsKind(authErr, claudecodeauth.ErrorUnsupportedAccountType) {
-			id, message = "claude_code_login_unsupported", "Claude Code login working copy does not report an active Pro, Max, Team, or Enterprise subscription"
+			id, message = "claude_code_login_unsupported", "Claude Code login working copy is not an account login from /login"
 		}
 		findings = append(findings, doctorcore.Finding{ID: id, Level: level, Message: message})
 	} else {

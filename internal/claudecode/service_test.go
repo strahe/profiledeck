@@ -911,6 +911,52 @@ func TestClaudeCodeReplacementProbeUsesAtomicRenameAndCleansUp(t *testing.T) {
 	}
 }
 
+func TestClaudeCodeListProfilesWithoutProviderReturnsEmpty(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	if _, err := initClaudeCodeTestRuntime(ctx, configDir); err != nil {
+		t.Fatal(err)
+	}
+	list, err := newClaudeCodeTestEnvironment(t, configDir).claudeCode.ListProfiles(ctx)
+	if err != nil {
+		t.Fatalf("ListProfiles without Provider error = %v", err)
+	}
+	if list.Profiles == nil || len(list.Profiles) != 0 {
+		t.Fatalf("expected non-nil empty profile list, got %#v", list.Profiles)
+	}
+}
+
+func TestClaudeCodeDetectAndCreateAcceptsNullSubscriptionType(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	credentialPath := filepath.Join(t.TempDir(), claudecodeconfig.CredentialsFile)
+	if _, err := initClaudeCodeTestRuntime(ctx, configDir); err != nil {
+		t.Fatal(err)
+	}
+	seedClaudeCodeFileProvider(t, ctx, configDir, credentialPath)
+	writeClaudeCodeCredential(t, credentialPath, `{"claudeAiOauth":{"accessToken":"free-access","refreshToken":"free-refresh","expiresAt":4102444800000,"subscriptionType":null,"rateLimitTier":"default_claude_ai"}}`)
+
+	detect, err := newClaudeCodeTestEnvironment(t, configDir).claudeCode.Detect(ctx, ClaudeCodeDetectRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detect.CredentialStatus != claudecodeauth.StatusValid {
+		t.Fatalf("detect status = %q, want %q; warnings=%v", detect.CredentialStatus, claudecodeauth.StatusValid, detect.Warnings)
+	}
+
+	created, err := newClaudeCodeTestEnvironment(t, configDir).claudeCode.CreateProfile(ctx, CreateClaudeCodeProfileRequest{ProfileID: "free"})
+	if err != nil {
+		t.Fatalf("CreateProfile with null subscriptionType error = %v", err)
+	}
+	if created.Summary.CredentialStatus != claudecodeauth.StatusValid {
+		t.Fatalf("created profile status = %#v", created.Summary)
+	}
+	credential := claudeCodeCredentialForProfile(t, ctx, configDir, "free")
+	if !strings.Contains(credential.PayloadJSON, `"subscriptionType":null`) {
+		t.Fatalf("saved payload rewrote subscriptionType: %s", credential.PayloadJSON)
+	}
+}
+
 func seedClaudeCodeFileProvider(t *testing.T, ctx context.Context, configDir, credentialPath string) {
 	t.Helper()
 	db, err := openHealthyStore(ctx, configDir, false)

@@ -177,7 +177,7 @@ func (Adapter) Finalize(_ context.Context, input switchplan.Input, preparedResul
 				warnings = append(warnings, "Expired current Claude Code login will not overwrite the saved active login")
 			}
 		} else if claudecodeauth.IsKind(err, claudecodeauth.ErrorUnsupportedAccountType) {
-			warnings = append(warnings, "Current Claude Code login does not report an active Pro, Max, Team, or Enterprise subscription and will not be captured")
+			warnings = append(warnings, "Current Claude Code login is not an account login from /login and will not be captured")
 		} else {
 			warnings = append(warnings, "Current Claude Code login is invalid and will not be captured")
 		}

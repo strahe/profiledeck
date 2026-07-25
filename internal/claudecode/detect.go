@@ -105,7 +105,7 @@ func (service *Service) Detect(ctx context.Context, req ClaudeCodeDetectRequest)
 	if err != nil {
 		if claudecodeauth.IsKind(err, claudecodeauth.ErrorUnsupportedAccountType) {
 			result.CredentialStatus = claudecodeauth.StatusUnsupported
-			result.Warnings = append(result.Warnings, "Claude Code does not report an active Pro, Max, Team, or Enterprise subscription for this login")
+			result.Warnings = append(result.Warnings, "Claude Code login is not an account login from /login")
 		} else {
 			result.CredentialStatus = claudecodeauth.StatusInvalid
 			result.Warnings = append(result.Warnings, "Claude Code login is invalid")

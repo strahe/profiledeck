@@ -20,7 +20,7 @@ This value is the parent config directory. ProfileDeck creates or uses its `prof
 | --- | --- |
 | `antigravity` | Save and manage Antigravity Profiles. |
 | `backup` | Create, export, restore, and manage encrypted application backups. |
-| `claude-code` | Save and manage official Claude Code subscription Profiles. |
+| `claude-code` | Save and manage Claude Code account-login Profiles. |
 | `codex` | Manage Codex Profiles and saved settings (Config Sets). |
 | `doctor` | Diagnose local-data, permission, and interrupted-operation problems. |
 | `init` | Create ProfileDeck's local data. |
@@ -88,7 +88,7 @@ profiledeck claude-code profile save-current [--yes] [--json]
 profiledeck claude-code profile delete <profile-id> --yes [--json]
 ```
 
-`create` saves the current official Claude Code subscription login and makes the new Profile current. `save-current` updates the login used by the current Profile. If that saved login is shared, the command reports how many Profiles will change and requires `--yes`.
+`create` saves the current Claude Code account login and makes the new Profile current. `save-current` updates the login used by the current Profile. If that saved login is shared, the command reports how many Profiles will change and requires `--yes`.
 
 There is no `claude` alias. Switch with `profiledeck plan claude-code <profile-id>` and `profiledeck switch claude-code <profile-id> --yes`. Commands show login status and safe metadata, never token values.
 

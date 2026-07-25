@@ -34,10 +34,7 @@ func TestNormalizeRejectsUnsupportedAndInvalidLogins(t *testing.T) {
 		unsupported bool
 	}{
 		{name: "console shape", raw: `{"apiKey":"secret"}`, unsupported: true},
-		{name: "missing subscription", raw: `{"claudeAiOauth":{"accessToken":"a","refreshToken":"r"}}`, unsupported: true},
-		{name: "null subscription", raw: `{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","subscriptionType":null}}`, unsupported: true},
 		{name: "oauth wrong type", raw: `{"claudeAiOauth":"invalid"}`},
-		{name: "empty subscription", raw: `{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","subscriptionType":""}}`},
 		{name: "subscription wrong type", raw: `{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","subscriptionType":1}}`},
 		{name: "missing access", raw: `{"claudeAiOauth":{"refreshToken":"r","subscriptionType":"max"}}`},
 		{name: "missing refresh", raw: `{"claudeAiOauth":{"accessToken":"a","subscriptionType":"max"}}`},
@@ -51,6 +48,61 @@ func TestNormalizeRejectsUnsupportedAndInvalidLogins(t *testing.T) {
 			}
 			if got := IsKind(err, ErrorUnsupportedAccountType); got != test.unsupported {
 				t.Fatalf("unsupported = %v, want %v; error = %v", got, test.unsupported, err)
+			}
+		})
+	}
+}
+
+func TestNormalizeAcceptsUnknownSubscriptionTier(t *testing.T) {
+	tests := []struct {
+		name               string
+		raw                string
+		subscriptionType   string
+		normalizedContains string
+	}{
+		{
+			name:               "missing subscription",
+			raw:                `{"claudeAiOauth":{"accessToken":"a","refreshToken":"r"}}`,
+			subscriptionType:   "",
+			normalizedContains: `"accessToken":"a"`,
+		},
+		{
+			name:               "null subscription",
+			raw:                `{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","subscriptionType":null}}`,
+			subscriptionType:   "",
+			normalizedContains: `"subscriptionType":null`,
+		},
+		{
+			name:               "empty subscription",
+			raw:                `{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","subscriptionType":""}}`,
+			subscriptionType:   "",
+			normalizedContains: `"subscriptionType":""`,
+		},
+		{
+			name:               "whitespace subscription",
+			raw:                `{"claudeAiOauth":{"accessToken":"a","refreshToken":"r","subscriptionType":"  "}}`,
+			subscriptionType:   "",
+			normalizedContains: `"subscriptionType":"  "`,
+		},
+		{
+			name: "free tier shape",
+			raw: `{"claudeAiOauth":{"accessToken":"access","refreshToken":"refresh","expiresAt":4102444800000,` +
+				`"subscriptionType":null,"rateLimitTier":"default_claude_ai","scopes":["user:inference"]}}`,
+			subscriptionType:   "",
+			normalizedContains: `"rateLimitTier":"default_claude_ai"`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			normalized, info, err := Normalize([]byte(test.raw))
+			if err != nil {
+				t.Fatalf("Normalize() error = %v", err)
+			}
+			if info.SubscriptionType != test.subscriptionType {
+				t.Fatalf("SubscriptionType = %q, want %q", info.SubscriptionType, test.subscriptionType)
+			}
+			if !strings.Contains(normalized, test.normalizedContains) {
+				t.Fatalf("normalized JSON missing %q: %s", test.normalizedContains, normalized)
 			}
 		})
 	}

@@ -47,7 +47,7 @@ The shell command `export PATH=...` updates `PATH` for the current shell. For fu
 Prepare the selected tool first:
 
 - **Codex:** confirm that `config.toml` and `auth.json` exist in `CODEX_HOME` or `~/.codex`. If `auth.json` is missing, follow the [Codex prerequisite](../codex/profiles.md#before-you-start).
-- **Claude Code:** run `/login` in Claude Code with an official subscription account.
+- **Claude Code:** run `/login` in Claude Code.
 - **Antigravity:** sign in to Antigravity and confirm that it works.
 
 In Desktop, select the tool and use the save action on its Profiles page. Enter a permanent Profile ID and a display name. To save another account, sign in to that account in the tool, return to ProfileDeck, and save another Profile.

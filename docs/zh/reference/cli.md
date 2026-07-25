@@ -20,7 +20,7 @@
 | --- | --- |
 | `antigravity` | 保存和管理 Antigravity Profile。 |
 | `backup` | 创建、导出、恢复和管理加密应用备份。 |
-| `claude-code` | 保存和管理 Claude Code 官方订阅 Profile。 |
+| `claude-code` | 保存和管理 Claude Code 账号登录 Profile。 |
 | `codex` | 管理 Codex Profile 和已保存设置（配置集）。 |
 | `doctor` | 诊断本地数据、权限和中断操作的问题。 |
 | `init` | 创建 ProfileDeck 本地数据。 |
@@ -88,7 +88,7 @@ profiledeck claude-code profile save-current [--yes] [--json]
 profiledeck claude-code profile delete <profile-id> --yes [--json]
 ```
 
-`create` 保存当前 Claude Code 官方订阅登录，并把新 Profile 设为当前 Profile。`save-current` 更新当前 Profile 使用的登录。如果该登录被共享，命令会报告受影响的 Profile 数量，并要求传入 `--yes`。
+`create` 保存当前 Claude Code 账号登录，并把新 Profile 设为当前 Profile。`save-current` 更新当前 Profile 使用的登录。如果该登录被共享，命令会报告受影响的 Profile 数量，并要求传入 `--yes`。
 
 Claude Code 没有 `claude` 别名。请使用 `profiledeck plan claude-code <profile-id>` 和 `profiledeck switch claude-code <profile-id> --yes` 切换。命令只显示登录状态和安全元数据，不会显示令牌值。
 

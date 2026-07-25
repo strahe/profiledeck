@@ -14,14 +14,14 @@ import (
 
 func newClaudeCodeCommand() *urfavecli.Command {
 	return &urfavecli.Command{
-		Name: "claude-code", Usage: "Manage official Claude Code subscription Profiles",
+		Name: "claude-code", Usage: "Manage Claude Code account-login Profiles",
 		Commands: []*urfavecli.Command{newClaudeCodeDetectCommand(), newClaudeCodeProfileCommand()},
 	}
 }
 
 func newClaudeCodeDetectCommand() *urfavecli.Command {
 	return &urfavecli.Command{
-		Name: "detect", Usage: "Detect the official Claude Code subscription login",
+		Name: "detect", Usage: "Detect the current Claude Code account login",
 		Flags: []urfavecli.Flag{boolFlag(jsonFlagName, "Write JSON output")},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
 			application, err := applicationFor(cmd)
@@ -42,7 +42,7 @@ func newClaudeCodeDetectCommand() *urfavecli.Command {
 
 func newClaudeCodeProfileCommand() *urfavecli.Command {
 	return &urfavecli.Command{
-		Name: "profile", Usage: "Manage official Claude Code subscription Profiles",
+		Name: "profile", Usage: "Manage Claude Code account-login Profiles",
 		Commands: []*urfavecli.Command{
 			newClaudeCodeProfileCreateCommand(), newClaudeCodeProfileListCommand(), newClaudeCodeProfileShowCommand(),
 			newClaudeCodeProfileUpdateCommand(), newClaudeCodeProfileSaveCurrentCommand(), newProfileDeleteCommand(),
@@ -52,7 +52,7 @@ func newClaudeCodeProfileCommand() *urfavecli.Command {
 
 func newClaudeCodeProfileCreateCommand() *urfavecli.Command {
 	return &urfavecli.Command{
-		Name: "create", Usage: "Save and activate the current Claude Code subscription login as a Profile", ArgsUsage: "<profile-id>",
+		Name: "create", Usage: "Save and activate the current Claude Code account login as a Profile", ArgsUsage: "<profile-id>",
 		Flags: []urfavecli.Flag{
 			stringFlag(nameFlagName, "Profile display name"), stringFlag(descriptionFlagName, "Profile description"),
 			boolFlag(jsonFlagName, "Write JSON output"),
@@ -160,7 +160,7 @@ func newClaudeCodeProfileUpdateCommand() *urfavecli.Command {
 
 func newClaudeCodeProfileSaveCurrentCommand() *urfavecli.Command {
 	return &urfavecli.Command{
-		Name: "save-current", Usage: "Save the current Claude Code subscription login into the active Profile",
+		Name: "save-current", Usage: "Save the current Claude Code account login into the active Profile",
 		Flags: []urfavecli.Flag{
 			boolFlag(yesFlagName, "Confirm updating a login shared by multiple Profiles"),
 			boolFlag(jsonFlagName, "Write JSON output"),

@@ -38,7 +38,7 @@ type CompatibilityError struct {
 
 func (err *CompatibilityError) Error() string {
 	if err != nil && err.Kind == ErrorUnsupportedAccountType {
-		return "Claude Code login does not report an active Pro, Max, Team, or Enterprise subscription"
+		return "Claude Code login is not an account login from /login"
 	}
 	return "Claude Code login is invalid"
 }
@@ -76,13 +76,15 @@ func Normalize(raw []byte) (string, Info, error) {
 	if !nonEmptyString(oauth["accessToken"]) || !nonEmptyString(oauth["refreshToken"]) {
 		return "", Info{}, &CompatibilityError{Kind: ErrorInvalid}
 	}
-	subscriptionValue, exists := oauth["subscriptionType"]
-	if !exists || subscriptionValue == nil {
-		return "", Info{}, &CompatibilityError{Kind: ErrorUnsupportedAccountType}
-	}
-	subscriptionType, ok := subscriptionValue.(string)
-	if !ok || strings.TrimSpace(subscriptionType) == "" {
-		return "", Info{}, &CompatibilityError{Kind: ErrorInvalid}
+	// subscriptionType is optional compatibility metadata. null, absent, or blank
+	// means unknown tier (including free/lapsed accounts); do not rewrite the payload.
+	subscriptionType := ""
+	if value, exists := oauth["subscriptionType"]; exists && value != nil {
+		text, ok := value.(string)
+		if !ok {
+			return "", Info{}, &CompatibilityError{Kind: ErrorInvalid}
+		}
+		subscriptionType = strings.TrimSpace(text)
 	}
 	info := Info{CompatibilityVersion: CompatibilityVersion, SubscriptionType: subscriptionType}
 	if value, exists := oauth["expiresAt"]; exists {

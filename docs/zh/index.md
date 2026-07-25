@@ -16,7 +16,7 @@ Universal 桌面端要求 macOS 14 或更高版本，可在 Apple 芯片和 Inte
 | 工具 | ProfileDeck 切换的内容 | 不受影响的内容 |
 | --- | --- | --- |
 | Codex | 已保存登录和可复用的用户级设置 | 会话、日志、Skills、项目设置和系统策略 |
-| Claude Code | 官方订阅登录 | Claude Code 设置、插件、API Key、云服务和 Claude Desktop |
+| Claude Code | `/login` 账号登录 | Claude Code 设置、插件、API Key、云服务和 Claude Desktop |
 | Antigravity | 个人 OAuth 登录 | 登录流程、设置、配额、Manager 数据以及 SSH 或容器登录文件 |
 
 Codex 用量报告与 Profile 切换相互独立。报告汇总本地会话数据，不会把用量归属到某个 Profile 或账号。

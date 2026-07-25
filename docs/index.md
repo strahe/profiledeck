@@ -16,7 +16,7 @@ The Universal Desktop app requires macOS 14 or later and runs natively on Apple 
 | Tool | What ProfileDeck switches | What stays unchanged |
 | --- | --- | --- |
 | Codex | A saved login and reusable user-level settings | Sessions, logs, skills, project settings, and system policy |
-| Claude Code | An official subscription login | Claude Code settings, plugins, API keys, cloud providers, and Claude Desktop |
+| Claude Code | Account login from `/login` | Claude Code settings, plugins, API keys, cloud providers, and Claude Desktop |
 | Antigravity | A consumer OAuth login | Sign-in flow, settings, quotas, Manager data, and SSH or container login files |
 
 Codex usage reports are separate from Profile switching. They summarize local session data without assigning activity to a Profile or account.

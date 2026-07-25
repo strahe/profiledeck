@@ -1,14 +1,13 @@
 # Claude Code Profile
 
-一个 Claude Code Profile 保存一份官方订阅登录。ProfileDeck 不会修改 Claude Code 设置、MCP 服务器、插件、API Key、云服务认证或 Claude Desktop。
+一个 Claude Code Profile 保存一份 Claude Code 账号登录。ProfileDeck 不会修改 Claude Code 设置、MCP 服务器、插件、API Key、云服务认证或 Claude Desktop。
 
 ## 开始前准备
 
 - 桌面端会自动初始化 ProfileDeck；CLI 用户需要先运行一次 `profiledeck init`。
 - 保存 Profile 前，先在 Claude Code 中运行 `/login`。
-- 使用官方 Pro、Max、Team 或 Enterprise 订阅登录。
 
-ProfileDeck 不会保存 Console/API Key 登录或云服务认证，也不会代替用户完成 Claude Code 登录。
+ProfileDeck 只保存 `/login` 得到的账号登录，不保存 API Key 或 Console 登录，也不会代替你登录。
 
 ## 在桌面端保存 Profile
 
@@ -88,7 +87,7 @@ ProfileDeck 使用 `CLAUDE_CONFIG_DIR` 下的 `.credentials.json`；未设置该
 
 ## Claude Code 使用了错误账号
 
-Claude Code 设置、`apiKeyHelper`、API Key 环境变量和云服务选项可能优先于所选订阅登录。ProfileDeck 会报告自身进程可见的受支持认证覆盖变量名称，但无法检查其他终端或已经运行的 Claude Code 进程。
+Claude Code 设置、`apiKeyHelper`、API Key 环境变量和云服务选项可能优先于所选账号登录。ProfileDeck 会报告自身进程可见的受支持认证覆盖变量名称，但无法检查其他终端或已经运行的 Claude Code 进程。
 
 请新建会话、运行 `/status`，并在所选账号未生效时查阅 [Claude Code 认证文档](https://code.claude.com/docs/en/authentication)。
 

@@ -88,7 +88,16 @@ func (service *Service) ListProfiles(ctx context.Context) (ClaudeCodeProfileList
 		return ClaudeCodeProfileListResult{}, err
 	}
 	defer db.Close()
-	if _, err := requireClaudeCodeProvider(ctx, db); err != nil {
+	// First-run and never-saved states have no Provider yet; return an empty
+	// list instead of PROVIDER_NOT_FOUND so Desktop can show the empty state.
+	provider, err := db.GetProvider(ctx, claudecodeconfig.ProviderID)
+	if errors.Is(err, store.ErrNotFound) {
+		return ClaudeCodeProfileListResult{Profiles: []ClaudeCodeProfileSummary{}}, nil
+	}
+	if err != nil {
+		return ClaudeCodeProfileListResult{}, mapProviderStoreError(err)
+	}
+	if _, err := validateClaudeCodeProvider(provider); err != nil {
 		return ClaudeCodeProfileListResult{}, err
 	}
 	profiles, err := listClaudeCodeProfileSummaries(ctx, db)
@@ -393,7 +402,7 @@ func normalizeCurrentClaudeCodeCredential(snapshot switchtarget.Snapshot) (strin
 	payload, info, err := claudecodeauth.Normalize([]byte(snapshot.Content))
 	if err != nil {
 		if claudecodeauth.IsKind(err, claudecodeauth.ErrorUnsupportedAccountType) {
-			return "", claudecodeauth.Info{}, apperror.New(apperror.ClaudeCodeInvalid, "Claude Code login does not report an active Pro, Max, Team, or Enterprise subscription").WithDetail("reason", "unsupported_account_type")
+			return "", claudecodeauth.Info{}, apperror.New(apperror.ClaudeCodeInvalid, "Claude Code login is not an account login from /login").WithDetail("reason", "unsupported_account_type")
 		}
 		return "", claudecodeauth.Info{}, apperror.New(apperror.ClaudeCodeInvalid, "Claude Code login is invalid")
 	}

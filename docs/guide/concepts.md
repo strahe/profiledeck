@@ -7,7 +7,7 @@ A Profile names the login and settings you want to use for one supported tool. S
 | Tool | Saved login | Saved settings |
 | --- | --- | --- |
 | Codex | One Codex login | Saved Codex settings, called a Config Set |
-| Claude Code | One official subscription login | Not included |
+| Claude Code | One account login | Not included |
 | Antigravity | One consumer OAuth login | Not included |
 
 Each Profile has a permanent ID used by CLI commands and links. Profile IDs share one namespace across tools, and one Profile can contain saved data for more than one tool.
@@ -17,7 +17,7 @@ Each Profile has a permanent ID used by CLI commands and links. Profile IDs shar
 ProfileDeck records one current Profile for each supported tool. The current Profile is the one represented by that tool's working login or files:
 
 - Codex uses `auth.json` and `config.toml` in the active Codex home.
-- Claude Code uses its official subscription login in Keychain on macOS or its credential file on Linux and Windows.
+- Claude Code stores its account login in Keychain on macOS or a credential file on Linux and Windows.
 - Antigravity uses its current login in the system credential store.
 
 Before leaving the current Profile, ProfileDeck preserves a valid refreshed login or valid Codex settings when it can do so safely. Missing, invalid, or unsupported content is reported instead of being saved silently.

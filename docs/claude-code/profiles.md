@@ -1,14 +1,13 @@
 # Claude Code Profiles
 
-A Claude Code Profile saves one official subscription login. ProfileDeck does not change Claude Code settings, MCP servers, plugins, API keys, cloud-provider authentication, or Claude Desktop.
+A Claude Code Profile saves one Claude Code account login. ProfileDeck does not change Claude Code settings, MCP servers, plugins, API keys, cloud-provider authentication, or Claude Desktop.
 
 ## Before you start
 
 - Desktop initializes ProfileDeck automatically. CLI users must run `profiledeck init` once.
 - Run `/login` in Claude Code before saving a Profile.
-- Use an official Pro, Max, Team, or Enterprise subscription login.
 
-Console/API-key logins and cloud-provider authentication are not saved. ProfileDeck does not perform the Claude Code login for you.
+ProfileDeck only saves the account login from `/login`. It does not save API keys or Console sign-in, and it does not sign you in.
 
 ## Save Profiles in Desktop
 
@@ -88,7 +87,7 @@ If a later CLI process sees a different `CLAUDE_CONFIG_DIR`, ProfileDeck warns i
 
 ## If Claude Code uses the wrong account
 
-Claude Code settings, `apiKeyHelper`, API-key environment variables, and cloud-provider options can take precedence over the selected subscription login. ProfileDeck reports the names of supported authentication override variables visible to its own process, but it cannot inspect another terminal or an already running Claude Code process.
+Claude Code settings, `apiKeyHelper`, API-key environment variables, and cloud-provider options can take precedence over the selected account login. ProfileDeck reports the names of supported authentication override variables visible to its own process, but it cannot inspect another terminal or an already running Claude Code process.
 
 Start a new session, run `/status`, and review the [Claude Code authentication documentation](https://code.claude.com/docs/en/authentication) when the selected account is not active.
 
