@@ -250,6 +250,11 @@ func setupTray(ctx context.Context, wailsApp *application.App, mainWindow *appli
 	tray.OnClick(func() {
 		runTrayAction(controller.openMainWindow)
 	})
+	removeStartedHandler := wailsApp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		// macOS persists NSStatusItem visibility. Restore it after Wails creates
+		// the native tray so a previous hidden state cannot survive relaunch.
+		tray.Show()
+	})
 	removeLocaleHandler := wailsApp.Event.On(trayLocaleChangedEventName, func(event *application.CustomEvent) {
 		if locale, ok := event.Data.(string); ok {
 			controller.SetLocale(locale)
@@ -258,6 +263,7 @@ func setupTray(ctx context.Context, wailsApp *application.App, mainWindow *appli
 	controller.Refresh(nil, false)
 	cleanupTrayRefresh := subscribeTrayRefresh(services, controller)
 	wailsApp.OnShutdown(func() {
+		removeStartedHandler()
 		removeLocaleHandler()
 		cleanupTrayRefresh()
 	})

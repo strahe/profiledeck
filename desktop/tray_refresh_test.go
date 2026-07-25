@@ -463,6 +463,22 @@ func TestTrayControllerRefreshSetsMenuBeforeDashboardEvent(t *testing.T) {
 	}
 }
 
+func TestTrayControllerQuitLeavesTrayVisibilityToShutdown(t *testing.T) {
+	ui := newFakeTrayUI()
+	controller := &trayController{ui: ui}
+
+	controller.quit()
+
+	if got := waitForTrayUICall(t, ui); got != "quit" {
+		t.Fatalf("expected application quit, got %q", got)
+	}
+	select {
+	case call := <-ui.calls:
+		t.Fatalf("unexpected tray action before shutdown: %q", call)
+	default:
+	}
+}
+
 func TestTrayErrorLabelDoesNotExposeRawError(t *testing.T) {
 	rawPath := "/Users/alice/Library/Application Support/profiledeck/profiledeck.db"
 	err := fmt.Errorf("open %s: permission denied", rawPath)
@@ -512,9 +528,9 @@ func (ui *fakeTrayUI) Emit(name string, data ...any) {
 
 func (ui *fakeTrayUI) ShowMainWindow() {}
 
-func (ui *fakeTrayUI) HideTray() {}
-
-func (ui *fakeTrayUI) Quit() {}
+func (ui *fakeTrayUI) Quit() {
+	ui.calls <- "quit"
+}
 
 func waitForMenu(t *testing.T, ui *fakeTrayUI) *application.Menu {
 	t.Helper()

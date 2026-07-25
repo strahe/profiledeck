@@ -20,7 +20,6 @@ type trayUI interface {
 	SetMenu(*application.Menu)
 	Emit(name string, data ...any)
 	ShowMainWindow()
-	HideTray()
 	Quit()
 }
 
@@ -40,10 +39,6 @@ func (ui wailsTrayUI) Emit(name string, data ...any) {
 
 func (ui wailsTrayUI) ShowMainWindow() {
 	showMainWindow(ui.window)
-}
-
-func (ui wailsTrayUI) HideTray() {
-	ui.tray.Hide()
 }
 
 func (ui wailsTrayUI) Quit() {
@@ -171,7 +166,6 @@ func (c *trayController) rebuildTrayMenu() {
 }
 
 func (c *trayController) quit() {
-	c.ui.HideTray()
 	c.ui.Quit()
 }
 
