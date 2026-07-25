@@ -67,14 +67,27 @@ func TestClientReadsCodexQuotaAndMapsRemainingPercent(t *testing.T) {
 	}
 }
 
+// handlerRoundTripper serves handlers in-process so tests do not need loopback
+// network access (which restricted sandboxes may deny).
 type handlerRoundTripper struct {
 	handler http.Handler
 }
 
 func (transport handlerRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	if err := request.Context().Err(); err != nil {
+		return nil, err
+	}
 	recorder := httptest.NewRecorder()
 	transport.handler.ServeHTTP(recorder, request)
 	return recorder.Result(), nil
+}
+
+func testQuotaClient(handler http.Handler) *Client {
+	return &Client{
+		httpClient: &http.Client{Transport: handlerRoundTripper{handler: handler}},
+		endpoint:   "https://quota.test/wham/usage",
+		now:        time.Now,
+	}
 }
 
 func TestClientClassifiesFailuresWithoutLeakingResponseBody(t *testing.T) {
@@ -90,12 +103,10 @@ func TestClientClassifiesFailuresWithoutLeakingResponseBody(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			client := testQuotaClient(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tc.code)
 				_, _ = w.Write([]byte(tc.body))
 			}))
-			defer server.Close()
-			client := &Client{httpClient: server.Client(), endpoint: server.URL, now: time.Now}
 			_, err := client.Read(context.Background(), Credentials{AccessToken: "token-secret", AccountID: "workspace"})
 			if err == nil || KindOf(err) != tc.kind {
 				t.Fatalf("expected %s error, got %v", tc.kind, err)
@@ -121,11 +132,9 @@ func TestClientRejectsOversizedOrIncompleteResponses(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			client := testQuotaClient(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = w.Write([]byte(tc.body))
 			}))
-			defer server.Close()
-			client := &Client{httpClient: server.Client(), endpoint: server.URL, now: time.Now}
 			_, err := client.Read(context.Background(), Credentials{AccessToken: "token", AccountID: "workspace"})
 			if err == nil || KindOf(err) != ErrorInvalidResponse {
 				t.Fatalf("expected invalid response for body size %d, got %v", len(tc.body), err)
@@ -136,18 +145,18 @@ func TestClientRejectsOversizedOrIncompleteResponses(t *testing.T) {
 
 func TestNewClientDoesNotFollowRedirects(t *testing.T) {
 	redirected := false
-	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		redirected = true
-	}))
-	defer target.Close()
-
-	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, target.URL, http.StatusFound)
-	}))
-	defer source.Close()
-
+	// Keep NewClient's CheckRedirect policy and only replace the transport so
+	// the test stays loopback-free under network-restricted sandboxes.
 	client := NewClient()
-	client.endpoint = source.URL
+	client.httpClient.Transport = handlerRoundTripper{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirect-target" {
+			redirected = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.Redirect(w, r, "https://quota.test/redirect-target", http.StatusFound)
+	})}
+	client.endpoint = "https://quota.test/wham/usage"
 	_, err := client.Read(context.Background(), Credentials{AccessToken: "token-secret", AccountID: "workspace"})
 	if err == nil || KindOf(err) != ErrorRemoteUnavailable {
 		t.Fatalf("expected redirect to be rejected, got %v", err)
@@ -160,7 +169,11 @@ func TestNewClientDoesNotFollowRedirects(t *testing.T) {
 func TestClientPreservesContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	client := NewClient()
+	// Use an in-process transport so a canceled request never needs network.
+	// handlerRoundTripper honors request context the same way a real transport would.
+	client := testQuotaClient(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("canceled request should not be served")
+	}))
 	_, err := client.Read(ctx, Credentials{AccessToken: "token", AccountID: "workspace"})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected cancellation to be preserved, got %v", err)
