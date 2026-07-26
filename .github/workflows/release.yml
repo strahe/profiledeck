@@ -298,7 +298,7 @@ jobs:
 
   build-linux:
     needs: validate
-    runs-on: ${{ vars.LINUX_RELEASE_RUNS_ON || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-24.04' }}
     env:
       VERSION: ${{ needs.validate.outputs.version }}
       RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
