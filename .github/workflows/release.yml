@@ -4,13 +4,19 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (X.Y.Z or X.Y.Z-beta.N)
+        required: true
+        type: string
 
 permissions:
   actions: read
   contents: read
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release
   cancel-in-progress: false
 
 env:
@@ -25,12 +31,13 @@ jobs:
       version: ${{ steps.contract.outputs.version }}
       tag: ${{ steps.contract.outputs.tag }}
       channel: ${{ steps.contract.outputs.channel }}
-      commit: ${{ steps.source.outputs.commit }}
-      built_at: ${{ steps.source.outputs.built_at }}
+      commit: ${{ steps.contract.outputs.commit }}
+      built_at: ${{ steps.contract.outputs.built_at }}
     steps:
-      - name: Checkout tag
+      - name: Checkout release source
         uses: actions/checkout@v7
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Setup Go
@@ -39,23 +46,49 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Validate tag source
-        id: source
+      - name: Resolve release contract
+        id: contract
         shell: bash
+        env:
+          MANUAL_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          case "$GITHUB_REF" in
-            refs/tags/v*) ;;
-            *) echo "::error::Releases require a v<version> tag."; exit 1 ;;
-          esac
-          printf 'commit=%s\n' "$(git rev-parse 'HEAD^{commit}')" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+              echo "::error::Manual releases must run from main."
+              exit 1
+            fi
+            candidate="$MANUAL_VERSION"
+          else
+            case "$GITHUB_REF" in
+              refs/tags/v*) candidate="${GITHUB_REF_NAME#v}" ;;
+              *) echo "::error::Tag releases require a v<version> tag."; exit 1 ;;
+            esac
+          fi
+
+          version="$(go run ./scripts/releasetool contract --version "$candidate" --field version)"
+          tag="$(go run ./scripts/releasetool contract --version "$candidate" --field tag)"
+          channel="$(go run ./scripts/releasetool contract --version "$candidate" --field channel)"
+          if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" && "$tag" != "$GITHUB_REF_NAME" ]]; then
+            echo "::error::The Git tag does not match the release contract."
+            exit 1
+          fi
+          commit="$(git rev-parse 'HEAD^{commit}')"
+          if [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Release source did not resolve to a full Git commit."
+            exit 1
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'channel=%s\n' "$channel" >> "$GITHUB_OUTPUT"
+          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
           printf 'built_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Require successful CI for release commit
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_COMMIT: ${{ steps.source.outputs.commit }}
+          RELEASE_COMMIT: ${{ steps.contract.outputs.commit }}
         run: |
           set -euo pipefail
           if ! git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main; then
@@ -78,22 +111,21 @@ jobs:
             exit 1
           fi
 
-      - name: Read release contract
-        id: contract
+      - name: Reject a conflicting release tag
         shell: bash
+        env:
+          RELEASE_COMMIT: ${{ steps.contract.outputs.commit }}
+          TAG: ${{ steps.contract.outputs.tag }}
         run: |
           set -euo pipefail
-          candidate="${GITHUB_REF_NAME#v}"
-          version="$(go run ./scripts/releasetool contract --version "$candidate" --field version)"
-          tag="$(go run ./scripts/releasetool contract --version "$candidate" --field tag)"
-          channel="$(go run ./scripts/releasetool contract --version "$candidate" --field channel)"
-          if [[ "$tag" != "$GITHUB_REF_NAME" ]]; then
-            echo "::error::The Git tag does not match the release contract."
+          if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            exit 0
+          fi
+          tag_commit="$(git rev-parse --verify -q "refs/tags/$TAG^{commit}" || true)"
+          if [[ -n "$tag_commit" && "$tag_commit" != "$RELEASE_COMMIT" ]]; then
+            echo "::error::The release tag already points to another commit."
             exit 1
           fi
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
-          printf 'channel=%s\n' "$channel" >> "$GITHUB_OUTPUT"
 
       - name: Reject an existing Draft or Release
         env:
@@ -329,6 +361,7 @@ jobs:
       VERSION: ${{ needs.validate.outputs.version }}
       TAG: ${{ needs.validate.outputs.tag }}
       CHANNEL: ${{ needs.validate.outputs.channel }}
+      RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
@@ -368,6 +401,21 @@ jobs:
         run: |
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "::error::A Draft or Release already exists for $TAG."
+            exit 1
+          fi
+
+      - name: Create exact manual release tag
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin "${RELEASE_COMMIT}:refs/tags/$TAG"
+          remote_tag="$(
+            git ls-remote --refs --tags origin "refs/tags/$TAG" |
+              awk 'NR == 1 { print $1 }'
+          )"
+          if [[ "$remote_tag" != "$RELEASE_COMMIT" ]]; then
+            echo "::error::The manual release tag does not point to the validated commit."
             exit 1
           fi
 
