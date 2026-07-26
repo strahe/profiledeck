@@ -3,7 +3,9 @@ package update
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/base64"
+	"crypto/x509"
+	_ "embed"
+	"encoding/pem"
 	"errors"
 	"log"
 	"os"
@@ -19,10 +21,15 @@ import (
 	coreapp "github.com/strahe/profiledeck/internal/app"
 	"github.com/strahe/profiledeck/internal/appbackup"
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/releaseartifact"
 )
 
 const (
 	StatusEventName = "profiledeck:update-status"
+
+	ManagementApplication = "application"
+	ManagementPackage     = "package"
+	ManagementUnavailable = "unavailable"
 
 	StateUnavailable = "unavailable"
 	StateIdle        = "idle"
@@ -34,13 +41,17 @@ const (
 	StateReady       = "ready"
 	StateError       = "error"
 
-	ErrorConfigurationInvalid = "configuration_invalid"
+	ErrorConfigurationInvalid    = "configuration_invalid"
+	ErrorInstallationUnsupported = "installation_unsupported"
 
 	defaultCheckInterval = 6 * time.Hour
 )
 
+var errUpdateReplacementUnsupported = errors.New("verified update cannot move into the install directory")
+
 type UpdateStatus struct {
 	Revision            uint64 `json:"revision"`
+	Management          string `json:"management"`
 	Configured          bool   `json:"configured"`
 	Automatic           bool   `json:"automatic"`
 	Channel             string `json:"channel"`
@@ -54,10 +65,14 @@ type UpdateStatus struct {
 }
 
 type BuildConfig struct {
-	CurrentVersion  string
-	PublicKeyBase64 string
-	CheckInterval   time.Duration
+	CurrentVersion string
+	PublicKey      []byte
+	Management     string
+	CheckInterval  time.Duration
 }
+
+//go:embed updater-public.pem
+var embeddedUpdaterPublicKey []byte
 
 type updateEngine interface {
 	Check(context.Context) (*updater.Release, error)
@@ -67,12 +82,14 @@ type updateEngine interface {
 }
 
 type Service struct {
-	application *coreapp.Application
-	provider    *channelGitHubProvider
-	publicKey   ed25519.PublicKey
-	interval    time.Duration
-	now         func() time.Time
-	executable  func() (string, error)
+	application       *coreapp.Application
+	provider          *channelGitHubProvider
+	publicKey         []byte
+	interval          time.Duration
+	now               func() time.Time
+	executable        func() (string, error)
+	verifyReplacement func(stagedPath, targetPath string) error
+	target            releaseartifact.UpdateTarget
 
 	mu         sync.RWMutex
 	status     UpdateStatus
@@ -95,26 +112,42 @@ func NewService(ctx context.Context, application *coreapp.Application, config Bu
 	if interval <= 0 {
 		interval = defaultCheckInterval
 	}
+	management := normalizeManagement(config.Management)
 	service := &Service{
-		application: application,
-		interval:    interval,
-		now:         time.Now,
-		executable:  os.Executable,
+		application:       application,
+		interval:          interval,
+		now:               time.Now,
+		executable:        os.Executable,
+		verifyReplacement: verifyUpdateReplacement,
 		status: UpdateStatus{
-			Automatic: true, State: StateUnavailable, CurrentVersion: strings.TrimSpace(config.CurrentVersion),
+			Management: management, Automatic: management == ManagementApplication,
+			State: StateUnavailable, CurrentVersion: strings.TrimSpace(config.CurrentVersion),
 		},
 	}
+	if management != ManagementApplication {
+		return service
+	}
 	if application == nil {
+		markUnavailable(&service.status, "")
+		return service
+	}
+	target, err := releaseartifact.ResolveUpdateTarget(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		markUnavailable(&service.status, "")
 		return service
 	}
 	provider, err := newGitHubProvider(config.CurrentVersion, githubProviderOptions{})
 	if err != nil {
+		markUnavailable(&service.status, "")
 		return service
 	}
-	publicKey, err := base64.StdEncoding.DecodeString(strings.TrimSpace(config.PublicKeyBase64))
-	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+	publicKey := config.PublicKey
+	if len(publicKey) == 0 {
+		publicKey = embeddedUpdaterPublicKey
+	}
+	if !validEd25519PublicKey(publicKey) {
 		// A release build must never fail open when its embedded verification key is absent or invalid.
-		service.status.ErrorCode = ErrorConfigurationInvalid
+		markUnavailable(&service.status, ErrorConfigurationInvalid)
 		return service
 	}
 	channel := provider.Channel()
@@ -123,7 +156,8 @@ func NewService(ctx context.Context, application *coreapp.Application, config Bu
 		_ = provider.SetChannel(channel)
 	}
 	service.provider = provider
-	service.publicKey = append(ed25519.PublicKey(nil), publicKey...)
+	service.publicKey = append([]byte(nil), publicKey...)
+	service.target = target
 	service.status.Configured = true
 	service.status.Channel = channel
 	service.status.State = StateIdle
@@ -138,13 +172,14 @@ func Attach(service *Service, wailsApp *application.App) error {
 		CurrentVersion: service.status.CurrentVersion,
 		Providers:      []updater.Provider{service.provider},
 		PublicKey:      append([]byte(nil), service.publicKey...),
-		Platform:       UpdatePlatform,
+		Platform:       service.target.Platform,
+		Arch:           service.target.Arch,
 		Window:         updater.WindowNone,
 	}); err != nil {
 		service.setStatus(func(status *UpdateStatus) {
 			status.Configured = false
 			status.State = StateUnavailable
-			status.ErrorCode = ErrorConfigurationInvalid
+			markUnavailable(status, ErrorConfigurationInvalid)
 		})
 		return err
 	}
@@ -249,6 +284,9 @@ func (service *Service) CheckAndDownload(ctx context.Context) UpdateStatus {
 }
 
 func (service *Service) SetAutomatic(ctx context.Context, enabled bool) UpdateStatus {
+	if !service.applicationManaged(ctx) {
+		return service.Status(ctx)
+	}
 	settings, err := service.application.Settings().SetAutomaticUpdates(ctx, enabled)
 	if err != nil {
 		service.setStatus(func(status *UpdateStatus) { status.ErrorCode = "settings_unavailable" })
@@ -266,6 +304,9 @@ func (service *Service) SetAutomatic(ctx context.Context, enabled bool) UpdateSt
 }
 
 func (service *Service) SetChannel(ctx context.Context, channel string) (UpdateStatus, error) {
+	if !service.applicationManaged(ctx) {
+		return service.Status(ctx), apperror.New(apperror.UpdateNotReady, "Application updates are not available")
+	}
 	channel, err := normalizeChannel(channel)
 	if err != nil {
 		return service.Status(ctx), apperror.New(apperror.SettingInvalid, "Unsupported update channel")
@@ -312,6 +353,9 @@ func (service *Service) SetChannel(ctx context.Context, channel string) (UpdateS
 }
 
 func (service *Service) Restart(ctx context.Context) error {
+	if !service.applicationManaged(ctx) {
+		return apperror.New(apperror.UpdateNotReady, "No application update is ready")
+	}
 	if !service.restartMu.TryLock() {
 		return apperror.New(apperror.UpdateNotReady, "An update restart is already in progress")
 	}
@@ -320,17 +364,23 @@ func (service *Service) Restart(ctx context.Context) error {
 	service.mu.RLock()
 	status, engine, restarting := service.status, service.engine, service.restarting
 	service.mu.RUnlock()
-	if restarting || status.State != StateReady || engine == nil || engine.DownloadedPath() == "" {
+	downloadedPath := ""
+	if engine != nil {
+		downloadedPath = engine.DownloadedPath()
+	}
+	if restarting || status.State != StateReady || downloadedPath == "" {
 		return apperror.New(apperror.UpdateNotReady, "No update is ready to restart")
 	}
 
 	err := service.application.Switching().RunWithSharedLock(ctx, "desktop-update", func(lockContext context.Context) error {
-		bundle, err := service.applicationBundle()
+		target, err := service.updateInstallTarget()
 		if err != nil {
 			return err
 		}
-		if err := verifyParentWritable(filepath.Dir(bundle)); err != nil {
-			return err
+		// Wails swaps the staged artifact with Rename after the app exits. Prove
+		// that move is supported before creating a backup or quitting.
+		if err := service.verifyReplacement(downloadedPath, target); err != nil {
+			return errors.Join(errUpdateReplacementUnsupported, err)
 		}
 		// A verified encrypted application backup is a restart gate: never swap
 		// the app without a recoverable copy of ProfileDeck data.
@@ -345,6 +395,22 @@ func (service *Service) Restart(ctx context.Context) error {
 		return engine.Restart(lockContext)
 	})
 	if err != nil {
+		if errors.Is(err, errUpdateReplacementUnsupported) {
+			removeWailsStaging(downloadedPath)
+			log.Printf("profiledeck: update replacement is unavailable")
+			service.setStatus(func(status *UpdateStatus) {
+				status.Configured = false
+				status.State = StateUnavailable
+				status.AvailableVersion = ""
+				status.DownloadedBytes = 0
+				status.TotalBytes = 0
+				markUnavailable(status, ErrorInstallationUnsupported)
+			})
+			return apperror.New(
+				apperror.UpdateNotReady,
+				"This installation cannot apply updates safely. Download and install a newer ProfileDeck release instead.",
+			)
+		}
 		service.mu.Lock()
 		service.restarting = false
 		service.mu.Unlock()
@@ -527,30 +593,101 @@ func channelCanChange(state string) bool {
 	}
 }
 
-func (service *Service) applicationBundle() (string, error) {
-	if runtime.GOOS != UpdatePlatform {
-		return "", errors.New("updates are only supported on macOS")
-	}
+// updateInstallTarget is the path Wails replaces on restart: the .app bundle on
+// macOS, or the running regular ELF on Linux portable builds.
+func (service *Service) updateInstallTarget() (string, error) {
 	executable, err := service.executable()
 	if err != nil {
 		return "", err
 	}
 	clean := filepath.Clean(executable)
-	for current := clean; current != filepath.Dir(current); current = filepath.Dir(current) {
-		if strings.HasSuffix(current, ".app") {
-			return current, nil
+	switch service.target.Platform {
+	case releaseartifact.PlatformDarwin:
+		for current := clean; current != filepath.Dir(current); current = filepath.Dir(current) {
+			if strings.HasSuffix(current, ".app") {
+				return current, nil
+			}
 		}
+		return "", errors.New("running executable is not inside an application bundle")
+	case releaseartifact.PlatformLinux:
+		info, err := os.Lstat(clean)
+		if err != nil {
+			return "", err
+		}
+		// The Linux helper replaces the running ELF in place. Refuse links or
+		// non-files so an update cannot redirect writes outside that target.
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return "", errors.New("running executable is not a regular file")
+		}
+		return clean, nil
+	default:
+		return "", errors.New("updates are not supported on this platform")
 	}
-	return "", errors.New("running executable is not inside an application bundle")
 }
 
-func verifyParentWritable(parent string) error {
-	probe, err := os.CreateTemp(parent, ".profiledeck-update-write-*")
+func (service *Service) applicationManaged(ctx context.Context) bool {
+	return service.Status(ctx).Management == ManagementApplication && service.application != nil
+}
+
+func markUnavailable(status *UpdateStatus, errorCode string) {
+	status.Management = ManagementUnavailable
+	status.Automatic = false
+	if errorCode != "" {
+		status.ErrorCode = errorCode
+	}
+}
+
+func normalizeManagement(value string) string {
+	switch strings.TrimSpace(value) {
+	case ManagementApplication:
+		return ManagementApplication
+	case ManagementPackage:
+		return ManagementPackage
+	default:
+		return ManagementUnavailable
+	}
+}
+
+func validEd25519PublicKey(raw []byte) bool {
+	if len(raw) == ed25519.PublicKeySize {
+		return true
+	}
+	if block, _ := pem.Decode(raw); block != nil {
+		raw = block.Bytes
+	}
+	publicKey, err := x509.ParsePKIXPublicKey(raw)
+	if err != nil {
+		return false
+	}
+	key, ok := publicKey.(ed25519.PublicKey)
+	return ok && len(key) == ed25519.PublicKeySize
+}
+
+func verifyUpdateReplacement(stagedPath, targetPath string) error {
+	sourceDir := filepath.Dir(filepath.Clean(stagedPath))
+	targetDir := filepath.Dir(filepath.Clean(targetPath))
+	probe, err := os.MkdirTemp(sourceDir, ".profiledeck-update-move-*")
 	if err != nil {
 		return err
 	}
-	path := probe.Name()
-	return errors.Join(probe.Close(), os.Remove(path))
+	destination := filepath.Join(targetDir, filepath.Base(probe))
+	if destination == probe {
+		return os.Remove(probe)
+	}
+	defer func() {
+		_ = os.Remove(probe)
+		_ = os.Remove(destination)
+	}()
+	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			return errors.New("update replacement probe already exists")
+		}
+		return err
+	}
+	if err := os.Rename(probe, destination); err != nil {
+		return err
+	}
+	return os.Remove(destination)
 }
 
 func removeWailsStaging(downloadedPath string) {

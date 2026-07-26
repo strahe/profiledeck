@@ -14,7 +14,7 @@ GO_PKGS := $(CORE_PKGS) $(DESKTOP_PKGS)
 GOLANGCI_LINT ?= golangci-lint
 WAILS3 ?= wails3
 GOLANGCI_LINT_VERSION := v2.12.2
-WAILS3_VERSION := v3.0.0-alpha2.115
+WAILS3_VERSION := v3.0.0-alpha2.117
 GOVULNCHECK_VERSION := v1.6.0
 ACTIONLINT_VERSION := v1.7.12
 CI_GOLANGCI_LINT_DIR := $(TOOLS_DIR)/golangci-lint/$(GOLANGCI_LINT_VERSION)
@@ -31,16 +31,16 @@ DESKTOP_GO_ENV := GOOS=$(DESKTOP_GOOS) GOARCH=$(DESKTOP_GOARCH)
 DESKTOP_SIGN ?= true
 VERSION ?=
 BUILD_NUMBER ?=
-RELEASE_REPO ?=
 RELEASE_COMMIT ?= $(shell git rev-parse HEAD)
-RELEASE_PLATFORMS ?= macos
+BUILT_AT ?=
 # Set a full SHA-1 fingerprint to skip the interactive choice when multiple identities are installed.
 SIGN_IDENTITY ?=
 RELEASE_KEYCHAIN ?=
 UPDATE_SIGNING_KEY ?=
-RELEASES_DIR ?= $(CURDIR)/.task/releases
+UPDATE_PUBLIC_KEY ?= desktop/update/updater-public.pem
+RELEASES_DIR ?= $(CURDIR)/.task/release-assets
 
-.PHONY: fmt vet lint lint-core lint-desktop test build source-hygiene core-boundary core-check security-check check clean desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-build release-tools-check release-github-check release-build release-build-macos release-assemble release-draft verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-check ci-core-check ci-desktop-check ci-security-check ci-release-build-macos ci-release-assemble ci-release-draft
+.PHONY: fmt vet lint lint-core lint-desktop test build source-hygiene core-boundary core-check security-check check clean desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-build release-tools-check release-build release-build-macos release-build-linux-amd64 release-finalize release-linux-smoke verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-check ci-core-check ci-desktop-check ci-security-check ci-release-build-macos ci-release-build-linux-amd64 ci-release-finalize ci-verify-update-e2e
 
 fmt:
 	$(GOLANGCI_LINT) fmt $(GO_PKGS)
@@ -97,12 +97,14 @@ desktop-taskfile-check:
 	$(WAILS3) task build GOOS=darwin DEV=true EXTRA_TAGS=taskfilecheck -dry >/dev/null
 	$(WAILS3) task build GOOS=windows DEV=true EXTRA_TAGS=taskfilecheck -dry >/dev/null
 	$(WAILS3) task build GOOS=linux DEV=true EXTRA_TAGS=taskfilecheck -dry >/dev/null
+	$(WAILS3) task linux:build ARCH=amd64 OUTPUT=.task/taskfile-check/profiledeck-desktop VERSION=0.1.0-beta.1 COMMIT=0123456789abcdef0123456789abcdef01234567 BUILD_DATE=2026-07-16T00:00:00Z UPDATE_MANAGEMENT=application -dry >/dev/null
+	$(WAILS3) task linux:build:release VERSION=0.1.0-beta.1 COMMIT=0123456789abcdef0123456789abcdef01234567 BUILD_DATE=2026-07-16T00:00:00Z PORTABLE_OUTPUT=.task/taskfile-check/portable PACKAGE_OUTPUT=.task/taskfile-check/package -dry >/dev/null
+	$(WAILS3) task linux:release VERSION=0.1.0-beta.1 RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567 BUILT_AT=2026-07-16T00:00:00Z OUTPUT_DIR=.task/taskfile-check/releases -dry >/dev/null
 	$(WAILS3) task darwin:build:universal VERSION=0.1.0-beta.1 COMMIT=0123456789abcdef0123456789abcdef01234567 BUILD_DATE=2026-07-16T00:00:00Z -dry >/dev/null
 	! $(WAILS3) task darwin:package:universal VERSION=0.1.0-beta.1 BUILD_NUMBER=1 COMMIT=0123456789abcdef0123456789abcdef01234567 BUILD_DATE=2026-07-16T00:00:00Z -dry >/dev/null 2>&1
 	$(WAILS3) task darwin:package:universal APP_PATH=.task/taskfile-check/ProfileDeck.app VERSION=0.1.0-beta.1 BUNDLE_VERSION=0.1.0 BUILD_NUMBER=1 COMMIT=0123456789abcdef0123456789abcdef01234567 BUILD_DATE=2026-07-16T00:00:00Z -dry >/dev/null
-	@output="$$(PROFILEDECK_RELEASE_SIGN_IDENTITY=profiledeck-signing-identity-privacy-probe PROFILEDECK_UPDATE_SIGNING_KEY_FILE=profiledeck-update-key-path-privacy-probe $(WAILS3) task darwin:release VERSION=0.1.0-beta.1 BUILD_NUMBER=1 RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567 RELEASES_DIR=.task/taskfile-check/releases -dry 2>&1 || true)"; \
-	case "$$output" in *profiledeck-signing-identity-privacy-probe*) echo "release task output exposed the signing identity"; exit 1;; esac; \
-	case "$$output" in *profiledeck-update-key-path-privacy-probe*) echo "release task output exposed the update key path"; exit 1;; esac
+	@output="$$(PROFILEDECK_RELEASE_SIGN_IDENTITY=profiledeck-signing-identity-privacy-probe $(WAILS3) task darwin:release VERSION=0.1.0-beta.1 BUILD_NUMBER=1 RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567 BUILT_AT=2026-07-16T00:00:00Z OUTPUT_DIR=.task/taskfile-check/releases -dry 2>&1 || true)"; \
+	case "$$output" in *profiledeck-signing-identity-privacy-probe*) echo "release task output exposed the signing identity"; exit 1;; esac
 	@output="$$(PROFILEDECK_RELEASE_SIGN_IDENTITY= $(MAKE) -n release-build-macos VERSION=0.1.0-beta.1 BUILD_NUMBER=1 RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567 SIGN_IDENTITY=profiledeck-signing-identity-privacy-probe 2>&1)"; \
 	case "$$output" in *profiledeck-signing-identity-privacy-probe*) echo "release Make output exposed the signing identity"; exit 1;; esac
 
@@ -124,45 +126,46 @@ ifeq ($(DESKTOP_GOOS),darwin)
 	fi
 endif
 
-release-github-check:
-	scripts/release/github-release.sh check --version "$(VERSION)" --repo "$(RELEASE_REPO)" --commit "$(RELEASE_COMMIT)" --platforms "$(RELEASE_PLATFORMS)"
-
 release-build: release-build-macos
 
 release-build-macos: export PROFILEDECK_RELEASE_SIGN_IDENTITY := $(or $(PROFILEDECK_RELEASE_SIGN_IDENTITY),$(SIGN_IDENTITY))
 release-build-macos:
-	@if [ -z "$(UPDATE_SIGNING_KEY)" ]; then echo "UPDATE_SIGNING_KEY is required"; exit 1; fi
-	@update_public_key="$$(go run ./scripts/releasetool update-public-key --private-key "$(UPDATE_SIGNING_KEY)")"; \
-		PROFILEDECK_UPDATE_SIGNING_KEY_FILE="$(UPDATE_SIGNING_KEY)" \
-		PROFILEDECK_UPDATE_PUBLIC_KEY_BASE64="$$update_public_key" \
-		$(WAILS3) task darwin:release VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_COMMIT="$(RELEASE_COMMIT)" RELEASE_KEYCHAIN="$(RELEASE_KEYCHAIN)" RELEASES_DIR="$(RELEASES_DIR)"
+	@if [ -z "$(VERSION)" ] || [ -z "$(BUILD_NUMBER)" ] || [ -z "$(BUILT_AT)" ]; then echo "VERSION, BUILD_NUMBER, and BUILT_AT are required"; exit 1; fi
+	$(WAILS3) task darwin:release VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_COMMIT="$(RELEASE_COMMIT)" BUILT_AT="$(BUILT_AT)" RELEASE_KEYCHAIN="$(RELEASE_KEYCHAIN)" OUTPUT_DIR="$(RELEASES_DIR)"
 
-release-assemble:
-	@set --; \
-		platforms='$(RELEASE_PLATFORMS)'; old_ifs="$$IFS"; IFS=,; \
-		for platform in $$platforms; do \
-			set -- "$$@" --handoff "$$platform=$(RELEASES_DIR)/v$(VERSION)/platforms/$$platform"; \
-		done; \
-		IFS="$$old_ifs"; \
-		go run ./scripts/releasetool assemble \
-			--version "$(VERSION)" --build-number "$(BUILD_NUMBER)" --commit "$(RELEASE_COMMIT)" \
-			--output "$(RELEASES_DIR)/v$(VERSION)/bundle" "$$@"
+release-build-linux-amd64:
+	@if [ -z "$(VERSION)" ] || [ -z "$(BUILT_AT)" ]; then echo "VERSION and BUILT_AT are required"; exit 1; fi
+	$(WAILS3) task linux:release VERSION="$(VERSION)" RELEASE_COMMIT="$(RELEASE_COMMIT)" BUILT_AT="$(BUILT_AT)" OUTPUT_DIR="$(RELEASES_DIR)"
 
-release-draft:
-	scripts/release/github-release.sh draft --version "$(VERSION)" --build-number "$(BUILD_NUMBER)" --repo "$(RELEASE_REPO)" --commit "$(RELEASE_COMMIT)" --platforms "$(RELEASE_PLATFORMS)" --bundle "$(RELEASES_DIR)/v$(VERSION)/bundle"
+release-finalize:
+	@if [ -z "$(VERSION)" ] || [ -z "$(UPDATE_SIGNING_KEY)" ]; then echo "VERSION and UPDATE_SIGNING_KEY are required"; exit 1; fi
+	@channel="$$(go run ./scripts/releasetool contract --version "$(VERSION)" --field channel)"; \
+		manifest="$$(go run ./scripts/releasetool contract --version "$(VERSION)" --field asset.manifest)"; \
+		$(WAILS3) updater manifest -version "$(VERSION)" -channel "$$channel" \
+			-key "$(UPDATE_SIGNING_KEY)" -output "$(RELEASES_DIR)/$$manifest" \
+			"$(RELEASES_DIR)/$$(go run ./scripts/releasetool contract --version "$(VERSION)" --field asset.macos-updater)" \
+			"$(RELEASES_DIR)/$$(go run ./scripts/releasetool contract --version "$(VERSION)" --field asset.linux-updater)"
+	@manifest="$$(go run ./scripts/releasetool contract --version "$(VERSION)" --field asset.manifest)"; \
+		$(WAILS3) updater verify -manifest "$(RELEASES_DIR)/$$manifest" -publickey "$(UPDATE_PUBLIC_KEY)" -dir "$(RELEASES_DIR)"
+	go run ./scripts/releasetool finalize --version "$(VERSION)" --directory "$(RELEASES_DIR)"
+
+release-linux-smoke:
+	scripts/release/verify-linux-containers.sh \
+		--version "$(VERSION)" \
+		--deb "$(RELEASES_DIR)/$$(go run ./scripts/releasetool contract --version "$(VERSION)" --field asset.linux-deb)" \
+		--rpm "$(RELEASES_DIR)/$$(go run ./scripts/releasetool contract --version "$(VERSION)" --field asset.linux-rpm)"
 
 verify-update-e2e:
-	go run ./scripts/updatee2e/runner
+	PROFILEDECK_WAILS3="$(WAILS3)" go run ./scripts/updatee2e/runner
 
 release-tools-check:
-	bash -n scripts/release/*.sh
+	@set -e; for script in scripts/release/*.sh; do bash -n "$$script"; done
 	go test $(RELEASE_TOOL_PKGS)
 	go test -tags updatee2e $(UPDATE_E2E_PKG)
 
 desktop-check: DESKTOP_SIGN = false
-desktop-check: core-boundary lint-desktop desktop-bindings-check desktop-taskfile-check desktop-frontend-check desktop-build
-	$(DESKTOP_GO_ENV) go test $(DESKTOP_PKGS) $(RELEASE_TOOL_PKGS)
-	$(DESKTOP_GO_ENV) go test -tags updatee2e $(UPDATE_E2E_PKG)
+desktop-check: core-boundary lint-desktop release-tools-check desktop-bindings-check desktop-taskfile-check desktop-frontend-check desktop-build
+	$(DESKTOP_GO_ENV) go test $(DESKTOP_PKGS)
 
 docs-install:
 	npm --prefix $(DOCS_DIR) ci
@@ -208,13 +211,16 @@ ci-security-check:
 
 ci-release-build-macos: export PROFILEDECK_RELEASE_SIGN_IDENTITY := $(or $(PROFILEDECK_RELEASE_SIGN_IDENTITY),$(SIGN_IDENTITY))
 ci-release-build-macos: $(CI_WAILS3)
-	$(MAKE) release-build-macos VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_COMMIT="$(RELEASE_COMMIT)" RELEASE_KEYCHAIN="$(RELEASE_KEYCHAIN)" UPDATE_SIGNING_KEY="$(UPDATE_SIGNING_KEY)" RELEASES_DIR="$(RELEASES_DIR)" WAILS3=$(abspath $(CI_WAILS3))
+	$(MAKE) release-build-macos VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_COMMIT="$(RELEASE_COMMIT)" BUILT_AT="$(BUILT_AT)" RELEASE_KEYCHAIN="$(RELEASE_KEYCHAIN)" RELEASES_DIR="$(RELEASES_DIR)" WAILS3=$(abspath $(CI_WAILS3))
 
-ci-release-assemble:
-	$(MAKE) release-assemble VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_COMMIT="$(RELEASE_COMMIT)" RELEASE_PLATFORMS="$(RELEASE_PLATFORMS)" RELEASES_DIR="$(RELEASES_DIR)"
+ci-release-build-linux-amd64: $(CI_WAILS3)
+	$(MAKE) release-build-linux-amd64 VERSION="$(VERSION)" RELEASE_COMMIT="$(RELEASE_COMMIT)" BUILT_AT="$(BUILT_AT)" RELEASES_DIR="$(RELEASES_DIR)" WAILS3=$(abspath $(CI_WAILS3))
 
-ci-release-draft:
-	$(MAKE) release-draft VERSION="$(VERSION)" BUILD_NUMBER="$(BUILD_NUMBER)" RELEASE_REPO="$(RELEASE_REPO)" RELEASE_COMMIT="$(RELEASE_COMMIT)" RELEASE_PLATFORMS="$(RELEASE_PLATFORMS)" RELEASES_DIR="$(RELEASES_DIR)"
+ci-release-finalize: $(CI_WAILS3)
+	$(MAKE) release-finalize VERSION="$(VERSION)" UPDATE_SIGNING_KEY="$(UPDATE_SIGNING_KEY)" RELEASES_DIR="$(RELEASES_DIR)" WAILS3=$(abspath $(CI_WAILS3))
+
+ci-verify-update-e2e: $(CI_WAILS3)
+	$(MAKE) verify-update-e2e WAILS3=$(abspath $(CI_WAILS3))
 
 clean:
 	@if [ -d "$(BIN_DIR)" ]; then \

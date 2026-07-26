@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=ProfileDeck
+Comment=Manage Profiles for AI Agents
+Comment[zh_CN]=管理 AI Agent 的 Profile
+Exec=profiledeck-desktop
+Icon=profiledeck
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true

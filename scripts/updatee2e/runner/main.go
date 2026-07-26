@@ -1,15 +1,18 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -18,13 +21,22 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/strahe/profiledeck/internal/releaseartifact"
 )
 
 const (
 	oldVersion = "0.1.0-beta.1"
 	newVersion = "0.1.0-beta.2"
-	artifact   = "ProfileDeck_0.1.0-beta.2_macos_universal.zip"
 )
+
+type e2ePlatform struct {
+	artifactName string
+	targetName   string
+	payloadKind  string
+	archive      func(root, target, output string) error
+	finalize     func(root, target, executable string) error
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -34,8 +46,13 @@ func main() {
 }
 
 func run() error {
-	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
-		return errors.New("update restart integration test requires macOS arm64")
+	contract, err := releaseartifact.NewContract(newVersion)
+	if err != nil {
+		return fmt.Errorf("create update release contract: %w", err)
+	}
+	platform, err := hostPlatform(contract)
+	if err != nil {
+		return err
 	}
 	root, err := repositoryRoot()
 	if err != nil {
@@ -67,33 +84,30 @@ func run() error {
 		}
 	}
 
-	newApp := filepath.Join(workDirectory, "new", "ProfileDeck.app")
-	if err := buildBundle(root, newApp, newVersion, "", configDirectory, markerPath, publicKeyBase64); err != nil {
+	newApp := platform.targetPath(filepath.Join(workDirectory, "new"))
+	if err := buildBundle(root, platform, newApp, newVersion, "", configDirectory, markerPath, publicKeyBase64); err != nil {
 		return err
 	}
-	artifactPath := filepath.Join(serveDirectory, artifact)
-	if err := runCommand(
+	artifactPath := filepath.Join(serveDirectory, platform.artifactName)
+	if err := platform.archive(root, newApp, artifactPath); err != nil {
+		return err
+	}
+	privateKeyPath := filepath.Join(workDirectory, "updater-private.pem")
+	publicKeyPath := filepath.Join(workDirectory, "updater-public.pem")
+	if err := writeUpdaterKeys(privateKeyPath, publicKeyPath, privateKey, publicKey); err != nil {
+		return err
+	}
+	if err := writeAndVerifyManifest(
 		root,
-		"ditto",
-		"-c",
-		"-k",
-		"--norsrc",
-		"--noextattr",
-		"--noqtn",
-		"--noacl",
-		"--keepParent",
-		newApp,
+		serveDirectory,
 		artifactPath,
+		privateKeyPath,
+		publicKeyPath,
+		contract,
 	); err != nil {
 		return err
 	}
-	if err := writeChecksum(serveDirectory, artifactPath); err != nil {
-		return err
-	}
-	if err := writeSignature(artifactPath, privateKey); err != nil {
-		return err
-	}
-	server, baseURL, err := startReleaseServer(serveDirectory)
+	server, baseURL, err := startReleaseServer(serveDirectory, contract)
 	if err != nil {
 		return err
 	}
@@ -101,9 +115,10 @@ func run() error {
 		_ = server.Shutdown(context.Background())
 	}()
 
-	installedApp := filepath.Join(installedDirectory, "ProfileDeck.app")
+	installedApp := platform.targetPath(installedDirectory)
 	if err := buildBundle(
 		root,
+		platform,
 		installedApp,
 		oldVersion,
 		baseURL,
@@ -113,10 +128,11 @@ func run() error {
 	); err != nil {
 		return err
 	}
-	if err := runCommand(
-		root,
-		filepath.Join(installedApp, "Contents", "MacOS", "profiledeck-desktop"),
-	); err != nil {
+	installedExecutable, err := platform.executablePath(installedApp)
+	if err != nil {
+		return err
+	}
+	if err := runCommand(root, installedExecutable); err != nil {
 		return err
 	}
 	deadline := time.Now().Add(45 * time.Second)
@@ -141,6 +157,57 @@ func run() error {
 	return fmt.Errorf("updated application did not relaunch; workspace: %s", workDirectory)
 }
 
+func hostPlatform(contract releaseartifact.Contract) (e2ePlatform, error) {
+	target, err := releaseartifact.ResolveUpdateTarget(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return e2ePlatform{}, err
+	}
+	artifactName, err := contract.AssetName(target.Role)
+	if err != nil {
+		return e2ePlatform{}, err
+	}
+	switch target.Role {
+	case releaseartifact.RoleMacOSUpdater:
+		return e2ePlatform{
+			artifactName: artifactName,
+			targetName:   target.PayloadName,
+			payloadKind:  target.PayloadKind,
+			archive:      archiveMacOSUpdate,
+			finalize:     finalizeMacOSBundle,
+		}, nil
+	case releaseartifact.RoleLinuxUpdater:
+		return e2ePlatform{
+			artifactName: artifactName,
+			targetName:   target.PayloadName,
+			payloadKind:  target.PayloadKind,
+			archive:      archiveLinuxUpdate,
+			finalize:     finalizeLinuxExecutable,
+		}, nil
+	default:
+		return e2ePlatform{}, fmt.Errorf("update restart integration test does not support role %q", target.Role)
+	}
+}
+
+func (platform e2ePlatform) targetPath(parent string) string {
+	return filepath.Join(parent, platform.targetName)
+}
+
+func (platform e2ePlatform) executablePath(target string) (string, error) {
+	switch platform.payloadKind {
+	case releaseartifact.PayloadExecutable:
+		return target, nil
+	case releaseartifact.PayloadAppBundle:
+		return filepath.Join(
+			target,
+			"Contents",
+			"MacOS",
+			releaseartifact.DesktopExecutableName,
+		), nil
+	default:
+		return "", fmt.Errorf("unsupported update payload kind %q", platform.payloadKind)
+	}
+}
+
 func repositoryRoot() (string, error) {
 	output, err := exec.Command("git", "rev-parse", "--show-toplevel").CombinedOutput()
 	if err != nil {
@@ -151,6 +218,7 @@ func repositoryRoot() (string, error) {
 
 func buildBundle(
 	root string,
+	platform e2ePlatform,
 	target string,
 	version string,
 	baseURL string,
@@ -158,7 +226,10 @@ func buildBundle(
 	markerPath string,
 	publicKeyBase64 string,
 ) error {
-	executable := filepath.Join(target, "Contents", "MacOS", "profiledeck-desktop")
+	executable, err := platform.executablePath(target)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
 		return fmt.Errorf("create application bundle: %w", err)
 	}
@@ -185,19 +256,84 @@ func buildBundle(
 	); err != nil {
 		return err
 	}
+	if err := os.Chmod(executable, 0o755); err != nil {
+		return fmt.Errorf("make update test executable runnable: %w", err)
+	}
+	return platform.finalize(root, target, executable)
+}
+
+func finalizeMacOSBundle(root, target, executable string) error {
 	if err := writeInfoPlist(
 		filepath.Join(root, "build", "darwin", "Info.plist.tmpl"),
 		filepath.Join(target, "Contents", "Info.plist"),
 	); err != nil {
 		return err
 	}
-	if err := os.Chmod(executable, 0o755); err != nil {
-		return fmt.Errorf("make update test executable runnable: %w", err)
-	}
 	if err := runCommand(root, "codesign", "--force", "--sign", "-", "--timestamp=none", executable); err != nil {
 		return err
 	}
 	return runCommand(root, "codesign", "--force", "--sign", "-", "--timestamp=none", target)
+}
+
+func finalizeLinuxExecutable(_, _, _ string) error {
+	return nil
+}
+
+func archiveMacOSUpdate(root, target, output string) error {
+	return runCommand(
+		root,
+		"ditto",
+		"-c",
+		"-k",
+		"--norsrc",
+		"--noextattr",
+		"--noqtn",
+		"--noacl",
+		"--keepParent",
+		target,
+		output,
+	)
+}
+
+func archiveLinuxUpdate(_, target, output string) error {
+	source, err := os.Open(target)
+	if err != nil {
+		return fmt.Errorf("open Linux update executable: %w", err)
+	}
+	defer source.Close()
+	info, err := source.Stat()
+	if err != nil {
+		return fmt.Errorf("inspect Linux update executable: %w", err)
+	}
+	file, err := os.Create(output)
+	if err != nil {
+		return fmt.Errorf("create Linux update archive: %w", err)
+	}
+	compressed := gzip.NewWriter(file)
+	archive := tar.NewWriter(compressed)
+	header := &tar.Header{
+		Name: filepath.Base(target), Mode: 0o755, Size: info.Size(), Typeflag: tar.TypeReg,
+	}
+	if err := archive.WriteHeader(header); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write Linux update header: %w", err)
+	}
+	if _, err := io.Copy(archive, source); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write Linux update executable: %w", err)
+	}
+	if err := archive.Close(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("close Linux update archive: %w", err)
+	}
+	if err := compressed.Close(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("close Linux update compression: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close Linux update file: %w", err)
+	}
+	return nil
 }
 
 func writeInfoPlist(templatePath, outputPath string) error {
@@ -213,32 +349,66 @@ func writeInfoPlist(templatePath, outputPath string) error {
 	return nil
 }
 
-func writeChecksum(directory, artifactPath string) error {
-	content, err := os.ReadFile(artifactPath)
+func writeUpdaterKeys(
+	privatePath string,
+	publicPath string,
+	privateKey ed25519.PrivateKey,
+	publicKey ed25519.PublicKey,
+) error {
+	privateDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
 	if err != nil {
-		return fmt.Errorf("read update artifact: %w", err)
+		return fmt.Errorf("marshal updater private key: %w", err)
 	}
-	digest := sha256.Sum256(content)
-	line := fmt.Sprintf("%s  %s\n", hex.EncodeToString(digest[:]), filepath.Base(artifactPath))
-	if err := os.WriteFile(filepath.Join(directory, "SHA256SUMS"), []byte(line), 0o600); err != nil {
-		return fmt.Errorf("write update checksum: %w", err)
+	publicDER, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		return fmt.Errorf("marshal updater public key: %w", err)
+	}
+	if err := os.WriteFile(privatePath, pem.EncodeToMemory(&pem.Block{
+		Type: "PRIVATE KEY", Bytes: privateDER,
+	}), 0o600); err != nil {
+		return fmt.Errorf("write updater private key: %w", err)
+	}
+	if err := os.WriteFile(publicPath, pem.EncodeToMemory(&pem.Block{
+		Type: "PUBLIC KEY", Bytes: publicDER,
+	}), 0o600); err != nil {
+		return fmt.Errorf("write updater public key: %w", err)
 	}
 	return nil
 }
 
-func writeSignature(artifactPath string, privateKey ed25519.PrivateKey) error {
-	content, err := os.ReadFile(artifactPath)
-	if err != nil {
-		return fmt.Errorf("read update artifact for signing: %w", err)
+func writeAndVerifyManifest(
+	root string,
+	serveDirectory string,
+	artifactPath string,
+	privateKeyPath string,
+	publicKeyPath string,
+	contract releaseartifact.Contract,
+) error {
+	wails := strings.TrimSpace(os.Getenv("PROFILEDECK_WAILS3"))
+	if wails == "" {
+		wails = "wails3"
 	}
-	digest := sha256.Sum256(content)
-	signature := ed25519.Sign(privateKey, digest[:])
-	encoded := base64.StdEncoding.AppendEncode(nil, signature)
-	encoded = append(encoded, '\n')
-	if err := os.WriteFile(artifactPath+".sig", encoded, 0o600); err != nil {
-		return fmt.Errorf("write update signature: %w", err)
+	manifestPath := filepath.Join(serveDirectory, releaseartifact.ManifestName)
+	if err := runCommand(
+		root,
+		wails,
+		"updater", "manifest",
+		"-version", contract.Version,
+		"-channel", contract.Channel,
+		"-key", privateKeyPath,
+		"-output", manifestPath,
+		artifactPath,
+	); err != nil {
+		return err
 	}
-	return nil
+	return runCommand(
+		root,
+		wails,
+		"updater", "verify",
+		"-manifest", manifestPath,
+		"-publickey", publicKeyPath,
+		"-dir", serveDirectory,
+	)
 }
 
 func runCommand(directory, name string, args ...string) error {
@@ -251,7 +421,7 @@ func runCommand(directory, name string, args ...string) error {
 	return nil
 }
 
-func startReleaseServer(root string) (*http.Server, string, error) {
+func startReleaseServer(root string, contract releaseartifact.Contract) (*http.Server, string, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, "", fmt.Errorf("start update server: %w", err)
@@ -260,11 +430,11 @@ func startReleaseServer(root string) (*http.Server, string, error) {
 	handler := http.NewServeMux()
 	handler.Handle("/downloads/", http.StripPrefix("/downloads/", http.FileServer(http.Dir(root))))
 	handler.HandleFunc("/repos/test/profiledeck/releases/latest", func(response http.ResponseWriter, _ *http.Request) {
-		writeRelease(response, releasePayload(root, baseURL))
+		writeRelease(response, releasePayload(root, baseURL, contract))
 	})
 	handler.HandleFunc("/repos/test/profiledeck/releases", func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(response).Encode([]any{releasePayload(root, baseURL)})
+		_ = json.NewEncoder(response).Encode([]any{releasePayload(root, baseURL, contract)})
 	})
 	server := &http.Server{
 		Handler:           handler,
@@ -278,31 +448,21 @@ func startReleaseServer(root string) (*http.Server, string, error) {
 	return server, baseURL, nil
 }
 
-func releasePayload(root, baseURL string) map[string]any {
-	artifactInfo, err := os.Stat(filepath.Join(root, artifact))
-	if err != nil {
-		panic(err)
-	}
-	checksumInfo, err := os.Stat(filepath.Join(root, "SHA256SUMS"))
-	if err != nil {
-		panic(err)
-	}
-	signatureInfo, err := os.Stat(filepath.Join(root, artifact+".sig"))
+func releasePayload(root, baseURL string, contract releaseartifact.Contract) map[string]any {
+	manifestInfo, err := os.Stat(filepath.Join(root, releaseartifact.ManifestName))
 	if err != nil {
 		panic(err)
 	}
 	return map[string]any{
-		"tag_name":     "v" + newVersion,
-		"name":         "ProfileDeck " + newVersion,
+		"tag_name":     contract.Tag,
+		"name":         contract.Product + " " + contract.Version,
 		"body":         "Update restart integration test",
-		"prerelease":   true,
+		"prerelease":   contract.Channel == releaseartifact.ChannelBeta,
 		"draft":        false,
 		"published_at": time.Now().UTC().Format(time.RFC3339),
 		"html_url":     baseURL + "/release",
 		"assets": []map[string]any{
-			releaseAsset(baseURL, artifact, "application/zip", artifactInfo.Size(), 1),
-			releaseAsset(baseURL, artifact+".sig", "text/plain", signatureInfo.Size(), 2),
-			releaseAsset(baseURL, "SHA256SUMS", "text/plain", checksumInfo.Size(), 3),
+			releaseAsset(baseURL, releaseartifact.ManifestName, "application/json", manifestInfo.Size(), 1),
 		},
 	}
 }

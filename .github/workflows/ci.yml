@@ -17,7 +17,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  core:
+  # Full quality gate on Linux (lint, tests, build, security).
+  test-linux:
+    name: Test (linux)
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
 
     steps:
@@ -30,27 +32,33 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Check core
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: |
+            desktop/frontend/package-lock.json
+            docs/package-lock.json
+
+      - name: Install GTK and WebKit for Desktop
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
+
+      - name: Lint, test, and build CLI
         run: make ci-core-check
 
-  core-windows:
-    if: ${{ vars.DISABLE_WINDOWS_CI != 'true' }}
-    runs-on: ${{ vars.WINDOWS_RUNS_ON || 'windows-latest' }}
+      - name: Lint, test, and build Desktop
+        run: make ci-desktop-check
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - name: Security scan
+        run: make ci-security-check
 
-      - name: Setup Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Test core on Windows
-        run: go test ./cmd/... ./internal/...
-
-  desktop:
+  # Platform smoke only (not a second full quality suite).
+  test-macos:
+    name: Test (macos)
+    if: ${{ vars.DISABLE_MACOS_CI != 'true' }}
     runs-on: ${{ vars.MACOS_RUNS_ON || 'macos-26' }}
 
     steps:
@@ -70,22 +78,22 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/frontend/package-lock.json
 
-      - name: Test macOS core with cgo
+      - name: Test Go packages
         run: go test ./cmd/... ./internal/...
 
-      - name: Check security
-        run: make ci-security-check
+      - name: Install frontend dependencies
+        run: npm --prefix desktop/frontend ci
 
-      - name: Check desktop
-        run: make ci-desktop-check
+      - name: Build frontend
+        run: npm --prefix desktop/frontend run build
 
-  desktop-native-build:
-    name: Desktop build (${{ matrix.platform }})
-    runs-on: ${{ matrix.platform == 'linux' && (vars.RUNS_ON || 'ubuntu-latest') || (vars.WINDOWS_RUNS_ON || 'windows-latest') }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJSON(vars.DISABLE_WINDOWS_CI == 'true' && '["linux"]' || '["linux","windows"]') }}
+      - name: Build Desktop
+        run: go build -tags production -o profiledeck-desktop ./desktop
+
+  test-windows:
+    name: Test (windows)
+    if: ${{ vars.DISABLE_WINDOWS_CI != 'true' }}
+    runs-on: ${{ vars.WINDOWS_RUNS_ON || 'windows-latest' }}
 
     steps:
       - name: Checkout
@@ -104,11 +112,8 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/frontend/package-lock.json
 
-      - name: Install Linux Wails dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
+      - name: Test Go packages
+        run: go test ./cmd/... ./internal/...
 
       - name: Install frontend dependencies
         run: npm --prefix desktop/frontend ci
@@ -116,5 +121,5 @@ jobs:
       - name: Build frontend
         run: npm --prefix desktop/frontend run build
 
-      - name: Build Wails desktop
-        run: go build -tags production -o profiledeck-desktop${{ runner.os == 'Windows' && '.exe' || '' }} ./desktop
+      - name: Build Desktop
+        run: go build -tags production -o profiledeck-desktop.exe ./desktop

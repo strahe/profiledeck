@@ -16,7 +16,7 @@
 		message?: string;
 		forID?: string;
 		disabled?: boolean;
-		control: Snippet;
+		control?: Snippet;
 	} = $props();
 </script>
 
@@ -26,5 +26,7 @@
 		{#if description}<Field.FieldDescription size="compact">{description}</Field.FieldDescription>{/if}
 		{#if message}<Field.FieldDescription size="compact">{message}</Field.FieldDescription>{/if}
 	</Field.FieldContent>
-	<div class="flex shrink-0 items-center justify-end gap-2">{@render control()}</div>
+	{#if control}
+		<div class="flex shrink-0 items-center justify-end gap-2">{@render control()}</div>
+	{/if}
 </Field.Field>

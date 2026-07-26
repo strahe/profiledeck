@@ -3,6 +3,7 @@
 
 export interface UpdateStatus {
     "revision": number;
+    "management": string;
     "configured": boolean;
     "automatic": boolean;
     "channel": string;

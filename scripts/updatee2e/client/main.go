@@ -4,14 +4,17 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 
 	"github.com/wailsapp/wails/v3/pkg/updater"
+	keyring "github.com/zalando/go-keyring"
 
 	desktopupdate "github.com/strahe/profiledeck/desktop/update"
 	coreapp "github.com/strahe/profiledeck/internal/app"
@@ -27,8 +30,18 @@ var (
 	updatePublicKeyBase64 string
 )
 
+// Fixed recovery identity for the updatee2e binary only. Both the pre-update and
+// post-restart processes seed an in-process mock credential store with this
+// value so the before-update backup stays decryptable after process replacement.
+// Production builds never include this path; they use the system credential store.
+const e2eBackupRecoveryIdentity = "AGE-SECRET-KEY-1CRFY8ADMRCNC78TZEGDVZ60DUZYP35SK29GX2TDSUS8DYAWAZT7QAPLQ6P"
+
 func main() {
 	updater.HandleHelperMode()
+	if err := seedE2ECredentialStore(); err != nil {
+		_ = os.WriteFile(marker, []byte("error: "+err.Error()), 0o600)
+		os.Exit(1)
+	}
 	if version == "0.1.0-beta.2" {
 		finishUpdatedLaunch()
 		return
@@ -37,6 +50,20 @@ func main() {
 		_ = os.WriteFile(marker, []byte("error: "+err.Error()), 0o600)
 		os.Exit(1)
 	}
+}
+
+func seedE2ECredentialStore() error {
+	// Match internal/appbackup keyring service/account constants so Create and
+	// post-restart Show/PreviewRestore use the same mock secret.
+	keyring.MockInit()
+	if err := keyring.Set(
+		"ProfileDeck",
+		"application-backup-recovery-key-v1",
+		e2eBackupRecoveryIdentity,
+	); err != nil {
+		return fmt.Errorf("seed e2e backup recovery key: %w", err)
+	}
+	return nil
 }
 
 func runUpdate() error {
@@ -63,8 +90,9 @@ func runUpdate() error {
 	host := &headlessHost{}
 	engine := updater.New(host)
 	service := desktopupdate.NewService(ctx, application, desktopupdate.BuildConfig{
-		CurrentVersion:  version,
-		PublicKeyBase64: updatePublicKeyBase64,
+		CurrentVersion: version,
+		PublicKey:      mustDecodePublicKey(),
+		Management:     desktopupdate.ManagementApplication,
 	})
 	if err := desktopupdate.ConfigureForE2E(service, engine, version, githubBaseURL); err != nil {
 		return err
@@ -74,6 +102,14 @@ func runUpdate() error {
 		return fmt.Errorf("update did not become ready: %#v: %s", status, host.LastError())
 	}
 	return service.Restart(ctx)
+}
+
+func mustDecodePublicKey() []byte {
+	publicKey, err := base64.StdEncoding.DecodeString(updatePublicKeyBase64)
+	if err != nil {
+		panic("invalid update E2E public key")
+	}
+	return publicKey
 }
 
 func finishUpdatedLaunch() {
@@ -125,6 +161,16 @@ func verifyRunningBundle() error {
 	executable, err := os.Executable()
 	if err != nil {
 		return err
+	}
+	if runtime.GOOS == "linux" {
+		info, err := os.Lstat(executable)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return errors.New("updated Linux executable is not a regular file")
+		}
+		return nil
 	}
 	bundle := filepath.Clean(executable)
 	for current := bundle; current != filepath.Dir(current); current = filepath.Dir(current) {

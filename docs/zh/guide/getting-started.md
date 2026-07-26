@@ -1,14 +1,15 @@
 # 快速开始
 
-使用 macOS 桌面端可以获得可视化操作流程；从源码构建 CLI 后，可以在终端中使用。两种入口共用相同的 Profile、应用备份、操作恢复和切换规则。
+使用桌面端可以获得可视化操作流程；CLI 适合终端操作。两种入口共用相同的 Profile、应用备份、操作恢复和切换规则。
 
 ## 开始前准备
 
 - Universal 桌面端要求 macOS 14 或更高版本，支持 Apple 芯片和 Intel Mac。
+- Linux 发布支持 amd64；桌面端需要 GTK 4 和 WebKitGTK 6.0。
 - 构建 CLI 需要 Git、Go 1.26、Make 和 POSIX shell。
-- 先安装要管理的 AI 编程工具，并在保存第一个 Profile 前完成登录。
+- 先安装要管理的 AI Agent，并在保存第一个 Profile 前完成登录。
 
-## 使用桌面端
+## 在 macOS 上安装桌面端
 
 1. 从 [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases) 下载最新的 macOS Universal DMG。正式版使用 `X.Y.Z`，Beta 版使用 `X.Y.Z-beta.N`。
 2. 打开 DMG，把 `ProfileDeck.app` 拖到“应用程序”文件夹。
@@ -17,7 +18,63 @@
 
 发布的 DMG 已使用 Developer ID 签名并通过 Apple 公证。如果 macOS 提示应用已损坏或无法验证开发者，请删除该副本，并从官方 Releases 页面重新下载，不要绕过安全警告。
 
-已签名的桌面端可以在**设置 → 常规 → 应用更新**中选择接收正式版或 Beta 更新。本地开发构建不会检查更新。
+macOS 桌面端可在**设置 → 常规 → 应用更新**中选择正式版或 Beta 更新。本地开发构建不会检查更新。详见[更新桌面端](./updates.md)。
+
+## 在 Linux amd64 上安装
+
+请选择一种安装方式：
+
+- **DEB 或 RPM 软件包：**同时安装桌面端与 CLI；新版软件包从 GitHub Releases 手动安装。
+- **便携版桌面端：**仅桌面端；请放在当前用户可写的目录，以便应用内更新。详见[更新桌面端](./updates.md)。
+
+### 安装 DEB 或 RPM
+
+正式版和 Beta 版 DEB、RPM 都会安装 `profiledeck` 与 `profiledeck-desktop`，添加桌面启动项，并声明 GTK 4 与 WebKitGTK 6.0 依赖。DEB 会在 Ubuntu 24.04 上做安装冒烟测试，RPM 会在 Fedora 44 上测试。
+
+在 Ubuntu 24.04 上，从 [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases) 下载 `ProfileDeck_<version>_linux_amd64.deb`，然后安装：
+
+```bash
+sudo apt install ./ProfileDeck_<version>_linux_amd64.deb
+```
+
+在 Fedora 44 上，下载 `ProfileDeck_<version>_linux_amd64.rpm`，然后安装：
+
+```bash
+sudo dnf install ./ProfileDeck_<version>_linux_amd64.rpm
+```
+
+从应用菜单打开 ProfileDeck，或运行 `profiledeck-desktop`。CLI 位于 `/usr/bin/profiledeck`，已在 `PATH` 中。
+
+这类安装不会在应用内检查或下载更新。请从 GitHub Releases 下载新版对应软件包，再用相同命令安装。详见[更新 Linux 软件包](./updates.md#更新-linux-软件包)。
+
+接下来请[保存第一个 Profile](#保存第一个-profile)。
+
+### 便携版桌面端
+
+适合只要桌面端，并由应用内更新的场景。
+
+1. 先安装运行库：
+
+```bash
+sudo apt install libgtk-4-1 libwebkitgtk-6.0-4
+# 或：sudo dnf install gtk4 webkitgtk6.0
+```
+
+2. 从 [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases) 下载 `ProfileDeck_<version>_linux_amd64.tar.gz`。
+
+3. 解压并链接到当前用户可写的目录：
+
+```bash
+mkdir -p "$HOME/.local/opt/profiledeck" "$HOME/.local/bin"
+tar -xzf ProfileDeck_<version>_linux_amd64.tar.gz -C "$HOME/.local/opt/profiledeck"
+ln -sf "$HOME/.local/opt/profiledeck/profiledeck-desktop" "$HOME/.local/bin/profiledeck-desktop"
+```
+
+4. 运行 `profiledeck-desktop`（请确保 `$HOME/.local/bin` 在 `PATH` 中）。
+
+压缩包只包含 `profiledeck-desktop`，不含 CLI。需要 `profiledeck` 命令时请使用 DEB 或 RPM。请把安装目录保持为可写，以便 ProfileDeck 在验证更新后替换程序。详见[更新桌面端](./updates.md)。
+
+接下来请[保存第一个 Profile](#保存第一个-profile)。
 
 ## 构建并使用 CLI
 
@@ -108,5 +165,6 @@ profiledeck doctor
 - [Codex Profile](../codex/profiles.md)
 - [Claude Code Profile](../claude-code/profiles.md)
 - [Antigravity Profile](../antigravity/profiles.md)
+- [更新桌面端](./updates.md)
 - [安全切换](../operations/switching.md)
 - [数据与安全](../reference/data-security.md)

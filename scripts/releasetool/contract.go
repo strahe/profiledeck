@@ -1,103 +1,70 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
+	"strings"
+
+	"github.com/strahe/profiledeck/internal/releaseartifact"
 )
 
-const (
-	releaseContractSchemaVersion = 1
-	productName                  = "ProfileDeck"
-	macOSPlatform                = "macos"
-	assetRoleUpdater             = "updater"
-	assetRoleSignature           = "signature"
-	assetRoleInstaller           = "installer"
-)
-
-type releaseContract struct {
-	SchemaVersion int                       `json:"schema_version"`
-	Product       string                    `json:"product"`
-	Version       string                    `json:"version"`
-	ShortVersion  string                    `json:"short_version"`
-	Tag           string                    `json:"tag"`
-	Channel       string                    `json:"channel"`
-	Platforms     []releasePlatformContract `json:"platforms"`
-	PublicAssets  []releaseAssetSpec        `json:"public_assets"`
-}
-
-type releasePlatformContract struct {
-	ID         string             `json:"id"`
-	Assets     []releaseAssetSpec `json:"assets"`
-	AssetNames map[string]string  `json:"asset_names"`
-}
-
-func platformAssetSpecs(platform string, version releaseVersion) ([]releaseAssetSpec, error) {
-	if !platformNamePattern.MatchString(platform) {
-		return nil, fmt.Errorf("release platform is invalid")
+func runContract(args []string, stdout io.Writer) error {
+	flags := newFlagSet("contract")
+	version := flags.String("version", "", "release version")
+	field := flags.String("field", "", "single contract field")
+	if err := flags.Parse(args); err != nil {
+		return err
 	}
-	var specs []releaseAssetSpec
-	switch platform {
-	case macOSPlatform:
-		specs = []releaseAssetSpec{
-			{Name: updaterZIPName(version), Role: assetRoleUpdater},
-			{Name: updaterSignatureName(version), Role: assetRoleSignature},
-			{Name: installerDMGName(version), Role: assetRoleInstaller},
-		}
-	default:
-		return nil, fmt.Errorf("unsupported release platform %q", platform)
-	}
-	sort.Slice(specs, func(left, right int) bool { return specs[left].Name < specs[right].Name })
-	return specs, nil
-}
-
-func buildReleaseContract(version releaseVersion, platforms string) (releaseContract, error) {
-	definitions, err := parseReleasePlatforms(platforms, version)
+	contract, err := releaseartifact.NewContract(*version)
 	if err != nil {
-		return releaseContract{}, err
+		return err
 	}
-	contract := releaseContract{
-		SchemaVersion: releaseContractSchemaVersion,
-		Product:       productName,
-		Version:       version.String(),
-		ShortVersion:  version.short(),
-		Tag:           version.tag(),
-		Channel:       version.channel(),
+	if *field != "" {
+		return writeContractField(stdout, contract, *field)
 	}
-	for _, definition := range definitions {
-		assetNames := make(map[string]string, len(definition.Specs))
-		for _, asset := range definition.Specs {
-			assetNames[asset.Role] = asset.Name
-		}
-		contract.Platforms = append(contract.Platforms, releasePlatformContract{
-			ID: definition.Name, Assets: definition.Specs, AssetNames: assetNames,
-		})
-		contract.PublicAssets = append(contract.PublicAssets, definition.Specs...)
-	}
-	contract.PublicAssets = append(contract.PublicAssets, releaseAssetSpec{Name: "SHA256SUMS", Role: "checksums"})
-	sort.Slice(contract.PublicAssets, func(left, right int) bool {
-		return contract.PublicAssets[left].Name < contract.PublicAssets[right].Name
-	})
-	return contract, nil
+	encoder := json.NewEncoder(stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(contract)
 }
 
-func writeContractField(writer io.Writer, contract releaseContract, field string) error {
+func writeContractField(writer io.Writer, contract releaseartifact.Contract, field string) error {
 	var values []string
-	switch field {
-	case "product":
+	switch {
+	case field == "product":
 		values = []string{contract.Product}
-	case "version":
+	case field == "version":
 		values = []string{contract.Version}
-	case "short-version":
+	case field == "short-version":
 		values = []string{contract.ShortVersion}
-	case "tag":
+	case field == "tag":
 		values = []string{contract.Tag}
-	case "channel":
+	case field == "channel":
 		values = []string{contract.Channel}
-	case "public-assets":
+	case field == "linux-updater-entry":
+		values = []string{contract.LinuxUpdaterEntry}
+	case field == "linux-package-version":
+		values = []string{contract.LinuxPackageVersion}
+	case field == "linux-deb-version":
+		values = []string{contract.LinuxDEBVersion}
+	case field == "linux-rpm-version":
+		values = []string{contract.LinuxRPMVersion}
+	case field == "linux-package-release":
+		values = []string{contract.LinuxPackageRelease}
+	case field == "public-assets":
 		for _, asset := range contract.PublicAssets {
 			values = append(values, asset.Name)
 		}
+	case field == "update-assets":
+		for _, asset := range contract.UpdateAssets {
+			values = append(values, asset.Name)
+		}
+	case strings.HasPrefix(field, "asset."):
+		name, err := contract.AssetName(strings.TrimPrefix(field, "asset."))
+		if err != nil {
+			return err
+		}
+		values = []string{name}
 	default:
 		return fmt.Errorf("unknown contract field %q", field)
 	}

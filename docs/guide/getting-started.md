@@ -1,14 +1,15 @@
 # Getting Started
 
-Use the macOS Desktop app for a visual workflow, or build the CLI for terminal use. Both use the same Profiles, application backups, operation recovery, and switching rules.
+Use the Desktop app for a visual workflow, or use the CLI for terminal work. Both use the same Profiles, application backups, operation recovery, and switching rules.
 
 ## Before you start
 
 - The Universal Desktop app requires macOS 14 or later and supports Apple silicon and Intel Macs.
+- Linux releases support amd64. The Desktop requires GTK 4 and WebKitGTK 6.0.
 - Building the CLI requires Git, Go 1.26, Make, and a POSIX shell.
-- Install the AI coding tool you want to manage and sign in before saving its first Profile.
+- Install the AI Agent you want to manage and sign in before saving its first Profile.
 
-## Use the Desktop app
+## Install the Desktop app on macOS
 
 1. Download the latest macOS Universal DMG from [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases). Stable releases use `X.Y.Z`; Beta releases use `X.Y.Z-beta.N`.
 2. Open the DMG and drag `ProfileDeck.app` to Applications.
@@ -17,7 +18,63 @@ Use the macOS Desktop app for a visual workflow, or build the CLI for terminal u
 
 Published DMGs are Developer ID signed and notarized by Apple. If macOS reports that the app is damaged or cannot verify its developer, delete that copy and download it again from the official Releases page instead of bypassing the warning.
 
-Signed Desktop releases can follow Stable updates or opt into Beta updates from **Settings → General → App updates**. Local development builds do not check for updates.
+macOS Desktop releases can follow Stable or Beta updates from **Settings → General → App updates**. Local development builds do not check for updates. See [Update the Desktop app](./updates.md).
+
+## Install on Linux amd64
+
+Choose one install path:
+
+- **DEB or RPM package:** Desktop and CLI together; install newer packages from GitHub Releases.
+- **Portable Desktop:** Desktop only; keep it in a user-writable directory so ProfileDeck can apply in-app updates. See [Update the Desktop app](./updates.md).
+
+### DEB or RPM package
+
+Stable and Beta DEB and RPM packages install both `profiledeck` and `profiledeck-desktop`, add a desktop launcher, and declare GTK 4 and WebKitGTK 6.0 dependencies. DEB installation is smoke-tested on Ubuntu 24.04, and RPM installation on Fedora 44.
+
+On Ubuntu 24.04, download `ProfileDeck_<version>_linux_amd64.deb` from [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases), then install it:
+
+```bash
+sudo apt install ./ProfileDeck_<version>_linux_amd64.deb
+```
+
+On Fedora 44, download `ProfileDeck_<version>_linux_amd64.rpm`, then install it:
+
+```bash
+sudo dnf install ./ProfileDeck_<version>_linux_amd64.rpm
+```
+
+Open ProfileDeck from the application menu, or run `profiledeck-desktop`. The `profiledeck` CLI is on your `PATH` as `/usr/bin/profiledeck`.
+
+These installs do not check for or download in-app updates. Download a newer matching package from GitHub Releases and install it with the same command. See [Update a Linux package](./updates.md#update-a-linux-package).
+
+Continue with [Save your first Profile](#save-your-first-profile).
+
+### Portable Desktop
+
+Use this when you want a Desktop-only install with in-app updates.
+
+1. Install the runtime libraries:
+
+```bash
+sudo apt install libgtk-4-1 libwebkitgtk-6.0-4
+# or: sudo dnf install gtk4 webkitgtk6.0
+```
+
+2. Download `ProfileDeck_<version>_linux_amd64.tar.gz` from [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases).
+
+3. Extract and link the app into a directory your user can write:
+
+```bash
+mkdir -p "$HOME/.local/opt/profiledeck" "$HOME/.local/bin"
+tar -xzf ProfileDeck_<version>_linux_amd64.tar.gz -C "$HOME/.local/opt/profiledeck"
+ln -sf "$HOME/.local/opt/profiledeck/profiledeck-desktop" "$HOME/.local/bin/profiledeck-desktop"
+```
+
+4. Run `profiledeck-desktop` (ensure `$HOME/.local/bin` is on your `PATH`).
+
+The archive contains only `profiledeck-desktop`, not the CLI. Use a DEB or RPM when you need `profiledeck`. Keep the install directory writable so ProfileDeck can replace the app after it verifies an update. See [Update the Desktop app](./updates.md).
+
+Continue with [Save your first Profile](#save-your-first-profile).
 
 ## Build and use the CLI
 
@@ -108,5 +165,6 @@ Follow only the recovery action that Diagnostics recommends. See [Diagnostics an
 - [Codex Profiles](../codex/profiles.md)
 - [Claude Code Profiles](../claude-code/profiles.md)
 - [Antigravity Profiles](../antigravity/profiles.md)
+- [Update the Desktop app](./updates.md)
 - [Switching safely](../operations/switching.md)
 - [Data and security](../reference/data-security.md)

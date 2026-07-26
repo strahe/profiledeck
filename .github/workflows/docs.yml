@@ -12,18 +12,13 @@ on:
   push:
     branches:
       - main
-    paths:
-      - '.github/workflows/docs.yml'
-      - 'Makefile'
-      - 'docs/**'
-      - 'README.md'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: docs-${{ github.ref }}
+  group: ${{ github.event_name == 'pull_request' && format('profiledeck-pages-pr-{0}', github.event.pull_request.number) || 'profiledeck-pages' }}
   cancel-in-progress: true
 
 jobs:
@@ -33,6 +28,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.sha || github.event.repository.default_branch }}
 
       - name: Setup Node
         uses: actions/setup-node@v7
@@ -47,13 +44,13 @@ jobs:
           VITEPRESS_BASE: ${{ vars.VITEPRESS_BASE || format('/{0}/', github.event.repository.name) }}
 
       - name: Upload GitHub Pages artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v5
         with:
           path: docs/.vitepress/dist
 
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
 

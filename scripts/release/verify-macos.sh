@@ -8,9 +8,7 @@ product=""
 binary=""
 bundle_id=""
 min_version=""
-public_key=""
 updater=""
-signature=""
 installer=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -22,15 +20,13 @@ while [[ $# -gt 0 ]]; do
     --binary) binary="${2-}"; shift 2 ;;
     --bundle-id) bundle_id="${2-}"; shift 2 ;;
     --min-version) min_version="${2-}"; shift 2 ;;
-    --public-key) public_key="${2-}"; shift 2 ;;
     --updater) updater="${2-}"; shift 2 ;;
-    --signature) signature="${2-}"; shift 2 ;;
     --installer) installer="${2-}"; shift 2 ;;
     *) echo "Could not verify the macOS release. Check the release command and try again." >&2; exit 1 ;;
   esac
 done
 for value in "$directory" "$version" "$short_version" "$build_number" "$product" "$binary" \
-  "$bundle_id" "$min_version" "$public_key" "$updater" "$signature" "$installer"; do
+  "$bundle_id" "$min_version" "$updater" "$installer"; do
   if [[ -z "$value" ]]; then
     echo "Could not verify the macOS release. Required release information is missing." >&2
     exit 1
@@ -114,11 +110,7 @@ verify_app() {
     spctl --assess --type execute --verbose=4 "$app_path"
 }
 updater_path="$directory/$updater"
-signature_path="$directory/$signature"
 installer_path="$directory/$installer"
-run_private "The update signature could not be verified. Sign the update again." \
-  go run ./scripts/releasetool verify-update-signature \
-  --public-key "$public_key" --artifact "$updater_path" --signature "$signature_path"
 extract_path="$temp_dir/updater"
 mkdir -p "$extract_path"
 run_private "The update archive could not be opened. Rebuild the release and try again." \

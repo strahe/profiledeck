@@ -129,8 +129,9 @@
 	let currentPath = $state(router.location);
 	let updateStatus = $state<UpdateStatus>({
 		revision: 0,
+		management: "unavailable",
 		configured: false,
-		automatic: true,
+		automatic: false,
 		channel: "",
 		state: "unavailable",
 		current_version: "dev",

@@ -7,6 +7,7 @@ import (
 
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/bootstrap"
+	"github.com/strahe/profiledeck/internal/releaseartifact"
 	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
 )
 
@@ -23,7 +24,7 @@ func TestDesktopSettingsDefaultsAndPartialUpdates(t *testing.T) {
 		initial.Appearance != DesktopAppearanceSystem ||
 		initial.SidebarCollapsed ||
 		!initial.AutomaticUpdates ||
-		initial.UpdateChannel != DesktopUpdateChannelStable ||
+		initial.UpdateChannel != releaseartifact.ChannelStable ||
 		!initial.AutomaticBackups {
 		t.Fatalf("expected default desktop settings, settings=%#v err=%v", initial, err)
 	}
@@ -70,7 +71,7 @@ func TestDesktopSettingsCombinedUpdate(t *testing.T) {
 	}
 	want := Desktop{
 		Language: language, Appearance: appearance, SidebarCollapsed: collapsed,
-		AutomaticUpdates: true, UpdateChannel: DesktopUpdateChannelStable, AutomaticBackups: true,
+		AutomaticUpdates: true, UpdateChannel: releaseartifact.ChannelStable, AutomaticBackups: true,
 	}
 	if updated != want {
 		t.Fatalf("unexpected combined settings: got %#v want %#v", updated, want)
@@ -99,20 +100,20 @@ func TestDesktopUpdateChannelUsesBuildDefaultUntilUserChangesIt(t *testing.T) {
 	ctx := context.Background()
 	service := newTestService(t, ctx, t.TempDir())
 
-	initialized, err := service.EnsureUpdateChannel(ctx, DesktopUpdateChannelBeta)
-	if err != nil || initialized.UpdateChannel != DesktopUpdateChannelBeta {
+	initialized, err := service.EnsureUpdateChannel(ctx, releaseartifact.ChannelBeta)
+	if err != nil || initialized.UpdateChannel != releaseartifact.ChannelBeta {
 		t.Fatalf("initialize beta channel: settings=%#v err=%v", initialized, err)
 	}
-	stillBeta, err := service.EnsureUpdateChannel(ctx, DesktopUpdateChannelStable)
-	if err != nil || stillBeta.UpdateChannel != DesktopUpdateChannelBeta {
+	stillBeta, err := service.EnsureUpdateChannel(ctx, releaseartifact.ChannelStable)
+	if err != nil || stillBeta.UpdateChannel != releaseartifact.ChannelBeta {
 		t.Fatalf("build default replaced persisted channel: settings=%#v err=%v", stillBeta, err)
 	}
-	stable, err := service.SetUpdateChannel(ctx, DesktopUpdateChannelStable)
-	if err != nil || stable.UpdateChannel != DesktopUpdateChannelStable {
+	stable, err := service.SetUpdateChannel(ctx, releaseartifact.ChannelStable)
+	if err != nil || stable.UpdateChannel != releaseartifact.ChannelStable {
 		t.Fatalf("switch stable channel: settings=%#v err=%v", stable, err)
 	}
 	reloaded, err := service.Get(ctx)
-	if err != nil || reloaded.UpdateChannel != DesktopUpdateChannelStable {
+	if err != nil || reloaded.UpdateChannel != releaseartifact.ChannelStable {
 		t.Fatalf("reload stable channel: settings=%#v err=%v", reloaded, err)
 	}
 }

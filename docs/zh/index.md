@@ -6,10 +6,12 @@ ProfileDeck 把本地 AI 编程工具的登录和设置保存为 Profile。需�
 
 | 方式 | 适合场景 | 开始使用 |
 | --- | --- | --- |
-| macOS 桌面端 | 在一个应用中管理 Profile、用量、更新和恢复操作 | [下载并打开桌面端](./guide/getting-started.md#使用桌面端) |
-| CLI | 在终端中使用，或从源码构建后接入自动化流程 | [构建并初始化 CLI](./guide/getting-started.md#构建并使用-cli) |
+| macOS 桌面端 | 在一个应用中管理 Profile、更新和恢复 | [在 macOS 上安装桌面端](./guide/getting-started.md#在-macos-上安装桌面端) |
+| Linux amd64 软件包 | 同时安装桌面端与 CLI | [安装 DEB 或 RPM](./guide/getting-started.md#安装-deb-或-rpm) |
+| Linux 便携版桌面端 | 只要桌面端；用户目录中应用内更新 | [便携版桌面端](./guide/getting-started.md#便携版桌面端) |
+| 从源码构建 CLI | 在终端中使用或接入自动化流程 | [构建并使用 CLI](./guide/getting-started.md#构建并使用-cli) |
 
-Universal 桌面端要求 macOS 14 或更高版本，可在 Apple 芯片和 Intel Mac 上原生运行。从源码构建 CLI 需要 Go 1.26 和 Make。
+Universal 桌面端要求 macOS 14 或更高版本，可在 Apple 芯片和 Intel Mac 上原生运行。Linux 软件包和便携版桌面端要求 amd64、GTK 4 与 WebKitGTK 6.0。从源码构建 CLI 需要 Go 1.26 和 Make。
 
 ## 支持的工具
 

@@ -3,6 +3,9 @@ version: '3'
 includes:
   common: ../Taskfile.yml
 
+vars:
+  DEFAULT_BINARY: '{{.BIN_DIR}}/{{.APP_NAME}}'
+
 tasks:
   build:
     deps:
@@ -10,14 +13,60 @@ tasks:
         vars:
           DEV: '{{.DEV}}'
     cmds:
-      - mkdir -p "{{.BIN_DIR}}"
-      - 'go build {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.APP_NAME}}" ./desktop'
+      - mkdir -p "$(dirname '{{.OUTPUT_PATH}}')"
+      - 'go build {{.BUILD_FLAGS}} -o "{{.OUTPUT_PATH}}" ./desktop'
     vars:
-      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if .EXTRA_TAGS}}-tags {{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s"{{end}}'
+      OUTPUT_PATH: '{{.OUTPUT | default .DEFAULT_BINARY}}'
+      RELEASE_LDFLAGS: '{{if .VERSION}}-w -s -X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.buildDate={{.BUILD_DATE}} -X main.updateManagement={{.UPDATE_MANAGEMENT}}{{else}}-w -s{{end}}'
+      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if .EXTRA_TAGS}}-tags {{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="{{.RELEASE_LDFLAGS}}"{{end}}'
     env:
       GOOS: linux
       GOARCH: '{{.ARCH | default ARCH}}'
       CGO_ENABLED: '1'
+
+  build:release:
+    desc: Build portable and package-managed Linux Desktop binaries
+    deps:
+      - task: build
+        vars:
+          ARCH: amd64
+          OUTPUT: '{{.PORTABLE_OUTPUT}}'
+          VERSION: '{{.VERSION}}'
+          COMMIT: '{{.COMMIT}}'
+          BUILD_DATE: '{{.BUILD_DATE}}'
+          UPDATE_MANAGEMENT: application
+      - task: build
+        vars:
+          ARCH: amd64
+          OUTPUT: '{{.PACKAGE_OUTPUT}}'
+          VERSION: '{{.VERSION}}'
+          COMMIT: '{{.COMMIT}}'
+          BUILD_DATE: '{{.BUILD_DATE}}'
+          UPDATE_MANAGEMENT: package
+    requires:
+      vars:
+        - PORTABLE_OUTPUT
+        - PACKAGE_OUTPUT
+        - VERSION
+        - COMMIT
+        - BUILD_DATE
+
+  release:
+    desc: Build Linux amd64 tar.gz, DEB, and RPM assets
+    cmds:
+      - >
+        scripts/release/build-linux-amd64.sh
+        --version "{{.VERSION}}"
+        --release-commit "{{.RELEASE_COMMIT}}"
+        --output "{{.OUTPUT_DIR}}"
+        --built-at "{{.BUILT_AT}}"
+        --task-exe "{{.TASK_EXE}}"
+    requires:
+      vars:
+        - VERSION
+        - RELEASE_COMMIT
+        - OUTPUT_DIR
+        - BUILT_AT
 
   run:
     cmds:

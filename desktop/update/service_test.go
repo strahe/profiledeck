@@ -2,7 +2,6 @@ package update
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -17,18 +16,20 @@ import (
 	coreapp "github.com/strahe/profiledeck/internal/app"
 	"github.com/strahe/profiledeck/internal/appbackup"
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/releaseartifact"
 )
 
 func TestServiceDisablesUnconfiguredBuilds(t *testing.T) {
 	application := newUpdateTestApplication(t)
 	for _, config := range []BuildConfig{
-		{CurrentVersion: "dev", PublicKeyBase64: testUpdatePublicKeyBase64()},
-		{CurrentVersion: "not-semver", PublicKeyBase64: testUpdatePublicKeyBase64()},
-		{CurrentVersion: "0.1.0-alpha.1", PublicKeyBase64: testUpdatePublicKeyBase64()},
-		{CurrentVersion: "0.1.0-beta.0", PublicKeyBase64: testUpdatePublicKeyBase64()},
+		{CurrentVersion: "dev", PublicKey: testUpdatePublicKey(), Management: ManagementApplication},
+		{CurrentVersion: "not-semver", PublicKey: testUpdatePublicKey(), Management: ManagementApplication},
+		{CurrentVersion: "0.1.0-alpha.1", PublicKey: testUpdatePublicKey(), Management: ManagementApplication},
+		{CurrentVersion: "0.1.0-beta.0", PublicKey: testUpdatePublicKey(), Management: ManagementApplication},
 	} {
 		status := NewService(context.Background(), application, config).Status(context.Background())
-		if status.Configured || status.State != StateUnavailable || status.ErrorCode != "" {
+		if status.Configured || status.Management != ManagementUnavailable || status.Automatic ||
+			status.State != StateUnavailable || status.ErrorCode != "" {
 			t.Fatalf("build should be unavailable: config=%#v status=%#v", config, status)
 		}
 	}
@@ -37,13 +38,23 @@ func TestServiceDisablesUnconfiguredBuilds(t *testing.T) {
 func TestServiceReportsInvalidReleaseVerificationConfiguration(t *testing.T) {
 	application := newUpdateTestApplication(t)
 	for _, config := range []BuildConfig{
-		{CurrentVersion: "0.1.0"},
-		{CurrentVersion: "0.1.0", PublicKeyBase64: "invalid"},
+		{CurrentVersion: "0.1.0", PublicKey: []byte("invalid"), Management: ManagementApplication},
 	} {
 		status := NewService(context.Background(), application, config).Status(context.Background())
-		if status.Configured || status.State != StateUnavailable || status.ErrorCode != ErrorConfigurationInvalid {
+		if status.Configured || status.Management != ManagementUnavailable || status.Automatic ||
+			status.State != StateUnavailable || status.ErrorCode != ErrorConfigurationInvalid {
 			t.Fatalf("invalid release configuration should be visible: config=%#v status=%#v", config, status)
 		}
+	}
+}
+
+func TestServiceDefaultsMissingManagementToUnavailable(t *testing.T) {
+	status := NewService(context.Background(), newUpdateTestApplication(t), BuildConfig{
+		CurrentVersion: "1.0.0", PublicKey: testUpdatePublicKey(),
+	}).Status(context.Background())
+	if status.Management != ManagementUnavailable || status.Configured || status.Automatic ||
+		status.State != StateUnavailable {
+		t.Fatalf("missing update management did not fail closed: %#v", status)
 	}
 }
 
@@ -52,37 +63,66 @@ func TestServiceConfiguresStableAndPrereleaseBuilds(t *testing.T) {
 		version string
 		channel string
 	}{
-		{version: "0.1.0", channel: ChannelStable},
-		{version: "0.1.0-beta.1", channel: ChannelBeta},
+		{version: "0.1.0", channel: releaseartifact.ChannelStable},
+		{version: "0.1.0-beta.1", channel: releaseartifact.ChannelBeta},
 	} {
 		application := newUpdateTestApplication(t)
 		version := test.version
 		status := NewService(context.Background(), application, BuildConfig{
-			CurrentVersion: version, PublicKeyBase64: testUpdatePublicKeyBase64(),
+			CurrentVersion: version, PublicKey: testUpdatePublicKey(), Management: ManagementApplication,
 		}).Status(context.Background())
-		if !status.Configured || status.State != StateIdle || status.Channel != test.channel {
+		if !status.Configured || status.Management != ManagementApplication ||
+			status.State != StateIdle || status.Channel != test.channel {
 			t.Fatalf("build should be configured: version=%q status=%#v", version, status)
 		}
 	}
+}
+
+func TestServiceReportsPackageManagedUpdatesWithoutConfiguringUpdater(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(ctx, newUpdateTestApplication(t), BuildConfig{
+		CurrentVersion: "1.0.0",
+		Management:     ManagementPackage,
+	})
+	status := service.Status(ctx)
+	if status.Management != ManagementPackage || status.Configured || status.Automatic ||
+		status.State != StateUnavailable || status.ErrorCode != "" {
+		t.Fatalf("unexpected package-managed status: %#v", status)
+	}
+	if service.provider != nil || service.engine != nil {
+		t.Fatal("package-managed build initialized the application updater")
+	}
+	if checked := service.CheckAndDownload(ctx); checked != status {
+		t.Fatalf("package-managed check changed status: before=%#v after=%#v", status, checked)
+	}
+	if automatic := service.SetAutomatic(ctx, true); automatic != status {
+		t.Fatalf("package-managed automatic setting changed status: before=%#v after=%#v", status, automatic)
+	}
+	if _, err := service.SetChannel(ctx, releaseartifact.ChannelBeta); err == nil {
+		t.Fatal("package-managed channel change was accepted")
+	}
+	assertUpdateNotReady(t, service.Restart(ctx))
 }
 
 func TestServicePersistsChannelInsteadOfReplacingItFromBuildVersion(t *testing.T) {
 	ctx := context.Background()
 	application := newUpdateTestApplication(t)
 	service := NewService(ctx, application, BuildConfig{
-		CurrentVersion: "0.1.0-beta.1", PublicKeyBase64: testUpdatePublicKeyBase64(),
+		CurrentVersion: "0.1.0-beta.1", PublicKey: testUpdatePublicKey(),
+		Management: ManagementApplication,
 	})
-	if status := service.Status(ctx); status.Channel != ChannelBeta {
+	if status := service.Status(ctx); status.Channel != releaseartifact.ChannelBeta {
 		t.Fatalf("beta build default channel = %q", status.Channel)
 	}
-	status, err := service.SetChannel(ctx, ChannelStable)
-	if err != nil || status.Channel != ChannelStable {
+	status, err := service.SetChannel(ctx, releaseartifact.ChannelStable)
+	if err != nil || status.Channel != releaseartifact.ChannelStable {
 		t.Fatalf("switch stable: status=%#v err=%v", status, err)
 	}
 	restarted := NewService(ctx, application, BuildConfig{
-		CurrentVersion: "0.2.0-beta.1", PublicKeyBase64: testUpdatePublicKeyBase64(),
+		CurrentVersion: "0.2.0-beta.1", PublicKey: testUpdatePublicKey(),
+		Management: ManagementApplication,
 	})
-	if status := restarted.Status(ctx); status.Channel != ChannelStable {
+	if status := restarted.Status(ctx); status.Channel != releaseartifact.ChannelStable {
 		t.Fatalf("new beta build replaced persisted channel: %#v", status)
 	}
 }
@@ -90,17 +130,17 @@ func TestServicePersistsChannelInsteadOfReplacingItFromBuildVersion(t *testing.T
 func TestServiceSwitchesChannelOnlyWhileUpdateIsIdle(t *testing.T) {
 	ctx := context.Background()
 	service, engine := newUpdateTestService(t, time.Hour)
-	status, err := service.SetChannel(ctx, ChannelStable)
-	if err != nil || status.Channel != ChannelStable {
+	status, err := service.SetChannel(ctx, releaseartifact.ChannelStable)
+	if err != nil || status.Channel != releaseartifact.ChannelStable {
 		t.Fatalf("switch stable: status=%#v err=%v", status, err)
 	}
 	status.LastCheckedAtUnixMS = 123
 	service.status = status
-	status, err = service.SetChannel(ctx, ChannelBeta)
+	status, err = service.SetChannel(ctx, releaseartifact.ChannelBeta)
 	if err != nil {
 		t.Fatalf("switch beta: %v", err)
 	}
-	if status.Channel != ChannelBeta ||
+	if status.Channel != releaseartifact.ChannelBeta ||
 		status.State != StateIdle ||
 		status.LastCheckedAtUnixMS != 0 ||
 		status.AvailableVersion != "" {
@@ -117,19 +157,19 @@ func TestServiceSwitchesChannelOnlyWhileUpdateIsIdle(t *testing.T) {
 	done := make(chan UpdateStatus, 1)
 	go func() { done <- service.CheckAndDownload(ctx) }()
 	<-started
-	_, err = service.SetChannel(ctx, ChannelStable)
+	_, err = service.SetChannel(ctx, releaseartifact.ChannelStable)
 	var appErr *apperror.Error
 	if !errors.As(err, &appErr) || appErr.Code != apperror.UpdateChannelBusy {
 		t.Fatalf("channel switch during check error = %v", err)
 	}
 	close(release)
 	<-done
-	if status := service.Status(ctx); status.Channel != ChannelBeta {
+	if status := service.Status(ctx); status.Channel != releaseartifact.ChannelBeta {
 		t.Fatalf("busy channel switch changed provider: %#v", status)
 	}
 
 	service.status.State = StateReady
-	_, err = service.SetChannel(ctx, ChannelStable)
+	_, err = service.SetChannel(ctx, releaseartifact.ChannelStable)
 	if !errors.As(err, &appErr) || appErr.Code != apperror.UpdateChannelBusy {
 		t.Fatalf("channel switch with ready update error = %v", err)
 	}
@@ -310,8 +350,12 @@ func TestRestartCreatesEncryptedApplicationBackup(t *testing.T) {
 	if err := os.WriteFile(executable, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	staging := filepath.Join(root, "staging")
+	if err := os.MkdirAll(staging, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	service.executable = func() (string, error) { return executable, nil }
-	engine.downloadedPath = filepath.Join(os.TempDir(), "wails-update-test", "ProfileDeck.app")
+	engine.downloadedPath = filepath.Join(staging, "ProfileDeck.app")
 	service.status.State = StateReady
 	service.status.AvailableVersion = "0.1.0-beta.2"
 
@@ -352,6 +396,7 @@ func TestRestartStopsBeforeUpdaterWhenSnapshotFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.executable = func() (string, error) { return executable, nil }
+	service.verifyReplacement = func(string, string) error { return nil }
 	service.status.State = StateReady
 	service.status.AvailableVersion = "0.1.0-beta.2"
 	engine.downloadedPath = "staged"
@@ -381,6 +426,7 @@ func TestRestartRejectsConcurrentAndRepeatedAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.executable = func() (string, error) { return executable, nil }
+	service.verifyReplacement = func(string, string) error { return nil }
 	service.status.State = StateReady
 	service.status.AvailableVersion = "0.1.0-beta.2"
 	engine.downloadedPath = "staged"
@@ -403,6 +449,83 @@ func TestRestartRejectsConcurrentAndRepeatedAttempts(t *testing.T) {
 	assertUpdateNotReady(t, service.Restart(context.Background()))
 	if engine.restarts.Load() != 1 {
 		t.Fatalf("updater restart count = %d, want 1", engine.restarts.Load())
+	}
+}
+
+func TestRestartDisablesUpdaterWhenReplacementIsNotAtomic(t *testing.T) {
+	service, engine := newUpdateTestService(t, time.Hour)
+	root := t.TempDir()
+	executable := filepath.Join(root, "profiledeck-desktop")
+	if err := os.WriteFile(executable, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staging, err := os.MkdirTemp("", "wails-update-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(staging) })
+
+	service.target = releaseartifact.UpdateTarget{
+		Platform: releaseartifact.PlatformLinux,
+		Arch:     releaseartifact.ArchAMD64,
+	}
+	service.executable = func() (string, error) { return executable, nil }
+	service.verifyReplacement = func(stagedPath, targetPath string) error {
+		if stagedPath != engine.downloadedPath || targetPath != executable {
+			t.Fatalf("replacement probe = %q -> %q", stagedPath, targetPath)
+		}
+		return errors.New("cross-device rename")
+	}
+	engine.downloadedPath = filepath.Join(staging, "profiledeck-desktop")
+	service.status.State = StateReady
+	service.status.AvailableVersion = "0.1.0-beta.2"
+
+	assertUpdateNotReady(t, service.Restart(context.Background()))
+	status := service.Status(context.Background())
+	if status.Management != ManagementUnavailable || status.Configured || status.Automatic ||
+		status.State != StateUnavailable || status.ErrorCode != ErrorInstallationUnsupported {
+		t.Fatalf("unsafe replacement did not disable updates: %#v", status)
+	}
+	if engine.restarts.Load() != 0 {
+		t.Fatalf("updater restarted after replacement probe failed: %d", engine.restarts.Load())
+	}
+	if _, err := os.Stat(staging); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Wails staging directory was not removed: %v", err)
+	}
+	backups, err := service.application.Backups().List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups.Backups) != 0 {
+		t.Fatalf("replacement probe created a backup: %#v", backups.Backups)
+	}
+}
+
+func TestUpdateInstallTargetAcceptsOnlyRegularLinuxExecutable(t *testing.T) {
+	root := t.TempDir()
+	executable := filepath.Join(root, "profiledeck-desktop")
+	if err := os.WriteFile(executable, []byte("elf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{
+		target: releaseartifact.UpdateTarget{
+			Platform: releaseartifact.PlatformLinux,
+			Arch:     releaseartifact.ArchAMD64,
+		},
+		executable: func() (string, error) { return executable, nil },
+	}
+	path, err := service.updateInstallTarget()
+	if err != nil || path != executable {
+		t.Fatalf("Linux install target = %q, %v", path, err)
+	}
+
+	link := filepath.Join(root, "profiledeck-link")
+	if err := os.Symlink(executable, link); err != nil {
+		t.Fatal(err)
+	}
+	service.executable = func() (string, error) { return link, nil }
+	if _, err := service.updateInstallTarget(); err == nil {
+		t.Fatal("Linux install target accepted a symbolic link")
 	}
 }
 
@@ -454,17 +577,18 @@ func (engine *fakeUpdateEngine) DownloadedPath() string { return engine.download
 func newUpdateTestService(t *testing.T, interval time.Duration) (*Service, *fakeUpdateEngine) {
 	t.Helper()
 	service := NewService(context.Background(), newUpdateTestApplication(t), BuildConfig{
-		CurrentVersion:  "0.1.0-beta.1",
-		PublicKeyBase64: testUpdatePublicKeyBase64(),
-		CheckInterval:   interval,
+		CurrentVersion: "0.1.0-beta.1",
+		PublicKey:      testUpdatePublicKey(),
+		Management:     ManagementApplication,
+		CheckInterval:  interval,
 	})
 	engine := &fakeUpdateEngine{}
 	service.engine = engine
 	return service, engine
 }
 
-func testUpdatePublicKeyBase64() string {
-	return base64.StdEncoding.EncodeToString(make([]byte, 32))
+func testUpdatePublicKey() []byte {
+	return make([]byte, 32)
 }
 
 func newUpdateTestApplication(t *testing.T) *coreapp.Application {

@@ -1,0 +1,57 @@
+name: profiledeck
+arch: amd64
+platform: linux
+version: ${PROFILEDECK_PACKAGE_VERSION}
+version_schema: none
+release: ${PROFILEDECK_PACKAGE_RELEASE}
+section: utils
+priority: optional
+maintainer: ProfileDeck maintainers
+description: Manage Profiles for AI Agents.
+vendor: ProfileDeck
+homepage: https://github.com/strahe/profiledeck
+license: Apache-2.0
+
+contents:
+  - src: ${PROFILEDECK_CLI_BINARY}
+    dst: /usr/bin/profiledeck
+    expand: true
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+  - src: ${PROFILEDECK_DESKTOP_BINARY}
+    dst: /usr/bin/profiledeck-desktop
+    expand: true
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+  - src: ./build/linux/profiledeck.desktop
+    dst: /usr/share/applications/profiledeck.desktop
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: ./desktop/assets/appicon.png
+    dst: /usr/share/icons/hicolor/1024x1024/apps/profiledeck.png
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: ./LICENSE
+    dst: /usr/share/licenses/profiledeck/LICENSE
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+
+depends:
+  - libgtk-4-1
+  - libwebkitgtk-6.0-4
+
+overrides:
+  rpm:
+    depends:
+      - gtk4
+      - webkitgtk6.0

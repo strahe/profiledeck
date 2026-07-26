@@ -18,8 +18,8 @@ func ConfigureForE2E(service *Service, engine *updater.Updater, version, baseURL
 		CurrentVersion: version,
 		Providers:      []updater.Provider{provider},
 		PublicKey:      append([]byte(nil), service.publicKey...),
-		Platform:       UpdatePlatform,
-		Arch:           "arm64",
+		Platform:       service.target.Platform,
+		Arch:           service.target.Arch,
 		Window:         updater.WindowNone,
 	}); err != nil {
 		return err
@@ -29,6 +29,7 @@ func ConfigureForE2E(service *Service, engine *updater.Updater, version, baseURL
 	service.provider = provider
 	service.engine = engine
 	service.status.Configured = true
+	service.status.Management = ManagementApplication
 	service.status.State = StateIdle
 	service.status.CurrentVersion = version
 	return nil

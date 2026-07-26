@@ -7,18 +7,17 @@ import (
 	"errors"
 
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/releaseartifact"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
 const (
-	DesktopLanguageAuto        = "auto"
-	DesktopLanguageZhCN        = "zh-CN"
-	DesktopLanguageEnUS        = "en-US"
-	DesktopAppearanceSystem    = "system"
-	DesktopAppearanceLight     = "light"
-	DesktopAppearanceDark      = "dark"
-	DesktopUpdateChannelStable = "stable"
-	DesktopUpdateChannelBeta   = "beta"
+	DesktopLanguageAuto     = "auto"
+	DesktopLanguageZhCN     = "zh-CN"
+	DesktopLanguageEnUS     = "en-US"
+	DesktopAppearanceSystem = "system"
+	DesktopAppearanceLight  = "light"
+	DesktopAppearanceDark   = "dark"
 
 	desktopLanguageSettingKey         = "desktop.language"
 	desktopAppearanceSettingKey       = "desktop.appearance"
@@ -206,7 +205,7 @@ func get(ctx context.Context, db *store.Store) (Desktop, error) {
 		ctx,
 		db,
 		desktopUpdateChannelSettingKey,
-		DesktopUpdateChannelStable,
+		releaseartifact.ChannelStable,
 		normalizeUpdateChannel,
 		"desktop update channel",
 	)
@@ -278,7 +277,7 @@ func normalizeAppearance(value string) (string, error) {
 
 func normalizeUpdateChannel(value string) (string, error) {
 	switch value {
-	case DesktopUpdateChannelStable, DesktopUpdateChannelBeta:
+	case releaseartifact.ChannelStable, releaseartifact.ChannelBeta:
 		return value, nil
 	default:
 		return "", apperror.New(apperror.SettingInvalid, "unsupported Desktop update channel").

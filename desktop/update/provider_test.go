@@ -3,13 +3,13 @@ package update
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ed25519"
-	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,561 +17,357 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/updater"
 	githubprovider "github.com/wailsapp/wails/v3/pkg/updater/providers/github"
+
+	"github.com/strahe/profiledeck/internal/releaseartifact"
 )
 
-func TestChannelForVersion(t *testing.T) {
+func TestManifestAssetMatcherRequiresOneManifest(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
-		version string
-		want    releaseChannel
-	}{
-		{version: "1.2.3", want: releaseChannelStable},
-		{version: "1.2.3-beta.1", want: releaseChannelPrerelease},
-		{version: "1.2.3-beta.12", want: releaseChannelPrerelease},
-		{version: "dev", want: releaseChannelInvalid},
-		{version: "v1.2.3", want: releaseChannelInvalid},
-		{version: "1.2.3-alpha.1", want: releaseChannelInvalid},
-		{version: "1.2.3-beta.0", want: releaseChannelInvalid},
-		{version: "1.2.3+build", want: releaseChannelInvalid},
-		{version: "01.2.3", want: releaseChannelInvalid},
-		{version: "1.02.3", want: releaseChannelInvalid},
-		{version: "1.2.03", want: releaseChannelInvalid},
-	}
-	for _, test := range tests {
-		test := test
-		t.Run(test.version, func(t *testing.T) {
-			t.Parallel()
-			if got := channelForVersion(test.version); got != test.want {
-				t.Fatalf("channelForVersion(%q) = %d, want %d", test.version, got, test.want)
-			}
-		})
-	}
-}
-
-func TestUniversalAssetMatcher(t *testing.T) {
-	t.Parallel()
-	request := updater.CheckRequest{Platform: UpdatePlatform, Arch: "arm64"}
-	assets := []githubprovider.ReleaseAsset{
-		{Name: "ProfileDeck_1.2.3_macos_universal.dmg"},
-		{Name: ChecksumAsset},
+	request := updater.CheckRequest{}
+	if got := manifestAssetMatcher(request, []githubprovider.ReleaseAsset{
 		{Name: "ProfileDeck_1.2.3_macos_universal.zip"},
-		{Name: "ProfileDeck_1.2.3_darwin_arm64.zip"},
+		{Name: releaseartifact.ManifestName},
+	}); got != 1 {
+		t.Fatalf("manifest match = %d, want 1", got)
 	}
-	if got := universalAssetMatcher(request, assets); got != 2 {
-		t.Fatalf("universalAssetMatcher() = %d, want 2", got)
+	if got := manifestAssetMatcher(request, []githubprovider.ReleaseAsset{
+		{Name: releaseartifact.ManifestName},
+		{Name: releaseartifact.ManifestName},
+	}); got != -1 {
+		t.Fatalf("duplicate manifest match = %d, want -1", got)
 	}
-	if got := universalAssetMatcher(
-		request,
-		append(assets, githubprovider.ReleaseAsset{Name: "ProfileDeck_1.2.4_macos_universal.zip"}),
-	); got != -1 {
-		t.Fatalf("ambiguous matcher result = %d, want -1", got)
-	}
-	if got := universalAssetMatcher(
-		updater.CheckRequest{Platform: "windows", Arch: "amd64"},
-		assets,
-	); got != -1 {
-		t.Fatalf("non-macOS matcher result = %d, want -1", got)
+	if got := manifestAssetMatcher(request, nil); got != -1 {
+		t.Fatalf("missing manifest match = %d, want -1", got)
 	}
 }
 
-func TestGitHubProviderSelectsStableAndPrereleaseEndpoints(t *testing.T) {
+func TestGitHubManifestProviderStableAndBeta(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
-		name              string
-		currentVersion    string
-		releaseVersion    string
-		releasePrerelease bool
-		wantPathSuffix    string
-		wantChannel       string
+	for _, test := range []struct {
+		name       string
+		version    string
+		current    string
+		prerelease bool
+		platform   string
+		arch       string
+		filetype   string
 	}{
 		{
-			name:           "stable",
-			currentVersion: "1.0.0",
-			releaseVersion: "1.1.0",
-			wantPathSuffix: "/releases/latest",
-			wantChannel:    "stable",
+			name: "stable macOS", version: "1.0.1", current: "1.0.0",
+			platform: "darwin", arch: "arm64", filetype: "zip",
 		},
 		{
-			name:              "beta",
-			currentVersion:    "1.1.0-beta.1",
-			releaseVersion:    "1.1.0-beta.2",
-			releasePrerelease: true,
-			wantPathSuffix:    "/releases?per_page=10",
-			wantChannel:       "prerelease",
+			name: "beta Linux", version: "1.0.1-beta.2", current: "1.0.1-beta.1",
+			prerelease: true, platform: "linux", arch: "amd64", filetype: "gz",
 		},
-		{
-			name:           "beta to stable",
-			currentVersion: "1.1.0-beta.2",
-			releaseVersion: "1.1.0",
-			wantPathSuffix: "/releases?per_page=10",
-			wantChannel:    "stable",
-		},
-	}
-	for _, test := range tests {
+	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			fixture := newGitHubFixture(t, githubFixtureConfig{
-				Version:    test.releaseVersion,
-				Prerelease: test.releasePrerelease,
-				Checksum:   true,
+			fixture := newManifestFixture(t, manifestFixtureConfig{
+				Version: test.version, Prerelease: test.prerelease,
+				Platform: test.platform, Arch: test.arch,
 			})
-			provider := fixture.provider(t, test.currentVersion)
+			provider := fixture.provider(t, test.current)
 			release, err := provider.Check(context.Background(), updater.CheckRequest{
-				CurrentVersion: test.currentVersion,
-				Platform:       UpdatePlatform,
-				Arch:           "arm64",
+				CurrentVersion: test.current, Platform: test.platform, Arch: test.arch,
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if release == nil || release.Version != test.releaseVersion || release.Channel != test.wantChannel {
+			expectedName, _ := releaseartifact.UpdaterName(test.version, test.platform, test.arch)
+			if release == nil ||
+				release.Version != test.version ||
+				release.Artifact.Filename != expectedName ||
+				release.Artifact.Filetype != test.filetype ||
+				release.Name != "GitHub release "+test.version ||
+				release.Notes != "Release notes" {
 				t.Fatalf("unexpected release: %#v", release)
 			}
-			if got := fixture.apiPath(); !strings.HasSuffix(got, test.wantPathSuffix) {
-				t.Fatalf("GitHub API path = %q, want suffix %q", got, test.wantPathSuffix)
+			expectedChannel := releaseartifact.ChannelStable
+			if test.prerelease {
+				expectedChannel = releaseartifact.ChannelBeta
 			}
-			if release.Notes != "Release notes from GitHub" {
-				t.Fatalf("release notes = %q", release.Notes)
+			if release.Channel != expectedChannel {
+				t.Fatalf("channel = %q, want %q", release.Channel, expectedChannel)
 			}
-		})
-	}
-}
+			if release.Verification == nil ||
+				release.Verification.DigestAlgo != "sha512" ||
+				release.Verification.SignatureAlgo != "ed25519ph" {
+				t.Fatalf("unexpected verification: %#v", release.Verification)
+			}
 
-func TestGitHubProviderSwitchesChannelsWithoutReinitialization(t *testing.T) {
-	t.Parallel()
-	fixture := newGitHubFixture(t, githubFixtureConfig{
-		Version:  "1.1.0",
-		Checksum: true,
-	})
-	provider := fixture.provider(t, "1.0.0")
-	request := updater.CheckRequest{
-		CurrentVersion: "1.0.0",
-		Platform:       UpdatePlatform,
-		Arch:           "arm64",
-	}
-	if _, err := provider.Check(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-	if got := fixture.apiPath(); !strings.HasSuffix(got, "/releases/latest") {
-		t.Fatalf("stable API path = %q", got)
-	}
-	if err := provider.SetChannel(ChannelBeta); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := provider.Check(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-	if got := fixture.apiPath(); !strings.HasSuffix(got, "/releases?per_page=10") {
-		t.Fatalf("beta API path = %q", got)
-	}
-}
-
-func TestGitHubProviderStableBuildRejectsPrerelease(t *testing.T) {
-	t.Parallel()
-	fixture := newGitHubFixture(t, githubFixtureConfig{
-		Version:    "1.1.0-beta.1",
-		Prerelease: true,
-		Checksum:   true,
-	})
-	provider := fixture.provider(t, "1.0.0")
-	_, err := provider.Check(context.Background(), updater.CheckRequest{
-		CurrentVersion: "1.0.0",
-		Platform:       UpdatePlatform,
-		Arch:           "arm64",
-	})
-	if ErrorCode(err) != ErrorFeedInvalid {
-		t.Fatalf("error = %v, code = %q", err, ErrorCode(err))
-	}
-}
-
-func TestGitHubProviderDoesNotDowngrade(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name           string
-		currentVersion string
-		releaseVersion string
-		prerelease     bool
-	}{
-		{
-			name:           "stable",
-			currentVersion: "1.1.0",
-			releaseVersion: "1.0.9",
-		},
-		{
-			name:           "prerelease",
-			currentVersion: "1.1.0-beta.2",
-			releaseVersion: "1.1.0-beta.1",
-			prerelease:     true,
-		},
-	}
-	for _, test := range tests {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			fixture := newGitHubFixture(t, githubFixtureConfig{
-				Version:    test.releaseVersion,
-				Prerelease: test.prerelease,
-				Checksum:   true,
-			})
-			provider := fixture.provider(t, test.currentVersion)
-			release, err := provider.Check(context.Background(), updater.CheckRequest{
-				CurrentVersion: test.currentVersion,
-				Platform:       UpdatePlatform,
-				Arch:           "arm64",
-			})
-			if err != nil || release != nil {
-				t.Fatalf("downgrade check returned release=%#v err=%v", release, err)
+			var downloaded bytes.Buffer
+			if err := provider.Download(context.Background(), release, &downloaded, func(int64, int64) {}); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(downloaded.Bytes(), fixture.artifact) {
+				t.Fatalf("download = %q, want %q", downloaded.Bytes(), fixture.artifact)
+			}
+			if err := ed25519.VerifyWithOptions(
+				fixture.publicKey,
+				release.Verification.Digest,
+				release.Verification.Signature,
+				&ed25519.Options{Hash: crypto.SHA512},
+			); err != nil {
+				t.Fatalf("Wails manifest signature did not verify: %v", err)
 			}
 		})
 	}
 }
 
-func TestGitHubProviderRequiresMatchingChecksum(t *testing.T) {
+func TestGitHubManifestProviderSwitchesChannels(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
-		name         string
-		checksum     bool
-		checksumBody string
-	}{
-		{name: "missing asset"},
-		{name: "missing filename", checksum: true, checksumBody: strings.Repeat("0", 64) + "  other.zip\n"},
-		{name: "malformed digest", checksum: true, checksumBody: "not-a-sha256  ProfileDeck_1.0.1-beta.2_macos_universal.zip\n"},
-	}
-	for _, test := range tests {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			fixture := newGitHubFixture(t, githubFixtureConfig{
-				Version:      "1.0.1-beta.2",
-				Prerelease:   true,
-				Checksum:     test.checksum,
-				ChecksumBody: test.checksumBody,
-			})
-			provider := fixture.provider(t, "1.0.1-beta.1")
-			_, err := provider.Check(context.Background(), updater.CheckRequest{
-				CurrentVersion: "1.0.1-beta.1",
-				Platform:       UpdatePlatform,
-				Arch:           "amd64",
-			})
-			if ErrorCode(err) != ErrorArtifactVerificationFailed {
-				t.Fatalf("error = %v, code = %q", err, ErrorCode(err))
-			}
-		})
-	}
-}
-
-func TestGitHubProviderRejectsMissingUniversalAsset(t *testing.T) {
-	t.Parallel()
-	fixture := newGitHubFixture(t, githubFixtureConfig{
-		Version:      "1.0.1",
-		Checksum:     true,
-		ArtifactName: "ProfileDeck_1.0.1_macos_universal.dmg",
+	fixture := newManifestFixture(t, manifestFixtureConfig{
+		Version: "1.0.1-beta.2", Prerelease: true, Platform: "darwin", Arch: "amd64",
 	})
-	provider := fixture.provider(t, "1.0.0")
-	_, err := provider.Check(context.Background(), updater.CheckRequest{
-		CurrentVersion: "1.0.0",
-		Platform:       UpdatePlatform,
-		Arch:           "arm64",
-	})
-	if ErrorCode(err) != ErrorFeedInvalid {
-		t.Fatalf("error = %v, code = %q", err, ErrorCode(err))
-	}
-}
-
-func TestGitHubProviderRejectsMismatchedArtifactVersion(t *testing.T) {
-	t.Parallel()
-	fixture := newGitHubFixture(t, githubFixtureConfig{
-		Version:      "1.0.2-beta.1",
-		Prerelease:   true,
-		Checksum:     true,
-		ArtifactName: artifactName("1.0.1-beta.9"),
-	})
-	provider := fixture.provider(t, "1.0.1-beta.8")
-	_, err := provider.Check(context.Background(), updater.CheckRequest{
-		CurrentVersion: "1.0.1-beta.8",
-		Platform:       UpdatePlatform,
-		Arch:           "arm64",
-	})
-	if ErrorCode(err) != ErrorFeedInvalid {
-		t.Fatalf("error = %v, code = %q", err, ErrorCode(err))
-	}
-}
-
-func TestGitHubProviderDownloadsChecksumVerifiedArtifact(t *testing.T) {
-	t.Parallel()
-	fixture := newGitHubFixture(t, githubFixtureConfig{
-		Version:    "1.0.1-beta.2",
-		Prerelease: true,
-		Checksum:   true,
-	})
-	provider := fixture.provider(t, "1.0.1-beta.1")
-	release, err := provider.Check(context.Background(), updater.CheckRequest{
-		CurrentVersion: "1.0.1-beta.1",
-		Platform:       UpdatePlatform,
-		Arch:           "arm64",
+	provider, err := newChannelGitHubProvider(releaseartifact.ChannelStable, githubProviderOptions{
+		Repository: "test/profiledeck", BaseURL: fixture.server.URL, HTTPClient: fixture.server.Client(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var downloaded bytes.Buffer
-	if err := provider.Download(context.Background(), release, &downloaded, nil); err != nil {
+	request := updater.CheckRequest{CurrentVersion: "1.0.0-beta.1", Platform: "darwin", Arch: "amd64"}
+	if _, err := provider.Check(context.Background(), request); ErrorCode(err) != ErrorFeedInvalid {
+		t.Fatalf("stable channel error = %v, want %s", err, ErrorFeedInvalid)
+	}
+	if err := provider.SetChannel(releaseartifact.ChannelBeta); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(downloaded.Bytes(), fixture.artifact) {
-		t.Fatalf("downloaded artifact = %q", downloaded.Bytes())
-	}
-	digest := sha256.Sum256(downloaded.Bytes())
-	if !bytes.Equal(release.Verification.Digest, digest[:]) {
-		t.Fatalf("release digest = %x, want %x", release.Verification.Digest, digest)
-	}
-	if release.Verification.SignatureAlgo != SignatureAlgo ||
-		!ed25519.Verify(fixture.publicKey, digest[:], release.Verification.Signature) {
-		t.Fatalf("release signature is not valid: %#v", release.Verification)
+	if release, err := provider.Check(context.Background(), request); err != nil || release == nil {
+		t.Fatalf("beta channel release = %#v, err=%v", release, err)
 	}
 }
 
-func TestGitHubProviderRequiresValidArtifactSignature(t *testing.T) {
+func TestGitHubManifestProviderRejectsInvalidReleaseContracts(t *testing.T) {
 	t.Parallel()
-	for _, test := range []struct {
-		name          string
-		signatureBody string
+	tests := []struct {
+		name   string
+		mutate func(*manifestFixtureConfig)
+		code   string
 	}{
-		{name: "malformed", signatureBody: "not-base64"},
-		{name: "wrong size", signatureBody: base64.StdEncoding.EncodeToString([]byte("short"))},
-	} {
+		{
+			name: "mismatched version",
+			mutate: func(config *manifestFixtureConfig) {
+				config.ManifestVersion = "1.0.2"
+			},
+			code: ErrorFeedInvalid,
+		},
+		{
+			name: "mismatched channel",
+			mutate: func(config *manifestFixtureConfig) {
+				config.ManifestChannel = releaseartifact.ChannelBeta
+			},
+			code: ErrorFeedInvalid,
+		},
+		{
+			name: "beta version published as stable",
+			mutate: func(config *manifestFixtureConfig) {
+				config.Version = "1.0.1-beta.1"
+				config.ManifestVersion = config.Version
+				config.Prerelease = false
+			},
+			code: ErrorFeedInvalid,
+		},
+		{
+			name: "stable version published as prerelease",
+			mutate: func(config *manifestFixtureConfig) {
+				config.Prerelease = true
+			},
+			code: ErrorFeedInvalid,
+		},
+		{
+			name: "wrong artifact",
+			mutate: func(config *manifestFixtureConfig) {
+				config.ArtifactName = "ProfileDeck_1.0.1_darwin_arm64.zip"
+			},
+			code: ErrorFeedInvalid,
+		},
+		{
+			name: "missing signature",
+			mutate: func(config *manifestFixtureConfig) {
+				config.MissingSignature = true
+			},
+			code: ErrorArtifactVerificationFailed,
+		},
+		{
+			name: "malformed digest",
+			mutate: func(config *manifestFixtureConfig) {
+				config.Digest = "not-base64"
+			},
+			code: ErrorArtifactVerificationFailed,
+		},
+		{
+			name: "missing manifest",
+			mutate: func(config *manifestFixtureConfig) {
+				config.ManifestAssets = -1
+			},
+			code: ErrorFeedInvalid,
+		},
+		{
+			name: "duplicate manifest",
+			mutate: func(config *manifestFixtureConfig) {
+				config.ManifestAssets = 2
+			},
+			code: ErrorFeedInvalid,
+		},
+	}
+	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			fixture := newGitHubFixture(t, githubFixtureConfig{
-				Version: "1.0.1", Checksum: true,
-				SignatureBody: test.signatureBody,
-			})
+			config := manifestFixtureConfig{
+				Version: "1.0.1", Platform: "darwin", Arch: "arm64", ManifestAssets: 1,
+			}
+			test.mutate(&config)
+			fixture := newManifestFixture(t, config)
 			_, err := fixture.provider(t, "1.0.0").Check(context.Background(), updater.CheckRequest{
-				CurrentVersion: "1.0.0", Platform: UpdatePlatform, Arch: "arm64",
+				CurrentVersion: "1.0.0", Platform: "darwin", Arch: "arm64",
 			})
-			if ErrorCode(err) != ErrorArtifactVerificationFailed {
-				t.Fatalf("error = %v, code = %q", err, ErrorCode(err))
+			if ErrorCode(err) != test.code {
+				t.Fatalf("error = %v (%s), want %s", err, ErrorCode(err), test.code)
 			}
 		})
 	}
 }
 
-func TestGitHubProviderRequiresListedUniqueArtifactSignature(t *testing.T) {
+func TestPinnedWailsProviderErrorsKeepStableUserClassifications(t *testing.T) {
 	t.Parallel()
-	for _, test := range []struct {
-		name               string
-		missingSignature   bool
-		unlistedSignature  bool
-		duplicateSignature bool
+	tests := []struct {
+		name string
+		err  error
+		mapf func(error) error
+		code string
 	}{
-		{name: "missing", missingSignature: true},
-		{name: "reachable but unlisted", unlistedSignature: true},
-		{name: "duplicate", duplicateSignature: true},
-	} {
+		{
+			name: "missing GitHub manifest",
+			err:  errors.New("github: release v1.2.3 has no asset for linux/amd64"),
+			mapf: githubCheckError,
+			code: ErrorFeedInvalid,
+		},
+		{
+			name: "GitHub unavailable",
+			err:  errors.New("github: request failed"),
+			mapf: githubCheckError,
+			code: ErrorFeedUnavailable,
+		},
+		{
+			name: "manifest unavailable",
+			err:  errors.New("endpoint: fetch manifest: offline"),
+			mapf: endpointCheckError,
+			code: ErrorFeedUnavailable,
+		},
+		{
+			name: "manifest verification failed",
+			err:  errors.New("artifact digest is not valid base64"),
+			mapf: endpointCheckError,
+			code: ErrorArtifactVerificationFailed,
+		},
+		{
+			name: "manifest invalid",
+			err:  errors.New("endpoint: manifest missing version"),
+			mapf: endpointCheckError,
+			code: ErrorFeedInvalid,
+		},
+	}
+	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			fixture := newGitHubFixture(t, githubFixtureConfig{
-				Version:            "1.0.1",
-				Checksum:           true,
-				MissingSignature:   test.missingSignature,
-				UnlistedSignature:  test.unlistedSignature,
-				DuplicateSignature: test.duplicateSignature,
-			})
-			_, err := fixture.provider(t, "1.0.0").Check(context.Background(), updater.CheckRequest{
-				CurrentVersion: "1.0.0", Platform: UpdatePlatform, Arch: "arm64",
-			})
-			if ErrorCode(err) != ErrorArtifactVerificationFailed {
-				t.Fatalf("error = %v, code = %q", err, ErrorCode(err))
+			if code := ErrorCode(test.mapf(test.err)); code != test.code {
+				t.Fatalf("error code = %q, want %q", code, test.code)
 			}
 		})
 	}
 }
 
-func TestGitHubProviderFetchesSignatureFromListedAssetURL(t *testing.T) {
+func TestGitHubManifestProviderDoesNotDowngrade(t *testing.T) {
 	t.Parallel()
-	fixture := newGitHubFixture(t, githubFixtureConfig{
-		Version:       "1.0.1",
-		Checksum:      true,
-		SignaturePath: "/release-assets/detached-signature",
+	fixture := newManifestFixture(t, manifestFixtureConfig{
+		Version: "1.0.1", Platform: "darwin", Arch: "arm64", ManifestAssets: 1,
 	})
-	release, err := fixture.provider(t, "1.0.0").Check(context.Background(), updater.CheckRequest{
-		CurrentVersion: "1.0.0", Platform: UpdatePlatform, Arch: "arm64",
+	release, err := fixture.provider(t, "1.0.2").Check(context.Background(), updater.CheckRequest{
+		CurrentVersion: "1.0.2", Platform: "darwin", Arch: "arm64",
 	})
-	if err != nil || release == nil {
-		t.Fatalf("listed signature URL was not used: release=%#v err=%v", release, err)
+	if err != nil || release != nil {
+		t.Fatalf("downgrade result = %#v, err=%v", release, err)
 	}
 }
 
-func TestGitHubProviderRejectsSignatureFromAnotherKey(t *testing.T) {
+func TestTrustedGitHubAssetURLIsExact(t *testing.T) {
 	t.Parallel()
-	fixture := newGitHubFixture(t, githubFixtureConfig{Version: "1.0.1", Checksum: true})
-	provider := fixture.provider(t, "1.0.0")
-	engine := updater.New(silentUpdaterHost{})
-	wrongSeed := sha256.Sum256([]byte("another updater key"))
-	wrongKey := ed25519.NewKeyFromSeed(wrongSeed[:]).Public().(ed25519.PublicKey)
-	if err := engine.Init(updater.Config{
-		CurrentVersion: "1.0.0", Providers: []updater.Provider{provider}, PublicKey: wrongKey,
-		Platform: UpdatePlatform, Arch: "arm64", Window: updater.WindowNone,
-	}); err != nil {
-		t.Fatal(err)
+	valid := "https://github.com/strahe/profiledeck/releases/download/v1.2.3/updates.json"
+	if !trustedGitHubAssetURL(valid, "1.2.3", "updates.json") {
+		t.Fatal("exact GitHub release URL was rejected")
 	}
-	if release, err := engine.Check(context.Background()); err != nil || release == nil {
-		t.Fatalf("check release: release=%#v err=%v", release, err)
-	}
-	if err := engine.DownloadAndInstall(context.Background()); err == nil || !strings.Contains(err.Error(), "signature") {
-		t.Fatalf("DownloadAndInstall() error = %v, want signature failure", err)
-	}
-}
-
-func TestGitHubProviderDigestMismatchFailsClosed(t *testing.T) {
-	t.Parallel()
-	version := "1.0.1-beta.2"
-	fixture := newGitHubFixture(t, githubFixtureConfig{
-		Version:      version,
-		Prerelease:   true,
-		Checksum:     true,
-		ChecksumBody: strings.Repeat("0", 64) + "  " + artifactName(version) + "\n",
-	})
-	provider := fixture.provider(t, "1.0.1-beta.1")
-	engine := updater.New(silentUpdaterHost{})
-	if err := engine.Init(updater.Config{
-		CurrentVersion: "1.0.1-beta.1",
-		Providers:      []updater.Provider{provider},
-		PublicKey:      fixture.publicKey,
-		Platform:       UpdatePlatform,
-		Arch:           "arm64",
-		Window:         updater.WindowNone,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if release, err := engine.Check(context.Background()); err != nil || release == nil {
-		t.Fatalf("check release: release=%#v err=%v", release, err)
-	}
-	err := engine.DownloadAndInstall(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "digest mismatch") {
-		t.Fatalf("DownloadAndInstall() error = %v, want digest mismatch", err)
-	}
-}
-
-type githubFixtureConfig struct {
-	Version            string
-	Prerelease         bool
-	Checksum           bool
-	ChecksumBody       string
-	ArtifactName       string
-	MissingSignature   bool
-	UnlistedSignature  bool
-	DuplicateSignature bool
-	SignatureBody      string
-	SignaturePath      string
-}
-
-type githubFixture struct {
-	server      *httptest.Server
-	artifact    []byte
-	publicKey   ed25519.PublicKey
-	lastAPIPath chan string
-}
-
-func newGitHubFixture(t *testing.T, config githubFixtureConfig) *githubFixture {
-	t.Helper()
-	fixture := &githubFixture{
-		artifact:    []byte("notarized universal application archive"),
-		lastAPIPath: make(chan string, 1),
-	}
-	seed := sha256.Sum256([]byte("ProfileDeck updater fixture key"))
-	privateKey := ed25519.NewKeyFromSeed(seed[:])
-	fixture.publicKey = append(ed25519.PublicKey(nil), privateKey.Public().(ed25519.PublicKey)...)
-	artifactFilename := config.ArtifactName
-	if artifactFilename == "" {
-		artifactFilename = artifactName(config.Version)
-	}
-	digest := sha256.Sum256(fixture.artifact)
-	signatureBody := config.SignatureBody
-	if signatureBody == "" {
-		signatureBody = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, digest[:])) + "\n"
-	}
-	signaturePath := config.SignaturePath
-	if signaturePath == "" {
-		signaturePath = "/downloads/" + artifactFilename + SignatureSuffix
-	}
-	fixture.server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		switch {
-		case strings.HasPrefix(request.URL.Path, "/repos/test/profiledeck/releases"):
-			select {
-			case fixture.lastAPIPath <- request.URL.RequestURI():
-			default:
-			}
-			payload := map[string]any{
-				"tag_name":     "v" + config.Version,
-				"name":         "ProfileDeck " + config.Version,
-				"body":         "Release notes from GitHub",
-				"prerelease":   config.Prerelease,
-				"draft":        false,
-				"published_at": "2026-07-16T12:00:00Z",
-				"html_url":     fixture.server.URL + "/release",
-				"assets": []map[string]any{
-					{
-						"id":                   1,
-						"name":                 artifactFilename,
-						"content_type":         "application/zip",
-						"size":                 len(fixture.artifact),
-						"browser_download_url": fixture.server.URL + "/downloads/" + artifactFilename,
-					},
-				},
-			}
-			if config.Checksum {
-				payload["assets"] = append(payload["assets"].([]map[string]any), map[string]any{
-					"id":                   2,
-					"name":                 ChecksumAsset,
-					"content_type":         "text/plain",
-					"size":                 128,
-					"browser_download_url": fixture.server.URL + "/downloads/" + ChecksumAsset,
-				})
-			}
-			if !config.MissingSignature && !config.UnlistedSignature {
-				payload["assets"] = append(payload["assets"].([]map[string]any), map[string]any{
-					"id": 3, "name": artifactFilename + SignatureSuffix, "content_type": "text/plain",
-					"size": len(signatureBody), "browser_download_url": fixture.server.URL + signaturePath,
-				})
-			}
-			if config.DuplicateSignature {
-				payload["assets"] = append(payload["assets"].([]map[string]any), map[string]any{
-					"id": 4, "name": artifactFilename + SignatureSuffix, "content_type": "text/plain",
-					"size": len(signatureBody), "browser_download_url": fixture.server.URL + signaturePath + "-duplicate",
-				})
-			}
-			response.Header().Set("Content-Type", "application/json")
-			if strings.HasSuffix(request.URL.Path, "/releases") {
-				_ = json.NewEncoder(response).Encode([]any{payload})
-			} else {
-				_ = json.NewEncoder(response).Encode(payload)
-			}
-		case request.URL.Path == "/downloads/"+artifactFilename:
-			response.Header().Set("Content-Type", "application/zip")
-			_, _ = response.Write(fixture.artifact)
-		case request.URL.Path == "/downloads/"+ChecksumAsset:
-			body := config.ChecksumBody
-			if body == "" {
-				digest := sha256.Sum256(fixture.artifact)
-				body = fmt.Sprintf("%s  %s\n", hex.EncodeToString(digest[:]), artifactFilename)
-			}
-			_, _ = io.WriteString(response, body)
-		case request.URL.Path == signaturePath && !config.MissingSignature:
-			_, _ = io.WriteString(response, signatureBody)
-		default:
-			http.NotFound(response, request)
+	for _, value := range []string{
+		"http://github.com/strahe/profiledeck/releases/download/v1.2.3/updates.json",
+		"https://github.com/strahe/profiledeck/releases/download/v1.2.4/updates.json",
+		"https://github.com/strahe/profiledeck/releases/download/v1.2.3/updates.json?token=x",
+		"https://evil.example/strahe/profiledeck/releases/download/v1.2.3/updates.json",
+	} {
+		if trustedGitHubAssetURL(value, "1.2.3", "updates.json") {
+			t.Fatalf("untrusted URL accepted: %s", value)
 		}
-	}))
+	}
+}
+
+type manifestFixtureConfig struct {
+	Version          string
+	ManifestVersion  string
+	ManifestChannel  string
+	Prerelease       bool
+	Platform         string
+	Arch             string
+	ArtifactName     string
+	Digest           string
+	MissingSignature bool
+	ManifestAssets   int
+}
+
+type manifestFixture struct {
+	server     *httptest.Server
+	artifact   []byte
+	publicKey  ed25519.PublicKey
+	privateKey ed25519.PrivateKey
+	config     manifestFixtureConfig
+}
+
+func newManifestFixture(t *testing.T, config manifestFixtureConfig) *manifestFixture {
+	t.Helper()
+	if config.ManifestAssets == 0 {
+		config.ManifestAssets = 1
+	} else if config.ManifestAssets < 0 {
+		config.ManifestAssets = 0
+	}
+	if config.ManifestVersion == "" {
+		config.ManifestVersion = config.Version
+	}
+	if config.ManifestChannel == "" {
+		version, err := releaseartifact.ParseVersion(config.ManifestVersion)
+		if err == nil {
+			config.ManifestChannel = version.Channel()
+		}
+	}
+	if config.ArtifactName == "" {
+		config.ArtifactName, _ = releaseartifact.UpdaterName(config.ManifestVersion, config.Platform, config.Arch)
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := &manifestFixture{
+		artifact: []byte("signed ProfileDeck update"), publicKey: publicKey,
+		privateKey: privateKey, config: config,
+	}
+	fixture.server = httptest.NewServer(http.HandlerFunc(fixture.serveHTTP))
 	t.Cleanup(fixture.server.Close)
 	return fixture
 }
 
-func (fixture *githubFixture) provider(t *testing.T, currentVersion string) *channelGitHubProvider {
+func (fixture *manifestFixture) provider(t *testing.T, current string) *channelGitHubProvider {
 	t.Helper()
-	provider, err := newGitHubProvider(currentVersion, githubProviderOptions{
+	provider, err := newGitHubProvider(current, githubProviderOptions{
 		Repository: "test/profiledeck",
 		BaseURL:    fixture.server.URL,
 		HTTPClient: fixture.server.Client(),
@@ -582,21 +378,73 @@ func (fixture *githubFixture) provider(t *testing.T, currentVersion string) *cha
 	return provider
 }
 
-func (fixture *githubFixture) apiPath() string {
-	select {
-	case path := <-fixture.lastAPIPath:
-		return path
+func (fixture *manifestFixture) serveHTTP(response http.ResponseWriter, request *http.Request) {
+	switch {
+	case strings.HasSuffix(request.URL.Path, "/releases/latest"):
+		fixture.writeGitHubRelease(response, false)
+	case strings.HasSuffix(request.URL.Path, "/releases"):
+		fixture.writeGitHubRelease(response, true)
+	case request.URL.Path == "/downloads/"+releaseartifact.ManifestName:
+		fixture.writeManifest(response)
+	case request.URL.Path == "/downloads/"+fixture.config.ArtifactName:
+		response.Header().Set("Content-Length", fmt.Sprint(len(fixture.artifact)))
+		_, _ = response.Write(fixture.artifact)
 	default:
-		return ""
+		http.NotFound(response, request)
 	}
 }
 
-type silentUpdaterHost struct{}
+func (fixture *manifestFixture) writeGitHubRelease(response http.ResponseWriter, list bool) {
+	assets := make([]map[string]any, 0, fixture.config.ManifestAssets)
+	for index := 0; index < fixture.config.ManifestAssets; index++ {
+		assets = append(assets, map[string]any{
+			"id": index + 1, "name": releaseartifact.ManifestName,
+			"content_type": "application/json", "size": 1,
+			"browser_download_url": fixture.server.URL + "/downloads/" + releaseartifact.ManifestName,
+		})
+	}
+	release := map[string]any{
+		"tag_name": "v" + fixture.config.Version,
+		"name":     "GitHub release " + fixture.config.Version,
+		"body":     "Release notes",
+		"draft":    false, "prerelease": fixture.config.Prerelease,
+		"published_at": "2026-01-02T03:04:05Z",
+		"html_url":     fixture.server.URL + "/release",
+		"assets":       assets,
+	}
+	response.Header().Set("Content-Type", "application/json")
+	if list {
+		_ = json.NewEncoder(response).Encode([]any{release})
+		return
+	}
+	_ = json.NewEncoder(response).Encode(release)
+}
 
-func (silentUpdaterHost) Emit(string, ...any) bool { return true }
-
-func (silentUpdaterHost) OnEvent(string, func(any)) func() { return func() {} }
-
-func (silentUpdaterHost) OpenWindow(updater.WindowOptions) updater.WindowHandle { return nil }
-
-func (silentUpdaterHost) Quit() {}
+func (fixture *manifestFixture) writeManifest(response http.ResponseWriter) {
+	digest := sha512.Sum512(fixture.artifact)
+	digestText := base64.StdEncoding.EncodeToString(digest[:])
+	if fixture.config.Digest != "" {
+		digestText = fixture.config.Digest
+	}
+	signature, _ := fixture.privateKey.Sign(nil, digest[:], &ed25519.Options{Hash: crypto.SHA512})
+	signatureAlgo := "ed25519ph"
+	signatureText := base64.StdEncoding.EncodeToString(signature)
+	if fixture.config.MissingSignature {
+		signatureAlgo = ""
+		signatureText = ""
+	}
+	manifest := map[string]any{
+		"schemaVersion": 1,
+		"version":       fixture.config.ManifestVersion,
+		"channel":       fixture.config.ManifestChannel,
+		"publishedAt":   "2026-01-02T03:04:05Z",
+		"artifacts": []map[string]any{{
+			"url": fixture.config.ArtifactName, "platform": fixture.config.Platform,
+			"arch": fixture.config.Arch, "size": len(fixture.artifact),
+			"digestAlgo": "sha512", "digest": digestText,
+			"signatureAlgo": signatureAlgo, "signature": signatureText,
+		}},
+	}
+	response.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(response).Encode(manifest)
+}

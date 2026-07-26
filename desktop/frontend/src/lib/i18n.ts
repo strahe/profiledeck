@@ -777,6 +777,7 @@ const messages = {
 			updates: {
 				title: "App updates",
 				description: "Download updates in the background and choose when to restart.",
+				packageDescription: "Install a newer DEB or RPM from GitHub Releases to update this installation.",
 				sidebar: {
 					downloading: "Update {value}%",
 					downloadingDescription: "Downloading version {version}: {value}%",
@@ -796,6 +797,10 @@ const messages = {
 					label: "Check for updates automatically",
 					description: "Check after startup and every six hours, then download available updates in the background.",
 				},
+				package: {
+					label: "Package installation",
+					description: "Download the matching DEB or RPM from GitHub Releases. In-app update checks are off.",
+				},
 				status: "Update status",
 				currentVersion: "Current version {version}",
 				neverChecked: "Not checked yet",
@@ -805,6 +810,7 @@ const messages = {
 				state: {
 					unavailable: "App updates are unavailable.",
 					configurationInvalid: "This installation cannot verify app updates. Install ProfileDeck from an official release to receive updates.",
+					installationUnsupported: "This installation cannot apply updates safely. Download and install a newer ProfileDeck release manually.",
 					idle: "Ready to check for an update.",
 					checking: "Checking for updates…",
 					upToDate: "You are using the latest version.",
@@ -1778,6 +1784,7 @@ const messages = {
 			updates: {
 				title: "应用更新",
 				description: "在后台下载更新，并由你选择何时重启。",
+				packageDescription: "请从 GitHub Releases 安装新版 DEB 或 RPM。",
 				sidebar: {
 					downloading: "更新 {value}%",
 					downloadingDescription: "正在下载版本 {version}：{value}%",
@@ -1797,6 +1804,10 @@ const messages = {
 					label: "自动检查更新",
 					description: "启动后及运行期间每 6 小时检查一次，并在后台下载可用更新。",
 				},
+				package: {
+					label: "软件包安装",
+					description: "请从 GitHub Releases 下载对应的 DEB 或 RPM。应用内不会检查更新。",
+				},
 				status: "更新状态",
 				currentVersion: "当前版本 {version}",
 				neverChecked: "尚未检查",
@@ -1806,6 +1817,7 @@ const messages = {
 				state: {
 					unavailable: "应用更新当前不可用。",
 					configurationInvalid: "当前安装无法验证应用更新。请安装官方发布的 ProfileDeck 以接收更新。",
+					installationUnsupported: "当前安装无法安全应用更新。请手动下载并安装新版 ProfileDeck。",
 					idle: "可以检查更新。",
 					checking: "正在检查更新…",
 					upToDate: "你已在使用最新版本。",

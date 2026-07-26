@@ -23,10 +23,10 @@ import (
 )
 
 var (
-	version               = app.DefaultVersion
-	commit                = app.UnknownBuildValue
-	buildDate             = app.UnknownBuildValue
-	updatePublicKeyBase64 string
+	version          = app.DefaultVersion
+	commit           = app.UnknownBuildValue
+	buildDate        = app.UnknownBuildValue
+	updateManagement string
 )
 
 //go:embed all:frontend/dist
@@ -63,7 +63,7 @@ func main() {
 	startupErr := backend.Bootstrap(desktopCtx, core)
 	services := backend.NewServices(core, info, env, startupErr)
 	updates := desktopupdate.NewService(desktopCtx, core, desktopupdate.BuildConfig{
-		CurrentVersion: version, PublicKeyBase64: updatePublicKeyBase64,
+		CurrentVersion: version, Management: updateManagement,
 	})
 	if updates.Status(desktopCtx).ErrorCode == desktopupdate.ErrorConfigurationInvalid {
 		log.Print("profiledeck: automatic updates are unavailable (verification configuration is invalid)")
@@ -71,7 +71,7 @@ func main() {
 
 	wailsApp := application.New(application.Options{
 		Name:        app.ProductName,
-		Description: "Provider/profile switcher and local usage tracker for AI coding tools",
+		Description: "Manage Profiles for AI Agents",
 		Icon:        appIcon,
 		Services: []application.Service{
 			application.NewService(services.App),

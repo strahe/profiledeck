@@ -3,41 +3,30 @@ package update
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/updater"
+	endpointprovider "github.com/wailsapp/wails/v3/pkg/updater/providers/endpoint"
 	githubprovider "github.com/wailsapp/wails/v3/pkg/updater/providers/github"
 
-	"github.com/strahe/profiledeck/internal/settings"
+	"github.com/strahe/profiledeck/internal/releaseartifact"
 )
 
 const (
 	UpdateRepository = "strahe/profiledeck"
-	UpdatePlatform   = "darwin"
-	ChecksumAsset    = "SHA256SUMS"
-	SignatureSuffix  = ".sig"
-	SignatureAlgo    = "ed25519"
-	ChannelStable    = settings.DesktopUpdateChannelStable
-	ChannelBeta      = settings.DesktopUpdateChannelBeta
 
 	ErrorFeedUnavailable            = "feed_unavailable"
 	ErrorFeedInvalid                = "feed_invalid"
 	ErrorArtifactVerificationFailed = "artifact_verification_failed"
-)
 
-var (
-	stableVersionPattern = regexp.MustCompile(`^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$`)
-	betaVersionPattern   = regexp.MustCompile(`^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)-beta\.[1-9][0-9]*$`)
-	artifactNamePattern  = regexp.MustCompile(`^ProfileDeck_(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-beta\.[1-9][0-9]*)?_macos_universal\.zip$`)
+	manifestURLMetadata = "profiledeck.manifest.url"
 )
 
 type codedError struct {
@@ -66,62 +55,37 @@ func ErrorCode(err error) string {
 	return "update_failed"
 }
 
-type releaseChannel int
-
-const (
-	releaseChannelInvalid releaseChannel = iota
-	releaseChannelStable
-	releaseChannelPrerelease
-)
-
-func channelForVersion(version string) releaseChannel {
-	version = strings.TrimSpace(version)
-	switch {
-	case stableVersionPattern.MatchString(version):
-		return releaseChannelStable
-	case betaVersionPattern.MatchString(version):
-		return releaseChannelPrerelease
-	default:
-		return releaseChannelInvalid
-	}
-}
-
-func artifactName(version string) string {
-	return fmt.Sprintf("ProfileDeck_%s_macos_universal.zip", version)
-}
-
 type githubProviderOptions struct {
 	Repository string
 	BaseURL    string
 	HTTPClient *http.Client
 }
 
-// channelGitHubProvider lets the Desktop switch update channels without
-// reinitializing Wails' process-scoped updater.
+// channelGitHubProvider switches channels without reinitializing Wails'
+// process-scoped updater.
 type channelGitHubProvider struct {
 	mu      sync.RWMutex
 	channel string
-	stable  *verifiedGitHubProvider
-	beta    *verifiedGitHubProvider
+	stable  *manifestGitHubProvider
+	beta    *manifestGitHubProvider
 }
 
-// verifiedGitHubProvider delegates GitHub API and download behaviour to Wails,
-// then requires immutable asset naming, a checksum, and a detached signature.
-type verifiedGitHubProvider struct {
-	delegate      *githubprovider.Provider
+// manifestGitHubProvider uses Wails' GitHub provider only to discover a
+// release manifest, then delegates manifest parsing and artifact downloads to
+// Wails' endpoint provider.
+type manifestGitHubProvider struct {
+	locator       *githubprovider.Provider
 	client        *http.Client
 	channel       string
 	trustedSource bool
-	checkMu       sync.Mutex
-	assetMatcher  *releaseAssetMatcher
 }
 
 func newGitHubProvider(version string, options githubProviderOptions) (*channelGitHubProvider, error) {
-	buildChannel := channelForVersion(version)
-	if buildChannel == releaseChannelInvalid {
-		return nil, errors.New("release version must be X.Y.Z or X.Y.Z-beta.N")
+	parsed, err := releaseartifact.ParseVersion(strings.TrimSpace(version))
+	if err != nil {
+		return nil, err
 	}
-	return newChannelGitHubProvider(channelName(buildChannel), options)
+	return newChannelGitHubProvider(parsed.Channel(), options)
 }
 
 func newChannelGitHubProvider(channel string, options githubProviderOptions) (*channelGitHubProvider, error) {
@@ -129,18 +93,18 @@ func newChannelGitHubProvider(channel string, options githubProviderOptions) (*c
 	if err != nil {
 		return nil, err
 	}
-	stable, err := newVerifiedGitHubProvider(ChannelStable, options)
+	stable, err := newManifestGitHubProvider(releaseartifact.ChannelStable, options)
 	if err != nil {
 		return nil, err
 	}
-	beta, err := newVerifiedGitHubProvider(ChannelBeta, options)
+	beta, err := newManifestGitHubProvider(releaseartifact.ChannelBeta, options)
 	if err != nil {
 		return nil, err
 	}
 	return &channelGitHubProvider{channel: channel, stable: stable, beta: beta}, nil
 }
 
-func newVerifiedGitHubProvider(channel string, options githubProviderOptions) (*verifiedGitHubProvider, error) {
+func newManifestGitHubProvider(channel string, options githubProviderOptions) (*manifestGitHubProvider, error) {
 	repository := strings.TrimSpace(options.Repository)
 	if repository == "" {
 		repository = UpdateRepository
@@ -157,30 +121,25 @@ func newVerifiedGitHubProvider(channel string, options githubProviderOptions) (*
 			},
 		}
 	}
-	assetMatcher := &releaseAssetMatcher{}
-	delegate, err := githubprovider.New(githubprovider.Config{
-		Repository:    repository,
-		Prerelease:    channel == ChannelBeta,
-		BaseURL:       options.BaseURL,
-		AssetMatcher:  assetMatcher.Match,
-		ChecksumAsset: ChecksumAsset,
-		HTTPClient:    client,
+	locator, err := githubprovider.New(githubprovider.Config{
+		Repository:   repository,
+		Prerelease:   channel == releaseartifact.ChannelBeta,
+		BaseURL:      options.BaseURL,
+		AssetMatcher: manifestAssetMatcher,
+		HTTPClient:   client,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &verifiedGitHubProvider{
-		delegate:      delegate,
+	return &manifestGitHubProvider{
+		locator:       locator,
 		client:        client,
 		channel:       channel,
 		trustedSource: repository == UpdateRepository && strings.TrimSpace(options.BaseURL) == "",
-		assetMatcher:  assetMatcher,
 	}, nil
 }
 
-func (provider *channelGitHubProvider) Name() string {
-	return provider.stable.Name()
-}
+func (provider *channelGitHubProvider) Name() string { return "github-manifest" }
 
 func (provider *channelGitHubProvider) Channel() string {
 	provider.mu.RLock()
@@ -205,7 +164,7 @@ func (provider *channelGitHubProvider) Check(
 ) (*updater.Release, error) {
 	provider.mu.RLock()
 	delegate := provider.stable
-	if provider.channel == ChannelBeta {
+	if provider.channel == releaseartifact.ChannelBeta {
 		delegate = provider.beta
 	}
 	provider.mu.RUnlock()
@@ -218,137 +177,136 @@ func (provider *channelGitHubProvider) Download(
 	destination io.Writer,
 	onProgress func(written, total int64),
 ) error {
-	// Both delegates share the same repository, asset matcher, and download
-	// contract; prerelease selection affects Check only.
+	// Both channel delegates share the same endpoint download contract.
 	return provider.stable.Download(ctx, release, destination, onProgress)
 }
 
-func (provider *verifiedGitHubProvider) Name() string {
-	return provider.delegate.Name()
-}
-
-func (provider *verifiedGitHubProvider) Check(
+func (provider *manifestGitHubProvider) Check(
 	ctx context.Context,
 	request updater.CheckRequest,
 ) (*updater.Release, error) {
-	if request.Platform != UpdatePlatform {
+	target, err := releaseartifact.ResolveUpdateTarget(request.Platform, request.Arch)
+	if err != nil {
 		return nil, updateError(ErrorFeedInvalid, errors.New("unsupported updater platform"))
 	}
-	if channelForVersion(request.CurrentVersion) == releaseChannelInvalid {
+	if _, err := releaseartifact.ParseVersion(strings.TrimSpace(request.CurrentVersion)); err != nil {
 		return nil, updateError(ErrorFeedInvalid, errors.New("running version is not releasable"))
 	}
-	provider.checkMu.Lock()
-	defer provider.checkMu.Unlock()
-	release, err := provider.delegate.Check(ctx, request)
+
+	discovered, err := provider.locator.Check(ctx, request)
 	if err != nil {
 		return nil, githubCheckError(err)
 	}
-	if release == nil {
+	if discovered == nil {
 		return nil, nil
 	}
-	if channelForVersion(release.Version) == releaseChannelInvalid {
+	version, err := releaseartifact.ParseVersion(discovered.Version)
+	if err != nil {
 		return nil, updateError(ErrorFeedInvalid, errors.New("release version is not supported"))
 	}
-	if provider.channel == ChannelStable && release.Channel != "stable" {
-		return nil, updateError(ErrorFeedInvalid, errors.New("stable build received a prerelease"))
+	discoveredChannel, err := productChannelFromGitHub(discovered.Channel)
+	if err != nil {
+		return nil, updateError(ErrorFeedInvalid, err)
 	}
-	if release.Channel != "stable" && release.Channel != "prerelease" {
-		return nil, updateError(ErrorFeedInvalid, errors.New("release channel is not supported"))
-	}
-	if release.Artifact.Filename != artifactName(release.Version) ||
-		release.Artifact.Filetype != "zip" ||
-		release.Artifact.Platform != UpdatePlatform {
-		return nil, updateError(ErrorFeedInvalid, errors.New("release asset does not match the ProfileDeck macOS package"))
-	}
-	assetURL, _ := release.Metadata["github.asset.url"].(string)
-	signatureURL, ok := provider.assetMatcher.SignatureURL(assetURL)
-	if !ok {
+	if discoveredChannel != version.Channel() {
 		return nil, updateError(
-			ErrorArtifactVerificationFailed,
-			errors.New("release asset is missing its unique detached signature"),
+			ErrorFeedInvalid,
+			errors.New("GitHub release channel does not match its version"),
 		)
 	}
-	if provider.trustedSource {
-		if !trustedGitHubAssetURL(assetURL, release.Version, release.Artifact.Filename) ||
-			!trustedGitHubAssetURL(signatureURL, release.Version, release.Artifact.Filename+SignatureSuffix) {
-			return nil, updateError(ErrorFeedInvalid, errors.New("release asset URL is not trusted"))
-		}
+	if provider.channel == releaseartifact.ChannelStable && discoveredChannel != releaseartifact.ChannelStable {
+		return nil, updateError(ErrorFeedInvalid, errors.New("stable channel received a beta release"))
+	}
+
+	manifestURL, _ := discovered.Metadata["github.asset.url"].(string)
+	if provider.trustedSource &&
+		!trustedGitHubAssetURL(manifestURL, version.String(), releaseartifact.ManifestName) {
+		return nil, updateError(ErrorFeedInvalid, errors.New("release manifest URL is not trusted"))
+	}
+	endpoint, err := endpointprovider.New(endpointprovider.Config{
+		URL:        manifestURL,
+		Channel:    version.Channel(),
+		HTTPClient: provider.client,
+	})
+	if err != nil {
+		return nil, updateError(ErrorFeedInvalid, err)
+	}
+	release, err := endpoint.Check(ctx, request)
+	if err != nil {
+		return nil, endpointCheckError(err)
+	}
+	if release == nil {
+		return nil, updateError(ErrorFeedInvalid, errors.New("release manifest does not describe the discovered release"))
+	}
+	if release.Version != version.String() {
+		return nil, updateError(ErrorFeedInvalid, errors.New("release manifest version does not match its GitHub release"))
+	}
+	if release.Channel != version.Channel() {
+		return nil, updateError(ErrorFeedInvalid, errors.New("release manifest channel does not match its version"))
+	}
+	expectedName, err := releaseartifact.UpdaterName(release.Version, target.Platform, target.Arch)
+	if err != nil {
+		return nil, updateError(ErrorFeedInvalid, err)
+	}
+	if release.Artifact.Filename != expectedName ||
+		release.Artifact.Filetype != target.Filetype ||
+		release.Artifact.Platform != target.Platform ||
+		release.Artifact.Arch != target.Arch {
+		return nil, updateError(ErrorFeedInvalid, errors.New("release artifact does not match this ProfileDeck build"))
 	}
 	if release.Verification == nil ||
-		release.Verification.DigestAlgo != "sha256" ||
-		len(release.Verification.Digest) != 32 {
+		release.Verification.DigestAlgo != "sha512" ||
+		len(release.Verification.Digest) != 64 ||
+		release.Verification.SignatureAlgo != "ed25519ph" ||
+		len(release.Verification.Signature) != 64 {
 		return nil, updateError(
 			ErrorArtifactVerificationFailed,
-			errors.New("release asset is missing its SHA-256 checksum"),
+			errors.New("release artifact is missing Wails digest or signature verification"),
 		)
 	}
-	signature, err := provider.fetchSignature(ctx, signatureURL)
-	if err != nil {
-		return nil, updateError(ErrorArtifactVerificationFailed, err)
+	artifactURL, _ := release.Metadata["endpoint.artifact.url"].(string)
+	if provider.trustedSource &&
+		!trustedGitHubAssetURL(artifactURL, version.String(), expectedName) {
+		return nil, updateError(ErrorFeedInvalid, errors.New("release artifact URL is not trusted"))
 	}
-	release.Verification.SignatureAlgo = SignatureAlgo
-	release.Verification.Signature = signature
+
+	release.Name = discovered.Name
+	release.Notes = discovered.Notes
+	release.PublishedAt = discovered.PublishedAt
+	release.Metadata[manifestURLMetadata] = manifestURL
 	return release, nil
 }
 
-func (provider *verifiedGitHubProvider) fetchSignature(ctx context.Context, signatureURL string) ([]byte, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, signatureURL, nil)
-	if err != nil {
-		return nil, errors.New("release asset signature URL is invalid")
-	}
-	request.Header.Set("Accept", "text/plain")
-	request.Header.Set("User-Agent", "ProfileDeck-Updater/1")
-	response, err := provider.client.Do(request)
-	if err != nil {
-		return nil, errors.New("release asset signature is unavailable")
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return nil, errors.New("release asset signature is unavailable")
-	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 1025))
-	if err != nil || len(raw) > 1024 {
-		return nil, errors.New("release asset signature is invalid")
-	}
-	signature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
-	if err != nil || len(signature) != 64 {
-		return nil, errors.New("release asset signature is invalid")
-	}
-	return signature, nil
-}
-
-func githubCheckError(err error) error {
-	message := err.Error()
-	switch {
-	case strings.Contains(message, "github: load checksum sidecar:"):
-		return updateError(ErrorArtifactVerificationFailed, err)
-	case strings.Contains(message, " has no asset for "),
-		strings.Contains(message, "github: decode release"):
-		return updateError(ErrorFeedInvalid, err)
-	default:
-		return updateError(ErrorFeedUnavailable, err)
-	}
-}
-
-func (provider *verifiedGitHubProvider) Download(
+func (provider *manifestGitHubProvider) Download(
 	ctx context.Context,
 	release *updater.Release,
 	destination io.Writer,
 	onProgress func(written, total int64),
 ) error {
-	if err := provider.delegate.Download(ctx, release, destination, onProgress); err != nil {
+	if release == nil || release.Metadata == nil {
+		return updateError(ErrorFeedInvalid, errors.New("release is missing manifest metadata"))
+	}
+	manifestURL, _ := release.Metadata[manifestURLMetadata].(string)
+	if strings.TrimSpace(manifestURL) == "" {
+		return updateError(ErrorFeedInvalid, errors.New("release is missing manifest URL"))
+	}
+	endpoint, err := endpointprovider.New(endpointprovider.Config{
+		URL:        manifestURL,
+		HTTPClient: provider.client,
+	})
+	if err != nil {
+		return updateError(ErrorFeedInvalid, err)
+	}
+	if err := endpoint.Download(ctx, release, destination, onProgress); err != nil {
 		return updateError(ErrorFeedUnavailable, err)
 	}
 	return nil
 }
 
-func universalAssetMatcher(request updater.CheckRequest, assets []githubprovider.ReleaseAsset) int {
-	if request.Platform != UpdatePlatform {
-		return -1
-	}
+func manifestAssetMatcher(_ updater.CheckRequest, assets []githubprovider.ReleaseAsset) int {
 	match := -1
 	for index, asset := range assets {
-		if !artifactNamePattern.MatchString(asset.Name) {
+		if asset.Name != releaseartifact.ManifestName {
 			continue
 		}
 		if match >= 0 {
@@ -359,46 +317,32 @@ func universalAssetMatcher(request updater.CheckRequest, assets []githubprovider
 	return match
 }
 
-// releaseAssetMatcher binds the selected archive to the one same-release
-// detached-signature asset. A reachable sibling URL is not sufficient evidence
-// that the signature was published as part of the release.
-type releaseAssetMatcher struct {
-	artifactURL   string
-	signatureURL  string
-	signatureSeen int
+func githubCheckError(err error) error {
+	// The pinned Wails providers do not export typed errors for these cases.
+	message := err.Error()
+	switch {
+	case strings.Contains(message, " has no asset for "),
+		strings.Contains(message, "github: decode release"),
+		strings.Contains(message, "github: decode releases list"):
+		return updateError(ErrorFeedInvalid, err)
+	default:
+		return updateError(ErrorFeedUnavailable, err)
+	}
 }
 
-func (matcher *releaseAssetMatcher) Match(
-	request updater.CheckRequest,
-	assets []githubprovider.ReleaseAsset,
-) int {
-	matcher.artifactURL = ""
-	matcher.signatureURL = ""
-	matcher.signatureSeen = 0
-
-	index := universalAssetMatcher(request, assets)
-	if index < 0 {
-		return index
+func endpointCheckError(err error) error {
+	// Keep the pinned Wails message contract isolated in this adapter.
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "fetch manifest"),
+		strings.Contains(message, "manifest request failed"):
+		return updateError(ErrorFeedUnavailable, err)
+	case strings.Contains(message, "signature"),
+		strings.Contains(message, "digest"):
+		return updateError(ErrorArtifactVerificationFailed, err)
+	default:
+		return updateError(ErrorFeedInvalid, err)
 	}
-	matcher.artifactURL = assets[index].URL
-	signatureName := assets[index].Name + SignatureSuffix
-	for _, asset := range assets {
-		if asset.Name != signatureName {
-			continue
-		}
-		matcher.signatureSeen++
-		matcher.signatureURL = asset.URL
-	}
-	return index
-}
-
-func (matcher *releaseAssetMatcher) SignatureURL(artifactURL string) (string, bool) {
-	if matcher.artifactURL != artifactURL ||
-		matcher.signatureSeen != 1 ||
-		strings.TrimSpace(matcher.signatureURL) == "" {
-		return "", false
-	}
-	return matcher.signatureURL, true
 }
 
 func trustedGitHubAssetURL(assetURL, version, filename string) bool {
@@ -416,20 +360,24 @@ func trustedGitHubAssetURL(assetURL, version, filename string) bool {
 	return parsedURL.EscapedPath() == expectedPath
 }
 
-func channelName(channel releaseChannel) string {
-	if channel == releaseChannelPrerelease {
-		return ChannelBeta
-	}
-	return ChannelStable
-}
-
 func normalizeChannel(channel string) (string, error) {
 	switch strings.TrimSpace(channel) {
-	case ChannelStable:
-		return ChannelStable, nil
-	case ChannelBeta:
-		return ChannelBeta, nil
+	case releaseartifact.ChannelStable:
+		return releaseartifact.ChannelStable, nil
+	case releaseartifact.ChannelBeta:
+		return releaseartifact.ChannelBeta, nil
 	default:
 		return "", errors.New("update channel must be stable or beta")
+	}
+}
+
+func productChannelFromGitHub(channel string) (string, error) {
+	switch strings.TrimSpace(channel) {
+	case releaseartifact.ChannelStable:
+		return releaseartifact.ChannelStable, nil
+	case "prerelease":
+		return releaseartifact.ChannelBeta, nil
+	default:
+		return "", errors.New("release channel is not supported")
 	}
 }

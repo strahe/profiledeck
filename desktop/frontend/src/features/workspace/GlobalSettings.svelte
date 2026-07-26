@@ -59,9 +59,13 @@
 	function updateStateDescription(): string {
 		switch (updateStatus.state) {
 			case "unavailable":
-				return updateStatus.error_code === "configuration_invalid"
-					? $_("settings.updates.state.configurationInvalid")
-					: $_("settings.updates.state.unavailable");
+				if (updateStatus.error_code === "configuration_invalid") {
+					return $_("settings.updates.state.configurationInvalid");
+				}
+				if (updateStatus.error_code === "installation_unsupported") {
+					return $_("settings.updates.state.installationUnsupported");
+				}
+				return $_("settings.updates.state.unavailable");
 			case "checking": return $_("settings.updates.state.checking");
 			case "up_to_date": return $_("settings.updates.state.upToDate");
 			case "downloading": return $_("settings.updates.state.downloading", {
@@ -143,8 +147,21 @@
 			</Field.FieldGroup>
 		</SectionCard>
 
-		<SectionCard title={$_("settings.updates.title")} description={$_("settings.updates.description")}>
-			{#if updateStatus.configured}
+		<SectionCard
+			title={$_("settings.updates.title")}
+			description={updateStatus.management === "package"
+				? $_("settings.updates.packageDescription")
+				: $_("settings.updates.description")}
+		>
+			{#if updateStatus.management === "package"}
+				<Field.FieldGroup>
+					<SettingsRow
+						label={$_("settings.updates.package.label")}
+						description={$_("settings.updates.package.description")}
+						message={$_("settings.updates.currentVersion", { values: { version: updateStatus.current_version } })}
+					/>
+				</Field.FieldGroup>
+			{:else if updateStatus.configured}
 				<Field.FieldGroup>
 					<SettingsRow
 						label={$_("settings.updates.channel.label")}
