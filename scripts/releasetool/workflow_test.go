@@ -42,6 +42,16 @@ func TestReleaseWorkflowKeepsTagAndManualEntrypoints(t *testing.T) {
 			t.Errorf("release workflow is missing %s", name)
 		}
 	}
+	// draft runs ci-release-finalize, which go-installs wails3 with CGO.
+	// bare ubuntu-latest lacks GTK4/WebKitGTK; build-linux already installs them.
+	draftIndex := strings.Index(content, "\n  draft:\n")
+	if draftIndex < 0 {
+		t.Fatal("release workflow is missing the draft job")
+	}
+	draftSection := content[draftIndex:]
+	if !strings.Contains(draftSection, "libgtk-4-dev libwebkitgtk-6.0-dev") {
+		t.Error("draft job must install libgtk-4-dev and libwebkitgtk-6.0-dev before ci-release-finalize")
+	}
 }
 
 func TestWorkflowRunnerVariablesStayPlatformScoped(t *testing.T) {

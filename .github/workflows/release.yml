@@ -376,6 +376,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # wails3 links against GTK4/WebKitGTK; ci-release-finalize installs it via go install.
+      - name: Install GTK and WebKit for wails3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
+
       - name: Download platform assets
         uses: actions/download-artifact@v8
         with:
