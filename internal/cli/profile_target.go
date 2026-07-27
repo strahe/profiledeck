@@ -10,7 +10,6 @@ import (
 
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/profiletarget"
-	"github.com/strahe/profiledeck/internal/switching"
 )
 
 const (
@@ -19,40 +18,6 @@ const (
 	strategyFlagName  = "strategy"
 	valueJSONFlagName = "value-json"
 )
-
-func newPlanCommand() *urfavecli.Command {
-	return &urfavecli.Command{
-		Name:      "plan",
-		Usage:     "Build a read-only switch plan",
-		ArgsUsage: "<provider-id> <profile-id>",
-		Flags: []urfavecli.Flag{
-			boolFlag(jsonFlagName, "Write JSON output"),
-		},
-		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
-			providerID, profileID, err := twoIDArgs(cmd, apperror.ProviderInvalid)
-			if err != nil {
-				return err
-			}
-			application, err := applicationFor(cmd)
-			if err != nil {
-				return err
-			}
-			result, err := application.Switching().BuildPlan(ctx, switching.BuildPlanRequest{
-				ProviderID: providerID,
-				ProfileID:  profileID,
-			})
-			if err != nil {
-				return err
-			}
-
-			w := outputWriter(cmd)
-			if cmd.Bool(jsonFlagName) {
-				return writeJSON(w, result)
-			}
-			return writePlan(w, result)
-		},
-	}
-}
 
 func newProfileTargetCommand() *urfavecli.Command {
 	return &urfavecli.Command{
@@ -333,40 +298,4 @@ func writeProfileTarget(w io.Writer, target profiletarget.ProfileTarget) error {
 		target.UpdatedAtUnixMS,
 	)
 	return err
-}
-
-func writePlan(w io.Writer, plan switching.SwitchPlan) error {
-	if _, err := fmt.Fprintf(
-		w,
-		"Switch plan\nprovider: %s (%s)\nprofile: %s (%s)\nplan_fingerprint: %s\noperations: %d\n",
-		plan.Provider.ID,
-		plan.Provider.Name,
-		plan.Profile.ID,
-		plan.Profile.Name,
-		plan.PlanFingerprint,
-		len(plan.Operations),
-	); err != nil {
-		return err
-	}
-	if len(plan.Operations) > 0 {
-		tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-		for _, op := range plan.Operations {
-			location := op.Path
-			if location == "" {
-				location = op.TargetLabel
-			}
-			if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", op.TargetID, op.Action, op.StatusReason, location); err != nil {
-				return err
-			}
-		}
-		if err := tw.Flush(); err != nil {
-			return err
-		}
-	}
-	for _, warning := range plan.Warnings {
-		if _, err := fmt.Fprintf(w, "warning: %s\n", warning); err != nil {
-			return err
-		}
-	}
-	return nil
 }

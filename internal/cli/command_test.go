@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	urfavecli "github.com/urfave/cli/v3"
 	keyring "github.com/zalando/go-keyring"
 
 	"github.com/strahe/profiledeck/internal/antigravity"
@@ -97,8 +98,8 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 	if cmd.Command("usage") == nil {
 		t.Fatalf("expected usage subcommand")
 	}
-	if cmd.Command("plan") == nil {
-		t.Fatalf("expected plan subcommand")
+	if cmd.Command("plan") != nil {
+		t.Fatalf("plan command must not be registered")
 	}
 	if cmd.Command("provider") == nil {
 		t.Fatalf("expected provider subcommand")
@@ -289,11 +290,11 @@ func TestClaudeCodeProfileCLIUsesOfficialLoginWithoutExposingTokens(t *testing.T
 	if err != nil {
 		t.Fatalf("expected Claude Code Profile list to succeed, got %v", err)
 	}
-	planned, err := runCLI(t, "--config-dir", configDir, "plan", claudecodeconfig.ProviderID, "work", "--json")
+	planned, err := runCLI(t, "--config-dir", configDir, "switch", claudecodeconfig.ProviderID, "work", "--dry-run", "--json")
 	if err != nil {
-		t.Fatalf("expected Claude Code plan to succeed, got %v", err)
+		t.Fatalf("expected Claude Code switch preview to succeed, got %v", err)
 	}
-	for boundary, output := range map[string]string{"create": created, "list": listed, "plan": planned} {
+	for boundary, output := range map[string]string{"create": created, "list": listed, "switch preview": planned} {
 		for _, secret := range []string{"cli-claude-access-secret", "cli-claude-refresh-secret", "accessToken", "refreshToken"} {
 			if strings.Contains(output, secret) {
 				t.Fatalf("Claude Code CLI %s output exposed %q: %s", boundary, secret, output)
@@ -312,6 +313,88 @@ func TestRootHelp(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), app.CLIName) {
 		t.Fatalf("expected help output to contain %q, got %q", app.CLIName, out.String())
+	}
+}
+
+func TestSwitchHelpShowsPreviewAndApplyModes(t *testing.T) {
+	var out bytes.Buffer
+	cmd := NewCommand(app.DefaultInfo())
+	cmd.Writer = &out
+
+	if err := cmd.Run(context.Background(), []string{app.CLIName, "switch", "--help"}); err != nil {
+		t.Fatalf("expected switch help to succeed, got %v", err)
+	}
+	for _, expected := range []string{
+		"Preview or apply a profile switch",
+		"--dry-run",
+		"Preview the switch without making changes",
+		"--yes",
+		"--plan-fingerprint",
+		"Require the applied switch to match a preview fingerprint",
+	} {
+		if !strings.Contains(out.String(), expected) {
+			t.Fatalf("expected switch help to contain %q, got %q", expected, out.String())
+		}
+	}
+}
+
+func TestSwitchModesRejectBeforeApplicationBootstrap(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		args    []string
+		message string
+	}{
+		{
+			name:    "missing mode",
+			args:    []string{"switch", "provider-a", "profile-a"},
+			message: "switch requires either --dry-run to preview or --yes to apply",
+		},
+		{
+			name:    "conflicting modes",
+			args:    []string{"switch", "provider-a", "profile-a", "--dry-run", "--yes"},
+			message: "--dry-run and --yes cannot be used together",
+		},
+		{
+			name: "preview fingerprint",
+			args: []string{
+				"switch", "provider-a", "profile-a", "--dry-run",
+				"--plan-fingerprint", "reviewed",
+			},
+			message: "--plan-fingerprint can only be used with --yes",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configDir := t.TempDir()
+			paths, err := profilesruntime.ResolvePaths(configDir)
+			if err != nil {
+				t.Fatalf("resolve runtime paths: %v", err)
+			}
+
+			out, err := runCLI(t, append([]string{"--config-dir", configDir}, test.args...)...)
+			assertCLIAppErrorCode(t, err, apperror.ConfirmationRequired)
+			if !strings.Contains(err.Error(), test.message) {
+				t.Fatalf("expected error to contain %q, got %v", test.message, err)
+			}
+			if out != "" {
+				t.Fatalf("expected rejected mode not to write output, got %q", out)
+			}
+			if _, statErr := os.Stat(paths.Root); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("expected rejected mode not to initialize runtime, got %v", statErr)
+			}
+		})
+	}
+}
+
+func TestRemovedPlanCommandFails(t *testing.T) {
+	cmd := NewCommand(app.DefaultInfo())
+	cmd.ExitErrHandler = func(context.Context, *urfavecli.Command, error) {}
+
+	err := cmd.Run(context.Background(), []string{app.CLIName, "plan", "provider-a", "profile-a"})
+	if err == nil {
+		t.Fatal("expected removed plan command to fail")
+	}
+	if !strings.Contains(err.Error(), "No help topic for 'plan'") {
+		t.Fatalf("expected plan to be an unknown command, got %v", err)
 	}
 }
 
@@ -656,9 +739,9 @@ func TestCodexDetectAndProfileCreatePlanSwitchJSON(t *testing.T) {
 		t.Fatalf("expected live config mutation to succeed, got %v", err)
 	}
 
-	out, err = runCLI(t, "--config-dir", configDir, "plan", codexconfig.ProviderID, "work", "--json")
+	out, err = runCLI(t, "--config-dir", configDir, "switch", codexconfig.ProviderID, "work", "--dry-run", "--json")
 	if err != nil {
-		t.Fatalf("expected codex plan to succeed, got %v", err)
+		t.Fatalf("expected codex switch preview to succeed, got %v", err)
 	}
 	var plan switching.SwitchPlan
 	decodeCLIJSON(t, []byte(out), &plan)
@@ -733,9 +816,9 @@ func TestCodexProfileCreateCLIJSONRedactsAuth(t *testing.T) {
 	if err := os.WriteFile(authPath, []byte(`{"unknown_auth_shape":"live-secret"}`), 0o600); err != nil {
 		t.Fatalf("expected auth mutation to succeed, got %v", err)
 	}
-	out, err = runCLI(t, "--config-dir", configDir, "plan", codexconfig.ProviderID, "work", "--json")
+	out, err = runCLI(t, "--config-dir", configDir, "switch", codexconfig.ProviderID, "work", "--dry-run", "--json")
 	if err != nil {
-		t.Fatalf("expected codex plan to succeed, got %v", err)
+		t.Fatalf("expected codex switch preview to succeed, got %v", err)
 	}
 	if strings.Contains(out, "desired-secret") || strings.Contains(out, "live-secret") {
 		t.Fatalf("expected plan output to redact raw auth, got %q", out)
@@ -1319,11 +1402,14 @@ func TestAgentProfileDeleteCommandsDeleteTheGlobalProfile(t *testing.T) {
 	assertNoTargetToolConfigCreated(t, configDir)
 }
 
-func TestProfileTargetAndPlanCLIFlow(t *testing.T) {
+func TestProfileTargetAndSwitchCLIFlow(t *testing.T) {
 	configDir := t.TempDir()
-	if _, err := runCLI(t, "--config-dir", configDir, "init", "--json"); err != nil {
+	initOut, err := runCLI(t, "--config-dir", configDir, "init", "--json")
+	if err != nil {
 		t.Fatalf("expected init to succeed, got %v", err)
 	}
+	var initResult profilesruntime.InitResult
+	decodeCLIJSON(t, []byte(initOut), &initResult)
 	if _, err := runCLI(t,
 		"--config-dir", configDir,
 		"provider", "create", "provider-a",
@@ -1386,35 +1472,45 @@ func TestProfileTargetAndPlanCLIFlow(t *testing.T) {
 		t.Fatalf("expected target show human output to redact raw key, got %q", humanOut)
 	}
 
-	out, err = runCLI(t, "--config-dir", configDir, "plan", "provider-a", "profile-a", "--json")
+	operationsBefore := countCLITableRows(t, initResult.DatabasePath, "operations")
+	activeStatesBefore := countCLITableRows(t, initResult.DatabasePath, "provider_active_states")
+	recoveryPath := filepath.Join(initResult.RuntimeRoot, "recovery")
+	recoveryBefore := cliDirectoryEntries(t, recoveryPath)
+
+	out, err = runCLI(t, "--config-dir", configDir, "switch", "provider-a", "profile-a", "--dry-run", "--json")
 	if err != nil {
-		t.Fatalf("expected plan JSON to succeed, got %v", err)
+		t.Fatalf("expected switch preview JSON to succeed, got %v", err)
 	}
 	if strings.Contains(out, "raw-key") {
-		t.Fatalf("expected plan JSON to redact raw key, got %q", out)
+		t.Fatalf("expected switch preview JSON to redact raw key, got %q", out)
 	}
 	var plan switching.SwitchPlan
 	decodeCLIJSON(t, []byte(out), &plan)
-	if !plan.ReadOnly || len(plan.Operations) != 1 || plan.Operations[0].Action != "create" {
-		t.Fatalf("unexpected plan result: %#v", plan)
-	}
-	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
-		t.Fatalf("expected plan not to create target file, stat error: %v", err)
+	if !plan.ReadOnly || plan.PlanFingerprint == "" || len(plan.Operations) != 1 || plan.Operations[0].Action != "create" {
+		t.Fatalf("unexpected switch preview result: %#v", plan)
 	}
 
-	humanOut, err = runCLI(t, "--config-dir", configDir, "switch", "provider-a", "profile-a")
-	if err == nil {
-		t.Fatalf("expected unconfirmed switch to fail")
+	humanOut, err = runCLI(t, "--config-dir", configDir, "switch", "provider-a", "profile-a", "--dry-run")
+	if err != nil {
+		t.Fatalf("expected human-readable switch preview to succeed, got %v", err)
 	}
-	assertCLIAppErrorCode(t, err, apperror.ConfirmationRequired)
 	if !strings.Contains(humanOut, "Switch plan") || !strings.Contains(humanOut, "plan_fingerprint:") {
-		t.Fatalf("expected unconfirmed switch to print plan, got %q", humanOut)
+		t.Fatalf("expected switch preview output, got %q", humanOut)
 	}
 	if strings.Contains(humanOut, "raw-key") {
-		t.Fatalf("expected unconfirmed switch plan to redact raw key, got %q", humanOut)
+		t.Fatalf("expected switch preview to redact raw key, got %q", humanOut)
 	}
 	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
-		t.Fatalf("expected unconfirmed switch not to create target file, stat error: %v", err)
+		t.Fatalf("expected switch preview not to create target file, stat error: %v", err)
+	}
+	if got := countCLITableRows(t, initResult.DatabasePath, "operations"); got != operationsBefore {
+		t.Fatalf("expected switch preview not to create operations, before=%d after=%d", operationsBefore, got)
+	}
+	if got := countCLITableRows(t, initResult.DatabasePath, "provider_active_states"); got != activeStatesBefore {
+		t.Fatalf("expected switch preview not to change active state, before=%d after=%d", activeStatesBefore, got)
+	}
+	if got := cliDirectoryEntries(t, recoveryPath); strings.Join(got, "\n") != strings.Join(recoveryBefore, "\n") {
+		t.Fatalf("expected switch preview not to create recovery material, before=%v after=%v", recoveryBefore, got)
 	}
 
 	out, err = runCLI(t,
@@ -1496,9 +1592,9 @@ func TestSwitchCLIRejectsStalePlanFingerprint(t *testing.T) {
 		t.Fatalf("expected profile target add to succeed, got %v", err)
 	}
 
-	out, err := runCLI(t, "--config-dir", configDir, "plan", "provider-a", "profile-a", "--json")
+	out, err := runCLI(t, "--config-dir", configDir, "switch", "provider-a", "profile-a", "--dry-run", "--json")
 	if err != nil {
-		t.Fatalf("expected plan to succeed, got %v", err)
+		t.Fatalf("expected switch preview to succeed, got %v", err)
 	}
 	var plan switching.SwitchPlan
 	decodeCLIJSON(t, []byte(out), &plan)
@@ -2065,6 +2161,49 @@ func hasCLIPlanOperation(operations []switching.PlanOperation, targetID, action 
 		}
 	}
 	return false
+}
+
+func countCLITableRows(t *testing.T, databasePath, table string) int {
+	t.Helper()
+
+	query := ""
+	switch table {
+	case "operations":
+		query = "SELECT COUNT(*) FROM operations"
+	case "provider_active_states":
+		query = "SELECT COUNT(*) FROM provider_active_states"
+	default:
+		t.Fatalf("unsupported CLI test table %q", table)
+	}
+
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatalf("expected sqlite open to succeed, got %v", err)
+	}
+	defer db.Close()
+
+	var count int
+	if err := db.QueryRow(query).Scan(&count); err != nil {
+		t.Fatalf("expected %s row count to succeed, got %v", table, err)
+	}
+	return count
+}
+
+func cliDirectoryEntries(t *testing.T, path string) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("expected directory read to succeed, got %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
 }
 
 func singleCLIOperationIDByTypeStatus(t *testing.T, databasePath, operationType, status string) string {

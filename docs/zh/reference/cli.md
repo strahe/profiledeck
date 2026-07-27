@@ -24,12 +24,11 @@
 | `codex` | 管理 Codex Profile 和已保存设置（配置集）。 |
 | `doctor` | 诊断本地数据、权限和中断操作的问题。 |
 | `init` | 创建 ProfileDeck 本地数据。 |
-| `plan` | 预览 Profile 切换，不更改所选工具。 |
 | `provider` | 为其他 AI 工具配置高级文件切换。 |
 | `profile` | 管理 Profile 和高级文件目标。 |
 | `recover` | 处理被中断或失败的切换。 |
 | `status` | 检查 ProfileDeck 是否已初始化。 |
-| `switch` | 应用 Profile 切换。 |
+| `switch` | 预览或应用 Profile 切换。 |
 | `usage` | 导入和报告本地 Codex 用量。 |
 | `version` | 输出版本信息。 |
 
@@ -90,7 +89,7 @@ profiledeck-cli claude-code profile delete <profile-id> --yes [--json]
 
 `create` 保存当前 Claude Code 账号登录，并把新 Profile 设为当前 Profile。`save-current` 更新当前 Profile 使用的登录。如果该登录被共享，命令会报告受影响的 Profile 数量，并要求传入 `--yes`。
 
-Claude Code 没有 `claude` 别名。请使用 `profiledeck-cli plan claude-code <profile-id>` 和 `profiledeck-cli switch claude-code <profile-id> --yes` 切换。命令只显示登录状态和安全元数据，不会显示令牌值。
+Claude Code 没有 `claude` 别名。如需预览，请运行 `profiledeck-cli switch claude-code <profile-id> --dry-run`；应用时运行 `profiledeck-cli switch claude-code <profile-id> --yes`。命令只显示登录状态和安全元数据，不会显示令牌值。
 
 登录要求与验证方式见 [Claude Code Profile](../claude-code/profiles.md)。
 
@@ -113,11 +112,11 @@ profiledeck-cli antigravity profile delete <profile-id> --yes [--json]
 ## 预览与切换
 
 ```bash
-profiledeck-cli plan [--json] <provider-id> <profile-id>
-profiledeck-cli switch [--yes] [--plan-fingerprint FINGERPRINT] [--json] <provider-id> <profile-id>
+profiledeck-cli switch --dry-run [--json] <provider-id> <profile-id>
+profiledeck-cli switch --yes [--plan-fingerprint FINGERPRINT] [--json] <provider-id> <profile-id>
 ```
 
-`plan` 是只读操作。`switch` 必须传入 `--yes`。如果希望 ProfileDeck 在检查后状态发生变化时拒绝切换，请传入 `plan` 返回的指纹。
+`switch --dry-run` 是可选的只读预览。使用 `switch --yes` 应用变更。如果希望 ProfileDeck 在检查后状态发生变化时拒绝切换，请传入预览返回的指纹。
 
 ## 用量
 

@@ -14,18 +14,18 @@
 
 ## 使用 CLI 预览
 
-切换前先运行 `plan`：
+预览是可选操作。如需在应用前检查切换内容，请运行 `switch --dry-run`：
 
 ```bash
-profiledeck-cli plan codex work
-profiledeck-cli plan claude-code personal
-profiledeck-cli plan antigravity work
+profiledeck-cli switch codex work --dry-run
+profiledeck-cli switch claude-code personal --dry-run
+profiledeck-cli switch antigravity work --dry-run
 ```
 
 如需结构化输出，可添加 `--json`：
 
 ```bash
-profiledeck-cli plan codex work --json
+profiledeck-cli switch codex work --dry-run --json
 ```
 
 对于文件，预览会显示路径将被创建、更新还是保持不变。对于已保存的登录，预览只显示安全的目标名称和操作。所有预览都会隐藏敏感登录内容。
@@ -40,7 +40,7 @@ profiledeck-cli switch claude-code personal --yes
 profiledeck-cli switch antigravity work --yes
 ```
 
-如需确保应用的状态与之前检查的内容完全一致，请复制 `plan` 返回的指纹：
+如需确保应用的状态与之前检查的内容完全一致，请复制 `switch --dry-run` 返回的指纹：
 
 ```bash
 profiledeck-cli switch codex work \
@@ -48,7 +48,7 @@ profiledeck-cli switch codex work \
   --yes
 ```
 
-如果预览后 Profile 或所选工具发生变化，ProfileDeck 会拒绝该指纹，不写入任何内容。请重新运行 `plan` 并检查新结果。
+如果预览后 Profile 或所选工具发生变化，ProfileDeck 会拒绝该指纹，不写入任何内容。请重新运行 `switch --dry-run` 并检查新结果。
 
 ## 切换期间会发生什么
 

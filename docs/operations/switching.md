@@ -14,18 +14,18 @@ ProfileDeck marks the Profile as current only after the change succeeds. Restart
 
 ## Preview from the CLI
 
-Run `plan` before switching:
+Previewing is optional. Run `switch --dry-run` when you want to review a switch before applying it:
 
 ```bash
-profiledeck-cli plan codex work
-profiledeck-cli plan claude-code personal
-profiledeck-cli plan antigravity work
+profiledeck-cli switch codex work --dry-run
+profiledeck-cli switch claude-code personal --dry-run
+profiledeck-cli switch antigravity work --dry-run
 ```
 
 Add `--json` if you need structured output:
 
 ```bash
-profiledeck-cli plan codex work --json
+profiledeck-cli switch codex work --dry-run --json
 ```
 
 For files, the preview shows which path will be created, updated, or left unchanged. For saved logins, it shows only a safe target name and action. Sensitive login values remain hidden in all previews.
@@ -40,7 +40,7 @@ profiledeck-cli switch claude-code personal --yes
 profiledeck-cli switch antigravity work --yes
 ```
 
-To apply only the exact state you previously reviewed, copy the fingerprint from `plan`:
+To apply only the exact state you previously reviewed, copy the fingerprint from `switch --dry-run`:
 
 ```bash
 profiledeck-cli switch codex work \
@@ -48,7 +48,7 @@ profiledeck-cli switch codex work \
   --yes
 ```
 
-If the Profile or selected tool changes after the preview, ProfileDeck rejects the fingerprint without writing anything. Run `plan` again and review the new result.
+If the Profile or selected tool changes after the preview, ProfileDeck rejects the fingerprint without writing anything. Run `switch --dry-run` again and review the new result.
 
 ## What happens during a switch
 

@@ -105,11 +105,11 @@ profiledeck-cli codex profile save-current
 In Desktop, choose **Use Profile**, review the hidden-value preview, and confirm. In the CLI:
 
 ```bash
-profiledeck-cli plan codex work
+profiledeck-cli switch codex work --dry-run
 profiledeck-cli switch codex work --yes
 ```
 
-`plan` is read-only. To require the switch to match an earlier preview, pass its fingerprint:
+The `--dry-run` preview is optional and read-only. To require the switch to match an earlier preview, pass its fingerprint:
 
 ```bash
 profiledeck-cli switch codex work \

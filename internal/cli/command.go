@@ -53,7 +53,6 @@ func NewCommand(info app.Info) *urfavecli.Command {
 			newCodexCommand(),
 			newDoctorCommand(),
 			newInitCommand(),
-			newPlanCommand(),
 			newProviderCommand(),
 			newProfileCommand(),
 			newRecoverCommand(),

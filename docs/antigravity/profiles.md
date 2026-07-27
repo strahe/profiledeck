@@ -42,10 +42,10 @@ When practical, close Antigravity before switching so it cannot refresh its logi
 
 In the Desktop app, open the Profile you want, select **Use Profile**, review the change, and confirm it.
 
-From the CLI, preview and apply the same change:
+From the CLI, preview the change when needed, then apply it:
 
 ```bash
-profiledeck-cli plan antigravity work
+profiledeck-cli switch antigravity work --dry-run
 profiledeck-cli switch antigravity work --yes
 ```
 

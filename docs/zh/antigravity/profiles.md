@@ -42,10 +42,10 @@ profiledeck-cli antigravity profile update work --name "Work account"
 
 在桌面端打开目标 Profile，选择**使用 Profile**，检查变更并确认。
 
-使用 CLI 时，先预览再应用同一变更：
+使用 CLI 时，可以先预览，再应用变更：
 
 ```bash
-profiledeck-cli plan antigravity work
+profiledeck-cli switch antigravity work --dry-run
 profiledeck-cli switch antigravity work --yes
 ```
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"text/tabwriter"
 
 	urfavecli "github.com/urfave/cli/v3"
 
@@ -11,19 +12,36 @@ import (
 	"github.com/strahe/profiledeck/internal/switching"
 )
 
-const planFingerprintFlagName = "plan-fingerprint"
+const (
+	dryRunFlagName          = "dry-run"
+	planFingerprintFlagName = "plan-fingerprint"
+)
 
 func newSwitchCommand() *urfavecli.Command {
 	return &urfavecli.Command{
 		Name:      "switch",
-		Usage:     "Apply a profile switch",
+		Usage:     "Preview or apply a profile switch",
 		ArgsUsage: "<provider-id> <profile-id>",
 		Flags: []urfavecli.Flag{
+			boolFlag(dryRunFlagName, "Preview the switch without making changes"),
 			boolFlag(yesFlagName, "Confirm switch apply"),
-			stringFlag(planFingerprintFlagName, "Require a matching read-only plan fingerprint"),
+			stringFlag(planFingerprintFlagName, "Require the applied switch to match a preview fingerprint"),
 			boolFlag(jsonFlagName, "Write JSON output"),
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
+			// Mode selection must be explicit before ProfileDeck opens application state.
+			dryRun := cmd.Bool(dryRunFlagName)
+			apply := cmd.Bool(yesFlagName)
+			if dryRun && apply {
+				return apperror.New(apperror.ConfirmationRequired, "--dry-run and --yes cannot be used together")
+			}
+			if cmd.IsSet(planFingerprintFlagName) && !apply {
+				return apperror.New(apperror.ConfirmationRequired, "--plan-fingerprint can only be used with --yes")
+			}
+			if !dryRun && !apply {
+				return apperror.New(apperror.ConfirmationRequired, "switch requires either --dry-run to preview or --yes to apply")
+			}
+
 			providerID, profileID, err := twoIDArgs(cmd, apperror.ProviderInvalid)
 			if err != nil {
 				return err
@@ -34,7 +52,7 @@ func newSwitchCommand() *urfavecli.Command {
 			}
 
 			w := outputWriter(cmd)
-			if !cmd.Bool(yesFlagName) {
+			if dryRun {
 				result, err := application.Switching().BuildPlan(ctx, switching.BuildPlanRequest{
 					ProviderID: providerID,
 					ProfileID:  profileID,
@@ -49,7 +67,7 @@ func newSwitchCommand() *urfavecli.Command {
 				} else if err := writePlan(w, result); err != nil {
 					return err
 				}
-				return apperror.New(apperror.ConfirmationRequired, "switch apply requires --yes")
+				return nil
 			}
 
 			result, err := application.Switching().Apply(ctx, switching.ApplySwitchRequest{
@@ -67,6 +85,42 @@ func newSwitchCommand() *urfavecli.Command {
 			return writeSwitchResult(w, result)
 		},
 	}
+}
+
+func writePlan(w io.Writer, plan switching.SwitchPlan) error {
+	if _, err := fmt.Fprintf(
+		w,
+		"Switch plan\nprovider: %s (%s)\nprofile: %s (%s)\nplan_fingerprint: %s\noperations: %d\n",
+		plan.Provider.ID,
+		plan.Provider.Name,
+		plan.Profile.ID,
+		plan.Profile.Name,
+		plan.PlanFingerprint,
+		len(plan.Operations),
+	); err != nil {
+		return err
+	}
+	if len(plan.Operations) > 0 {
+		tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
+		for _, op := range plan.Operations {
+			location := op.Path
+			if location == "" {
+				location = op.TargetLabel
+			}
+			if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", op.TargetID, op.Action, op.StatusReason, location); err != nil {
+				return err
+			}
+		}
+		if err := tw.Flush(); err != nil {
+			return err
+		}
+	}
+	for _, warning := range plan.Warnings {
+		if _, err := fmt.Fprintf(w, "warning: %s\n", warning); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeSwitchResult(w io.Writer, result switching.ApplySwitchResult) error {

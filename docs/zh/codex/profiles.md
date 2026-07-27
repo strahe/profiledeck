@@ -105,11 +105,11 @@ profiledeck-cli codex profile save-current
 在桌面端选择**使用 Profile**，审核隐藏敏感值的预览，然后确认。使用 CLI 时运行：
 
 ```bash
-profiledeck-cli plan codex work
+profiledeck-cli switch codex work --dry-run
 profiledeck-cli switch codex work --yes
 ```
 
-`plan` 是只读操作。要确保切换内容与之前的预览一致，请传入计划指纹：
+`--dry-run` 预览是可选的只读操作。要确保切换内容与之前的预览一致，请传入计划指纹：
 
 ```bash
 profiledeck-cli switch codex work \

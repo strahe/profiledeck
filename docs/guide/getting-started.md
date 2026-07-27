@@ -109,14 +109,16 @@ Prepare the selected tool first:
 
 In Desktop, select the tool and use the save action on its Profiles page. Enter a permanent Profile ID and a display name. To save another account, sign in to that account in the tool, return to ProfileDeck, and save another Profile.
 
-Use these minimal CLI flows instead:
+Use these CLI flows instead:
+
+The `--dry-run` command in each flow is an optional preview. Use `--yes` to apply the switch.
 
 ### Codex
 
 ```bash
 profiledeck-cli codex detect
 profiledeck-cli codex profile create work
-profiledeck-cli plan codex work
+profiledeck-cli switch codex work --dry-run
 profiledeck-cli switch codex work --yes
 ```
 
@@ -125,7 +127,7 @@ profiledeck-cli switch codex work --yes
 ```bash
 profiledeck-cli claude-code detect
 profiledeck-cli claude-code profile create personal
-profiledeck-cli plan claude-code personal
+profiledeck-cli switch claude-code personal --dry-run
 profiledeck-cli switch claude-code personal --yes
 ```
 
@@ -136,7 +138,7 @@ Start a new Claude Code session after switching and run `/status` to confirm the
 ```bash
 profiledeck-cli antigravity detect
 profiledeck-cli antigravity profile create work
-profiledeck-cli plan antigravity work
+profiledeck-cli switch antigravity work --dry-run
 profiledeck-cli switch antigravity work --yes
 ```
 

@@ -40,10 +40,10 @@ List and show commands display login status and expiry information without print
 
 In Desktop, choose **Use Profile**, review the login change, and confirm. ProfileDeck creates a private operation recovery point before continuing.
 
-With the CLI:
+With the CLI, previewing is optional:
 
 ```bash
-profiledeck-cli plan claude-code personal
+profiledeck-cli switch claude-code personal --dry-run
 profiledeck-cli switch claude-code personal --yes
 ```
 

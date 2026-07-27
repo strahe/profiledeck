@@ -40,10 +40,10 @@ profiledeck-cli claude-code profile list
 
 在桌面端选择**使用 Profile**，审核登录变化，然后确认。继续前，ProfileDeck 会创建私有操作恢复点。
 
-使用 CLI 时运行：
+使用 CLI 时可按需预览：
 
 ```bash
-profiledeck-cli plan claude-code personal
+profiledeck-cli switch claude-code personal --dry-run
 profiledeck-cli switch claude-code personal --yes
 ```
 

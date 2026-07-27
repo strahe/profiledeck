@@ -43,8 +43,10 @@ Merge strategies require the current file to contain valid JSON, TOML, or env da
 
 ## Review and switch
 
+Previewing is optional:
+
 ```bash
-profiledeck-cli plan my-tool work
+profiledeck-cli switch my-tool work --dry-run
 profiledeck-cli switch my-tool work --yes
 ```
 

@@ -109,14 +109,16 @@ ProfileDeck 会在该目录下创建 `profiledeck` 文件夹。
 
 在桌面端选择工具，然后使用 Profiles 页面中的保存操作。输入创建后不会改变的 Profile ID 和用于显示的名称。要保存另一个账号，请先在对应工具中切换登录，再回到 ProfileDeck 保存另一个 Profile。
 
-也可以使用以下最短 CLI 流程。
+也可以使用以下 CLI 流程。
+
+每组流程中的 `--dry-run` 命令都是可选预览；使用 `--yes` 应用切换。
 
 ### Codex
 
 ```bash
 profiledeck-cli codex detect
 profiledeck-cli codex profile create work
-profiledeck-cli plan codex work
+profiledeck-cli switch codex work --dry-run
 profiledeck-cli switch codex work --yes
 ```
 
@@ -125,7 +127,7 @@ profiledeck-cli switch codex work --yes
 ```bash
 profiledeck-cli claude-code detect
 profiledeck-cli claude-code profile create personal
-profiledeck-cli plan claude-code personal
+profiledeck-cli switch claude-code personal --dry-run
 profiledeck-cli switch claude-code personal --yes
 ```
 
@@ -136,7 +138,7 @@ profiledeck-cli switch claude-code personal --yes
 ```bash
 profiledeck-cli antigravity detect
 profiledeck-cli antigravity profile create work
-profiledeck-cli plan antigravity work
+profiledeck-cli switch antigravity work --dry-run
 profiledeck-cli switch antigravity work --yes
 ```
 

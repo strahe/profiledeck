@@ -24,12 +24,11 @@ This value is the parent config directory. ProfileDeck creates or uses its `prof
 | `codex` | Manage Codex Profiles and saved settings (Config Sets). |
 | `doctor` | Diagnose local-data, permission, and interrupted-operation problems. |
 | `init` | Create ProfileDeck's local data. |
-| `plan` | Preview a Profile switch without changing the selected tool. |
 | `provider` | Configure another AI tool for advanced file switching. |
 | `profile` | Manage Profiles and advanced file targets. |
 | `recover` | Resolve an interrupted or failed switch. |
 | `status` | Check whether ProfileDeck is initialized. |
-| `switch` | Apply a Profile switch. |
+| `switch` | Preview or apply a Profile switch. |
 | `usage` | Import and report local Codex usage. |
 | `version` | Print version information. |
 
@@ -90,7 +89,7 @@ profiledeck-cli claude-code profile delete <profile-id> --yes [--json]
 
 `create` saves the current Claude Code account login and makes the new Profile current. `save-current` updates the login used by the current Profile. If that saved login is shared, the command reports how many Profiles will change and requires `--yes`.
 
-There is no `claude` alias. Switch with `profiledeck-cli plan claude-code <profile-id>` and `profiledeck-cli switch claude-code <profile-id> --yes`. Commands show login status and safe metadata, never token values.
+There is no `claude` alias. Preview with `profiledeck-cli switch claude-code <profile-id> --dry-run` when needed, then apply with `profiledeck-cli switch claude-code <profile-id> --yes`. Commands show login status and safe metadata, never token values.
 
 See [Claude Code Profiles](../claude-code/profiles.md) for login requirements and verification.
 
@@ -113,11 +112,11 @@ See [Antigravity Profiles](../antigravity/profiles.md) for compatibility and swi
 ## Preview and switch
 
 ```bash
-profiledeck-cli plan [--json] <provider-id> <profile-id>
-profiledeck-cli switch [--yes] [--plan-fingerprint FINGERPRINT] [--json] <provider-id> <profile-id>
+profiledeck-cli switch --dry-run [--json] <provider-id> <profile-id>
+profiledeck-cli switch --yes [--plan-fingerprint FINGERPRINT] [--json] <provider-id> <profile-id>
 ```
 
-`plan` is read-only. `switch` requires `--yes`. Pass the fingerprint returned by `plan` when you want ProfileDeck to reject any state that changed after your review.
+`switch --dry-run` is an optional read-only preview. Use `switch --yes` to apply the change. Pass the fingerprint returned by the preview when you want ProfileDeck to reject any state that changed after your review.
 
 ## Usage
 

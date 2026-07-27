@@ -43,8 +43,10 @@ profiledeck-cli profile target add work settings \
 
 ## 审核并切换
 
+预览是可选操作：
+
 ```bash
-profiledeck-cli plan my-tool work
+profiledeck-cli switch my-tool work --dry-run
 profiledeck-cli switch my-tool work --yes
 ```
 
