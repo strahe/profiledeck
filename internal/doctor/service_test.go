@@ -1008,7 +1008,6 @@ func TestDoctorClassifiesWeakRuntimePermissions(t *testing.T) {
 		{path: paths.Database, mode: 0o644, id: "database_permissions_weak", level: doctor.LevelError},
 		{path: paths.Backups, mode: 0o755, id: "backups_permissions_weak", level: doctor.LevelWarning},
 		{path: paths.Recovery, mode: 0o755, id: "recovery_permissions_weak", level: doctor.LevelError},
-		{path: paths.Exports, mode: 0o755, id: "exports_permissions_weak", level: doctor.LevelWarning},
 		{path: paths.Logs, mode: 0o755, id: "logs_permissions_weak", level: doctor.LevelWarning},
 		{path: filepath.Dir(paths.Lock), mode: 0o755, id: "locks_permissions_weak", level: doctor.LevelWarning},
 	}

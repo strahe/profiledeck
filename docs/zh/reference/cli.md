@@ -51,9 +51,6 @@ profiledeck-cli codex profile fork <source-profile-id> <new-profile-id> --creden
 profiledeck-cli codex profile save-current [--codex-dir PATH] [--json]
 profiledeck-cli codex profile set-config <profile-id> <config-set-id> [--json]
 profiledeck-cli codex profile delete <profile-id> --yes [--json]
-profiledeck-cli codex profile export [<profile-id> ...] --output PATH [--force] [--json]
-profiledeck-cli codex profile import inspect <bundle-path> [--codex-dir PATH] [--json]
-profiledeck-cli codex profile import apply <bundle-path> --plan-fingerprint FINGERPRINT --yes [--codex-dir PATH] [--json]
 
 profiledeck-cli codex config-set list [--json]
 profiledeck-cli codex config-set show <config-set-id> [--json]
@@ -68,10 +65,6 @@ profiledeck-cli codex config-set delete <config-set-id> --yes [--json]
 `fork` 要求同时选择登录和配置集的处理方式，且至少一项必须是 `copy-new`。复制设置时还必须提供 `--new-config-set`。`save-current` 保存 Codex 当前使用的登录和设置；`set-config` 只能更改非当前 Profile。
 
 `config-set create` 保存当前 `config.toml`。列表和详情命令只返回安全摘要。只有未被任何 Profile 使用的配置集才能删除。
-
-`profile export` 会创建敏感备份。不指定 Profile ID 时，它会导出全部 Codex Profile 和配置集；指定 ID 时，只导出所选 Profile 及其所需数据。覆盖已有输出文件时需要 `--force`。
-
-请先运行 `import inspect`，检查哪些内容会新增、哪些与已保存数据一致，以及是否有冲突，再把返回的指纹传给 `import apply`。已有 Codex 数据冲突时，导入会停止且不做更改。导入不会把 Profile 设为当前 Profile，也不会更改 Codex 文件。
 
 任务示例与安全说明见 [Codex Profile](../codex/profiles.md)。
 

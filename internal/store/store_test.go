@@ -1596,6 +1596,49 @@ func TestSwitchOperationLifecycle(t *testing.T) {
 	}
 }
 
+func TestHistoricalImportOperationRemainsIntegrityValidAndReadable(t *testing.T) {
+	ctx := context.Background()
+	db := migratedTestStore(t, ctx)
+	defer closeTestStore(t, db)
+	createStoreOperationFixtures(t, ctx, db, "provider-a", "profile-a", "profile-b")
+
+	if err := db.WithTransaction(ctx, func(tx *Store) error {
+		if _, err := tx.executor().ExecContext(ctx, `
+			INSERT INTO operations (
+				id, provider_id, operation_type, status, metadata_schema_version,
+				metadata_json, created_at_unix_ms, updated_at_unix_ms
+			) VALUES (?, ?, ?, ?, ?, ?, 1, 1)
+		`, "historical-import", "provider-a", OperationTypeImport, OperationStatusApplied,
+			OperationMetadataSchemaVersion,
+			`{"provider_id":"provider-a","related_profile_ids":["profile-a","profile-b"]}`,
+		); err != nil {
+			return fmt.Errorf("insert historical import operation: %w", err)
+		}
+		if _, err := tx.executor().ExecContext(ctx, `
+			INSERT INTO operation_profiles (operation_id, profile_id)
+			VALUES ('historical-import', 'profile-a'), ('historical-import', 'profile-b')
+		`); err != nil {
+			return fmt.Errorf("insert historical import Profile links: %w", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed historical import fixture: %v", err)
+	}
+
+	report, err := db.InspectIntegrity(ctx, IntegrityCurrentBaseline)
+	if err != nil || !report.Healthy {
+		t.Fatalf("historical import operation failed integrity: report=%#v err=%v", report, err)
+	}
+	operation, err := db.GetOperation(ctx, "historical-import")
+	if err != nil || operation.OperationType != OperationTypeImport || operation.Status != OperationStatusApplied {
+		t.Fatalf("read historical import operation: operation=%#v err=%v", operation, err)
+	}
+	profileIDs, err := db.ListOperationProfileIDs(ctx, operation.ID)
+	if err != nil || strings.Join(profileIDs, ",") != "profile-a,profile-b" {
+		t.Fatalf("read historical import Profile links: profile_ids=%v err=%v", profileIDs, err)
+	}
+}
+
 func TestMaintenanceOperationSeparatesActiveProfileFromRelations(t *testing.T) {
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)

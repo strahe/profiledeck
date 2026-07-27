@@ -16,7 +16,6 @@ type Paths struct {
 	Database   string
 	Backups    string
 	Recovery   string
-	Exports    string
 	Logs       string
 	Lock       string
 	DataLock   string
@@ -38,7 +37,6 @@ func ResolvePaths(userConfigDir string) (Paths, error) {
 		Database:   filepath.Join(root, "profiledeck.db"),
 		Backups:    filepath.Join(root, "backups"),
 		Recovery:   filepath.Join(root, "recovery"),
-		Exports:    filepath.Join(root, "exports"),
 		Logs:       filepath.Join(root, "logs"),
 		Lock:       filepath.Join(root, "locks", "switch.lock"),
 		DataLock:   filepath.Join(root, "locks", "data.lock"),

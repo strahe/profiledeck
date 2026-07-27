@@ -313,10 +313,11 @@ func TestDeleteRemovesResolvedHistoryAndUnsharedResourcesButPreservesSharedState
 	if _, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1); err != nil {
 		t.Fatalf("create Usage source: %v", err)
 	}
-	if _, err := db.CreateAppliedImportOperation(ctx, store.CreateAppliedImportOperationParams{
-		ID: "multi-profile-import", ProviderID: "codex",
-		ProfileIDs:            []string{"delete-me", "keep-me"},
-		MetadataSchemaVersion: store.OperationMetadataSchemaVersion, MetadataJSON: `{}`,
+	if _, err := db.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
+		ID: "multi-profile-maintenance", ProviderID: "codex",
+		RelatedProfileIDs:     []string{"delete-me", "keep-me"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          `{}`,
 	}); err != nil {
 		t.Fatalf("create multi-Profile operation: %v", err)
 	}
@@ -358,7 +359,7 @@ func TestDeleteRemovesResolvedHistoryAndUnsharedResourcesButPreservesSharedState
 	if _, err := db.GetProviderConfigSet(ctx, "codex", "unique-config"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("unshared Config Set remains: %v", err)
 	}
-	if _, err := db.GetOperation(ctx, "multi-profile-import"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := db.GetOperation(ctx, "multi-profile-maintenance"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("multi-Profile operation remains: %v", err)
 	}
 	if _, err := db.GetUsageSource(ctx, "codex", "codex-session-jsonl"); err != nil {

@@ -150,10 +150,6 @@ func TestCodexProfileCreateRejectsInvalidProviderMetadata(t *testing.T) {
 		ProfileID: "work",
 	})
 	assertErrorCode(t, err, apperror.StoreSchemaInvalid)
-	_, err = newCodexTestEnvironment(t, configDir, "").codex.ExportProfiles(ctx, ExportCodexProfilesRequest{
-		OutputPath: filepath.Join(t.TempDir(), "profiles.json"),
-	})
-	assertErrorCode(t, err, apperror.ExportFailed)
 }
 
 func TestCodexPlanIgnoresGenericTargetPath(t *testing.T) {

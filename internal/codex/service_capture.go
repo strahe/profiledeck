@@ -123,10 +123,6 @@ func codexBindingTargets(ctx context.Context, db *store.Store, profileID string,
 	return codexprofile.BindingTargets(ctx, db, profileID, home)
 }
 
-func codexStoredHome(ctx context.Context, db *store.Store) (codexconfig.Home, error) {
-	return codexprofile.StoredHome(ctx, db)
-}
-
 func storedCodexBindingTargets(ctx context.Context, db *store.Store, profileID string) ([]store.ProfileTarget, error) {
 	return codexprofile.StoredBindingTargets(ctx, db, profileID)
 }

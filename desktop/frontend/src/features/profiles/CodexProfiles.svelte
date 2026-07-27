@@ -1,15 +1,13 @@
 <script lang="ts">
 	import { onMount, tick } from "svelte";
-	import { Dialogs, type CancellablePromise } from "@wailsio/runtime";
+	import type { CancellablePromise } from "@wailsio/runtime";
 	import { push } from "svelte-spa-router";
 	import { _, locale } from "svelte-i18n";
 	import { toast } from "svelte-sonner";
 	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
-	import DownloadIcon from "@lucide/svelte/icons/download";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
-	import UploadIcon from "@lucide/svelte/icons/upload";
 
 	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
 	import PageHeader from "$lib/components/app/PageHeader.svelte";
@@ -17,11 +15,9 @@
 
 	import { CodexService, SwitchService } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type {
-		ApplyCodexProfileImportRequest,
 		CopyCodexConfigSetRequest,
 		CreateCodexConfigSetRequest,
 		CreateCodexProfileRequest,
-		ExportCodexProfilesRequest,
 		ForkCodexProfileRequest,
 		UpdateCodexConfigSetRequest,
 		UpdateCodexProfileMetadataRequest,
@@ -30,8 +26,6 @@
 		CodexConfigSet,
 		CodexDetectResult,
 		CodexProfileDetail,
-		CodexProfileExportResult,
-		CodexProfileImportPlan,
 		CodexProfileSaveResult,
 		CodexProfileSummary,
 	} from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
@@ -48,7 +42,7 @@
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { Spinner } from "$lib/components/ui/spinner";
 	import { Textarea } from "$lib/components/ui/textarea";
-	import { desktopErrorDetails, desktopErrorMessage, isCancelError, isDesktopErrorCode } from "$lib/desktop-errors";
+	import { desktopErrorMessage, isCancelError, isDesktopErrorCode } from "$lib/desktop-errors";
 	import { currentDesktopLocale, translate } from "$lib/i18n";
 	import { joinUserMessages, profileChangeWarningMessage } from "$lib/user-facing-messages";
 
@@ -57,7 +51,6 @@
 	import ProfileDetail from "./ProfileDetail.svelte";
 	import ProfileDeleteDialog, { type ProfileDeleteTarget } from "./ProfileDeleteDialog.svelte";
 	import ProfileEditorPage from "./ProfileEditorPage.svelte";
-	import ProfileImportDialog from "./ProfileImportDialog.svelte";
 	import ProfileList from "./ProfileList.svelte";
 	import UseProfileDialog from "./UseProfileDialog.svelte";
 	import type { CodexForkBinding, CodexProfileListItem, CodexProfileRoute, ConfigSetDialogState, ProfileUseRequest } from "./types";
@@ -117,9 +110,6 @@
 	let saveCurrentSourceError = $state("");
 	let setConfigOpen = $state(false);
 	let selectedConfigSetID = $state("");
-	let importOpen = $state(false);
-	let importPath = $state("");
-	let importPlan = $state<CodexProfileImportPlan | null>(null);
 	let deleteOpen = $state(false);
 	let deleteTarget = $state<ProfileDeleteTarget | null>(null);
 
@@ -379,99 +369,6 @@
 		});
 	}
 
-	async function exportProfiles(profileIDs: string[] = []) {
-		let path = "";
-		try {
-			path = await Dialogs.SaveFile({
-				Title: translate("profileTransfer.export.dialogTitle"),
-				Filename: profileIDs.length === 1 ? `profiledeck-codex-${profileIDs[0]}.json` : "profiledeck-codex-profiles.json",
-				Filters: [{ DisplayName: translate("profileTransfer.fileType"), Pattern: "*.json" }],
-			});
-		} catch (error) {
-			if (!isCancelError(error)) showError(error);
-			return;
-		}
-		if (!path) return;
-		await runAction("profile-export", async () => {
-			const request: ExportCodexProfilesRequest = { profile_ids: profileIDs, output_path: path, overwrite: false };
-			let result: CodexProfileExportResult;
-			try {
-				result = await track("profile-export", CodexService.ExportProfiles(request));
-			} catch (error) {
-				const details = desktopErrorDetails(error);
-				if (!isDesktopErrorCode(error, "EXPORT_FAILED") || details?.reason !== "exists") throw error;
-				const overwrite = translate("actions.overwrite");
-				const answer = await Dialogs.Question({
-					Title: translate("profileTransfer.export.overwriteTitle"),
-					Message: translate("profileTransfer.export.overwriteDescription"),
-					Buttons: [{ Label: overwrite }, { Label: translate("actions.cancel"), IsCancel: true, IsDefault: true }],
-				});
-				if (answer !== overwrite) return;
-				result = await track("profile-export", CodexService.ExportProfiles({ ...request, overwrite: true }));
-			}
-			showNotice(translate("notice.profilesExported.title"), translate("notice.profilesExported.description", { count: result.profile_count, path: result.path }));
-		});
-	}
-
-	async function chooseProfileImport() {
-		let path = "";
-		try {
-			path = await Dialogs.OpenFile({
-				Title: translate("profileTransfer.import.dialogTitle"),
-				Filters: [{ DisplayName: translate("profileTransfer.fileType"), Pattern: "*.json" }],
-			});
-		} catch (error) {
-			if (!isCancelError(error)) showError(error);
-			return;
-		}
-		if (!path) return;
-		await runAction("profile-import-inspect", async () => {
-			importPlan = await track("profile-import-inspect", CodexService.InspectProfileImport(path));
-			importPath = path;
-			importOpen = true;
-		});
-	}
-
-	async function applyProfileImport() {
-		if (!importPlan?.can_apply || !importPath || busyAction) return;
-		busyAction = "profile-import-apply";
-		try {
-			const request: ApplyCodexProfileImportRequest = {
-				input_path: importPath,
-				expected_plan_fingerprint: importPlan.plan_fingerprint,
-				confirm: true,
-			};
-			const result = await track("profile-import-apply", CodexService.ApplyProfileImport(request));
-			importOpen = false;
-			importPath = "";
-			importPlan = null;
-			await Promise.all([refreshProfiles(), refreshConfigSets()]);
-			showNotice(translate("notice.profilesImported.title"), translate("notice.profilesImported.description", { count: result.profile_count }));
-		} catch (error) {
-			if (isCancelError(error)) return;
-			if (isDesktopErrorCode(error, "IMPORT_PLAN_CHANGED")) {
-				try {
-					importPlan = await track("profile-import-inspect", CodexService.InspectProfileImport(importPath));
-					toast.warning(translate("profileTransfer.import.changedTitle"), { description: translate("profileTransfer.import.changedDescription") });
-				} catch (refreshError) {
-					if (!isCancelError(refreshError)) showError(refreshError);
-				}
-			} else {
-				showError(error);
-			}
-		} finally {
-			if (busyAction === "profile-import-apply") busyAction = "";
-		}
-	}
-
-	function closeProfileImport() {
-		cancelAction("profile-import-inspect");
-		cancelAction("profile-import-apply");
-		importOpen = false;
-		importPath = "";
-		importPlan = null;
-	}
-
 	async function openUse(profile: CodexProfileListItem) {
 		closeUse();
 		const sequence = useSequence;
@@ -633,8 +530,6 @@
 						<DropdownMenu.Content align="end">
 							<DropdownMenu.Group>
 								<DropdownMenu.Item onSelect={() => push("/codex/config-sets")}><SlidersHorizontalIcon />{$_("actions.configSets")}</DropdownMenu.Item>
-								<DropdownMenu.Item onSelect={() => exportProfiles()}><DownloadIcon />{$_("actions.exportAllProfiles")}</DropdownMenu.Item>
-								<DropdownMenu.Item onSelect={chooseProfileImport}><UploadIcon />{$_("actions.importProfiles")}</DropdownMenu.Item>
 							</DropdownMenu.Group>
 						</DropdownMenu.Content>
 					</DropdownMenu.Root>
@@ -687,7 +582,6 @@
 			busy={!!busyAction || useBuilding || useApplying}
 			canCreate={sourceReady}
 			onNew={() => push("/codex/profiles/new")}
-			onExport={(profile) => exportProfiles([profile.id])}
 			onDelete={openProfileDelete}
 			onRefreshQuota={(profile) => runtime.readQuota(profile.id)}
 			onUse={openUse}
@@ -715,7 +609,6 @@
 		onUse={() => openUse(profileListItem(detail!.summary))}
 		onFork={() => push(`/codex/profiles/${encodeURIComponent(detail!.summary.profile.id)}/fork`)}
 		onEdit={openEdit}
-		onExport={() => exportProfiles([detail!.summary.profile.id])}
 		onSaveCurrent={openSaveCurrent}
 		onSetConfig={openSetConfig}
 		onDelete={() => openProfileDelete({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || translate("profile.unnamed") })}
@@ -729,8 +622,6 @@
 <ProfileDeleteDialog bind:open={deleteOpen} profile={deleteTarget} onDeleted={profileDeleted} />
 
 <ConfigSetDialog bind:open={configDialogOpen} mode={configDialog.mode} busy={busyAction === "config-set-save"} configSetID={configDialog.source?.id || ""} name={configDialog.source?.name || ""} description={configDialog.source?.description || ""} onClose={() => (configDialogOpen = false)} onSubmit={submitConfigDialog} />
-
-<ProfileImportDialog bind:open={importOpen} plan={importPlan} busy={busyAction === "profile-import-apply"} onClose={closeProfileImport} onApply={applyProfileImport} />
 
 <Dialog.Root bind:open={editOpen}>
 	<Dialog.Content class="sm:max-w-lg">

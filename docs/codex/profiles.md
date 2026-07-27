@@ -136,32 +136,3 @@ Desktop can check the current ChatGPT Codex limits for one saved Profile. Profil
 Set automatic limit refresh to Off, 5, 10, 30, or 60 minutes on the Profile detail page or under **Codex → Settings**. Managed ChatGPT logins can also enable **Renew sign-in automatically**. Both options are off by default and run only while ProfileDeck is open or hidden in the menu bar.
 
 Limit information is temporary and is not saved to disk. It is not a billing balance and does not connect local sessions to a Profile or account. Some external sign-in methods can show limits but cannot be renewed automatically.
-
-## Back up and restore Profiles
-
-Save current changes before exporting, and keep the backup outside any ProfileDeck data directory you plan to remove:
-
-```bash
-profiledeck-cli codex profile save-current
-profiledeck-cli codex profile export --output ./profiledeck-codex-profiles.json
-```
-
-Without Profile IDs, the command exports every Codex Profile and Config Set. To export selected Profiles and the data they need:
-
-```bash
-profiledeck-cli codex profile export work personal \
-  --output ./selected-codex-profiles.json
-```
-
-The JSON file contains complete Codex sign-in data and settings. Where the operating system supports private file permissions, ProfileDeck restricts the export to your user account. It does not print the sensitive contents. Anyone with the file may be able to access your account.
-
-Inspect a backup before importing it into an initialized ProfileDeck setup:
-
-```bash
-profiledeck-cli codex profile import inspect ./profiledeck-codex-profiles.json
-profiledeck-cli codex profile import apply ./profiledeck-codex-profiles.json \
-  --plan-fingerprint <reviewed-fingerprint> \
-  --yes
-```
-
-Import adds missing data, skips identical data, and stops without changes when saved Codex data conflicts. Imported Profiles do not become current and do not write `auth.json` or `config.toml`. Review and apply a normal switch when you are ready to use one.

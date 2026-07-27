@@ -31,8 +31,10 @@ const (
 	sqliteMigrationMaxAttempts   = 3
 	sqliteMigrationRetryBaseWait = 25 * time.Millisecond
 
-	OperationTypeSwitch      = "switch"
-	OperationTypeRecovery    = "recovery"
+	OperationTypeSwitch   = "switch"
+	OperationTypeRecovery = "recovery"
+	// OperationTypeImport remains part of the stable persistence contract for
+	// historical Profile import records; current services do not create it.
 	OperationTypeImport      = "import"
 	OperationTypeMaintenance = "maintenance"
 
@@ -281,14 +283,6 @@ type CreateAppliedMaintenanceOperationParams struct {
 	ProviderID            string
 	RelatedProfileIDs     []string
 	ActiveProfileID       string
-	MetadataSchemaVersion int
-	MetadataJSON          string
-}
-
-type CreateAppliedImportOperationParams struct {
-	ID                    string
-	ProviderID            string
-	ProfileIDs            []string
 	MetadataSchemaVersion int
 	MetadataJSON          string
 }
@@ -2133,14 +2127,6 @@ func (s *Store) CreateAppliedMaintenanceOperation(ctx context.Context, params Cr
 		return err
 	})
 	return operation, err
-}
-
-func (s *Store) CreateAppliedImportOperation(ctx context.Context, params CreateAppliedImportOperationParams) (Operation, error) {
-	return s.createOperation(ctx, createOperationParams{
-		ID: params.ID, ProviderID: params.ProviderID, OperationType: OperationTypeImport,
-		Status: OperationStatusApplied, ProfileIDs: params.ProfileIDs,
-		MetadataSchemaVersion: params.MetadataSchemaVersion, MetadataJSON: params.MetadataJSON,
-	})
 }
 
 type createOperationParams struct {

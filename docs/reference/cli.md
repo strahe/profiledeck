@@ -51,9 +51,6 @@ profiledeck-cli codex profile fork <source-profile-id> <new-profile-id> --creden
 profiledeck-cli codex profile save-current [--codex-dir PATH] [--json]
 profiledeck-cli codex profile set-config <profile-id> <config-set-id> [--json]
 profiledeck-cli codex profile delete <profile-id> --yes [--json]
-profiledeck-cli codex profile export [<profile-id> ...] --output PATH [--force] [--json]
-profiledeck-cli codex profile import inspect <bundle-path> [--codex-dir PATH] [--json]
-profiledeck-cli codex profile import apply <bundle-path> --plan-fingerprint FINGERPRINT --yes [--codex-dir PATH] [--json]
 
 profiledeck-cli codex config-set list [--json]
 profiledeck-cli codex config-set show <config-set-id> [--json]
@@ -68,10 +65,6 @@ The first `profile create` saves the current Codex login and settings and create
 `fork` requires choices for both the login and Config Set, and at least one choice must be `copy-new`. Copying settings also requires `--new-config-set`. `save-current` saves the login and settings currently used by Codex. `set-config` changes only a Profile that is not current.
 
 `config-set create` saves the current `config.toml`. List and show commands return safe summaries. You can delete only a Config Set that no Profile uses.
-
-`profile export` creates a sensitive backup. Without Profile IDs, it exports every Codex Profile and Config Set. With IDs, it exports only the selected Profiles and the data they need. Use `--force` to replace an existing output file.
-
-Run `import inspect` first. Review what will be added, what already matches your saved data, and any conflicts, then pass the returned fingerprint to `import apply`. Import stops without changes when existing Codex data conflicts. It does not make a Profile current or change Codex files.
 
 See [Codex Profiles](../codex/profiles.md) for task-based examples and safety guidance.
 

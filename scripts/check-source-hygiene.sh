@@ -7,6 +7,7 @@ while IFS= read -r tracked_path; do
 		.DS_Store | */.DS_Store \
 		| profiledeck.db | profiledeck.db-* | */profiledeck.db | */profiledeck.db-* \
 		| profiles.json | */profiles.json \
+		| profiledeck-codex-*.json | */profiledeck-codex-*.json \
 		| *.profiledeck-backup \
 		| pre-launch-audit-report-*.md | */pre-launch-audit-report-*.md \
 		| pre-launch-data-model-audit-*.md | */pre-launch-data-model-audit-*.md \

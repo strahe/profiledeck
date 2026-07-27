@@ -21,6 +21,6 @@ Include:
 - minimal reproduction steps using synthetic or redacted data;
 - any known workaround.
 
-Do not include credentials, access tokens, personal data, Profile exports, application databases, backups, or recovery files. Replace sensitive values with placeholders.
+Do not include credentials, access tokens, personal data, application databases, backup or recovery files, or any other artifact containing saved Profile data. Replace sensitive values with placeholders.
 
 Reports are reviewed privately. Fix and disclosure details are coordinated through the security advisory. The project does not promise a response deadline or bug bounty.

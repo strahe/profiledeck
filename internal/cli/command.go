@@ -16,6 +16,7 @@ import (
 const (
 	configDirFlagName = "config-dir"
 	jsonFlagName      = "json"
+	outputFlagName    = "output"
 	providerFlagName  = "provider"
 	applicationKey    = "profiledeck.application"
 )

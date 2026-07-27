@@ -79,7 +79,7 @@ profiledeck-cli antigravity profile delete work --yes
 
 Profile 列表显示紧凑摘要；Profile 详情显示各分组的 5 小时和每周窗口、剩余百分比、重置时间与检查时间。非当前 Profile 可以保留本次应用会话中较早检查的快照，但必须先使用该 Profile，才能刷新结果。
 
-限额快照只存在于内存，不会写入用量报告、导出、备份或 ProfileDeck 数据库，也不能用来判断此前的 Antigravity 活动属于哪个 Profile。
+限额快照只存在于内存，不会写入用量报告、应用备份或 ProfileDeck 数据库，也不能用来判断此前的 Antigravity 活动属于哪个 Profile。
 
 ## 不支持的范围
 
