@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/github/license/strahe/profiledeck)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](docs/guide/getting-started.md)
 
-[English](README.md) · [简体中文](README_ZH.md) | [Documentation](docs/index.md) · [Releases](https://github.com/strahe/profiledeck/releases)
+[English](README.md) · [简体中文](README_ZH.md) | [Documentation](docs/index.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Releases](https://github.com/strahe/profiledeck/releases)
 
 </div>
 
