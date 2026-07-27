@@ -313,67 +313,16 @@ func TestDeleteRemovesResolvedHistoryAndUnsharedResourcesButPreservesSharedState
 	if _, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1); err != nil {
 		t.Fatalf("create Usage source: %v", err)
 	}
+	if _, err := db.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
+		ID: "multi-profile-maintenance", ProviderID: "codex",
+		RelatedProfileIDs:     []string{"delete-me", "keep-me"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          `{}`,
+	}); err != nil {
+		t.Fatalf("create multi-Profile operation: %v", err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close fixture store: %v", err)
-	}
-	db = nil
-
-	legacyDB, err := sql.Open("sqlite", environment.runtime.Paths().Database)
-	if err != nil {
-		t.Fatalf("open legacy fixture database: %v", err)
-	}
-	legacyTx, err := legacyDB.BeginTx(ctx, nil)
-	if err != nil {
-		_ = legacyDB.Close()
-		t.Fatalf("begin legacy fixture transaction: %v", err)
-	}
-	if _, err := legacyTx.ExecContext(ctx, `
-		INSERT INTO operations (
-			id, provider_id, operation_type, status, metadata_schema_version,
-			metadata_json, created_at_unix_ms, updated_at_unix_ms
-		) VALUES (?, ?, ?, ?, ?, ?, 1, 1)
-	`, "multi-profile-import", "codex", store.OperationTypeImport, store.OperationStatusApplied,
-		store.OperationMetadataSchemaVersion,
-		`{"provider_id":"codex","related_profile_ids":["delete-me","keep-me"]}`,
-	); err != nil {
-		_ = legacyTx.Rollback()
-		_ = legacyDB.Close()
-		t.Fatalf("seed historical import operation: %v", err)
-	}
-	if _, err := legacyTx.ExecContext(ctx, `
-		INSERT INTO operation_profiles (operation_id, profile_id)
-		VALUES ('multi-profile-import', 'delete-me'), ('multi-profile-import', 'keep-me')
-	`); err != nil {
-		_ = legacyTx.Rollback()
-		_ = legacyDB.Close()
-		t.Fatalf("seed historical import Profile links: %v", err)
-	}
-	if err := legacyTx.Commit(); err != nil {
-		_ = legacyDB.Close()
-		t.Fatalf("commit historical import fixture: %v", err)
-	}
-	if err := legacyDB.Close(); err != nil {
-		t.Fatalf("close historical import fixture: %v", err)
-	}
-
-	db, err = environment.runtime.StoreFactory().OpenHealthy(ctx, true)
-	if err != nil {
-		t.Fatalf("open historical import state: %v", err)
-	}
-	report, err := db.InspectIntegrity(ctx, store.IntegrityCurrentBaseline)
-	if err != nil || !report.Healthy {
-		t.Fatalf("historical import operation failed integrity: report=%#v err=%v", report, err)
-	}
-	historicalOperation, err := db.GetOperation(ctx, "multi-profile-import")
-	if err != nil || historicalOperation.OperationType != store.OperationTypeImport || historicalOperation.Status != store.OperationStatusApplied {
-		t.Fatalf("read historical import operation: operation=%#v err=%v", historicalOperation, err)
-	}
-	historicalProfileIDs, err := db.ListOperationProfileIDs(ctx, historicalOperation.ID)
-	if err != nil || len(historicalProfileIDs) != 2 || historicalProfileIDs[0] != "delete-me" || historicalProfileIDs[1] != "keep-me" {
-		t.Fatalf("read historical import Profile links: profile_ids=%#v err=%v", historicalProfileIDs, err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close historical import state: %v", err)
 	}
 	db = nil
 
@@ -410,7 +359,7 @@ func TestDeleteRemovesResolvedHistoryAndUnsharedResourcesButPreservesSharedState
 	if _, err := db.GetProviderConfigSet(ctx, "codex", "unique-config"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("unshared Config Set remains: %v", err)
 	}
-	if _, err := db.GetOperation(ctx, "multi-profile-import"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := db.GetOperation(ctx, "multi-profile-maintenance"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("multi-Profile operation remains: %v", err)
 	}
 	if _, err := db.GetUsageSource(ctx, "codex", "codex-session-jsonl"); err != nil {

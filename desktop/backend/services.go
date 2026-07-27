@@ -1019,7 +1019,6 @@ func desktopErrorDetails(err error) map[string]any {
 			reason == profile.DeleteReasonUnresolvedOperation ||
 			reason == profile.DeleteReasonUnsupportedManagedData)
 	allowed := appErr.Code == apperror.ConfirmationRequired && reason == "replace_required" ||
-		appErr.Code == apperror.ExportFailed && reason == "exists" ||
 		allowedProfileDeleteReason
 	if !allowed {
 		return nil

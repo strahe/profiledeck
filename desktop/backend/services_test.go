@@ -784,7 +784,6 @@ func TestFormatDesktopErrorAllowsOnlyInteractionReasons(t *testing.T) {
 		want   bool
 	}{
 		{code: apperror.ConfirmationRequired, reason: "replace_required", want: true},
-		{code: apperror.ExportFailed, reason: "exists", want: true},
 		{code: apperror.ProfileInUse, reason: profile.DeleteReasonActive, want: true},
 		{code: apperror.ProfileInUse, reason: profile.DeleteReasonUnresolvedOperation, want: true},
 		{code: apperror.ProfileInUse, reason: profile.DeleteReasonUnsupportedManagedData, want: true},
