@@ -2,47 +2,59 @@
 
 # ProfileDeck
 
-**Manage and switch AI Agent Profiles from one place**
+**Save and switch Profiles for AI Agents**
 
 [![Release](https://img.shields.io/github/v/release/strahe/profiledeck?include_prereleases&label=release)](https://github.com/strahe/profiledeck/releases)
 [![License](https://img.shields.io/github/license/strahe/profiledeck)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20amd64-lightgrey)](docs/guide/getting-started.md)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](docs/guide/getting-started.md)
 
-[English](README.md) · [简体中文](README_ZH.md) · [Docs](docs/index.md) · [Releases](https://github.com/strahe/profiledeck/releases)
+[English](README.md) · [简体中文](README_ZH.md) | [Documentation](docs/index.md) · [Releases](https://github.com/strahe/profiledeck/releases)
 
 </div>
 
-ProfileDeck organizes AI Agent logins and configuration into reusable **Profiles**, so you can manage Profiles and review local usage in one place. Desktop and CLI both work with the same local Profiles.
+ProfileDeck saves AI Agent logins and settings as reusable **Profiles**. Use the Desktop app or CLI to switch between Profiles and preview the changes before applying them.
 
-![ProfileDeck Desktop — Codex Profiles](docs/images/desktop-codex-profiles-en.png)
+## Features
 
-## Quick start
+- **Reusable Profiles** — Save separate logins and settings for work, personal, or other contexts.
+- **Review before switching** — See which files and login details will change. Sensitive values stay hidden.
+- **Usage and limits** — View usage data, cost estimates, and current limits; availability varies by tool.
+- **Local data** — Keep data on your machine and create encrypted backups for recovery.
 
-| Option | Start here |
-| --- | --- |
-| [**macOS Desktop**](https://github.com/strahe/profiledeck/releases) | Download the signed Universal app for macOS 14+ |
-| [**Linux package**](docs/guide/getting-started.md#deb-or-rpm-package) | Install Desktop and CLI from a DEB or RPM on Linux amd64 |
-| [**Linux portable Desktop**](docs/guide/getting-started.md#portable-desktop) | Install Desktop in your user directory on Linux amd64 |
-| [**CLI from source**](docs/guide/getting-started.md#build-and-use-the-cli) | Build `profiledeck` for terminal workflows and automation |
+## Supported Agents
 
-## Core capabilities
+ProfileDeck supports multiple AI Agents. See [Agent support](docs/index.md#supported-tools) for the full list and what ProfileDeck can switch for each Agent.
 
-- **Reusable Profiles** — Save Agent logins and configuration for different work contexts.
-- **Review before switching** — Preview the changes a Profile will make while sensitive values remain hidden.
-- **Desktop and CLI** — Manage the same local Profiles from either interface.
-- **Local usage** — Review local usage, cost estimates, and usage limits alongside Agent Profiles.
-- **Local data** — Store ProfileDeck data on your machine and protect it with encrypted application backups.
+## Install
 
-## Available Agents
+| Option | Includes | Details |
+| --- | --- | --- |
+| **macOS app** | Desktop | [Download from Releases](https://github.com/strahe/profiledeck/releases) |
+| **Linux DEB or RPM** | Desktop and CLI | [Install a Linux package](docs/guide/getting-started.md#deb-or-rpm-package) |
+| **Linux portable app** | Desktop | [Install portable Desktop](docs/guide/getting-started.md#portable-desktop) |
+| **Build from source** | CLI | [Build and use the CLI](docs/guide/getting-started.md#build-and-use-the-cli) |
 
-Codex, Claude Code, and Antigravity are available today. See [Agent support](docs/index.md#supported-tools) for details.
+## Desktop and CLI
 
-## Documentation
+Desktop and CLI use the same local Profiles and switching rules. Use Desktop for visual workflows and `profiledeck-cli` for terminal workflows and automation.
 
-- [English manual](docs/index.md)
-- [简体中文手册](docs/zh/index.md)
-- [CLI reference](docs/reference/cli.md)
-- [Data & security](docs/reference/data-security.md)
+### Desktop
+
+Manage Profiles, preview switches, view usage and limits, and run diagnostics from a visual interface.
+
+![ProfileDeck Desktop showing Profiles and usage limits](docs/images/desktop-codex-profiles-en.png)
+
+### CLI
+
+Use the CLI to list Profiles, switch between them, and view usage. The example below uses Codex:
+
+```bash
+profiledeck-cli codex profile list
+profiledeck-cli switch codex <profile-id> --yes
+profiledeck-cli usage summary --provider codex
+```
+
+Add `--json` when a script or tool needs machine-readable output. See the [CLI reference](docs/reference/cli.md) for all commands.
 
 ## License
 

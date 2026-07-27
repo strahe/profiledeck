@@ -76,7 +76,7 @@ func mapRecoveryCleanupInspectionError(err error) error {
 	if errors.Is(err, store.ErrInvalidSystemState) {
 		return apperror.New(
 			apperror.StoreSchemaInvalid,
-			"ProfileDeck local data is not in a valid state; run profiledeck doctor or restore a known-good application backup",
+			"ProfileDeck local data is not in a valid state; run profiledeck-cli doctor or restore a known-good application backup",
 		)
 	}
 	return apperror.New(

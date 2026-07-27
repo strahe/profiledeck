@@ -43,13 +43,13 @@ Claude Code 支持与 Claude Desktop 相互独立。ProfileDeck 不会读取或�
 
 切换修改外部工具前，ProfileDeck 会在 `recovery/<operation-id>/` 下创建私有恢复点。其中可能包含未经过应用备份加密的完整 Codex 文件、Claude Code 账号登录或 Antigravity 登录。恢复点只为未完成切换保留，成功后会删除；它不会出现在备份列表中，不能导出，也不能用于撤销成功切换。
 
-操作状态正式生效前，ProfileDeck 会先登记清理责任；只有恢复目录完成同步后才会清除该责任。因此，崩溃或文件系统错误可能使已完成操作的恢复数据仍然存在，并显示清理警告。警告存在时，Profile 切换和应用恢复会暂停，但读取、诊断和应用备份仍可使用。请运行 `profiledeck doctor retry-cleanup --yes`，或在桌面端“诊断”中选择**重试清理**。清理不会改变工具登录信息或设置。
+操作状态正式生效前，ProfileDeck 会先登记清理责任；只有恢复目录完成同步后才会清除该责任。因此，崩溃或文件系统错误可能使已完成操作的恢复数据仍然存在，并显示清理警告。警告存在时，Profile 切换和应用恢复会暂停，但读取、诊断和应用备份仍可使用。请运行 `profiledeck-cli doctor retry-cleanup --yes`，或在桌面端“诊断”中选择**重试清理**。清理不会改变工具登录信息或设置。
 
 备份列表和预览只显示安全元数据。作为纵深保护，请保持加密备份私有，并且绝不分享操作恢复数据。
 
 ## 安全导出 Codex Profile
 
-`profiledeck codex profile export` 会创建明确标记为敏感的备份，其中包含所选 Profile 的完整 Codex 登录和已保存设置。获得该文件的人可能可以使用对应账号。
+`profiledeck-cli codex profile export` 会创建明确标记为敏感的备份，其中包含所选 Profile 的完整 Codex 登录和已保存设置。获得该文件的人可能可以使用对应账号。
 
 请选择仓库和共享文件夹之外的私有位置。不要提交或分享该导出文件，也不要把它放在准备删除的 ProfileDeck 数据目录中。
 

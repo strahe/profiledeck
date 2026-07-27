@@ -4,7 +4,7 @@ Generic targets are an advanced CLI feature for switching explicitly selected lo
 
 ## Before you start
 
-- Initialize ProfileDeck with `profiledeck init`.
+- Initialize ProfileDeck with `profiledeck-cli init`.
 - Use an absolute path to a regular local file.
 - Decide whether ProfileDeck should replace the whole file or merge selected values.
 
@@ -13,8 +13,8 @@ ProfileDeck refuses to change files reached through symbolic links. Review the p
 ## Create a tool and Profile
 
 ```bash
-profiledeck provider create my-tool --adapter generic --name "My Tool"
-profiledeck profile create work --name "Work"
+profiledeck-cli provider create my-tool --adapter generic --name "My Tool"
+profiledeck-cli profile create work --name "Work"
 ```
 
 The Provider ID identifies the tool in later commands. The Profile ID identifies the saved setup you want to switch to.
@@ -22,7 +22,7 @@ The Provider ID identifies the tool in later commands. The Profile ID identifies
 ## Add a configuration file
 
 ```bash
-profiledeck profile target add work settings \
+profiledeck-cli profile target add work settings \
   --provider my-tool \
   --path /absolute/path/to/settings.json \
   --format json \
@@ -44,8 +44,8 @@ Merge strategies require the current file to contain valid JSON, TOML, or env da
 ## Review and switch
 
 ```bash
-profiledeck plan my-tool work
-profiledeck switch my-tool work --yes
+profiledeck-cli plan my-tool work
+profiledeck-cli switch my-tool work --yes
 ```
 
 The preview shows the selected file and hides sensitive-looking values. ProfileDeck checks the file again and creates an operation recovery point before applying the change.
@@ -53,12 +53,12 @@ The preview shows the selected file and hides sensitive-looking values. ProfileD
 ## Inspect or recover
 
 ```bash
-profiledeck provider list
-profiledeck profile list
-profiledeck profile target list work
-profiledeck profile target show work my-tool settings
+profiledeck-cli provider list
+profiledeck-cli profile list
+profiledeck-cli profile target list work
+profiledeck-cli profile target show work my-tool settings
 ```
 
-Adding or editing a target changes only the saved rule. The external file changes only after `profiledeck switch` succeeds.
+Adding or editing a target changes only the saved rule. The external file changes only after `profiledeck-cli switch` succeeds.
 
-If a switch does not finish, run `profiledeck doctor` before trying again. Use [Diagnostics and Recovery](../operations/recovery.md) to restore its pre-switch state. A successful switch cannot be undone; switch to the intended Profile instead.
+If a switch does not finish, run `profiledeck-cli doctor` before trying again. Use [Diagnostics and Recovery](../operations/recovery.md) to restore its pre-switch state. A successful switch cannot be undone; switch to the intended Profile instead.

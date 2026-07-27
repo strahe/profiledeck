@@ -93,7 +93,7 @@ func writeSwitchResult(w io.Writer, result switching.ApplySwitchResult) error {
 	if !result.RecoveryCleanupCompleted {
 		_, err := fmt.Fprintln(
 			w,
-			"warning: The switch was applied, but temporary recovery files still need cleanup. Run `profiledeck doctor retry-cleanup --yes`; this does not change tool sign-ins or settings.",
+			"warning: The switch was applied, but temporary recovery files still need cleanup. Run `profiledeck-cli doctor retry-cleanup --yes`; this does not change tool sign-ins or settings.",
 		)
 		return err
 	}

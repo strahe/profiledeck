@@ -2,7 +2,7 @@ package app
 
 const (
 	ProductName       = "ProfileDeck"
-	CLIName           = "profiledeck"
+	CLIName           = "profiledeck-cli"
 	DefaultVersion    = "dev"
 	UnknownBuildValue = "unknown"
 )

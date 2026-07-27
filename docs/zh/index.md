@@ -32,7 +32,7 @@ Codex 用量报告与 Profile 切换相互独立。报告汇总本地会话数�
 3. ProfileDeck 会在修改所选工具前创建临时恢复点。
 4. 只有变更成功后，所选 Profile 才会成为当前 Profile。
 
-如果操作没有完成，请先打开“诊断”，或运行 `profiledeck doctor`，再继续切换。
+如果操作没有完成，请先打开“诊断”，或运行 `profiledeck-cli doctor`，再继续切换。
 
 ## 继续阅读
 

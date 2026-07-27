@@ -21,7 +21,7 @@ const (
 	ArchARM64      = "arm64"
 	ArchAMD64      = "amd64"
 
-	DesktopExecutableName = "profiledeck-desktop"
+	DesktopExecutableName = "profiledeck"
 	MacOSUpdaterEntry     = Product + ".app"
 	LinuxUpdaterEntry     = DesktopExecutableName
 	PayloadAppBundle      = "app-bundle"

@@ -100,7 +100,7 @@ func newInitCommand() *urfavecli.Command {
 				recoveryCleanupStatus(result.OperationRecoveryCleanupRequired),
 			)
 			if err == nil && result.OperationRecoveryCleanupRequired {
-				_, err = fmt.Fprintln(w, "next action: profiledeck doctor retry-cleanup --yes")
+				_, err = fmt.Fprintln(w, "next action: profiledeck-cli doctor retry-cleanup --yes")
 			}
 			return err
 		},
@@ -149,7 +149,7 @@ func newStatusCommand() *urfavecli.Command {
 				recoveryCleanupStatus(result.OperationRecoveryCleanupRequired),
 			)
 			if err == nil && result.OperationRecoveryCleanupRequired {
-				_, err = fmt.Fprintln(w, "next action: profiledeck doctor retry-cleanup --yes")
+				_, err = fmt.Fprintln(w, "next action: profiledeck-cli doctor retry-cleanup --yes")
 			}
 			return err
 		},

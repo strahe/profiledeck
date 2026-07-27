@@ -343,7 +343,7 @@ func TestRestartCreatesEncryptedApplicationBackup(t *testing.T) {
 	service, engine := newUpdateTestService(t, time.Hour)
 	root := t.TempDir()
 	bundle := filepath.Join(root, "Applications", "ProfileDeck.app")
-	executable := filepath.Join(bundle, "Contents", "MacOS", "profiledeck-desktop")
+	executable := filepath.Join(bundle, "Contents", "MacOS", releaseartifact.DesktopExecutableName)
 	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +388,7 @@ func TestRestartCreatesEncryptedApplicationBackup(t *testing.T) {
 func TestRestartStopsBeforeUpdaterWhenSnapshotFails(t *testing.T) {
 	service, engine := newUpdateTestService(t, time.Hour)
 	bundle := filepath.Join(t.TempDir(), "ProfileDeck.app")
-	executable := filepath.Join(bundle, "Contents", "MacOS", "profiledeck-desktop")
+	executable := filepath.Join(bundle, "Contents", "MacOS", releaseartifact.DesktopExecutableName)
 	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +418,7 @@ func TestRestartStopsBeforeUpdaterWhenSnapshotFails(t *testing.T) {
 func TestRestartRejectsConcurrentAndRepeatedAttempts(t *testing.T) {
 	service, engine := newUpdateTestService(t, time.Hour)
 	bundle := filepath.Join(t.TempDir(), "ProfileDeck.app")
-	executable := filepath.Join(bundle, "Contents", "MacOS", "profiledeck-desktop")
+	executable := filepath.Join(bundle, "Contents", "MacOS", releaseartifact.DesktopExecutableName)
 	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -455,7 +455,7 @@ func TestRestartRejectsConcurrentAndRepeatedAttempts(t *testing.T) {
 func TestRestartDisablesUpdaterWhenReplacementIsNotAtomic(t *testing.T) {
 	service, engine := newUpdateTestService(t, time.Hour)
 	root := t.TempDir()
-	executable := filepath.Join(root, "profiledeck-desktop")
+	executable := filepath.Join(root, releaseartifact.DesktopExecutableName)
 	if err := os.WriteFile(executable, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +476,7 @@ func TestRestartDisablesUpdaterWhenReplacementIsNotAtomic(t *testing.T) {
 		}
 		return errors.New("cross-device rename")
 	}
-	engine.downloadedPath = filepath.Join(staging, "profiledeck-desktop")
+	engine.downloadedPath = filepath.Join(staging, releaseartifact.DesktopExecutableName)
 	service.status.State = StateReady
 	service.status.AvailableVersion = "0.1.0-beta.2"
 
@@ -503,7 +503,7 @@ func TestRestartDisablesUpdaterWhenReplacementIsNotAtomic(t *testing.T) {
 
 func TestUpdateInstallTargetAcceptsOnlyRegularLinuxExecutable(t *testing.T) {
 	root := t.TempDir()
-	executable := filepath.Join(root, "profiledeck-desktop")
+	executable := filepath.Join(root, releaseartifact.DesktopExecutableName)
 	if err := os.WriteFile(executable, []byte("elf"), 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -17,15 +17,15 @@ ProfileDeck marks the Profile as current only after the change succeeds. Restart
 Run `plan` before switching:
 
 ```bash
-profiledeck plan codex work
-profiledeck plan claude-code personal
-profiledeck plan antigravity work
+profiledeck-cli plan codex work
+profiledeck-cli plan claude-code personal
+profiledeck-cli plan antigravity work
 ```
 
 Add `--json` if you need structured output:
 
 ```bash
-profiledeck plan codex work --json
+profiledeck-cli plan codex work --json
 ```
 
 For files, the preview shows which path will be created, updated, or left unchanged. For saved logins, it shows only a safe target name and action. Sensitive login values remain hidden in all previews.
@@ -35,15 +35,15 @@ Warnings tell you when a file or login is missing, invalid, unsupported, or unsa
 ## Apply from the CLI
 
 ```bash
-profiledeck switch codex work --yes
-profiledeck switch claude-code personal --yes
-profiledeck switch antigravity work --yes
+profiledeck-cli switch codex work --yes
+profiledeck-cli switch claude-code personal --yes
+profiledeck-cli switch antigravity work --yes
 ```
 
 To apply only the exact state you previously reviewed, copy the fingerprint from `plan`:
 
 ```bash
-profiledeck switch codex work \
+profiledeck-cli switch codex work \
   --plan-fingerprint <fingerprint> \
   --yes
 ```

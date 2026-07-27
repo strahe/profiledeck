@@ -4,7 +4,7 @@
 
 ## 开始前准备
 
-- 桌面端会自动初始化 ProfileDeck；CLI 用户需要先运行一次 `profiledeck init`。
+- 桌面端会自动初始化 ProfileDeck；CLI 用户需要先运行一次 `profiledeck-cli init`。
 - 保存 Profile 前，先在 Claude Code 中运行 `/login`。
 
 ProfileDeck 只保存 `/login` 得到的账号登录，不保存 API Key 或 Console 登录，也不会代替你登录。
@@ -23,15 +23,15 @@ ProfileDeck 只保存 `/login` 得到的账号登录，不保存 API Key 或 Con
 登录第一个账号后运行：
 
 ```bash
-profiledeck claude-code detect
-profiledeck claude-code profile create personal --name "Personal"
+profiledeck-cli claude-code detect
+profiledeck-cli claude-code profile create personal --name "Personal"
 ```
 
 使用 `/login` 登录第二个账号，再单独保存：
 
 ```bash
-profiledeck claude-code profile create work --name "Work"
-profiledeck claude-code profile list
+profiledeck-cli claude-code profile create work --name "Work"
+profiledeck-cli claude-code profile list
 ```
 
 `list` 和 `show` 命令只显示登录状态和过期时间，不会打印令牌值。
@@ -43,8 +43,8 @@ profiledeck claude-code profile list
 使用 CLI 时运行：
 
 ```bash
-profiledeck plan claude-code personal
-profiledeck switch claude-code personal --yes
+profiledeck-cli plan claude-code personal
+profiledeck-cli switch claude-code personal --yes
 ```
 
 切换后请新建 Claude Code 会话，并运行 `/status` 确认账号。已经运行的 Claude Code 进程不会改变。
@@ -56,7 +56,7 @@ profiledeck switch claude-code personal --yes
 在桌面端当前 Profile 中使用**保存当前 Claude Code 登录**，或运行：
 
 ```bash
-profiledeck claude-code profile save-current
+profiledeck-cli claude-code profile save-current
 ```
 
 如果多个 Profile 共用这份登录，ProfileDeck 会显示受影响的 Profile 数量。使用 CLI 时，请先审核该数量，再通过 `--yes` 确认。
@@ -66,7 +66,7 @@ profiledeck claude-code profile save-current
 在桌面端打开 Profile 的操作菜单并选择**删除 Profile**，或运行：
 
 ```bash
-profiledeck claude-code profile delete work --yes
+profiledeck-cli claude-code profile delete work --yes
 ```
 
 这会从所有 Agent 中删除完整的全局 Profile，而不只是 Claude Code 数据。只有该 Profile 使用的已保存登录会删除，共享登录会保留。当前 Profile 或存在未完成操作的 Profile 不能删除。Claude Code 当前使用的 Keychain 条目或凭据文件不会改变。

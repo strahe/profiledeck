@@ -8,8 +8,8 @@ func TestDefaultInfo(t *testing.T) {
 	if info.ProductName != ProductName {
 		t.Fatalf("expected product name %q, got %q", ProductName, info.ProductName)
 	}
-	if info.CLIName != CLIName {
-		t.Fatalf("expected CLI name %q, got %q", CLIName, info.CLIName)
+	if info.CLIName != "profiledeck-cli" {
+		t.Fatalf("expected CLI name %q, got %q", "profiledeck-cli", info.CLIName)
 	}
 	if info.Version != DefaultVersion {
 		t.Fatalf("expected version %q, got %q", DefaultVersion, info.Version)

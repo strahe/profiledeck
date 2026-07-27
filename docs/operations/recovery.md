@@ -11,14 +11,14 @@ In the Desktop app, Diagnostics shows only unresolved root switch operations and
 From the CLI, run:
 
 ```bash
-profiledeck doctor
-profiledeck doctor --json
+profiledeck-cli doctor
+profiledeck-cli doctor --json
 ```
 
 If Diagnostics says no change is still running and offers to repair the switch lock, use its Desktop action or run:
 
 ```bash
-profiledeck doctor repair-lock --yes
+profiledeck-cli doctor repair-lock --yes
 ```
 
 Do not repair a lock merely because a switch is taking longer than expected. ProfileDeck refuses recovery while the switch lock is held or when it cannot recognize every affected target safely.
@@ -30,7 +30,7 @@ ProfileDeck normally removes temporary operation recovery files after a switch, 
 Use **Retry cleanup** in Diagnostics, or run:
 
 ```bash
-profiledeck doctor retry-cleanup --yes
+profiledeck-cli doctor retry-cleanup --yes
 ```
 
 Cleanup removes only temporary operation recovery files that do not belong to an unresolved switch. It does not change any tool sign-in or setting. Close other ProfileDeck windows if the retry reports that another operation is running. If the warning remains, keep the data directory private and retry after resolving the reported filesystem problem.
@@ -45,7 +45,7 @@ Diagnostics may offer one of two actions:
 Confirm the offered Desktop action, or use the operation ID shown by `doctor`:
 
 ```bash
-profiledeck recover <operation-id> --yes
+profiledeck-cli recover <operation-id> --yes
 ```
 
 Recovery may restore tool-owned files or the selected system login, but it does not change which Profile is current. If the current Profile changed after the unfinished switch, a target was modified by another program, recovery data is damaged, or a target cannot be read, ProfileDeck refuses to write and reports what must be checked. A failed attempt can be retried against the same original switch.
@@ -59,10 +59,10 @@ An application backup contains the complete ProfileDeck database, including save
 Create and inspect backups with:
 
 ```bash
-profiledeck backup create
-profiledeck backup list
-profiledeck backup show <backup-id>
-profiledeck backup export <backup-id> --output <private-file>
+profiledeck-cli backup create
+profiledeck-cli backup list
+profiledeck-cli backup show <backup-id>
+profiledeck-cli backup export <backup-id> --output <private-file>
 ```
 
 When a newer ProfileDeck version needs to update existing local data, it first verifies the data and creates an encrypted automatic backup. If verification or backup creation fails, ProfileDeck stops before updating the data. If the update later fails, ProfileDeck stops and keeps the encrypted backup for restore. Close other ProfileDeck windows and retry; if the data remains unavailable, use the Desktop recovery screen to restore a known-good application backup.
@@ -72,9 +72,9 @@ Automatic backups are enabled by default. Desktop and Tray create one when the n
 Backup files are encrypted with the recovery key stored in your system credential store. Export that key separately before moving a backup to another computer:
 
 ```bash
-profiledeck backup key status
-profiledeck backup key export --output <private-key-file> --yes
-profiledeck backup key import --file <private-key-file> --yes
+profiledeck-cli backup key status
+profiledeck-cli backup key export --output <private-key-file> --yes
+profiledeck-cli backup key import --file <private-key-file> --yes
 ```
 
 Keep the exported key private. Importing a different key requires `--replace --yes` and makes backups encrypted to the previous key unavailable until that previous key is imported again.
@@ -84,8 +84,8 @@ Keep the exported key private. Importing a different key requires `--replace --y
 Restore a managed or exported backup with:
 
 ```bash
-profiledeck backup restore <backup-id> --yes
-profiledeck backup restore --file <private-file> --yes
+profiledeck-cli backup restore <backup-id> --yes
+profiledeck-cli backup restore --file <private-file> --yes
 ```
 
 ProfileDeck verifies the encrypted archive and database before replacing current application data. When the current database is healthy, it first creates an automatic safety backup. A damaged current database can be replaced after confirmation without that safety backup.
@@ -96,4 +96,4 @@ After restore commits, ProfileDeck removes obsolete operation recovery files. If
 
 If ProfileDeck cannot open its database at startup, the Desktop recovery screen still lets you import the recovery key, list available backups, and restore one.
 
-If ProfileDeck reports that the local data format is not supported, it cannot update that data in place. Restore a compatible application backup. To start with new local data instead, close every ProfileDeck process, move the entire [ProfileDeck data directory](../reference/data-security.md) to a private location, then reopen ProfileDeck or run `profiledeck init`. Moving the directory keeps the old database and backups available for later inspection; it does not change tool-owned files or system logins.
+If ProfileDeck reports that the local data format is not supported, it cannot update that data in place. Restore a compatible application backup. To start with new local data instead, close every ProfileDeck process, move the entire [ProfileDeck data directory](../reference/data-security.md) to a private location, then reopen ProfileDeck or run `profiledeck-cli init`. Moving the directory keeps the old database and backups available for later inspection; it does not change tool-owned files or system logins.

@@ -13,7 +13,7 @@ To change the interval, open **Codex → Settings → Usage reports → Update f
 Run:
 
 ```bash
-profiledeck usage sync codex
+profiledeck-cli usage sync codex
 ```
 
 By default, ProfileDeck reads:
@@ -26,7 +26,7 @@ $CODEX_HOME/archived_sessions/*.jsonl
 If `CODEX_HOME` is not set, it uses `~/.codex`. To read another Codex home:
 
 ```bash
-profiledeck usage sync codex --codex-dir /path/to/codex-home
+profiledeck-cli usage sync codex --codex-dir /path/to/codex-home
 ```
 
 You can repeat a sync safely; previously imported usage is not counted again. Invalid, oversized, or unsupported records are skipped and reported without storing their contents.
@@ -36,8 +36,8 @@ Deleting the Codex Provider also deletes its saved usage reports. Desktop backgr
 ## View a summary
 
 ```bash
-profiledeck usage summary
-profiledeck usage summary --json
+profiledeck-cli usage summary
+profiledeck-cli usage summary --json
 ```
 
 The summary includes event count, input and output tokens, cached input, total tokens, estimated cost when available, and the number of events with unknown cost.
@@ -45,10 +45,10 @@ The summary includes event count, input and output tokens, cached input, total t
 ## View a report
 
 ```bash
-profiledeck usage report
-profiledeck usage report --range today
-profiledeck usage report --range 30d --json
-profiledeck usage report --range all
+profiledeck-cli usage report
+profiledeck-cli usage report --range today
+profiledeck-cli usage report --range 30d --json
+profiledeck-cli usage report --range all
 ```
 
 The default range is `7d`. Available ranges are:

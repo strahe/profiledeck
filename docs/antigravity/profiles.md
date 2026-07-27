@@ -5,7 +5,7 @@ ProfileDeck can save and switch an Antigravity consumer OAuth login stored in th
 ## Before you start
 
 1. Sign in to Antigravity and confirm that it works.
-2. Start ProfileDeck, or run `profiledeck init` if you use the CLI.
+2. Start ProfileDeck, or run `profiledeck-cli init` if you use the CLI.
 
 Legacy Antigravity storage is not supported.
 
@@ -22,8 +22,8 @@ The new Profile becomes the current Antigravity Profile. ProfileDeck never displ
 Check the current login, then save it:
 
 ```bash
-profiledeck antigravity detect
-profiledeck antigravity profile create work --name Work
+profiledeck-cli antigravity detect
+profiledeck-cli antigravity profile create work --name Work
 ```
 
 `detect` reports whether the login is ready without printing it. The create command requires a valid current login.
@@ -31,9 +31,9 @@ profiledeck antigravity profile create work --name Work
 Review or rename saved Profiles with:
 
 ```bash
-profiledeck antigravity profile list
-profiledeck antigravity profile show work
-profiledeck antigravity profile update work --name "Work account"
+profiledeck-cli antigravity profile list
+profiledeck-cli antigravity profile show work
+profiledeck-cli antigravity profile update work --name "Work account"
 ```
 
 ## Switch Profiles
@@ -45,8 +45,8 @@ In the Desktop app, open the Profile you want, select **Use Profile**, review th
 From the CLI, preview and apply the same change:
 
 ```bash
-profiledeck plan antigravity work
-profiledeck switch antigravity work --yes
+profiledeck-cli plan antigravity work
+profiledeck-cli switch antigravity work --yes
 ```
 
 ProfileDeck checks the current login again and creates a private operation recovery point before changing it. If the switch is interrupted, use [Diagnostics and recovery](../operations/recovery.md).
@@ -56,7 +56,7 @@ ProfileDeck checks the current login again and creates a private operation recov
 Antigravity may refresh its login while it runs. The short-lived access-token expiry does not describe how long a saved Profile can be reused, so ProfileDeck does not present it as a login expiry. ProfileDeck saves a valid refreshed login when you switch away from the current Profile. You can also save it explicitly:
 
 ```bash
-profiledeck antigravity profile save-current
+profiledeck-cli antigravity profile save-current
 ```
 
 In the Desktop app, open the current Profile and select **Update from Current Antigravity**.
@@ -66,7 +66,7 @@ In the Desktop app, open the current Profile and select **Update from Current An
 Open a Profile's action menu in Desktop and choose **Delete Profile**, or run:
 
 ```bash
-profiledeck antigravity profile delete work --yes
+profiledeck-cli antigravity profile delete work --yes
 ```
 
 This deletes the complete global Profile from every Agent, not only its Antigravity data. A saved login used only by that Profile is deleted, while shared saved logins remain. A current Profile or one with an unfinished operation cannot be deleted. The current Antigravity login in the system credential store does not change.

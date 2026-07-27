@@ -41,6 +41,7 @@ deb_version="$(go run ./scripts/releasetool contract --version "$version" --fiel
 rpm_version="$(go run ./scripts/releasetool contract --version "$version" --field linux-rpm-version)"
 package_release="$(go run ./scripts/releasetool contract --version "$version" --field linux-package-release)"
 updater_entry="$(go run ./scripts/releasetool contract --version "$version" --field linux-updater-entry)"
+cli_install_path="/usr/bin/profiledeck-cli"
 desktop_install_path="/usr/bin/$updater_entry"
 
 umask 077
@@ -84,7 +85,7 @@ if ! dpkg-deb --extract "$deb" "$deb_root"; then
 fi
 expected_package_files="$(
   printf '%s\n' \
-    './usr/bin/profiledeck' \
+    ".$cli_install_path" \
     ".$desktop_install_path" \
     './usr/share/applications/profiledeck.desktop' \
     './usr/share/icons/hicolor/1024x1024/apps/profiledeck.png' \
@@ -107,12 +108,12 @@ verify_deb_file() {
     fail "the DEB payload has an invalid file or mode at $path."
   fi
 }
-verify_deb_file /usr/bin/profiledeck 755
+verify_deb_file "$cli_install_path" 755
 verify_deb_file "$desktop_install_path" 755
 verify_deb_file /usr/share/applications/profiledeck.desktop 644
 verify_deb_file /usr/share/icons/hicolor/1024x1024/apps/profiledeck.png 644
 verify_deb_file /usr/share/licenses/profiledeck/LICENSE 644
-for executable in "$deb_root/usr/bin/profiledeck" "$deb_root$desktop_install_path"; do
+for executable in "$deb_root$cli_install_path" "$deb_root$desktop_install_path"; do
   executable_type="$(file -b "$executable")"
   if [[ "$executable_type" != *"ELF 64-bit LSB"* || "$executable_type" != *"x86-64"* ]]; then
     fail "the DEB contains a non-amd64 executable."
@@ -154,7 +155,7 @@ verify_rpm_file() {
     fail "the RPM payload has an invalid file, mode, or owner at $expected_path."
   fi
 }
-verify_rpm_file /usr/bin/profiledeck -rwxr-xr-x
+verify_rpm_file "$cli_install_path" -rwxr-xr-x
 verify_rpm_file "$desktop_install_path" -rwxr-xr-x
 verify_rpm_file /usr/share/applications/profiledeck.desktop -rw-r--r--
 verify_rpm_file /usr/share/icons/hicolor/1024x1024/apps/profiledeck.png -rw-r--r--

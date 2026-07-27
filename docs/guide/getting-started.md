@@ -29,7 +29,7 @@ Choose one install path:
 
 ### DEB or RPM package
 
-Stable and Beta DEB and RPM packages install both `profiledeck` and `profiledeck-desktop`, add a desktop launcher, and declare GTK 4 and WebKitGTK 6.0 dependencies. DEB installation is smoke-tested on Ubuntu 24.04, and RPM installation on Fedora 44.
+Stable and Beta DEB and RPM packages install the `profiledeck` Desktop app and the `profiledeck-cli` command, add a desktop launcher, and declare GTK 4 and WebKitGTK 6.0 dependencies. DEB installation is smoke-tested on Ubuntu 24.04, and RPM installation on Fedora 44.
 
 On Ubuntu 24.04, download `ProfileDeck_<version>_linux_amd64.deb` from [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases), then install it:
 
@@ -43,7 +43,7 @@ On Fedora 44, download `ProfileDeck_<version>_linux_amd64.rpm`, then install it:
 sudo dnf install ./ProfileDeck_<version>_linux_amd64.rpm
 ```
 
-Open ProfileDeck from the application menu, or run `profiledeck-desktop`. The `profiledeck` CLI is on your `PATH` as `/usr/bin/profiledeck`.
+Open ProfileDeck from the application menu, or run `profiledeck`. The CLI is on your `PATH` as `/usr/bin/profiledeck-cli`.
 
 These installs do not check for or download in-app updates. Download a newer matching package from GitHub Releases and install it with the same command. See [Update a Linux package](./updates.md#update-a-linux-package).
 
@@ -67,12 +67,12 @@ sudo apt install libgtk-4-1 libwebkitgtk-6.0-4
 ```bash
 mkdir -p "$HOME/.local/opt/profiledeck" "$HOME/.local/bin"
 tar -xzf ProfileDeck_<version>_linux_amd64.tar.gz -C "$HOME/.local/opt/profiledeck"
-ln -sf "$HOME/.local/opt/profiledeck/profiledeck-desktop" "$HOME/.local/bin/profiledeck-desktop"
+ln -sf "$HOME/.local/opt/profiledeck/profiledeck" "$HOME/.local/bin/profiledeck"
 ```
 
-4. Run `profiledeck-desktop` (ensure `$HOME/.local/bin` is on your `PATH`).
+4. Run `profiledeck` (ensure `$HOME/.local/bin` is on your `PATH`).
 
-The archive contains only `profiledeck-desktop`, not the CLI. Use a DEB or RPM when you need `profiledeck`. Keep the install directory writable so ProfileDeck can replace the app after it verifies an update. See [Update the Desktop app](./updates.md).
+The archive contains only `profiledeck`, not the CLI. Use a DEB or RPM when you need `profiledeck-cli`. Keep the install directory writable so ProfileDeck can replace the app after it verifies an update. See [Update the Desktop app](./updates.md).
 
 Continue with [Save your first Profile](#save-your-first-profile).
 
@@ -85,14 +85,14 @@ git clone https://github.com/strahe/profiledeck.git
 cd profiledeck
 make build
 export PATH="$PWD/bin:$PATH"
-profiledeck version
-profiledeck init
+profiledeck-cli version
+profiledeck-cli init
 ```
 
-`profiledeck init` creates ProfileDeck's local database, encrypted application-backup folder, and operation-recovery folder. To use a different location, pass the parent config directory:
+`profiledeck-cli init` creates ProfileDeck's local database, encrypted application-backup folder, and operation-recovery folder. To use a different location, pass the parent config directory:
 
 ```bash
-profiledeck --config-dir /path/to/config-root init
+profiledeck-cli --config-dir /path/to/config-root init
 ```
 
 ProfileDeck creates a `profiledeck` folder below that directory.
@@ -114,19 +114,19 @@ Use these minimal CLI flows instead:
 ### Codex
 
 ```bash
-profiledeck codex detect
-profiledeck codex profile create work
-profiledeck plan codex work
-profiledeck switch codex work --yes
+profiledeck-cli codex detect
+profiledeck-cli codex profile create work
+profiledeck-cli plan codex work
+profiledeck-cli switch codex work --yes
 ```
 
 ### Claude Code
 
 ```bash
-profiledeck claude-code detect
-profiledeck claude-code profile create personal
-profiledeck plan claude-code personal
-profiledeck switch claude-code personal --yes
+profiledeck-cli claude-code detect
+profiledeck-cli claude-code profile create personal
+profiledeck-cli plan claude-code personal
+profiledeck-cli switch claude-code personal --yes
 ```
 
 Start a new Claude Code session after switching and run `/status` to confirm the account.
@@ -134,10 +134,10 @@ Start a new Claude Code session after switching and run `/status` to confirm the
 ### Antigravity
 
 ```bash
-profiledeck antigravity detect
-profiledeck antigravity profile create work
-profiledeck plan antigravity work
-profiledeck switch antigravity work --yes
+profiledeck-cli antigravity detect
+profiledeck-cli antigravity profile create work
+profiledeck-cli plan antigravity work
+profiledeck-cli switch antigravity work --yes
 ```
 
 Close Antigravity before switching when practical, then restart it afterward.
@@ -147,15 +147,15 @@ Close Antigravity before switching when practical, then restart it afterward.
 Desktop marks the selected Profile as **Current** after a successful switch. In the CLI, list the Profiles for the selected tool:
 
 ```bash
-profiledeck codex profile list
-profiledeck claude-code profile list
-profiledeck antigravity profile list
+profiledeck-cli codex profile list
+profiledeck-cli claude-code profile list
+profiledeck-cli antigravity profile list
 ```
 
 If ProfileDeck reports an incomplete change or blocks another switch, open **Diagnostics** or run:
 
 ```bash
-profiledeck doctor
+profiledeck-cli doctor
 ```
 
 Follow only the recovery action that Diagnostics recommends. See [Diagnostics and Recovery](../operations/recovery.md) for unfinished-switch recovery and application backup restore. Successful switches cannot be undone.

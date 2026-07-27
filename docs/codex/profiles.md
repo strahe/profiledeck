@@ -34,22 +34,22 @@ The first Profile becomes current. To save another login, run `codex login` for 
 ## Save a Profile with the CLI
 
 ```bash
-profiledeck init
-profiledeck codex detect
-profiledeck codex profile create work
+profiledeck-cli init
+profiledeck-cli codex detect
+profiledeck-cli codex profile create work
 ```
 
 The first Profile saves the current login and settings, creates the `shared` Config Set, and becomes current. Later Profiles reuse the current Config Set by default:
 
 ```bash
 codex login
-profiledeck codex profile create personal
+profiledeck-cli codex profile create personal
 ```
 
 Save the current settings separately when needed:
 
 ```bash
-profiledeck codex profile create client \
+profiledeck-cli codex profile create client \
   --new-config-set client \
   --config-set-name "Client"
 ```
@@ -61,18 +61,18 @@ In Desktop, open **Config Sets** from the Codex Profiles page. You can create, c
 The equivalent CLI commands show summaries without printing the complete settings:
 
 ```bash
-profiledeck codex config-set list
-profiledeck codex config-set show shared
-profiledeck codex config-set create experimental --name "Experimental"
-profiledeck codex config-set copy shared local --name "Local"
-profiledeck codex config-set update local --description "Local models"
-profiledeck codex config-set delete local --yes
+profiledeck-cli codex config-set list
+profiledeck-cli codex config-set show shared
+profiledeck-cli codex config-set create experimental --name "Experimental"
+profiledeck-cli codex config-set copy shared local --name "Local"
+profiledeck-cli codex config-set update local --description "Local models"
+profiledeck-cli codex config-set delete local --yes
 ```
 
 Choose different saved settings for an inactive Profile with:
 
 ```bash
-profiledeck codex profile set-config work shared
+profiledeck-cli codex profile set-config work shared
 ```
 
 ## Fork a Profile
@@ -82,11 +82,11 @@ Forking creates another Profile from saved data. Copy the login or Config Set wh
 Desktop presents the share-or-copy choice in the Fork form. In the CLI, at least one item must use `copy-new`:
 
 ```bash
-profiledeck codex profile fork work client-login \
+profiledeck-cli codex profile fork work client-login \
   --credential-binding copy-new \
   --config-binding share-parent
 
-profiledeck codex profile fork work client-config \
+profiledeck-cli codex profile fork work client-config \
   --credential-binding share-parent \
   --config-binding copy-new \
   --new-config-set client-config
@@ -99,32 +99,32 @@ Codex continues to use normal `auth.json` and `config.toml` files. Before switch
 Use **Update from Current Codex** in Desktop, or run the following command, before signing in to a different account or replacing the current files when you want to save explicitly:
 
 ```bash
-profiledeck codex profile save-current
+profiledeck-cli codex profile save-current
 ```
 
 In Desktop, choose **Use Profile**, review the hidden-value preview, and confirm. In the CLI:
 
 ```bash
-profiledeck plan codex work
-profiledeck switch codex work --yes
+profiledeck-cli plan codex work
+profiledeck-cli switch codex work --yes
 ```
 
 `plan` is read-only. To require the switch to match an earlier preview, pass its fingerprint:
 
 ```bash
-profiledeck switch codex work \
+profiledeck-cli switch codex work \
   --plan-fingerprint <fingerprint> \
   --yes
 ```
 
-If the current `auth.json` or `config.toml` is missing or invalid, the preview warns that it will not be saved; a confirmed switch can recreate it from the selected Profile. ProfileDeck stops before writing when the current state is unsupported, cannot be checked safely, or changes after review. Open Diagnostics or run `profiledeck doctor` before retrying.
+If the current `auth.json` or `config.toml` is missing or invalid, the preview warns that it will not be saved; a confirmed switch can recreate it from the selected Profile. ProfileDeck stops before writing when the current state is unsupported, cannot be checked safely, or changes after review. Open Diagnostics or run `profiledeck-cli doctor` before retrying.
 
 ## Delete a Profile
 
 Open a Profile's action menu in Desktop and choose **Delete Profile**, or run:
 
 ```bash
-profiledeck codex profile delete work --yes
+profiledeck-cli codex profile delete work --yes
 ```
 
 This deletes the complete global Profile from every Agent, not only its Codex data. It also deletes saved logins and Config Sets used only by that Profile, while shared saved data remains. A current Profile or one with an unfinished operation cannot be deleted. Deletion does not change Codex `auth.json`, `config.toml`, or any other tool-owned working state.
@@ -142,14 +142,14 @@ Limit information is temporary and is not saved to disk. It is not a billing bal
 Save current changes before exporting, and keep the backup outside any ProfileDeck data directory you plan to remove:
 
 ```bash
-profiledeck codex profile save-current
-profiledeck codex profile export --output ./profiledeck-codex-profiles.json
+profiledeck-cli codex profile save-current
+profiledeck-cli codex profile export --output ./profiledeck-codex-profiles.json
 ```
 
 Without Profile IDs, the command exports every Codex Profile and Config Set. To export selected Profiles and the data they need:
 
 ```bash
-profiledeck codex profile export work personal \
+profiledeck-cli codex profile export work personal \
   --output ./selected-codex-profiles.json
 ```
 
@@ -158,8 +158,8 @@ The JSON file contains complete Codex sign-in data and settings. Where the opera
 Inspect a backup before importing it into an initialized ProfileDeck setup:
 
 ```bash
-profiledeck codex profile import inspect ./profiledeck-codex-profiles.json
-profiledeck codex profile import apply ./profiledeck-codex-profiles.json \
+profiledeck-cli codex profile import inspect ./profiledeck-codex-profiles.json
+profiledeck-cli codex profile import apply ./profiledeck-codex-profiles.json \
   --plan-fingerprint <reviewed-fingerprint> \
   --yes
 ```

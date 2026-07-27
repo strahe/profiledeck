@@ -24,20 +24,21 @@ verify_file() {
   fi
 }
 
+cli_path="/usr/bin/profiledeck-cli"
 desktop_path="/usr/bin/$desktop_name"
-verify_file /usr/bin/profiledeck 755
+verify_file "$cli_path" 755
 verify_file "$desktop_path" 755
 verify_file /usr/share/applications/profiledeck.desktop 644
 verify_file /usr/share/icons/hicolor/1024x1024/apps/profiledeck.png 644
 verify_file /usr/share/licenses/profiledeck/LICENSE 644
 
-for executable in /usr/bin/profiledeck "$desktop_path"; do
+for executable in "$cli_path" "$desktop_path"; do
   executable_type="$(file -b "$executable")"
   if [[ "$executable_type" != *"ELF 64-bit LSB"* || "$executable_type" != *"x86-64"* ]]; then
     fail "$executable is not a Linux amd64 ELF binary."
   fi
 done
-if [[ "$(/usr/bin/profiledeck --version)" != "profiledeck version $version" ]]; then
+if [[ "$("$cli_path" --version)" != "profiledeck-cli version $version" ]]; then
   fail "the CLI version does not match the release."
 fi
 if ! grep -Fxq "Exec=$desktop_name" /usr/share/applications/profiledeck.desktop ||

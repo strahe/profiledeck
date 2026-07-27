@@ -34,22 +34,22 @@ ProfileDeck 还需要有效的 `config.toml`。CLI 命令按以下顺序查找 C
 ## 使用 CLI 保存 Profile
 
 ```bash
-profiledeck init
-profiledeck codex detect
-profiledeck codex profile create work
+profiledeck-cli init
+profiledeck-cli codex detect
+profiledeck-cli codex profile create work
 ```
 
 第一个 Profile 会保存当前登录和设置、创建 `shared` 配置集，并成为当前 Profile。后续 Profile 默认复用当前配置集：
 
 ```bash
 codex login
-profiledeck codex profile create personal
+profiledeck-cli codex profile create personal
 ```
 
 需要独立保存当前设置时，运行：
 
 ```bash
-profiledeck codex profile create client \
+profiledeck-cli codex profile create client \
   --new-config-set client \
   --config-set-name "Client"
 ```
@@ -61,18 +61,18 @@ profiledeck codex profile create client \
 对应的 CLI 命令只显示摘要，不会打印完整设置：
 
 ```bash
-profiledeck codex config-set list
-profiledeck codex config-set show shared
-profiledeck codex config-set create experimental --name "Experimental"
-profiledeck codex config-set copy shared local --name "Local"
-profiledeck codex config-set update local --description "Local models"
-profiledeck codex config-set delete local --yes
+profiledeck-cli codex config-set list
+profiledeck-cli codex config-set show shared
+profiledeck-cli codex config-set create experimental --name "Experimental"
+profiledeck-cli codex config-set copy shared local --name "Local"
+profiledeck-cli codex config-set update local --description "Local models"
+profiledeck-cli codex config-set delete local --yes
 ```
 
 为非当前 Profile 选择其他已保存设置：
 
 ```bash
-profiledeck codex profile set-config work shared
+profiledeck-cli codex profile set-config work shared
 ```
 
 ## Fork Profile
@@ -82,11 +82,11 @@ Fork 会基于已保存数据创建另一个 Profile。如果新 Profile 的登�
 桌面端会在 Fork 表单中提供共享或复制选项。使用 CLI 时，至少一项必须使用 `copy-new`：
 
 ```bash
-profiledeck codex profile fork work client-login \
+profiledeck-cli codex profile fork work client-login \
   --credential-binding copy-new \
   --config-binding share-parent
 
-profiledeck codex profile fork work client-config \
+profiledeck-cli codex profile fork work client-config \
   --credential-binding share-parent \
   --config-binding copy-new \
   --new-config-set client-config
@@ -99,32 +99,32 @@ Codex 继续使用普通的 `auth.json` 和 `config.toml` 文件。离开当前 
 如果准备登录其他账号或替换当前文件，并希望先明确保存当前内容，请在桌面端使用**从当前 Codex 更新**，或运行：
 
 ```bash
-profiledeck codex profile save-current
+profiledeck-cli codex profile save-current
 ```
 
 在桌面端选择**使用 Profile**，审核隐藏敏感值的预览，然后确认。使用 CLI 时运行：
 
 ```bash
-profiledeck plan codex work
-profiledeck switch codex work --yes
+profiledeck-cli plan codex work
+profiledeck-cli switch codex work --yes
 ```
 
 `plan` 是只读操作。要确保切换内容与之前的预览一致，请传入计划指纹：
 
 ```bash
-profiledeck switch codex work \
+profiledeck-cli switch codex work \
   --plan-fingerprint <fingerprint> \
   --yes
 ```
 
-当前 `auth.json` 或 `config.toml` 缺失或无效时，预览会提示它不会被保存；确认切换后，ProfileDeck 可以使用所选 Profile 重新创建该文件。当前状态不受支持、无法安全检查或在审核后发生变化时，ProfileDeck 会在写入前停止。请先打开“诊断”或运行 `profiledeck doctor`，再重试。
+当前 `auth.json` 或 `config.toml` 缺失或无效时，预览会提示它不会被保存；确认切换后，ProfileDeck 可以使用所选 Profile 重新创建该文件。当前状态不受支持、无法安全检查或在审核后发生变化时，ProfileDeck 会在写入前停止。请先打开“诊断”或运行 `profiledeck-cli doctor`，再重试。
 
 ## 删除 Profile
 
 在桌面端打开 Profile 的操作菜单并选择**删除 Profile**，或运行：
 
 ```bash
-profiledeck codex profile delete work --yes
+profiledeck-cli codex profile delete work --yes
 ```
 
 这会从所有 Agent 中删除完整的全局 Profile，而不只是 Codex 数据。只有该 Profile 使用的已保存登录和配置集也会删除，共享数据会保留。当前 Profile 或存在未完成操作的 Profile 不能删除。删除不会修改 Codex 的 `auth.json`、`config.toml` 或其他工具当前使用的状态。
@@ -142,14 +142,14 @@ profiledeck codex profile delete work --yes
 导出前先保存当前更改，并把备份放在任何准备删除的 ProfileDeck 数据目录之外：
 
 ```bash
-profiledeck codex profile save-current
-profiledeck codex profile export --output ./profiledeck-codex-profiles.json
+profiledeck-cli codex profile save-current
+profiledeck-cli codex profile export --output ./profiledeck-codex-profiles.json
 ```
 
 不指定 Profile ID 时，命令会导出全部 Codex Profile 和配置集。要导出指定 Profile 及其所需数据：
 
 ```bash
-profiledeck codex profile export work personal \
+profiledeck-cli codex profile export work personal \
   --output ./selected-codex-profiles.json
 ```
 
@@ -158,8 +158,8 @@ JSON 文件包含完整的 Codex 登录数据和设置。操作系统支持私�
 向已完成初始化的 ProfileDeck 导入前，请先检查备份：
 
 ```bash
-profiledeck codex profile import inspect ./profiledeck-codex-profiles.json
-profiledeck codex profile import apply ./profiledeck-codex-profiles.json \
+profiledeck-cli codex profile import inspect ./profiledeck-codex-profiles.json
+profiledeck-cli codex profile import apply ./profiledeck-codex-profiles.json \
   --plan-fingerprint <reviewed-fingerprint> \
   --yes
 ```

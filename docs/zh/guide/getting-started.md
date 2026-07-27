@@ -29,7 +29,7 @@ macOS 桌面端可在**设置 → 常规 → 应用更新**中选择正式版或
 
 ### 安装 DEB 或 RPM
 
-正式版和 Beta 版 DEB、RPM 都会安装 `profiledeck` 与 `profiledeck-desktop`，添加桌面启动项，并声明 GTK 4 与 WebKitGTK 6.0 依赖。DEB 会在 Ubuntu 24.04 上做安装冒烟测试，RPM 会在 Fedora 44 上测试。
+正式版和 Beta 版 DEB、RPM 都会安装 `profiledeck` 桌面端与 `profiledeck-cli` 命令，添加桌面启动项，并声明 GTK 4 与 WebKitGTK 6.0 依赖。DEB 会在 Ubuntu 24.04 上做安装冒烟测试，RPM 会在 Fedora 44 上测试。
 
 在 Ubuntu 24.04 上，从 [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases) 下载 `ProfileDeck_<version>_linux_amd64.deb`，然后安装：
 
@@ -43,7 +43,7 @@ sudo apt install ./ProfileDeck_<version>_linux_amd64.deb
 sudo dnf install ./ProfileDeck_<version>_linux_amd64.rpm
 ```
 
-从应用菜单打开 ProfileDeck，或运行 `profiledeck-desktop`。CLI 位于 `/usr/bin/profiledeck`，已在 `PATH` 中。
+从应用菜单打开 ProfileDeck，或运行 `profiledeck`。CLI 位于 `/usr/bin/profiledeck-cli`，已在 `PATH` 中。
 
 这类安装不会在应用内检查或下载更新。请从 GitHub Releases 下载新版对应软件包，再用相同命令安装。详见[更新 Linux 软件包](./updates.md#更新-linux-软件包)。
 
@@ -67,12 +67,12 @@ sudo apt install libgtk-4-1 libwebkitgtk-6.0-4
 ```bash
 mkdir -p "$HOME/.local/opt/profiledeck" "$HOME/.local/bin"
 tar -xzf ProfileDeck_<version>_linux_amd64.tar.gz -C "$HOME/.local/opt/profiledeck"
-ln -sf "$HOME/.local/opt/profiledeck/profiledeck-desktop" "$HOME/.local/bin/profiledeck-desktop"
+ln -sf "$HOME/.local/opt/profiledeck/profiledeck" "$HOME/.local/bin/profiledeck"
 ```
 
-4. 运行 `profiledeck-desktop`（请确保 `$HOME/.local/bin` 在 `PATH` 中）。
+4. 运行 `profiledeck`（请确保 `$HOME/.local/bin` 在 `PATH` 中）。
 
-压缩包只包含 `profiledeck-desktop`，不含 CLI。需要 `profiledeck` 命令时请使用 DEB 或 RPM。请把安装目录保持为可写，以便 ProfileDeck 在验证更新后替换程序。详见[更新桌面端](./updates.md)。
+压缩包只包含 `profiledeck`，不含 CLI。需要 `profiledeck-cli` 命令时请使用 DEB 或 RPM。请把安装目录保持为可写，以便 ProfileDeck 在验证更新后替换程序。详见[更新桌面端](./updates.md)。
 
 接下来请[保存第一个 Profile](#保存第一个-profile)。
 
@@ -85,14 +85,14 @@ git clone https://github.com/strahe/profiledeck.git
 cd profiledeck
 make build
 export PATH="$PWD/bin:$PATH"
-profiledeck version
-profiledeck init
+profiledeck-cli version
+profiledeck-cli init
 ```
 
-`profiledeck init` 会创建本地数据库、加密应用备份目录和操作恢复目录。要使用其他位置，请传入用户配置根目录：
+`profiledeck-cli init` 会创建本地数据库、加密应用备份目录和操作恢复目录。要使用其他位置，请传入用户配置根目录：
 
 ```bash
-profiledeck --config-dir /path/to/config-root init
+profiledeck-cli --config-dir /path/to/config-root init
 ```
 
 ProfileDeck 会在该目录下创建 `profiledeck` 文件夹。
@@ -114,19 +114,19 @@ ProfileDeck 会在该目录下创建 `profiledeck` 文件夹。
 ### Codex
 
 ```bash
-profiledeck codex detect
-profiledeck codex profile create work
-profiledeck plan codex work
-profiledeck switch codex work --yes
+profiledeck-cli codex detect
+profiledeck-cli codex profile create work
+profiledeck-cli plan codex work
+profiledeck-cli switch codex work --yes
 ```
 
 ### Claude Code
 
 ```bash
-profiledeck claude-code detect
-profiledeck claude-code profile create personal
-profiledeck plan claude-code personal
-profiledeck switch claude-code personal --yes
+profiledeck-cli claude-code detect
+profiledeck-cli claude-code profile create personal
+profiledeck-cli plan claude-code personal
+profiledeck-cli switch claude-code personal --yes
 ```
 
 切换后请新建 Claude Code 会话，并运行 `/status` 确认账号。
@@ -134,10 +134,10 @@ profiledeck switch claude-code personal --yes
 ### Antigravity
 
 ```bash
-profiledeck antigravity detect
-profiledeck antigravity profile create work
-profiledeck plan antigravity work
-profiledeck switch antigravity work --yes
+profiledeck-cli antigravity detect
+profiledeck-cli antigravity profile create work
+profiledeck-cli plan antigravity work
+profiledeck-cli switch antigravity work --yes
 ```
 
 条件允许时，请先关闭 Antigravity，切换后再重新启动。
@@ -147,15 +147,15 @@ profiledeck switch antigravity work --yes
 切换成功后，桌面端会把所选 Profile 标记为**当前**。在 CLI 中，可以查看对应工具的 Profile 列表：
 
 ```bash
-profiledeck codex profile list
-profiledeck claude-code profile list
-profiledeck antigravity profile list
+profiledeck-cli codex profile list
+profiledeck-cli claude-code profile list
+profiledeck-cli antigravity profile list
 ```
 
 如果 ProfileDeck 报告未完成的更改，或阻止继续切换，请打开**诊断**，或运行：
 
 ```bash
-profiledeck doctor
+profiledeck-cli doctor
 ```
 
 只执行诊断功能明确建议的恢复操作。未完成切换恢复和应用备份恢复见[诊断与恢复](../operations/recovery.md)。成功切换不能撤销。

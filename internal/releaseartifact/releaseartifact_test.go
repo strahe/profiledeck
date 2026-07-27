@@ -21,6 +21,9 @@ func TestContractUsesTheSameAssetsForStableAndBeta(t *testing.T) {
 	if stable.LinuxUpdaterEntry != LinuxUpdaterEntry || beta.LinuxUpdaterEntry != LinuxUpdaterEntry {
 		t.Fatalf("Linux updater entries = %q, %q", stable.LinuxUpdaterEntry, beta.LinuxUpdaterEntry)
 	}
+	if stable.LinuxUpdaterEntry != "profiledeck" {
+		t.Fatalf("Linux updater entry = %q, want %q", stable.LinuxUpdaterEntry, "profiledeck")
+	}
 	if stable.LinuxPackageVersion != "1.2.3" || stable.LinuxPackageRelease != "1" ||
 		stable.LinuxDEBVersion != "1.2.3-1" || stable.LinuxRPMVersion != "1.2.3" {
 		t.Fatalf("stable package versions = %q, %q, %q",

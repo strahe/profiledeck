@@ -5,7 +5,7 @@ ProfileDeck 可以保存和切换存储在操作系统凭据存储中的 Antigra
 ## 开始前准备
 
 1. 登录 Antigravity，并确认可以正常使用。
-2. 启动 ProfileDeck；如果使用 CLI，请运行 `profiledeck init`。
+2. 启动 ProfileDeck；如果使用 CLI，请运行 `profiledeck-cli init`。
 
 ProfileDeck 不支持旧版 Antigravity 存储方式。
 
@@ -22,8 +22,8 @@ ProfileDeck 不支持旧版 Antigravity 存储方式。
 先检查当前登录，再保存它：
 
 ```bash
-profiledeck antigravity detect
-profiledeck antigravity profile create work --name Work
+profiledeck-cli antigravity detect
+profiledeck-cli antigravity profile create work --name Work
 ```
 
 `detect` 只报告登录是否就绪，不会输出登录内容。创建命令要求当前登录有效。
@@ -31,9 +31,9 @@ profiledeck antigravity profile create work --name Work
 查看或重命名已保存的 Profile：
 
 ```bash
-profiledeck antigravity profile list
-profiledeck antigravity profile show work
-profiledeck antigravity profile update work --name "Work account"
+profiledeck-cli antigravity profile list
+profiledeck-cli antigravity profile show work
+profiledeck-cli antigravity profile update work --name "Work account"
 ```
 
 ## 切换 Profile
@@ -45,8 +45,8 @@ profiledeck antigravity profile update work --name "Work account"
 使用 CLI 时，先预览再应用同一变更：
 
 ```bash
-profiledeck plan antigravity work
-profiledeck switch antigravity work --yes
+profiledeck-cli plan antigravity work
+profiledeck-cli switch antigravity work --yes
 ```
 
 ProfileDeck 会再次检查当前登录，并在变更前创建私有操作恢复点。如果切换中断，请使用[诊断与恢复](../operations/recovery.md)。
@@ -56,7 +56,7 @@ ProfileDeck 会再次检查当前登录，并在变更前创建私有操作恢�
 Antigravity 运行时可能刷新登录。短期访问令牌的到期时间不能代表已保存 Profile 的可复用期限，因此 ProfileDeck 不会把它显示为登录过期时间。切离当前 Profile 时，ProfileDeck 会保存有效的刷新后登录。你也可以主动保存：
 
 ```bash
-profiledeck antigravity profile save-current
+profiledeck-cli antigravity profile save-current
 ```
 
 在桌面端打开当前 Profile，然后选择**从当前 Antigravity 更新**。
@@ -66,7 +66,7 @@ profiledeck antigravity profile save-current
 在桌面端打开 Profile 的操作菜单并选择**删除 Profile**，或运行：
 
 ```bash
-profiledeck antigravity profile delete work --yes
+profiledeck-cli antigravity profile delete work --yes
 ```
 
 这会从所有 Agent 中删除完整的全局 Profile，而不只是 Antigravity 数据。只有该 Profile 使用的已保存登录会删除，共享登录会保留。当前 Profile 或存在未完成操作的 Profile 不能删除。系统凭据存储中的当前 Antigravity 登录不会改变。

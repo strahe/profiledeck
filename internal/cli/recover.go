@@ -63,7 +63,7 @@ func writeRecoverResult(w io.Writer, result switching.RecoverOperationResult) er
 	if !result.RecoveryCleanupCompleted {
 		_, err := fmt.Fprintln(
 			w,
-			"warning: Recovery completed, but temporary recovery files still need cleanup. Run `profiledeck doctor retry-cleanup --yes`; this does not change tool sign-ins or settings.",
+			"warning: Recovery completed, but temporary recovery files still need cleanup. Run `profiledeck-cli doctor retry-cleanup --yes`; this does not change tool sign-ins or settings.",
 		)
 		return err
 	}

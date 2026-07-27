@@ -71,7 +71,7 @@ func (factory Factory) OpenHealthy(ctx context.Context, readOnly bool) (*Store, 
 			return nil, apperror.New(apperror.StoreSchemaUnsupported, apperror.StoreSchemaUnsupportedMessage)
 		}
 		if errors.Is(err, ErrInvalidMigrationHistory) {
-			return nil, apperror.New(apperror.StoreSchemaInvalid, "ProfileDeck local data is not in a valid state; run profiledeck doctor or restore a known-good application backup")
+			return nil, apperror.New(apperror.StoreSchemaInvalid, "ProfileDeck local data is not in a valid state; run profiledeck-cli doctor or restore a known-good application backup")
 		}
 		return nil, apperror.Wrap(apperror.StoreStatusFailed, "failed to inspect application database", err)
 	}

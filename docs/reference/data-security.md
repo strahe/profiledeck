@@ -24,7 +24,7 @@ The directory contains `profiledeck.db`, encrypted application backups, and temp
 
 ## Protect local data
 
-ProfileDeck encrypts `.profiledeck-backup` files with age X25519. The live database and unfinished-switch recovery material are not separately encrypted, so anyone who can read your local files may be able to read saved logins. On macOS and Linux, ProfileDeck restricts its own private files and directories where possible. Desktop Diagnostics and `profiledeck doctor` report ProfileDeck, Codex, or Claude Code paths whose permissions may allow access by other local users. These checks do not block startup or Profile switching, and ProfileDeck does not change files owned by those tools during a check.
+ProfileDeck encrypts `.profiledeck-backup` files with age X25519. The live database and unfinished-switch recovery material are not separately encrypted, so anyone who can read your local files may be able to read saved logins. On macOS and Linux, ProfileDeck restricts its own private files and directories where possible. Desktop Diagnostics and `profiledeck-cli doctor` report ProfileDeck, Codex, or Claude Code paths whose permissions may allow access by other local users. These checks do not block startup or Profile switching, and ProfileDeck does not change files owned by those tools during a check.
 
 - Use your operating system's full-disk encryption and screen lock.
 - Do not sync, commit, upload, or share the complete ProfileDeck data directory.
@@ -43,13 +43,13 @@ The private X25519 recovery key is stored in the operating system credential sto
 
 Before a switch changes an external tool, ProfileDeck creates a private recovery point under `recovery/<operation-id>/`. It may contain complete Codex files, a Claude Code account login, or an Antigravity login without application-backup encryption. It exists only for an unfinished switch and is deleted after success. It is not listed, exported, or usable to undo a successful switch.
 
-ProfileDeck records a cleanup obligation before an operation becomes authoritative, then clears it only after the recovery directory has been synchronized. A crash or filesystem error can therefore leave completed-operation material visible as a cleanup warning. While that warning is active, Profile switching and application restore pause, but reads, Doctor, and application backups remain available. Run `profiledeck doctor retry-cleanup --yes` or use **Retry cleanup** in Desktop Diagnostics. The cleanup does not change tool sign-ins or settings.
+ProfileDeck records a cleanup obligation before an operation becomes authoritative, then clears it only after the recovery directory has been synchronized. A crash or filesystem error can therefore leave completed-operation material visible as a cleanup warning. While that warning is active, Profile switching and application restore pause, but reads, Doctor, and application backups remain available. Run `profiledeck-cli doctor retry-cleanup --yes` or use **Retry cleanup** in Desktop Diagnostics. The cleanup does not change tool sign-ins or settings.
 
 Backup lists and previews show only safe metadata. Keep encrypted backup files private as defense in depth, and never share operation recovery material.
 
 ## Export a Codex Profile safely
 
-`profiledeck codex profile export` creates an explicitly sensitive backup containing the selected Profile's complete Codex login and saved settings. Anyone with that file may be able to use the account.
+`profiledeck-cli codex profile export` creates an explicitly sensitive backup containing the selected Profile's complete Codex login and saved settings. Anyone with that file may be able to use the account.
 
 Choose a private destination outside a repository or shared folder. Do not commit or share the export. Keep it outside any ProfileDeck data directory you plan to delete.
 

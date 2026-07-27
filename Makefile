@@ -1,9 +1,9 @@
-BINARY := profiledeck
+BINARY := profiledeck-cli
 BIN_DIR := bin
 TOOLS_DIR := $(BIN_DIR)/tools
-CMD := ./cmd/profiledeck
+CMD := ./cmd/profiledeck-cli
 DESKTOP_FRONTEND := desktop/frontend
-DESKTOP_BINARY := $(BIN_DIR)/profiledeck-desktop
+DESKTOP_BINARY := $(BIN_DIR)/profiledeck
 DESKTOP_DEVELOPMENT_IDENTIFIER := io.github.strahe.profiledeck.dev
 RELEASE_TOOL_PKGS := ./scripts/releasetool ./scripts/updatee2e/runner
 UPDATE_E2E_PKG := ./scripts/updatee2e/client
@@ -97,7 +97,7 @@ desktop-taskfile-check:
 	$(WAILS3) task build GOOS=darwin DEV=true EXTRA_TAGS=taskfilecheck -dry >/dev/null
 	$(WAILS3) task build GOOS=windows DEV=true EXTRA_TAGS=taskfilecheck -dry >/dev/null
 	$(WAILS3) task build GOOS=linux DEV=true EXTRA_TAGS=taskfilecheck -dry >/dev/null
-	$(WAILS3) task linux:build ARCH=amd64 OUTPUT=.task/taskfile-check/profiledeck-desktop VERSION=0.1.0-beta.1 COMMIT=0123456789abcdef0123456789abcdef01234567 BUILD_DATE=2026-07-16T00:00:00Z UPDATE_MANAGEMENT=application -dry >/dev/null
+	$(WAILS3) task linux:build ARCH=amd64 OUTPUT=.task/taskfile-check/profiledeck VERSION=0.1.0-beta.1 COMMIT=0123456789abcdef0123456789abcdef01234567 BUILD_DATE=2026-07-16T00:00:00Z UPDATE_MANAGEMENT=application -dry >/dev/null
 	$(WAILS3) task linux:build:release VERSION=0.1.0-beta.1 COMMIT=0123456789abcdef0123456789abcdef01234567 BUILD_DATE=2026-07-16T00:00:00Z PORTABLE_OUTPUT=.task/taskfile-check/portable PACKAGE_OUTPUT=.task/taskfile-check/package -dry >/dev/null
 	$(WAILS3) task linux:release VERSION=0.1.0-beta.1 RELEASE_COMMIT=0123456789abcdef0123456789abcdef01234567 BUILT_AT=2026-07-16T00:00:00Z OUTPUT_DIR=.task/taskfile-check/releases -dry >/dev/null
 	$(WAILS3) task darwin:build:universal VERSION=0.1.0-beta.1 COMMIT=0123456789abcdef0123456789abcdef01234567 BUILD_DATE=2026-07-16T00:00:00Z -dry >/dev/null

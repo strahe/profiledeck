@@ -1872,7 +1872,7 @@ func TestDoctorRetryCleanupCLIFlow(t *testing.T) {
 	}
 	humanStatus, err := runCLI(t, "--config-dir", configDir, "status")
 	if err != nil || !strings.Contains(humanStatus, "temporary recovery cleanup: required") ||
-		!strings.Contains(humanStatus, "profiledeck doctor retry-cleanup --yes") {
+		!strings.Contains(humanStatus, "profiledeck-cli doctor retry-cleanup --yes") {
 		t.Fatalf("human status did not explain cleanup restriction: %q, %v", humanStatus, err)
 	}
 	_, err = runCLI(t, "--config-dir", configDir, "doctor", "retry-cleanup", "--json")

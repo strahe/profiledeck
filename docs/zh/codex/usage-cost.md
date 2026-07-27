@@ -13,7 +13,7 @@ ProfileDeck 读取本地 Codex 会话数据，展示令牌用量、活动情况�
 运行：
 
 ```bash
-profiledeck usage sync codex
+profiledeck-cli usage sync codex
 ```
 
 ProfileDeck 默认读取：
@@ -26,7 +26,7 @@ $CODEX_HOME/archived_sessions/*.jsonl
 如果没有设置 `CODEX_HOME`，则使用 `~/.codex`。如需读取其他 Codex 主目录：
 
 ```bash
-profiledeck usage sync codex --codex-dir /path/to/codex-home
+profiledeck-cli usage sync codex --codex-dir /path/to/codex-home
 ```
 
 你可以安全地重复同步，已导入的用量不会再次计数。无效、过大或不支持的记录会被跳过并报告，但其内容不会被保存。
@@ -36,8 +36,8 @@ profiledeck usage sync codex --codex-dir /path/to/codex-home
 ## 查看摘要
 
 ```bash
-profiledeck usage summary
-profiledeck usage summary --json
+profiledeck-cli usage summary
+profiledeck-cli usage summary --json
 ```
 
 摘要包含事件数、输入和输出令牌、缓存输入、令牌总量、可用时的成本估算，以及成本未知的事件数。
@@ -45,10 +45,10 @@ profiledeck usage summary --json
 ## 查看报告
 
 ```bash
-profiledeck usage report
-profiledeck usage report --range today
-profiledeck usage report --range 30d --json
-profiledeck usage report --range all
+profiledeck-cli usage report
+profiledeck-cli usage report --range today
+profiledeck-cli usage report --range 30d --json
+profiledeck-cli usage report --range all
 ```
 
 默认范围是 `7d`。可用范围如下：

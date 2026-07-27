@@ -68,8 +68,8 @@ chmod 0755 "$portable_root/$app_name" "$package_root/$app_name"
 env GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
   go build -trimpath -buildvcs=false \
     -ldflags="-w -s -X main.version=$version -X main.commit=$release_commit -X main.buildDate=$built_at" \
-    -o "$package_root/profiledeck" ./cmd/profiledeck
-chmod 0755 "$package_root/profiledeck"
+    -o "$package_root/profiledeck-cli" ./cmd/profiledeck-cli
+chmod 0755 "$package_root/profiledeck-cli"
 scripts/release/verify-release-source.sh "$release_commit"
 
 tar -C "$portable_root" -czf "$output/$portable_name" "$app_name"
@@ -79,7 +79,7 @@ for package_format in deb rpm; do
     GOARCH=amd64 \
     PROFILEDECK_PACKAGE_VERSION="$package_version" \
     PROFILEDECK_PACKAGE_RELEASE="$package_release" \
-    PROFILEDECK_CLI_BINARY="$package_root/profiledeck" \
+    PROFILEDECK_CLI_BINARY="$package_root/profiledeck-cli" \
     PROFILEDECK_DESKTOP_BINARY="$package_root/$app_name" \
     "$task_exe" tool package \
       -name "$package_basename" -format "$package_format" -config ./build/linux/nfpm.yaml -out "$output"

@@ -4,7 +4,7 @@ A Claude Code Profile saves one Claude Code account login. ProfileDeck does not 
 
 ## Before you start
 
-- Desktop initializes ProfileDeck automatically. CLI users must run `profiledeck init` once.
+- Desktop initializes ProfileDeck automatically. CLI users must run `profiledeck-cli init` once.
 - Run `/login` in Claude Code before saving a Profile.
 
 ProfileDeck only saves the account login from `/login`. It does not save API keys or Console sign-in, and it does not sign you in.
@@ -23,15 +23,15 @@ The first saved Profile becomes current. Saving another Profile does not change 
 Sign in to the first account, then run:
 
 ```bash
-profiledeck claude-code detect
-profiledeck claude-code profile create personal --name "Personal"
+profiledeck-cli claude-code detect
+profiledeck-cli claude-code profile create personal --name "Personal"
 ```
 
 Sign in to the second account with `/login`, then save it separately:
 
 ```bash
-profiledeck claude-code profile create work --name "Work"
-profiledeck claude-code profile list
+profiledeck-cli claude-code profile create work --name "Work"
+profiledeck-cli claude-code profile list
 ```
 
 List and show commands display login status and expiry information without printing token values.
@@ -43,8 +43,8 @@ In Desktop, choose **Use Profile**, review the login change, and confirm. Profil
 With the CLI:
 
 ```bash
-profiledeck plan claude-code personal
-profiledeck switch claude-code personal --yes
+profiledeck-cli plan claude-code personal
+profiledeck-cli switch claude-code personal --yes
 ```
 
 Start a new Claude Code session after switching and run `/status` to confirm the account. Already running Claude Code processes do not change.
@@ -56,7 +56,7 @@ If Claude Code refreshed the current login, ProfileDeck saves a valid update bef
 Use **Save Current Claude Code Login** on the current Profile in Desktop, or run:
 
 ```bash
-profiledeck claude-code profile save-current
+profiledeck-cli claude-code profile save-current
 ```
 
 When the saved login is shared by multiple Profiles, ProfileDeck shows how many Profiles will change. Review that count before confirming with `--yes` in the CLI.
@@ -66,7 +66,7 @@ When the saved login is shared by multiple Profiles, ProfileDeck shows how many 
 Open a Profile's action menu in Desktop and choose **Delete Profile**, or run:
 
 ```bash
-profiledeck claude-code profile delete work --yes
+profiledeck-cli claude-code profile delete work --yes
 ```
 
 This deletes the complete global Profile from every Agent, not only its Claude Code data. A saved login used only by that Profile is deleted, while shared saved logins remain. A current Profile or one with an unfinished operation cannot be deleted. The current Claude Code Keychain item or credential file does not change.

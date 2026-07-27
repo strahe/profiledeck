@@ -131,7 +131,7 @@ func (service *Service) Status(ctx context.Context) (StatusResult, error) {
 			return StatusResult{}, unsupportedSchemaError()
 		}
 		if errors.Is(err, store.ErrInvalidMigrationHistory) {
-			return StatusResult{}, apperror.New(apperror.StoreSchemaInvalid, "ProfileDeck local data is not in a valid state; run profiledeck doctor or restore a known-good application backup")
+			return StatusResult{}, apperror.New(apperror.StoreSchemaInvalid, "ProfileDeck local data is not in a valid state; run profiledeck-cli doctor or restore a known-good application backup")
 		}
 		return StatusResult{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to inspect application database", err)
 	}
@@ -145,7 +145,7 @@ func (service *Service) Status(ctx context.Context) (StatusResult, error) {
 			if errors.Is(err, store.ErrInvalidSystemState) {
 				return StatusResult{}, apperror.New(
 					apperror.StoreSchemaInvalid,
-					"ProfileDeck local data is not in a valid state; run profiledeck doctor or restore a known-good application backup",
+					"ProfileDeck local data is not in a valid state; run profiledeck-cli doctor or restore a known-good application backup",
 				)
 			}
 			return StatusResult{}, apperror.New(apperror.StoreStatusFailed, "application recovery state could not be inspected")
@@ -184,6 +184,6 @@ func createDirs(paths Paths) error {
 
 func chmodBestEffort(path string, mode os.FileMode) {
 	if err := os.Chmod(path, mode); err != nil {
-		log.Print("profiledeck: private permissions could not be applied; run profiledeck doctor")
+		log.Print("profiledeck: private permissions could not be applied; run profiledeck-cli doctor")
 	}
 }

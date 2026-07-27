@@ -14,14 +14,14 @@ license: Apache-2.0
 
 contents:
   - src: ${PROFILEDECK_CLI_BINARY}
-    dst: /usr/bin/profiledeck
+    dst: /usr/bin/profiledeck-cli
     expand: true
     file_info:
       mode: 0755
       owner: root
       group: root
   - src: ${PROFILEDECK_DESKTOP_BINARY}
-    dst: /usr/bin/profiledeck-desktop
+    dst: /usr/bin/profiledeck
     expand: true
     file_info:
       mode: 0755
