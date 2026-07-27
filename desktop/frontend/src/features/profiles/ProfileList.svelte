@@ -2,7 +2,6 @@
 	import { onMount } from "svelte";
 	import { _ } from "svelte-i18n";
 	import CheckIcon from "@lucide/svelte/icons/check";
-	import DownloadIcon from "@lucide/svelte/icons/download";
 	import EyeIcon from "@lucide/svelte/icons/eye";
 	import GitForkIcon from "@lucide/svelte/icons/git-fork";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
@@ -39,7 +38,6 @@
 		onUse,
 		onDetails,
 		onFork,
-		onExport,
 		onDelete,
 		onRefreshQuota,
 		onRetrySource,
@@ -53,7 +51,6 @@
 		onUse: (profile: CodexProfileListItem) => void;
 		onDetails: (profile: CodexProfileListItem) => void;
 		onFork: (profile: CodexProfileListItem) => void;
-		onExport: (profile: CodexProfileListItem) => void;
 		onDelete: (profile: CodexProfileListItem) => void;
 		onRefreshQuota: (profile: CodexProfileListItem) => void;
 		onRetrySource?: () => void;
@@ -152,7 +149,6 @@
 										<DropdownMenu.Group>
 											<DropdownMenu.Item onSelect={() => onDetails(profile)}><EyeIcon />{$_("actions.details")}</DropdownMenu.Item>
 											<DropdownMenu.Item onSelect={() => onFork(profile)}><GitForkIcon />{$_("actions.fork")}</DropdownMenu.Item>
-											<DropdownMenu.Item onSelect={() => onExport(profile)}><DownloadIcon />{$_("actions.exportProfile")}</DropdownMenu.Item>
 											<DropdownMenu.Item variant="destructive" disabled={busy} onSelect={() => onDelete(profile)}><Trash2Icon />{$_("actions.deleteProfile")}</DropdownMenu.Item>
 										</DropdownMenu.Group>
 									</DropdownMenu.Content>

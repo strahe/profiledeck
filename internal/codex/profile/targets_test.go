@@ -10,7 +10,7 @@ import (
 	"github.com/strahe/profiledeck/internal/store"
 )
 
-func TestFullProfileTargetsRequiresTypedConfigAndCredentialBindings(t *testing.T) {
+func TestFullProfileTargetsRequireTypedConfigAndCredentialBindings(t *testing.T) {
 	configValue, err := codexpreset.ConfigSetBindingValueJSON("config-work")
 	if err != nil {
 		t.Fatal(err)

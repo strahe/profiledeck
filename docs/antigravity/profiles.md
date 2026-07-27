@@ -79,7 +79,7 @@ These checks send the current Profile's access token to Google's Cloud Code serv
 
 The Profile list shows a compact summary. Profile details show each available group, its 5-hour and weekly windows, remaining percentage, reset time, and check time. A non-current Profile can keep a snapshot checked earlier in the same app session, but you must use that Profile before refreshing it.
 
-Limit snapshots are temporary. They are not saved to usage reports, exports, backups, or the ProfileDeck database, and they do not identify which Profile produced earlier Antigravity activity.
+Limit snapshots are temporary. They are not saved to usage reports, application backups, or the ProfileDeck database, and they do not identify which Profile produced earlier Antigravity activity.
 
 ## What is not supported
 

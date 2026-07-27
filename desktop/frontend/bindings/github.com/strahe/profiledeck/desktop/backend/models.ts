@@ -29,12 +29,6 @@ import * as runtime$0 from "../../internal/runtime/models.js";
 // @ts-ignore: Unused imports
 import * as usage$0 from "../../internal/usage/models.js";
 
-export interface ApplyCodexProfileImportRequest {
-    "input_path": string;
-    "expected_plan_fingerprint": string;
-    "confirm": boolean;
-}
-
 export interface CodexProfileQuotaRuntimeStatus {
     "profile_id": string;
     "running": boolean;
@@ -113,12 +107,6 @@ export interface DesktopError {
 export interface Environment {
     "config_dir": string;
     "codex_dir": string;
-}
-
-export interface ExportCodexProfilesRequest {
-    "profile_ids"?: string[] | null;
-    "output_path": string;
-    "overwrite": boolean;
 }
 
 export interface ForkCodexProfileRequest {

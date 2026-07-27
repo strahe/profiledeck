@@ -219,18 +219,6 @@ type UpdateClaudeCodeProfileRequest struct {
 	Description *string `json:"description,omitempty"`
 }
 
-type ExportCodexProfilesRequest struct {
-	ProfileIDs []string `json:"profile_ids,omitempty"`
-	OutputPath string   `json:"output_path"`
-	Overwrite  bool     `json:"overwrite"`
-}
-
-type ApplyCodexProfileImportRequest struct {
-	InputPath               string `json:"input_path"`
-	ExpectedPlanFingerprint string `json:"expected_plan_fingerprint"`
-	Confirm                 bool   `json:"confirm"`
-}
-
 func NewServices(application *app.Application, info app.Info, env Environment, startupErr error) Services {
 	changes := NewChangeNotifier()
 	autoSync := newUsageAutoSyncRuntime(application.Codex().GetSettings, application.Usage().SyncCodexBackground)
@@ -661,30 +649,6 @@ func (s *CodexService) UpdateProfileMetadata(ctx context.Context, req UpdateCode
 	return result, err
 }
 
-func (s *CodexService) ExportProfiles(ctx context.Context, req ExportCodexProfilesRequest) (codex.CodexProfileExportResult, error) {
-	return s.application.Codex().ExportProfiles(ctx, codex.ExportCodexProfilesRequest{
-		ProfileIDs: req.ProfileIDs,
-		OutputPath: req.OutputPath, Overwrite: req.Overwrite,
-	})
-}
-
-func (s *CodexService) InspectProfileImport(ctx context.Context, inputPath string) (codex.CodexProfileImportPlan, error) {
-	return s.application.Codex().InspectProfileImport(ctx, codex.InspectCodexProfileImportRequest{
-		InputPath: inputPath,
-	})
-}
-
-func (s *CodexService) ApplyProfileImport(ctx context.Context, req ApplyCodexProfileImportRequest) (codex.CodexProfileImportResult, error) {
-	result, err := s.application.Codex().ImportProfiles(ctx, codex.ImportCodexProfilesRequest{
-		InputPath:               req.InputPath,
-		ExpectedPlanFingerprint: req.ExpectedPlanFingerprint, Confirm: req.Confirm,
-	})
-	if err == nil && result.Changed {
-		s.notifyMutationResult(DesktopChangeCodexProfileChanged, "codex.importProfiles", codexconfig.ProviderID, "", result.OperationID, nil)
-	}
-	return result, err
-}
-
 func (s *ProfileService) ListProviders(ctx context.Context) ([]provider.Provider, error) {
 	return s.application.Providers().List(ctx)
 }
@@ -980,7 +944,7 @@ func notifyMutationResult(changes *ChangeNotifier, kind, source, providerID, pro
 	switch kind {
 	case DesktopChangeCodexProfileChanged:
 		event.ProfileChanged = true
-		event.ConfigSetsChanged = strings.Contains(source, "createProfile") || strings.Contains(source, "forkProfile") || strings.Contains(source, "saveActiveProfileState") || strings.Contains(source, "setProfileConfig") || strings.Contains(source, "importProfiles")
+		event.ConfigSetsChanged = strings.Contains(source, "createProfile") || strings.Contains(source, "forkProfile") || strings.Contains(source, "saveActiveProfileState") || strings.Contains(source, "setProfileConfig")
 		event.ActiveStateChanged = strings.Contains(source, "createProfile")
 	case DesktopChangeCodexConfigSetChanged:
 		event.ConfigSetsChanged = true

@@ -136,32 +136,3 @@ profiledeck-cli codex profile delete work --yes
 可以在 Profile 详情页或 **Codex → 设置**中，把自动刷新限额设为关闭、5、10、30 或 60 分钟。受支持的 ChatGPT 登录还可以启用**自动续期登录**。两项设置默认关闭，并且只在 ProfileDeck 打开或隐藏到菜单栏时运行。
 
 限额信息只会临时保留，不会保存到磁盘。它不是账单余额，也不会把本地会话关联到某个 Profile 或账号。部分外部登录方式可以显示限额，但无法自动续期。
-
-## 备份与恢复 Profile
-
-导出前先保存当前更改，并把备份放在任何准备删除的 ProfileDeck 数据目录之外：
-
-```bash
-profiledeck-cli codex profile save-current
-profiledeck-cli codex profile export --output ./profiledeck-codex-profiles.json
-```
-
-不指定 Profile ID 时，命令会导出全部 Codex Profile 和配置集。要导出指定 Profile 及其所需数据：
-
-```bash
-profiledeck-cli codex profile export work personal \
-  --output ./selected-codex-profiles.json
-```
-
-JSON 文件包含完整的 Codex 登录数据和设置。操作系统支持私有文件权限时，ProfileDeck 会把导出文件限制为仅当前用户账号可读。命令不会打印敏感内容。获得该文件的人可能可以访问你的账号。
-
-向已完成初始化的 ProfileDeck 导入前，请先检查备份：
-
-```bash
-profiledeck-cli codex profile import inspect ./profiledeck-codex-profiles.json
-profiledeck-cli codex profile import apply ./profiledeck-codex-profiles.json \
-  --plan-fingerprint <reviewed-fingerprint> \
-  --yes
-```
-
-导入会添加缺失数据、跳过相同数据；已有 Codex 数据冲突时，不会写入更改。导入的 Profile 不会成为当前 Profile，也不会写入 `auth.json` 或 `config.toml`。准备使用时，请再审核并应用正常切换。

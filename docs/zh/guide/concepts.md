@@ -44,7 +44,7 @@ ProfileDeck 可能显示 Codex Account ID 的末尾字符，帮助区分不同�
 
 ## ProfileDeck 会修改什么
 
-创建、编辑、Fork 或导入 Profile 时，只会更改 ProfileDeck 保存的数据。确认切换或恢复未完成切换后，ProfileDeck 才可能修改所选工具正在使用的登录或文件。
+创建、编辑或 Fork Profile 时，只会更改 ProfileDeck 保存的数据。确认切换或恢复未完成切换后，ProfileDeck 才可能修改所选工具正在使用的登录或文件。
 
 每次修改前，ProfileDeck 都会根据工具当前状态重新检查并创建临时操作恢复点。正常流程请参阅[审核并切换](../operations/switching.md)；操作未完成时请参阅[诊断与恢复](../operations/recovery.md)。成功切换不能撤销。
 

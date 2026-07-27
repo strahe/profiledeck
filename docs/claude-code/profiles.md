@@ -93,4 +93,4 @@ Start a new session, run `/status`, and review the [Claude Code authentication d
 
 ## What is not included
 
-Claude Code Profile support does not include Claude Desktop, sensitive export/import, quota checks, usage attribution, Console or API-key accounts, Claude Code settings switching, or parallel account sessions.
+Claude Code Profile support does not include Claude Desktop, quota checks, usage attribution, Console or API-key accounts, Claude Code settings switching, or parallel account sessions.

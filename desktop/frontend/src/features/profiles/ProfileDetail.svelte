@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
 	import CheckIcon from "@lucide/svelte/icons/check";
-	import DownloadIcon from "@lucide/svelte/icons/download";
 	import GitForkIcon from "@lucide/svelte/icons/git-fork";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import PencilIcon from "@lucide/svelte/icons/pencil";
@@ -35,14 +34,13 @@
 		onUse: () => void;
 		onFork: () => void;
 		onEdit: () => void;
-		onExport: () => void;
 		onSaveCurrent: () => void;
 		onSetConfig: () => void;
 		onRefreshQuota: () => void;
 		onDelete: () => void;
 	}
 
-	let { detail, busyAction, updated, quota, quotaLoading, onUse, onFork, onEdit, onExport, onSaveCurrent, onSetConfig, onRefreshQuota, onDelete }: Props = $props();
+	let { detail, busyAction, updated, quota, quotaLoading, onUse, onFork, onEdit, onSaveCurrent, onSetConfig, onRefreshQuota, onDelete }: Props = $props();
 	const runtime = useCodexRuntime();
 	let profileName = $derived(detail.summary.profile.name || detail.summary.profile.id);
 	let automation = $derived(runtime.settingsProfile(detail.summary.profile.id));
@@ -90,7 +88,6 @@
 					<DropdownMenu.Group>
 						<DropdownMenu.Item onSelect={onEdit}><PencilIcon />{$_("actions.editDetails")}</DropdownMenu.Item>
 						<DropdownMenu.Item onSelect={onFork}><GitForkIcon />{$_("actions.fork")}</DropdownMenu.Item>
-						<DropdownMenu.Item onSelect={onExport}><DownloadIcon />{$_("actions.exportProfile")}</DropdownMenu.Item>
 						{#if detail.summary.active}
 							<DropdownMenu.Item onSelect={onSaveCurrent}><SaveIcon />{$_("actions.updateFromCurrent")}</DropdownMenu.Item>
 						{:else}

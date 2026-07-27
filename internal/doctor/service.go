@@ -493,7 +493,6 @@ func (service *Service) inspectSensitivePathPermissions(ctx context.Context, pat
 		{path: paths.Database, want: 0o600, id: "database_permissions_weak", level: LevelError, message: "application database may allow access by other users"},
 		{path: paths.Backups, want: 0o700, id: "backups_permissions_weak", level: LevelWarning, message: "backup directory may allow access by other users"},
 		{path: paths.Recovery, want: 0o700, id: "recovery_permissions_weak", level: LevelError, message: "operation recovery directory may allow access by other users"},
-		{path: paths.Exports, want: 0o700, id: "exports_permissions_weak", level: LevelWarning, message: "export directory may allow access by other users"},
 		{path: paths.Logs, want: 0o700, id: "logs_permissions_weak", level: LevelWarning, message: "log directory may allow access by other users"},
 		{path: filepath.Dir(paths.Lock), want: 0o700, id: "locks_permissions_weak", level: LevelWarning, message: "lock directory may allow access by other users"},
 	}

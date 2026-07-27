@@ -21,7 +21,6 @@ func TestResolvePaths(t *testing.T) {
 		Database:   filepath.Join(root, "profiledeck.db"),
 		Backups:    filepath.Join(root, "backups"),
 		Recovery:   filepath.Join(root, "recovery"),
-		Exports:    filepath.Join(root, "exports"),
 		Logs:       filepath.Join(root, "logs"),
 		Lock:       filepath.Join(root, "locks", "switch.lock"),
 		DataLock:   filepath.Join(root, "locks", "data.lock"),
@@ -54,5 +53,27 @@ func TestResolvePathsDoesNotCreateDirectories(t *testing.T) {
 
 	if _, err := os.Stat(configDir); !os.IsNotExist(err) {
 		t.Fatalf("expected resolver not to create config dir, stat error: %v", err)
+	}
+}
+
+func TestEnsureDirectoriesLeavesLegacyExportFilesUntouched(t *testing.T) {
+	service, err := NewService(t.TempDir())
+	if err != nil {
+		t.Fatalf("create runtime service: %v", err)
+	}
+	legacyExport := filepath.Join(service.Paths().Root, "exports", "saved.json")
+	if err := os.MkdirAll(filepath.Dir(legacyExport), 0o700); err != nil {
+		t.Fatalf("create legacy export directory: %v", err)
+	}
+	if err := os.WriteFile(legacyExport, []byte("legacy export\n"), 0o600); err != nil {
+		t.Fatalf("write legacy export: %v", err)
+	}
+
+	if err := service.EnsureDirectories(); err != nil {
+		t.Fatalf("ensure runtime directories: %v", err)
+	}
+	content, err := os.ReadFile(legacyExport)
+	if err != nil || string(content) != "legacy export\n" {
+		t.Fatalf("legacy export changed: content=%q err=%v", content, err)
 	}
 }

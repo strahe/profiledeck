@@ -93,4 +93,4 @@ Claude Code 设置、`apiKeyHelper`、API Key 环境变量和云服务选项可�
 
 ## 不包含的功能
 
-Claude Code Profile 不包含 Claude Desktop、敏感导出/导入、配额检查、用量归属、Console 或 API Key 账号、Claude Code 设置切换或并行账号会话。
+Claude Code Profile 不包含 Claude Desktop、配额检查、用量归属、Console 或 API Key 账号、Claude Code 设置切换或并行账号会话。

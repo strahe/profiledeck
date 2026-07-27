@@ -16,10 +16,6 @@ import * as profile$0 from "../../internal/profile/models.js";
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
-export function ApplyProfileImport(req: $models.ApplyCodexProfileImportRequest): $CancellablePromise<codex$0.CodexProfileImportResult> {
-    return $Call.ByID(1095961474, req);
-}
-
 export function CopyConfigSet(req: $models.CopyCodexConfigSetRequest): $CancellablePromise<codex$0.CodexConfigSet> {
     return $Call.ByID(359109991, req);
 }
@@ -40,20 +36,12 @@ export function Detect(): $CancellablePromise<codex$0.CodexDetectResult> {
     return $Call.ByID(1422541865);
 }
 
-export function ExportProfiles(req: $models.ExportCodexProfilesRequest): $CancellablePromise<codex$0.CodexProfileExportResult> {
-    return $Call.ByID(2603279926, req);
-}
-
 export function ForkProfile(req: $models.ForkCodexProfileRequest): $CancellablePromise<codex$0.CodexProfileSaveResult> {
     return $Call.ByID(2400690215, req);
 }
 
 export function GetSettings(): $CancellablePromise<codex$0.CodexSettings> {
     return $Call.ByID(2021969151);
-}
-
-export function InspectProfileImport(inputPath: string): $CancellablePromise<codex$0.CodexProfileImportPlan> {
-    return $Call.ByID(3289700062, inputPath);
 }
 
 export function ListConfigSets(): $CancellablePromise<codex$0.CodexConfigSetListResult> {

@@ -44,7 +44,7 @@ Deletion changes only ProfileDeck's saved data. It removes completed operation r
 
 ## What ProfileDeck changes
 
-Creating, editing, forking, or importing a Profile changes only saved ProfileDeck data. Confirming a switch or unfinished-switch recovery may change the selected tool's working login or files.
+Creating, editing, or forking a Profile changes only saved ProfileDeck data. Confirming a switch or unfinished-switch recovery may change the selected tool's working login or files.
 
 Every such change is reviewed against the current tool state and gets a temporary operation recovery point first. See [Review and Switch](../operations/switching.md) for the normal flow and [Diagnostics and Recovery](../operations/recovery.md) when a change does not finish. Successful switches cannot be undone.
 

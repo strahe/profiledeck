@@ -27,7 +27,6 @@ export {
 };
 
 export type {
-    ApplyCodexProfileImportRequest,
     CodexProfileQuotaRuntimeStatus,
     CodexQuotaRuntimeStatus,
     CopyCodexConfigSetRequest,
@@ -38,7 +37,6 @@ export type {
     DashboardResult,
     DesktopError,
     Environment,
-    ExportCodexProfilesRequest,
     ForkCodexProfileRequest,
     SwitchApplyRequest,
     UpdateAntigravityProfileRequest,

@@ -47,29 +47,19 @@ ProfileDeck records a cleanup obligation before an operation becomes authoritati
 
 Backup lists and previews show only safe metadata. Keep encrypted backup files private as defense in depth, and never share operation recovery material.
 
-## Export a Codex Profile safely
-
-`profiledeck-cli codex profile export` creates an explicitly sensitive backup containing the selected Profile's complete Codex login and saved settings. Anyone with that file may be able to use the account.
-
-Choose a private destination outside a repository or shared folder. Do not commit or share the export. Keep it outside any ProfileDeck data directory you plan to delete.
-
-Import checks the file and reports conflicts before saving anything. It does not make the imported Profile current, change Codex files, or enable automatic limit refresh and sign-in renewal.
-
-See [Codex Profiles](../codex/profiles.md#back-up-and-restore-profiles) for the export and import commands.
-
 ## Know when ProfileDeck connects to the internet
 
 Most ProfileDeck actions use local data only.
 
 - Usage sync and reports read local Codex session files and do not contact a billing service.
 - Codex limit checks contact Codex or OpenAI with the selected saved login. That login is never sent to a custom model-service URL from the saved Codex settings. Limit results are temporary and are not added to usage reports.
-- Antigravity limit checks send the current Antigravity access token to a fixed, unpublished Google Cloud Code service. Using this service may carry account risk. ProfileDeck does not refresh, save, or write back the token during a check. The result stays in app memory and is not added to the database, usage reports, exports, or backups.
+- Antigravity limit checks send the current Antigravity access token to a fixed, unpublished Google Cloud Code service. Using this service may carry account risk. ProfileDeck does not refresh, save, or write back the token during a check. The result stays in app memory and is not added to the database, usage reports, or application backups.
 - Desktop update checks and downloads contact the public ProfileDeck release on GitHub.
 
 ProfileDeck does not provide cloud sync and does not send telemetry or analytics data. Automatic Codex limit refresh and sign-in renewal are off by default and run only while the Desktop app is open or in the menu bar.
 
 ## What output and usage reports omit
 
-Normal previews, commands, logs, errors, and backup summaries hide saved login values and other sensitive-looking settings. Encrypted application backup exports copy ciphertext unchanged. Only a sensitive Codex Profile export that you explicitly create exposes complete login and settings data in its private bundle.
+Normal previews, commands, logs, errors, and backup summaries hide saved login values and other sensitive-looking settings. Exported application backups remain encrypted; recovery-key exports are separate sensitive files that must be kept private.
 
 Usage reports store token counts, model names, time information, and cost estimates. They do not store raw prompts, raw completions, API keys, complete session records, or full source-file paths. Local Codex activity cannot reliably identify the Profile or ChatGPT account that served a request, so ProfileDeck does not guess that attribution.
