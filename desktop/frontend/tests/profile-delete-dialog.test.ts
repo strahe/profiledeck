@@ -29,9 +29,10 @@ function renderDialog(onDeleted = vi.fn()) {
 	return onDeleted;
 }
 
-afterEach(() => {
+afterEach(async () => {
 	cleanup();
 	backend.deleteProfile.mockReset();
+	await waitFor(() => expect(document.body.style.overflow).not.toBe("hidden"));
 });
 
 describe("ProfileDeleteDialog", () => {
