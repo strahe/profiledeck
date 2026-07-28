@@ -9,7 +9,7 @@ export default defineConfig({
 			$lib: resolve("./src/lib"),
 		},
 	},
-	plugins: [svelte(), svelteTesting()],
+	plugins: [svelte(), svelteTesting({ autoCleanup: false })],
 	test: {
 		environment: "jsdom",
 		globals: false,

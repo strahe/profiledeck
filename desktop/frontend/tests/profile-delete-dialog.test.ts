@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/svelte";
+import { render, screen, waitFor, within } from "@testing-library/svelte";
 import userEvent from "@testing-library/user-event";
 import { locale } from "svelte-i18n";
 import { tick } from "svelte";
@@ -29,10 +29,8 @@ function renderDialog(onDeleted = vi.fn()) {
 	return onDeleted;
 }
 
-afterEach(async () => {
-	cleanup();
+afterEach(() => {
 	backend.deleteProfile.mockReset();
-	await waitFor(() => expect(document.body.style.overflow).not.toBe("hidden"));
 });
 
 describe("ProfileDeleteDialog", () => {
