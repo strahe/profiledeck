@@ -8,6 +8,7 @@ import * as BackupService from "./backupservice.js";
 import * as ClaudeCodeService from "./claudecodeservice.js";
 import * as CodexService from "./codexservice.js";
 import * as DoctorService from "./doctorservice.js";
+import * as GrokBuildService from "./grokbuildservice.js";
 import * as ProfileService from "./profileservice.js";
 import * as SettingsService from "./settingsservice.js";
 import * as SwitchService from "./switchservice.js";
@@ -20,6 +21,7 @@ export {
     ClaudeCodeService,
     CodexService,
     DoctorService,
+    GrokBuildService,
     ProfileService,
     SettingsService,
     SwitchService,
@@ -30,20 +32,27 @@ export type {
     CodexProfileQuotaRuntimeStatus,
     CodexQuotaRuntimeStatus,
     CopyCodexConfigSetRequest,
+    CopyGrokBuildConfigSetRequest,
     CreateAntigravityProfileRequest,
     CreateClaudeCodeProfileRequest,
     CreateCodexConfigSetRequest,
     CreateCodexProfileRequest,
+    CreateGrokBuildConfigSetRequest,
+    CreateGrokBuildProfileRequest,
     DashboardResult,
     DesktopError,
     Environment,
     ForkCodexProfileRequest,
+    ForkGrokBuildProfileRequest,
     SwitchApplyRequest,
     UpdateAntigravityProfileRequest,
     UpdateClaudeCodeProfileRequest,
     UpdateCodexConfigSetRequest,
     UpdateCodexProfileConfigSetRequest,
     UpdateCodexProfileMetadataRequest,
+    UpdateGrokBuildConfigSetRequest,
+    UpdateGrokBuildProfileConfigSetRequest,
+    UpdateGrokBuildProfileMetadataRequest,
     UsageAutoSyncError,
     UsageAutoSyncStatus
 } from "./models.js";

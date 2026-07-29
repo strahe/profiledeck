@@ -20,11 +20,11 @@ Common examples are:
 
 If you pass `--config-dir <directory>`, ProfileDeck uses `<directory>/profiledeck` instead.
 
-The directory contains `profiledeck.db`, encrypted application backups, and temporary recovery material for unfinished switches. Codex, Claude Code, and Antigravity logins may be stored in the database or operation recovery material because ProfileDeck needs them to switch Profiles safely.
+The directory contains `profiledeck.db`, encrypted application backups, and temporary recovery material for unfinished switches. Codex, Claude Code, Antigravity, and Grok Build logins may be stored in the database or operation recovery material because ProfileDeck needs them to switch Profiles safely. Saved Grok Build Config Sets may contain the complete local `config.toml`.
 
 ## Protect local data
 
-ProfileDeck encrypts `.profiledeck-backup` files with age X25519. The live database and unfinished-switch recovery material are not separately encrypted, so anyone who can read your local files may be able to read saved logins. On macOS and Linux, ProfileDeck restricts its own private files and directories where possible. Desktop Diagnostics and `profiledeck-cli doctor` report ProfileDeck, Codex, or Claude Code paths whose permissions may allow access by other local users. These checks do not block startup or Profile switching, and ProfileDeck does not change files owned by those tools during a check.
+ProfileDeck encrypts `.profiledeck-backup` files with age X25519. The live database and unfinished-switch recovery material are not separately encrypted, so anyone who can read your local files may be able to read saved logins. On macOS and Linux, ProfileDeck restricts its own private files and directories where possible. Desktop Diagnostics and `profiledeck-cli doctor` report ProfileDeck, Codex, Grok Build, or Claude Code paths whose permissions may allow access by other local users. These checks do not block startup or Profile switching, and ProfileDeck does not change files owned by those tools during a check.
 
 - Use your operating system's full-disk encryption and screen lock.
 - Do not sync, commit, upload, or share the complete ProfileDeck data directory.
@@ -41,7 +41,7 @@ Manual backups remain until you delete them. Automatic backups run every 24 hour
 
 The private X25519 recovery key is stored in the operating system credential store. ProfileDeck does not store it inside a backup. Export the key separately before moving backups to another system, and remember that replacing the current key does not re-encrypt existing files.
 
-Before a switch changes an external tool, ProfileDeck creates a private recovery point under `recovery/<operation-id>/`. It may contain complete Codex files, a Claude Code account login, or an Antigravity login without application-backup encryption. It exists only for an unfinished switch and is deleted after success. It is not listed, exported, or usable to undo a successful switch.
+Before a switch changes an external tool, ProfileDeck creates a private recovery point under `recovery/<operation-id>/`. It may contain complete Codex or Grok Build files, a Claude Code account login, or an Antigravity login without application-backup encryption. It exists only for an unfinished switch and is deleted after success. It is not listed, exported, or usable to undo a successful switch.
 
 ProfileDeck records a cleanup obligation before an operation becomes authoritative, then clears it only after the recovery directory has been synchronized. A crash or filesystem error can therefore leave completed-operation material visible as a cleanup warning. While that warning is active, Profile switching and application restore pause, but reads, Doctor, and application backups remain available. Run `profiledeck-cli doctor retry-cleanup --yes` or use **Retry cleanup** in Desktop Diagnostics. The cleanup does not change tool sign-ins or settings.
 

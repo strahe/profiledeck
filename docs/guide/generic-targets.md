@@ -1,6 +1,6 @@
 # Switch Other Configuration Files
 
-Generic targets are an advanced CLI feature for switching explicitly selected local configuration files. Use the dedicated Profile commands for Codex, Claude Code, and Antigravity; generic target commands cannot change their managed logins or settings.
+Generic targets are an advanced CLI feature for switching explicitly selected local configuration files. Use the dedicated Profile commands for Codex, Claude Code, Antigravity, and Grok Build; generic target commands cannot change their managed logins or settings.
 
 ## Before you start
 

@@ -10,6 +10,8 @@ const (
 	DesktopChangeInitialized               = "initialized"
 	DesktopChangeCodexProfileChanged       = "codex-profile-changed"
 	DesktopChangeCodexConfigSetChanged     = "codex-config-set-changed"
+	DesktopChangeGrokBuildProfileChanged   = "grok-build-profile-changed"
+	DesktopChangeGrokBuildConfigSetChanged = "grok-build-config-set-changed"
 	DesktopChangeAntigravityProfileChanged = "antigravity-profile-changed"
 	DesktopChangeClaudeCodeProfileChanged  = "claude-code-profile-changed"
 	DesktopChangeProfileDeleted            = "profile-deleted"

@@ -11,6 +11,7 @@
 	import { Spinner } from "$lib/components/ui/spinner";
 	import * as Switch from "$lib/components/ui/switch";
 	import type { UpdateStatus } from "../../../bindings/github.com/strahe/profiledeck/desktop/update";
+	import type { State as AgentState } from "../../../bindings/github.com/strahe/profiledeck/internal/agent/models";
 	import { currentDesktopLocale, type DesktopLanguage } from "$lib/i18n";
 	import AppBackupSettings from "./AppBackupSettings.svelte";
 
@@ -20,10 +21,13 @@
 		appearance,
 		languageBusy,
 		appearanceBusy,
+		agents,
+		agentBusy,
 		updateStatus,
 		updateBusy,
 		onLanguageChange,
 		onAppearanceChange,
+		onAgentEnabledChange,
 		onChannelChange,
 		onAutomaticChange,
 		onCheckForUpdates,
@@ -37,10 +41,13 @@
 		appearance: "system" | "light" | "dark";
 		languageBusy: boolean;
 		appearanceBusy: boolean;
+		agents: AgentState[];
+		agentBusy: string;
 		updateStatus: UpdateStatus;
 		updateBusy: string;
 		onLanguageChange: (value: string) => void | Promise<void>;
 		onAppearanceChange: (value: string) => void | Promise<void>;
+		onAgentEnabledChange: (agentID: string, enabled: boolean) => void | Promise<void>;
 		onChannelChange: (value: string) => void | Promise<void>;
 		onAutomaticChange: (enabled: boolean) => void | Promise<void>;
 		onCheckForUpdates: () => void | Promise<void>;
@@ -144,6 +151,28 @@
 						</Select.Root>
 					{/snippet}
 				</SettingsRow>
+			</Field.FieldGroup>
+		</SectionCard>
+
+		<SectionCard title={$_("settings.agents.title")} description={$_("settings.agents.description")}>
+			<Field.FieldGroup>
+				{#each agents as agent (agent.manifest.id)}
+					<SettingsRow
+						label={agent.manifest.display_name}
+						description={$_("settings.agents.agentDescription", { values: { agent: agent.manifest.display_name } })}
+						forID={`desktop-agent-${agent.manifest.id}`}
+					>
+						{#snippet control()}
+							{#if agentBusy === agent.manifest.id}<Spinner />{/if}
+							<Switch.Root
+								id={`desktop-agent-${agent.manifest.id}`}
+								checked={agent.enabled}
+								disabled={!!agentBusy}
+								onCheckedChange={(enabled) => onAgentEnabledChange(agent.manifest.id, enabled)}
+							/>
+						{/snippet}
+					</SettingsRow>
+				{/each}
 			</Field.FieldGroup>
 		</SectionCard>
 

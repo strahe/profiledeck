@@ -4,15 +4,18 @@ Use this page for command names and common options. Run `profiledeck-cli --help`
 
 Angle brackets mark required values. Square brackets mark optional arguments.
 
-## Global option
+## Global options
 
 Every command accepts:
 
 ```text
 --config-dir string  Use a custom ProfileDeck config directory
+--grok-home string   Use a custom Grok Build Home
 ```
 
-This value is the parent config directory. ProfileDeck creates or uses its `profiledeck` folder below it.
+`--config-dir` is the parent config directory. ProfileDeck creates or uses its `profiledeck` folder below it.
+
+`--grok-home` overrides `GROK_HOME` and the default `~/.grok` location. Put a global option before the command name.
 
 ## Commands
 
@@ -23,6 +26,7 @@ This value is the parent config directory. ProfileDeck creates or uses its `prof
 | `claude-code` | Save and manage Claude Code account-login Profiles. |
 | `codex` | Manage Codex Profiles and saved settings (Config Sets). |
 | `doctor` | Diagnose local-data, permission, and interrupted-operation problems. |
+| `grok-build` | Manage Grok Build Profiles and saved settings (Config Sets). |
 | `init` | Create ProfileDeck's local data. |
 | `provider` | Configure another AI tool for advanced file switching. |
 | `profile` | Manage Profiles and advanced file targets. |
@@ -67,6 +71,38 @@ The first `profile create` saves the current Codex login and settings and create
 `config-set create` saves the current `config.toml`. List and show commands return safe summaries. You can delete only a Config Set that no Profile uses.
 
 See [Codex Profiles](../codex/profiles.md) for task-based examples and safety guidance.
+
+## Grok Build
+
+```bash
+profiledeck-cli grok-build detect [--json]
+profiledeck-cli grok-build profile list [--json]
+profiledeck-cli grok-build profile show <profile-id> [--json]
+profiledeck-cli grok-build profile create <profile-id> [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--name NAME] [--description TEXT] [--json]
+profiledeck-cli grok-build profile fork <source-profile-id> <new-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--name NAME] [--description TEXT] [--json]
+profiledeck-cli grok-build profile save-current [--json]
+profiledeck-cli grok-build profile set-config <profile-id> <config-set-id> [--json]
+profiledeck-cli grok-build profile delete <profile-id> --yes [--json]
+
+profiledeck-cli grok-build config-set list [--json]
+profiledeck-cli grok-build config-set show <config-set-id> [--json]
+profiledeck-cli grok-build config-set create <config-set-id> [--name NAME] [--description TEXT] [--json]
+profiledeck-cli grok-build config-set copy <source-id> <new-id> [--name NAME] [--description TEXT] [--json]
+profiledeck-cli grok-build config-set update <config-set-id> [--name NAME] [--description TEXT] [--json]
+profiledeck-cli grok-build config-set delete <config-set-id> --yes [--json]
+```
+
+The first `profile create` saves the current file-based login and uses the `shared` Config Set. If `shared` does not exist, ProfileDeck creates it from the current `config.toml`; a missing file becomes empty settings. A pre-created `shared` Config Set is reused without changing it. Later creates reuse the current Profile's saved Config Set without reading or overwriting the working `config.toml`, unless you pass `--new-config-set`. `auth.json` must be present, non-empty, and valid.
+
+`fork` requires choices for both the login and Config Set, and at least one choice must be `copy-new`. `save-current` saves both current files and fails without partially saving if `auth.json` is invalid. Config Set list and detail output never contains `config.toml`.
+
+Set `--grok-home` before `grok-build` when needed:
+
+```bash
+profiledeck-cli --grok-home /path/to/grok-home grok-build detect
+```
+
+The Provider remains bound to the first initialized Home. Profile creation, `save-current`, and switching are unavailable while `GROK_AUTH` or `GROK_AUTH_PATH` is set. See [Grok Build Profiles](../grok-build/profiles.md) for switching and safety guidance.
 
 ## Claude Code
 
@@ -123,7 +159,7 @@ Only local Codex usage is supported. `report` defaults to `7d`; `summary` gives 
 
 ## Other tools and configuration files
 
-The following commands are advanced CLI features for tools other than the built-in Codex, Claude Code, and Antigravity workflows. Use each built-in tool's dedicated commands above; generic target commands cannot manage their saved logins or settings.
+The following commands are advanced CLI features for tools other than the built-in Codex, Claude Code, Antigravity, and Grok Build workflows. Use each built-in tool's dedicated commands above; generic target commands cannot manage their saved logins or settings.
 
 ```bash
 profiledeck-cli provider list [--json]
@@ -141,7 +177,7 @@ profiledeck-cli profile delete <id> --yes [--json]
 
 Deleting a Provider removes all ProfileDeck data owned by it, including its settings, saved resources and bindings, file targets, current-Profile state, usage reports, and completed operation records. Global Profiles, Desktop Agent preferences, tool-owned working logins, settings, and files remain. Deletion stops while that Provider has an unfinished operation.
 
-All four Profile delete commands perform the same global deletion. An Agent-specific command deletes the complete Profile even when it contains data only for another Agent. Deletion stops if the Profile is current in any Agent or has an unfinished operation. Saved logins and Config Sets used only by that Profile are deleted; shared saved data and unrelated unbound data remain. Completed operation records that refer to the Profile are also removed. Tool-owned working logins, settings, and files do not change.
+All five Profile delete commands perform the same global deletion. An Agent-specific command deletes the complete Profile even when it contains data only for another Agent. Deletion stops if the Profile is current in any Agent or has an unfinished operation. Saved logins and Config Sets used only by that Profile are deleted; shared saved data and unrelated unbound data remain. Completed operation records that refer to the Profile are also removed. Tool-owned working logins, settings, and files do not change.
 
 Target commands:
 

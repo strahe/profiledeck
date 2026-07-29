@@ -99,6 +99,7 @@ type SensitivePathKind string
 const (
 	SensitivePathCodexAuth            SensitivePathKind = "codex_auth"
 	SensitivePathClaudeCodeCredential SensitivePathKind = "claude_code_credential"
+	SensitivePathGrokBuildAuth        SensitivePathKind = "grok_build_auth"
 )
 
 // SensitivePathLister returns compiled-in Provider working paths that remain
@@ -568,6 +569,15 @@ func permissionPolicyForSensitivePath(kind SensitivePathKind) (sensitivePathPerm
 			},
 			checkFailedID:      "claude_code_credentials_permission_check_failed",
 			checkFailedMessage: "failed to inspect Claude Code login file permissions",
+		}, true
+	case SensitivePathGrokBuildAuth:
+		return sensitivePathPermissionPolicy{
+			pathPermissionCheck: pathPermissionCheck{
+				want: 0o600, id: "grok_build_auth_target_permissions_weak", level: LevelError,
+				message: "Grok Build login file may allow access by other users",
+			},
+			checkFailedID:      "grok_build_auth_target_permission_check_failed",
+			checkFailedMessage: "failed to inspect Grok Build login file permissions",
 		}, true
 	default:
 		return sensitivePathPermissionPolicy{}, false

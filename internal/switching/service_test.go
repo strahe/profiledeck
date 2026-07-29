@@ -17,6 +17,7 @@ import (
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/maintenance"
 	"github.com/strahe/profiledeck/internal/profiletarget"
+	"github.com/strahe/profiledeck/internal/providercoord"
 	"github.com/strahe/profiledeck/internal/store"
 	switchtarget "github.com/strahe/profiledeck/internal/switching/target"
 	"github.com/strahe/profiledeck/internal/targetfs"
@@ -31,6 +32,77 @@ type blockingApplyFileBackend struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+type recordingProviderCoordinator struct {
+	mu       sync.Mutex
+	events   []string
+	requests []providercoord.Request
+}
+
+type recordingProviderGuard struct {
+	coordinator *recordingProviderCoordinator
+}
+
+type rejectingProviderCoordinator struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (coordinator *rejectingProviderCoordinator) Acquire(
+	context.Context,
+	providercoord.Request,
+) (providercoord.Guard, error) {
+	coordinator.mu.Lock()
+	coordinator.calls++
+	coordinator.mu.Unlock()
+	return nil, apperror.New(apperror.LockAcquireFailed, "injected Provider guard failure")
+}
+
+func (coordinator *rejectingProviderCoordinator) callCount() int {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	return coordinator.calls
+}
+
+func (coordinator *recordingProviderCoordinator) Acquire(
+	_ context.Context,
+	request providercoord.Request,
+) (providercoord.Guard, error) {
+	coordinator.record("acquire")
+	coordinator.mu.Lock()
+	coordinator.requests = append(coordinator.requests, request)
+	coordinator.mu.Unlock()
+	return recordingProviderGuard{coordinator: coordinator}, nil
+}
+
+func (guard recordingProviderGuard) Validate(context.Context) error {
+	guard.coordinator.record("validate")
+	return nil
+}
+
+func (guard recordingProviderGuard) Release() {
+	guard.coordinator.record("release")
+}
+
+func (coordinator *recordingProviderCoordinator) record(event string) {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	coordinator.events = append(coordinator.events, event)
+}
+
+func (coordinator *recordingProviderCoordinator) snapshot() ([]string, []providercoord.Request) {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	events := append([]string(nil), coordinator.events...)
+	requests := append([]providercoord.Request(nil), coordinator.requests...)
+	return events, requests
+}
+
+func providerCoordinatorOption(coordinator providercoord.Coordinator) DependencyOption {
+	return WithProviderCoordinators(providercoord.MustRegistry(providercoord.Registration{
+		ProviderID: "provider-a", Coordinator: coordinator,
+	}))
 }
 
 func (backend *blockingApplyFileBackend) Apply(
@@ -465,6 +537,91 @@ func TestMaintenanceDoesNotApplyDesktopAgentPolicy(t *testing.T) {
 	if policy.calls != 1 {
 		t.Fatalf("maintenance consulted Desktop policy: calls=%d, want 1 explicit fixture call", policy.calls)
 	}
+}
+
+func TestMaintenanceHoldsProviderGuardThroughMutationCommitBoundary(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	if _, err := initSwitchingTestRuntime(ctx, configDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	createGenericProviderAndProfile(t, ctx, configDir)
+	coordinator := &recordingProviderCoordinator{}
+	environment := newSwitchingTestEnvironmentWithOptions(
+		t,
+		configDir,
+		switchtarget.MustRegistry(switchtarget.FileBackend{}),
+		providerCoordinatorOption(coordinator),
+	)
+	targets := []providercoord.Target{{ID: "auth", BackendID: "file", Path: "/safe/test/path"}}
+	err := environment.service.RunMaintenance(ctx, maintenance.Request{
+		Operation:           "profile-save",
+		ProviderID:          "provider-a",
+		CoordinationTargets: targets,
+	}, func(context.Context, *store.Store, string) error {
+		coordinator.record("mutation")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunMaintenance: %v", err)
+	}
+	events, requests := coordinator.snapshot()
+	if strings.Join(events, ",") != "acquire,mutation,validate,release" {
+		t.Fatalf("coordination events = %v", events)
+	}
+	if len(requests) != 1 || requests[0].ProviderID != "provider-a" ||
+		requests[0].ProviderMetadataJSON != "{}" ||
+		len(requests[0].Targets) != 1 || requests[0].Targets[0] != targets[0] {
+		t.Fatalf("coordination request = %#v", requests)
+	}
+}
+
+func TestApplyHoldsProviderGuardAcrossExternalWritesAndDatabaseCommit(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	if _, err := initSwitchingTestRuntime(ctx, configDir); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	createGenericProviderAndProfile(t, ctx, configDir)
+	targetPath := filepath.Join(t.TempDir(), "settings.txt")
+	plain := newSwitchingTestEnvironment(t, configDir)
+	if _, err := plain.targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
+		ProfileID: "profile-a", ProviderID: "provider-a", TargetID: "target-a",
+		Path: targetPath, Format: "text", Strategy: "replace-file",
+		ValueJSON: contentValueJSON(t, "managed\n"),
+	}); err != nil {
+		t.Fatalf("Create target: %v", err)
+	}
+
+	coordinator := &recordingProviderCoordinator{}
+	environment := newSwitchingTestEnvironmentWithOptions(
+		t,
+		configDir,
+		switchtarget.MustRegistry(switchtarget.FileBackend{}),
+		providerCoordinatorOption(coordinator),
+	)
+	if _, err := environment.service.Apply(ctx, ApplySwitchRequest{
+		ProviderID: "provider-a", ProfileID: "profile-a", Confirm: true,
+	}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	events, requests := coordinator.snapshot()
+	if len(events) < 5 || events[0] != "acquire" || events[len(events)-1] != "release" {
+		t.Fatalf("coordination events = %v", events)
+	}
+	validations := 0
+	for _, event := range events {
+		if event == "validate" {
+			validations++
+		}
+	}
+	if validations < 3 {
+		t.Fatalf("guard validations = %d, events = %v", validations, events)
+	}
+	if len(requests) != 1 || requests[0].ProviderMetadataJSON != "{}" {
+		t.Fatalf("coordination requests = %#v", requests)
+	}
+	assertFileContent(t, targetPath, "managed\n")
 }
 
 func TestApplySwitchUpdatePreservesPOSIXModeAndCleansRecoveryPoint(t *testing.T) {

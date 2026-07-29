@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/providercoord"
 	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/switching/transaction"
@@ -58,9 +59,10 @@ type RecoveryInspection struct {
 }
 
 type recoveryAssessment struct {
-	Inspection     RecoveryInspection
-	Source         recoverySource
-	ResolutionKind string
+	Inspection               RecoveryInspection
+	Source                   recoverySource
+	ResolutionKind           string
+	RequiresTargetInspection bool
 }
 
 func (service *Service) InspectRecovery(ctx context.Context, rawOperationID string) (RecoveryInspection, error) {
@@ -114,8 +116,24 @@ func (service *Service) RecoverOperation(ctx context.Context, req RecoverOperati
 	if err != nil {
 		return RecoverOperationResult{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to read switch operation", err)
 	}
-	assessment := service.inspectRecoveryFromOperation(ctx, db, service.paths, operation, false)
+	assessment := inspectRecoveryMetadata(operation)
+	var guard providercoord.Guard
+	// Pre-write checkpoints are database-only cleanup. Once target work may
+	// have started, acquire coordination before the first external inspection.
+	if assessment.RequiresTargetInspection {
+		guard, err = service.acquireProviderGuard(ctx, db, recoveryCoordinationRequest(assessment.Source))
+		if err != nil {
+			return RecoverOperationResult{}, err
+		}
+		if guard != nil {
+			defer guard.Release()
+		}
+		assessment = service.inspectRecoveryTargets(ctx, db, service.paths, assessment)
+	}
 	if assessment.Inspection.Status == RecoveryStatusClosable {
+		if err := validateProviderGuard(ctx, guard); err != nil {
+			return RecoverOperationResult{}, err
+		}
 		if err := db.ResolveSwitchOperationForCleanup(ctx, operationID, assessment.ResolutionKind); err != nil {
 			return RecoverOperationResult{}, apperror.Wrap(apperror.OperationUpdateFailed, "failed to close incomplete switch operation", err)
 		}
@@ -154,9 +172,12 @@ func (service *Service) RecoverOperation(ctx context.Context, req RecoverOperati
 		return RecoverOperationResult{}, apperror.Wrap(apperror.OperationCreateFailed, "failed to create recovery operation", err)
 	}
 
-	counts, processed, err := service.applyRecoveryTargets(ctx, db, recoveryOperationID, initialMetadata, metadataBase, source)
+	counts, processed, err := service.applyRecoveryTargets(ctx, db, recoveryOperationID, initialMetadata, metadataBase, source, guard)
 	if err != nil {
 		return RecoverOperationResult{}, err
+	}
+	if err := validateProviderGuard(ctx, guard); err != nil {
+		return RecoverOperationResult{}, failRecoveryWithProcessed(ctx, db, recoveryOperationID, initialMetadata, metadataBase, counts, processed, err)
 	}
 	if err := service.verifyRestoredRecoveryTargets(ctx, source.Targets); err != nil {
 		return RecoverOperationResult{}, failRecoveryWithProcessed(ctx, db, recoveryOperationID, initialMetadata, metadataBase, counts, processed, err)
@@ -166,6 +187,9 @@ func (service *Service) RecoverOperation(ctx context.Context, req RecoverOperati
 	appliedMetadata, err := marshalRecoveryOperationMetadata("applied", metadataBase)
 	if err != nil {
 		return RecoverOperationResult{}, failRecoveryOperation(ctx, db, recoveryOperationID, initialMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode recovery operation metadata", err))
+	}
+	if err := validateProviderGuard(ctx, guard); err != nil {
+		return RecoverOperationResult{}, failRecoveryWithProcessed(ctx, db, recoveryOperationID, initialMetadata, metadataBase, counts, processed, err)
 	}
 	if err := db.CompleteRecoveryOperation(ctx, store.CompleteRecoveryOperationParams{
 		ID: recoveryOperationID, SourceOperationID: source.Operation.ID,
@@ -189,6 +213,24 @@ func (service *Service) RecoverOperation(ctx context.Context, req RecoverOperati
 	}, nil
 }
 
+func recoveryCoordinationRequest(source recoverySource) providercoord.Request {
+	operation := source.Operation
+	request := providercoord.Request{
+		OperationID: "recover-" + operation.ID,
+		ProviderID:  operation.ProviderID,
+	}
+	metadata := source.Metadata
+	request.Targets = make([]providercoord.Target, 0, len(metadata.Targets))
+	for _, target := range metadata.Targets {
+		request.Targets = append(request.Targets, providercoord.Target{
+			ID:        target.TargetID,
+			BackendID: target.BackendID,
+			Path:      target.Path,
+		})
+	}
+	return request
+}
+
 func (service *Service) inspectRecoveryFromOperation(
 	ctx context.Context,
 	db *store.Store,
@@ -196,37 +238,108 @@ func (service *Service) inspectRecoveryFromOperation(
 	operation store.Operation,
 	probeLock bool,
 ) recoveryAssessment {
+	if inspection, invalid := inspectRecoveryHeader(operation); invalid {
+		return recoveryAssessment{Inspection: inspection}
+	}
+	if probeLock {
+		probe, err := targetfs.ProbeLock(paths.Lock)
+		if err != nil {
+			return recoveryAssessment{Inspection: RecoveryInspection{
+				OperationID: operation.ID,
+				Status:      RecoveryStatusUnknown,
+				Reason:      "switch_lock_check_failed",
+			}}
+		}
+		if probe.Held {
+			return recoveryAssessment{Inspection: RecoveryInspection{
+				OperationID: operation.ID,
+				Status:      RecoveryStatusRunning,
+				Reason:      "switch_operation_in_progress",
+			}}
+		}
+	}
+	assessment := inspectRecoveryMetadataAfterHeader(operation)
+	if !assessment.RequiresTargetInspection {
+		return assessment
+	}
+	// Recovery inspection follows the same lock order as recovery mutation so
+	// no Grok target is read outside its Provider coordination boundary.
+	lock, err := acquireSwitchLock(paths.Lock, "inspect-recovery-"+operation.ID)
+	if err != nil {
+		var appErr *apperror.Error
+		if errors.As(err, &appErr) && appErr.Code == apperror.LockAcquireFailed {
+			return recoveryAssessment{Inspection: RecoveryInspection{
+				OperationID: operation.ID,
+				Status:      RecoveryStatusRunning,
+				Reason:      "switch_operation_in_progress",
+			}}
+		}
+		return recoveryAssessment{Inspection: RecoveryInspection{
+			OperationID: operation.ID,
+			Status:      RecoveryStatusUnknown,
+			Reason:      "switch_lock_check_failed",
+		}}
+	}
+	defer lock.Release()
+	guard, err := service.acquireProviderGuard(ctx, db, recoveryCoordinationRequest(assessment.Source))
+	if err != nil {
+		return recoveryAssessment{Inspection: RecoveryInspection{
+			OperationID: operation.ID,
+			Status:      RecoveryStatusUnknown,
+			Reason:      "recovery_check_failed",
+		}}
+	}
+	if guard != nil {
+		defer guard.Release()
+	}
+	assessment = service.inspectRecoveryTargets(ctx, db, paths, assessment)
+	if err := validateProviderGuard(ctx, guard); err != nil {
+		return recoveryAssessment{Inspection: RecoveryInspection{
+			OperationID: operation.ID,
+			Status:      RecoveryStatusUnknown,
+			Reason:      "recovery_check_failed",
+		}}
+	}
+	return assessment
+}
+
+func inspectRecoveryMetadata(operation store.Operation) recoveryAssessment {
+	if inspection, invalid := inspectRecoveryHeader(operation); invalid {
+		return recoveryAssessment{Inspection: inspection}
+	}
+	return inspectRecoveryMetadataAfterHeader(operation)
+}
+
+func inspectRecoveryHeader(operation store.Operation) (RecoveryInspection, bool) {
 	inspection := RecoveryInspection{OperationID: operation.ID}
 	if operation.OperationType != store.OperationTypeSwitch ||
 		(operation.Status != store.OperationStatusPending && operation.Status != store.OperationStatusFailed) ||
 		operation.ResolvedAtUnixMS != 0 {
 		inspection.Status = RecoveryStatusUnrecoverable
 		inspection.Reason = "operation_not_unresolved_switch"
-		return recoveryAssessment{Inspection: inspection}
+		return inspection, true
 	}
 	if operation.MetadataSchemaVersion != store.OperationMetadataSchemaVersion {
 		// Recovery metadata is executable safety state. A newer schema must be
 		// interpreted only by a binary that understands its full contract.
 		inspection.Status = RecoveryStatusUnrecoverable
 		inspection.Reason = "operation_metadata_version_unsupported"
-		return recoveryAssessment{Inspection: inspection}
+		return inspection, true
 	}
-	if probeLock {
-		probe, err := targetfs.ProbeLock(paths.Lock)
-		if err != nil {
-			inspection.Status = RecoveryStatusUnknown
-			inspection.Reason = "switch_lock_check_failed"
-			return recoveryAssessment{Inspection: inspection}
-		}
-		if probe.Held {
-			inspection.Status = RecoveryStatusRunning
-			inspection.Reason = "switch_operation_in_progress"
-			return recoveryAssessment{Inspection: inspection}
-		}
-	}
+	return inspection, false
+}
 
+func inspectRecoveryMetadataAfterHeader(operation store.Operation) recoveryAssessment {
+	inspection := RecoveryInspection{OperationID: operation.ID}
 	var metadata switchOperationMetadata
 	if err := decodeSwitchOperationMetadata(operation.MetadataJSON, &metadata); err != nil {
+		inspection.Status = RecoveryStatusUnrecoverable
+		inspection.Reason = "operation_metadata_invalid"
+		return recoveryAssessment{Inspection: inspection}
+	}
+	// Executable recovery metadata cannot transfer an operation to another
+	// Provider because doing so would select the wrong coordination guard.
+	if metadata.ProviderID == "" || metadata.ProviderID != operation.ProviderID {
 		inspection.Status = RecoveryStatusUnrecoverable
 		inspection.Reason = "operation_metadata_invalid"
 		return recoveryAssessment{Inspection: inspection}
@@ -243,21 +356,45 @@ func (service *Service) inspectRecoveryFromOperation(
 			ResolutionKind: "closed_before_target_writes",
 		}
 	case "recovery_created":
+		return recoveryAssessment{
+			Inspection:               inspection,
+			Source:                   source,
+			RequiresTargetInspection: true,
+		}
 	default:
 		inspection.Status = RecoveryStatusUnrecoverable
 		inspection.Reason = "recovery_checkpoint_invalid"
 		return recoveryAssessment{Inspection: inspection, Source: source}
 	}
-	loaded, err := service.loadOperationRecoverySourceFromOperation(ctx, db, paths, operation)
+}
+
+func (service *Service) inspectRecoveryTargets(
+	ctx context.Context,
+	db *store.Store,
+	paths runtime.Paths,
+	assessment recoveryAssessment,
+) recoveryAssessment {
+	inspection := assessment.Inspection
+	source := assessment.Source
+	loaded, err := service.loadOperationRecoverySourceFromOperation(ctx, db, paths, source.Operation)
 	if err != nil {
-		return recoveryAssessment{Inspection: recoveryInspectionFromError(operation.ID, err), Source: source}
+		return recoveryAssessment{
+			Inspection: recoveryInspectionFromError(source.Operation.ID, err),
+			Source:     source,
+		}
 	}
 	if err := validateRecoveryActiveState(ctx, db, loaded); err != nil {
-		return recoveryAssessment{Inspection: recoveryInspectionFromError(operation.ID, err), Source: loaded}
+		return recoveryAssessment{
+			Inspection: recoveryInspectionFromError(source.Operation.ID, err),
+			Source:     loaded,
+		}
 	}
 	allBefore, err := service.inspectRecoveryTargetStates(ctx, loaded.Targets)
 	if err != nil {
-		return recoveryAssessment{Inspection: recoveryInspectionFromError(operation.ID, err), Source: loaded}
+		return recoveryAssessment{
+			Inspection: recoveryInspectionFromError(source.Operation.ID, err),
+			Source:     loaded,
+		}
 	}
 	if allBefore {
 		inspection.Status = RecoveryStatusClosable
@@ -286,7 +423,8 @@ func (service *Service) loadOperationRecoverySourceFromOperation(
 		return recoverySource{}, apperror.New(apperror.RecoveryUnsupported, "switch operation metadata is invalid").WithDetail("operation_id", operation.ID)
 	}
 	if metadata.Checkpoint != "recovery_created" || metadata.PreviousActive == nil ||
-		metadata.ProviderID == "" || metadata.ProfileID == "" || metadata.PlanFingerprint == "" || metadata.RecoveryPath == "" {
+		metadata.ProviderID == "" || metadata.ProviderID != operation.ProviderID ||
+		metadata.ProfileID == "" || metadata.PlanFingerprint == "" || metadata.RecoveryPath == "" {
 		return recoverySource{}, apperror.New(apperror.RecoveryUnsupported, "switch operation has no valid recovery checkpoint").WithDetail("operation_id", operation.ID)
 	}
 	recoveryPath := filepath.Join(paths.Recovery, operation.ID)

@@ -19,9 +19,15 @@ import (
 	codexadapter "github.com/strahe/profiledeck/internal/codex/adapter"
 	codexprofile "github.com/strahe/profiledeck/internal/codex/profile"
 	"github.com/strahe/profiledeck/internal/doctor"
+	"github.com/strahe/profiledeck/internal/grokbuild"
+	grokadapter "github.com/strahe/profiledeck/internal/grokbuild/adapter"
+	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
+	grokcoordination "github.com/strahe/profiledeck/internal/grokbuild/coordination"
+	grokprofile "github.com/strahe/profiledeck/internal/grokbuild/profile"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/provider"
+	"github.com/strahe/profiledeck/internal/providercoord"
 	"github.com/strahe/profiledeck/internal/recoverycleanup"
 	runtimeservice "github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/settings"
@@ -35,6 +41,7 @@ import (
 type Config struct {
 	ConfigDir   string
 	CodexDir    string
+	GrokHome    string
 	AgentAccess agent.AccessMode
 }
 
@@ -64,18 +71,31 @@ type Application struct {
 	usage       *usage.Service
 	settings    *settings.Service
 	codex       *codex.Service
+	grokBuild   *grokbuild.Service
 	antigravity *antigravity.Service
 	claudeCode  *claudecode.Service
 }
 
 func New(config Config) (*Application, error) {
-	return NewWithDependencies(config, defaultDependencies())
+	home, err := grokconfig.ResolveHome(config.GrokHome)
+	if err != nil {
+		return nil, err
+	}
+	config.GrokHome = home.Dir
+	return NewWithDependencies(config, defaultDependencies(home))
 }
 
 func NewWithDependencies(config Config, dependencies Dependencies) (*Application, error) {
 	if !dependencies.configured {
 		return nil, fmt.Errorf("application dependencies are required")
 	}
+	home, err := grokconfig.ResolveHome(config.GrokHome)
+	if err != nil {
+		return nil, err
+	}
+	// Freeze service path resolution even if the process environment or working
+	// directory later changes. Production dependencies use this same Home.
+	config.GrokHome = home.Dir
 	accessMode := config.AgentAccess
 	if accessMode == "" {
 		accessMode = agent.AccessUnrestricted
@@ -126,6 +146,7 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 	)
 
 	codexService := codex.NewService(runtimeService, switchingService, switchingService, agentService, config.CodexDir)
+	grokBuildService := grokbuild.NewService(runtimeService, switchingService, agentService, config.GrokHome)
 	antigravityService := antigravity.NewService(
 		runtimeService, stores, switchingService, switchingService, agentService, dependencies.switching.Targets,
 	)
@@ -134,13 +155,14 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 	)
 	profileTargetService := profiletarget.NewService(
 		stores, switchingService, agentService, dependencies.agents,
-		codexService.ReservedPaths, claudeCodeService.ReservedPaths,
+		codexService.ReservedPaths, grokBuildService.ReservedPaths, claudeCodeService.ReservedPaths,
 	)
 	doctorService := doctor.NewService(
 		runtimeService,
 		agentService,
 		[]doctor.ProviderCheck{
 			{AgentID: agent.Codex, Check: codexService.HealthCheck},
+			{AgentID: agent.GrokBuild, Check: grokBuildService.HealthCheck},
 			{AgentID: agent.Antigravity, Check: antigravityService.HealthCheck},
 			{AgentID: agent.ClaudeCode, Check: claudeCodeService.HealthCheck},
 		},
@@ -150,6 +172,7 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 		},
 		[]doctor.SensitivePathCheck{
 			{Kind: doctor.SensitivePathCodexAuth, List: codexService.SensitivePaths},
+			{Kind: doctor.SensitivePathGrokBuildAuth, List: grokBuildService.SensitivePaths},
 			{Kind: doctor.SensitivePathClaudeCodeCredential, List: claudeCodeService.SensitivePaths},
 		},
 		doctor.RecoveryCleanupCoordinator{Cleanup: cleanupService, Locks: switchingService},
@@ -163,6 +186,7 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 	)
 	profileDeleteRegistry := profile.MustDeleteRegistry(
 		codexprofile.DeleteParticipant{},
+		grokprofile.DeleteParticipant{},
 		agyprofile.DeleteParticipant{},
 		claudeprofile.DeleteParticipant{},
 	)
@@ -180,11 +204,16 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 		targets:   profileTargetService,
 		switching: switchingService, doctor: doctorService,
 		usage: usage.NewService(stores, usageRegistry), settings: settings.NewService(stores),
-		codex: codexService, antigravity: antigravityService, claudeCode: claudeCodeService,
+		codex: codexService, grokBuild: grokBuildService,
+		antigravity: antigravityService, claudeCode: claudeCodeService,
 	}, nil
 }
 
-func defaultDependencies() Dependencies {
+func defaultDependencies(homes ...grokconfig.Home) Dependencies {
+	home, _ := grokconfig.ResolveHome("")
+	if len(homes) > 0 {
+		home = homes[0]
+	}
 	targets := switchtarget.MustRegistry(
 		switchtarget.FileBackend{},
 		switchtarget.NewKeyringBackend(switchtarget.SystemKeyringClient{}),
@@ -193,10 +222,17 @@ func defaultDependencies() Dependencies {
 	adapters := switchplan.MustRegistry(
 		switchplan.GenericAdapter{},
 		codexadapter.Adapter{},
+		grokadapter.Adapter{},
 		agyadapter.Adapter{},
 		claudeadapter.Adapter{},
 	)
-	return NewDependencies(agent.BuiltinRegistry(), switching.NewDependencies(targets, adapters))
+	coordinators := providercoord.MustRegistry(providercoord.Registration{
+		ProviderID: grokconfig.ProviderID, Coordinator: grokcoordination.NewCoordinator(home),
+	})
+	return NewDependencies(
+		agent.BuiltinRegistry(),
+		switching.NewDependencies(targets, adapters, switching.WithProviderCoordinators(coordinators)),
+	)
 }
 
 func (application *Application) Runtime() *runtimeservice.Service  { return application.runtime }
@@ -210,6 +246,7 @@ func (application *Application) Doctor() *doctor.Service           { return appl
 func (application *Application) Usage() *usage.Service             { return application.usage }
 func (application *Application) Settings() *settings.Service       { return application.settings }
 func (application *Application) Codex() *codex.Service             { return application.codex }
+func (application *Application) GrokBuild() *grokbuild.Service     { return application.grokBuild }
 func (application *Application) Antigravity() *antigravity.Service { return application.antigravity }
 func (application *Application) ClaudeCode() *claudecode.Service   { return application.claudeCode }
 

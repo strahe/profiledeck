@@ -20,6 +20,7 @@ const (
 	Codex       ID = "codex"
 	Antigravity ID = "antigravity"
 	ClaudeCode  ID = "claude-code"
+	GrokBuild   ID = "grok-build"
 )
 
 type Manifest struct {
@@ -121,6 +122,7 @@ func BuiltinRegistry() Registry {
 		Manifest{ID: Codex, DisplayName: "Codex", ProviderIDs: []string{"codex"}, DefaultDesktopEnabled: true},
 		Manifest{ID: Antigravity, DisplayName: "Antigravity", ProviderIDs: []string{"antigravity"}, DefaultDesktopEnabled: true},
 		Manifest{ID: ClaudeCode, DisplayName: "Claude Code", ProviderIDs: []string{"claude-code"}, DefaultDesktopEnabled: true},
+		Manifest{ID: GrokBuild, DisplayName: "Grok Build", ProviderIDs: []string{"grok-build"}, DefaultDesktopEnabled: true},
 	)
 }
 

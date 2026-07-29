@@ -21,6 +21,9 @@ import * as codex$0 from "../../internal/codex/models.js";
 import * as doctor$0 from "../../internal/doctor/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as grokbuild$0 from "../../internal/grokbuild/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as provider$0 from "../../internal/provider/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -54,6 +57,13 @@ export interface CopyCodexConfigSetRequest {
     "description"?: string;
 }
 
+export interface CopyGrokBuildConfigSetRequest {
+    "source_config_set_id": string;
+    "config_set_id": string;
+    "name": string;
+    "description"?: string;
+}
+
 export interface CreateAntigravityProfileRequest {
     "profile_id": string;
     "name"?: string | null;
@@ -81,6 +91,21 @@ export interface CreateCodexProfileRequest {
     "new_config_set_description"?: string | null;
 }
 
+export interface CreateGrokBuildConfigSetRequest {
+    "config_set_id": string;
+    "name": string;
+    "description"?: string;
+}
+
+export interface CreateGrokBuildProfileRequest {
+    "profile_id": string;
+    "name"?: string | null;
+    "description"?: string | null;
+    "new_config_set_id"?: string;
+    "new_config_set_name"?: string | null;
+    "new_config_set_description"?: string | null;
+}
+
 export interface DashboardResult {
     "info": app$0.Info;
     "environment": Environment;
@@ -91,6 +116,8 @@ export interface DashboardResult {
     "active_states": provider$0.ActiveState[] | null;
     "codex_profiles"?: codex$0.CodexProfileListResult | null;
     "codex_config_sets"?: codex$0.CodexConfigSetListResult | null;
+    "grok_build_profiles"?: grokbuild$0.ProfileListResult | null;
+    "grok_build_config_sets"?: grokbuild$0.ConfigSetListResult | null;
     "antigravity_profiles"?: antigravity$0.AntigravityProfileListResult | null;
     "claude_code_profiles"?: claudecode$0.ClaudeCodeProfileListResult | null;
     "usage"?: usage$0.UsageSummaryResult | null;
@@ -107,9 +134,22 @@ export interface DesktopError {
 export interface Environment {
     "config_dir": string;
     "codex_dir": string;
+    "grok_home": string;
 }
 
 export interface ForkCodexProfileRequest {
+    "source_profile_id": string;
+    "profile_id": string;
+    "credential_binding": string;
+    "config_binding": string;
+    "new_config_set_id"?: string;
+    "new_config_set_name"?: string | null;
+    "new_config_set_description"?: string | null;
+    "name"?: string | null;
+    "description"?: string | null;
+}
+
+export interface ForkGrokBuildProfileRequest {
     "source_profile_id": string;
     "profile_id": string;
     "credential_binding": string;
@@ -152,6 +192,23 @@ export interface UpdateCodexProfileConfigSetRequest {
 }
 
 export interface UpdateCodexProfileMetadataRequest {
+    "profile_id": string;
+    "name"?: string | null;
+    "description"?: string | null;
+}
+
+export interface UpdateGrokBuildConfigSetRequest {
+    "config_set_id": string;
+    "name"?: string | null;
+    "description"?: string | null;
+}
+
+export interface UpdateGrokBuildProfileConfigSetRequest {
+    "profile_id": string;
+    "config_set_id": string;
+}
+
+export interface UpdateGrokBuildProfileMetadataRequest {
     "profile_id": string;
     "name"?: string | null;
     "description"?: string | null;

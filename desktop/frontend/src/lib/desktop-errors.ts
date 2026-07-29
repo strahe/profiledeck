@@ -56,6 +56,7 @@ const userErrorKeys: Record<string, string> = {
 	USAGE_MIGRATION_REQUIRED: "errors.usageUnavailable",
 	USAGE_SYNC_CONFLICT: "errors.usageUnavailable",
 	CODEX_INVALID: "errors.codexNotReady",
+	GROK_BUILD_INVALID: "errors.grokBuildNotReady",
 	ANTIGRAVITY_INVALID: "errors.antigravityNotReady",
 	CLAUDE_CODE_INVALID: "errors.claudeCodeNotReady",
 	SETTING_INVALID: "errors.settingInvalid",

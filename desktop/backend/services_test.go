@@ -23,6 +23,7 @@ import (
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/codex"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/settings"
 	"github.com/strahe/profiledeck/internal/usage"
@@ -33,8 +34,12 @@ func newBackendTestApplication(t *testing.T, env Environment) *app.Application {
 	if env.ConfigDir == "" {
 		env.ConfigDir = t.TempDir()
 	}
+	if env.GrokHome == "" {
+		env.GrokHome = t.TempDir()
+	}
 	application, err := app.New(app.Config{
-		ConfigDir: env.ConfigDir, CodexDir: env.CodexDir, AgentAccess: agent.AccessDesktopPreferences,
+		ConfigDir: env.ConfigDir, CodexDir: env.CodexDir, GrokHome: env.GrokHome,
+		AgentAccess: agent.AccessDesktopPreferences,
 	})
 	if err != nil {
 		t.Fatalf("create test Application: %v", err)
@@ -231,10 +236,10 @@ func TestDisabledAgentsRejectStaticServiceCallsButKeepSafetyServices(t *testing.
 	if dashboard.CodexProfiles != nil || dashboard.CodexConfigSets != nil || dashboard.Usage != nil {
 		t.Fatalf("disabled Codex data remained in Dashboard: %#v", dashboard)
 	}
-	if len(dashboard.Agents) != 3 || agentEnabled(dashboard.Agents, agent.Codex) {
+	if len(dashboard.Agents) != 4 || agentEnabled(dashboard.Agents, agent.Codex) {
 		t.Fatalf("Dashboard did not expose resolved disabled state: %#v", dashboard.Agents)
 	}
-	for _, id := range []agent.ID{agent.Antigravity, agent.ClaudeCode} {
+	for _, id := range []agent.ID{agent.Antigravity, agent.ClaudeCode, agent.GrokBuild} {
 		if _, err := services.Agent.SetEnabled(ctx, string(id), false); err != nil {
 			t.Fatalf("disable %s Agent: %v", id, err)
 		}
@@ -249,7 +254,8 @@ func TestDisabledAgentsRejectStaticServiceCallsButKeepSafetyServices(t *testing.
 		}
 	}
 	if len(dashboard.Providers) != 0 || len(dashboard.ActiveStates) != 0 ||
-		dashboard.CodexProfiles != nil || dashboard.AntigravityProfiles != nil || dashboard.ClaudeCodeProfiles != nil {
+		dashboard.CodexProfiles != nil || dashboard.GrokBuildProfiles != nil ||
+		dashboard.AntigravityProfiles != nil || dashboard.ClaudeCodeProfiles != nil {
 		t.Fatalf("all-disabled Dashboard exposed managed Agent data: %#v", dashboard)
 	}
 	if _, err := services.Backup.List(ctx); err != nil {
@@ -1065,6 +1071,61 @@ func TestCodexConfigSetServiceCRUDAndNotifications(t *testing.T) {
 	}
 }
 
+func TestGrokBuildDesktopWorkflowsOmitManagedFileBodies(t *testing.T) {
+	t.Setenv("GROK_AUTH", "")
+	t.Setenv("GROK_AUTH_PATH", "")
+	ctx := context.Background()
+	configDir := t.TempDir()
+	grokHome := t.TempDir()
+	authSecret := "desktop-grok-auth-secret"
+	configSecret := "desktop-grok-config-secret"
+	writeDesktopGrokBuildFiles(
+		t,
+		grokHome,
+		"api_key = \""+configSecret+"\"\n",
+		`{"default":{"key":"`+authSecret+`","auth_mode":"api_key","create_time":"2026-07-29T00:00:00Z","user_id":"","email":null}}`,
+	)
+	env := Environment{ConfigDir: configDir, GrokHome: grokHome}
+	if err := Bootstrap(ctx, newBackendTestApplication(t, env)); err != nil {
+		t.Fatalf("expected bootstrap to succeed, got %v", err)
+	}
+	services := newTestServices(t, app.DefaultInfo(), env, nil)
+	events := []DesktopChangeEvent{}
+	services.SubscribeChanges(func(event DesktopChangeEvent) { events = append(events, event) })
+
+	if _, err := services.GrokBuild.CreateProfile(ctx, CreateGrokBuildProfileRequest{ProfileID: "work"}); err != nil {
+		t.Fatalf("expected Grok Build Profile create, got %v", err)
+	}
+	detail, err := services.GrokBuild.ShowProfile(ctx, "work")
+	if err != nil {
+		t.Fatalf("expected Grok Build Profile detail, got %v", err)
+	}
+	dashboard, err := services.App.Dashboard(ctx)
+	if err != nil {
+		t.Fatalf("expected Dashboard, got %v", err)
+	}
+	if dashboard.GrokBuildProfiles == nil || len(dashboard.GrokBuildProfiles.Profiles) != 1 ||
+		dashboard.GrokBuildConfigSets == nil || len(dashboard.GrokBuildConfigSets.ConfigSets) != 1 {
+		t.Fatalf("expected Grok Build Dashboard data, got profiles=%#v configSets=%#v", dashboard.GrokBuildProfiles, dashboard.GrokBuildConfigSets)
+	}
+	publicJSON, err := json.Marshal(struct {
+		Detail    any `json:"detail"`
+		Dashboard any `json:"dashboard"`
+	}{Detail: detail, Dashboard: dashboard})
+	if err != nil {
+		t.Fatalf("marshal Desktop result: %v", err)
+	}
+	for _, forbidden := range []string{authSecret, configSecret, `"api_key"`, `"auth_mode"`, `"key"`} {
+		if strings.Contains(string(publicJSON), forbidden) {
+			t.Fatalf("Desktop result exposed Grok Build managed content %q", forbidden)
+		}
+	}
+	if len(events) != 1 || events[0].Kind != DesktopChangeGrokBuildProfileChanged ||
+		!events[0].ProfileChanged || !events[0].ConfigSetsChanged || !events[0].ActiveStateChanged {
+		t.Fatalf("unexpected Grok Build change event: %#v", events)
+	}
+}
+
 func TestUsageReportServiceDefaultsAndValidatesRange(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
@@ -1092,5 +1153,15 @@ func writeDesktopCodexFiles(t *testing.T, codexDir, config, auth string) {
 	}
 	if err := os.WriteFile(filepath.Join(codexDir, codexconfig.AuthFileName), []byte(auth), 0o600); err != nil {
 		t.Fatalf("expected auth fixture to write, got %v", err)
+	}
+}
+
+func writeDesktopGrokBuildFiles(t *testing.T, grokHome, config, auth string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(grokHome, grokconfig.ConfigFileName), []byte(config), 0o600); err != nil {
+		t.Fatalf("expected Grok Build config fixture to write, got %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(grokHome, grokconfig.AuthFileName), []byte(auth), 0o600); err != nil {
+		t.Fatalf("expected Grok Build auth fixture to write, got %v", err)
 	}
 }

@@ -1,10 +1,10 @@
 # Review and Switch Profiles
 
-Switching changes the login or settings used by Codex, Claude Code, or Antigravity. ProfileDeck lets you review the change and creates a temporary recovery point before applying it.
+Switching changes the login or settings used by Codex, Claude Code, Antigravity, or Grok Build. ProfileDeck lets you review the change and creates a temporary recovery point before applying it.
 
 ## Switch in the Desktop app
 
-1. Open **Codex**, **Claude Code**, or **Antigravity**.
+1. Open **Codex**, **Claude Code**, **Antigravity**, or **Grok Build**.
 2. Select the Profile you want to use.
 3. Select **Use Profile**.
 4. Review the files or login that will change and any warnings.
@@ -20,6 +20,7 @@ Previewing is optional. Run `switch --dry-run` when you want to review a switch 
 profiledeck-cli switch codex work --dry-run
 profiledeck-cli switch claude-code personal --dry-run
 profiledeck-cli switch antigravity work --dry-run
+profiledeck-cli switch grok-build work --dry-run
 ```
 
 Add `--json` if you need structured output:
@@ -28,7 +29,7 @@ Add `--json` if you need structured output:
 profiledeck-cli switch codex work --dry-run --json
 ```
 
-For files, the preview shows which path will be created, updated, or left unchanged. For saved logins, it shows only a safe target name and action. Sensitive login values remain hidden in all previews.
+For ordinary files, the preview shows which path will be created, updated, or left unchanged. Grok Build treats both its login and settings as sensitive: its preview shows only the action, target, path, and warnings. Sensitive values and complete Grok Build file contents remain hidden in all previews.
 
 Warnings tell you when a file or login is missing, invalid, unsupported, or unsafe to change. Resolve blocking warnings before applying the switch.
 
@@ -38,6 +39,7 @@ Warnings tell you when a file or login is missing, invalid, unsupported, or unsa
 profiledeck-cli switch codex work --yes
 profiledeck-cli switch claude-code personal --yes
 profiledeck-cli switch antigravity work --yes
+profiledeck-cli switch grok-build work --yes
 ```
 
 To apply only the exact state you previously reviewed, copy the fingerprint from `switch --dry-run`:
@@ -65,6 +67,6 @@ ProfileDeck stops without applying the switch if it cannot verify the current st
 
 ## Keep recovery data private
 
-An unfinished switch recovery point may contain previous Codex files, a Claude Code account login, or an Antigravity login. Keep the ProfileDeck data directory private and do not commit, upload, or share recovery files.
+An unfinished switch recovery point may contain previous Codex or Grok Build files, a Claude Code account login, or an Antigravity login. Keep the ProfileDeck data directory private and do not commit, upload, or share recovery files.
 
 Recovery returns targets affected by an unfinished switch to their pre-switch state without changing the current Profile. If the current Profile changed after the unfinished switch, ProfileDeck refuses recovery before writing. Updates that were already saved into a Profile remain saved. A successful switch cannot be undone; switch to the intended Profile instead. See [Diagnostics, backups, and recovery](./recovery.md) for the available actions.

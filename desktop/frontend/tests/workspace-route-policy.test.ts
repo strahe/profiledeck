@@ -10,6 +10,7 @@ import {
 describe("Workspace route policy", () => {
 	it.each([
 		["/codex/profiles", "profiles"],
+		["/grok-build/profiles", "grok-build-profiles"],
 		["/antigravity/profiles", "antigravity-profiles"],
 		["/claude-code/profiles", "claude-code-profiles"],
 		["/codex/usage", "usage"],
@@ -26,6 +27,9 @@ describe("Workspace route policy", () => {
 		expect(parseWorkspaceRoute("/codex/profiles/new").codexProfile).toEqual({ kind: "new", profileID: "" });
 		expect(parseWorkspaceRoute("/codex/profiles/work/fork").codexProfile).toEqual({ kind: "fork", profileID: "work" });
 		expect(parseWorkspaceRoute("/codex/config-sets").codexProfile).toEqual({ kind: "config-sets", profileID: "" });
+		expect(parseWorkspaceRoute("/grok-build/profiles/new").grokBuildProfile).toEqual({ kind: "new", profileID: "" });
+		expect(parseWorkspaceRoute("/grok-build/profiles/work/fork").grokBuildProfile).toEqual({ kind: "fork", profileID: "work" });
+		expect(parseWorkspaceRoute("/grok-build/config-sets").grokBuildProfile).toEqual({ kind: "config-sets", profileID: "" });
 		expect(parseWorkspaceRoute("/antigravity/profiles/personal").antigravityProfile).toEqual({ kind: "detail", profileID: "personal" });
 		expect(parseWorkspaceRoute("/claude-code/profiles/new").claudeCodeProfile).toEqual({ kind: "new", profileID: "" });
 	});
@@ -50,11 +54,13 @@ describe("Workspace route policy", () => {
 		expect(agentForWorkspace("profiles")).toBe("codex");
 		expect(agentForWorkspace("usage")).toBe("codex");
 		expect(agentForWorkspace("codex-settings")).toBe("codex");
+		expect(agentForWorkspace("grok-build-profiles")).toBe("grok-build");
 		expect(agentForWorkspace("antigravity-profiles")).toBe("antigravity");
 		expect(agentForWorkspace("claude-code-profiles")).toBe("claude-code");
 		expect(agentForWorkspace("settings")).toBeNull();
 		expect(agentForWorkspace("diagnostics")).toBeNull();
 		expect(agentHome("codex")).toBe("/codex/profiles");
+		expect(agentHome("grok-build")).toBe("/grok-build/profiles");
 		expect(agentHome("antigravity")).toBe("/antigravity/profiles");
 		expect(agentHome("claude-code")).toBe("/claude-code/profiles");
 		expect(isAgentWorkspace("usage")).toBe(true);

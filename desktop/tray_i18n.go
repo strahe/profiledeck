@@ -10,6 +10,7 @@ const (
 	trayLocaleChangedEventName              = "profiledeck:locale-changed"
 	trayDashboardUnavailableLabel           = "Dashboard unavailable. Open ProfileDeck for details."
 	trayCodexProfilesUnavailableLabel       = "Unable to load Codex profiles. Open ProfileDeck for details."
+	trayGrokBuildProfilesUnavailableLabel   = "Unable to load Grok Build profiles. Open ProfileDeck for details."
 	trayAntigravityProfilesUnavailableLabel = "Unable to load Antigravity profiles. Open ProfileDeck for details."
 	trayClaudeCodeProfilesUnavailableLabel  = "Unable to load Claude Code profiles. Open ProfileDeck for details."
 )
@@ -29,6 +30,9 @@ type trayMessages struct {
 	codexProfiles            string
 	noCodexProfiles          string
 	codexProfilesUnavailable string
+	grokBuildProfiles        string
+	noGrokBuildProfiles      string
+	grokBuildUnavailable     string
 	antigravityProfiles      string
 	noAntigravityProfiles    string
 	antigravityUnavailable   string
@@ -48,6 +52,9 @@ var trayEnglishMessages = trayMessages{
 	codexProfiles:            "Codex Profiles",
 	noCodexProfiles:          "No Codex profiles",
 	codexProfilesUnavailable: trayCodexProfilesUnavailableLabel,
+	grokBuildProfiles:        "Grok Build Profiles",
+	noGrokBuildProfiles:      "No Grok Build profiles",
+	grokBuildUnavailable:     trayGrokBuildProfilesUnavailableLabel,
 	antigravityProfiles:      "Antigravity Profiles",
 	noAntigravityProfiles:    "No Antigravity profiles",
 	antigravityUnavailable:   trayAntigravityProfilesUnavailableLabel,
@@ -67,6 +74,9 @@ var traySimplifiedChineseMessages = trayMessages{
 	codexProfiles:            "Codex Profile",
 	noCodexProfiles:          "没有 Codex Profile",
 	codexProfilesUnavailable: "无法加载 Codex Profile，请打开 ProfileDeck 查看详情。",
+	grokBuildProfiles:        "Grok Build Profile",
+	noGrokBuildProfiles:      "没有 Grok Build Profile",
+	grokBuildUnavailable:     "无法加载 Grok Build Profile，请打开 ProfileDeck 查看详情。",
 	antigravityProfiles:      "Antigravity Profile",
 	noAntigravityProfiles:    "没有 Antigravity Profile",
 	antigravityUnavailable:   "无法加载 Antigravity Profile，请打开 ProfileDeck 查看详情。",

@@ -13,6 +13,7 @@ import (
 	agyconfig "github.com/strahe/profiledeck/internal/antigravity/config"
 	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
 	"github.com/strahe/profiledeck/internal/profile"
 )
 
@@ -208,6 +209,16 @@ func buildTrayMenu(dashboard backend.DashboardResult, dashboardErr error, action
 		addTrayProfilesMenu(menu, messages.codexProfiles, codexconfig.ProviderID, codexProfiles, dashboard.CodexProfiles != nil, messages.noCodexProfiles, messages.codexProfilesUnavailable, actions)
 	}
 
+	var grokBuildProfiles []trayProfile
+	if dashboard.GrokBuildProfiles != nil {
+		for _, profile := range dashboard.GrokBuildProfiles.Profiles {
+			grokBuildProfiles = append(grokBuildProfiles, trayProfile{Profile: profile.Profile, Active: profile.Active})
+		}
+	}
+	if trayAgentEnabled(dashboard, agent.GrokBuild) {
+		addTrayProfilesMenu(menu, messages.grokBuildProfiles, grokconfig.ProviderID, grokBuildProfiles, dashboard.GrokBuildProfiles != nil, messages.noGrokBuildProfiles, messages.grokBuildUnavailable, actions)
+	}
+
 	var antigravityProfiles []trayProfile
 	if dashboard.AntigravityProfiles != nil {
 		for _, profile := range dashboard.AntigravityProfiles.Profiles {
@@ -327,6 +338,8 @@ func missingActiveProfileLabels(dashboard backend.DashboardResult, messages tray
 		switch state.ProviderID {
 		case codexconfig.ProviderID:
 			providerName = "Codex"
+		case grokconfig.ProviderID:
+			providerName = "Grok Build"
 		case agyconfig.ProviderID:
 			providerName = "Antigravity"
 		case claudecodeconfig.ProviderID:

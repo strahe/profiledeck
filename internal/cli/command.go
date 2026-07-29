@@ -15,6 +15,7 @@ import (
 
 const (
 	configDirFlagName = "config-dir"
+	grokHomeFlagName  = "grok-home"
 	jsonFlagName      = "json"
 	outputFlagName    = "output"
 	providerFlagName  = "provider"
@@ -30,6 +31,13 @@ func NewCommand(info app.Info) *urfavecli.Command {
 			&urfavecli.StringFlag{
 				Name:  configDirFlagName,
 				Usage: "Use a custom ProfileDeck config directory",
+				Config: urfavecli.StringConfig{
+					TrimSpace: true,
+				},
+			},
+			&urfavecli.StringFlag{
+				Name:  grokHomeFlagName,
+				Usage: "Use a custom Grok Build Home",
 				Config: urfavecli.StringConfig{
 					TrimSpace: true,
 				},
@@ -53,6 +61,7 @@ func NewCommand(info app.Info) *urfavecli.Command {
 			newClaudeCodeCommand(),
 			newCodexCommand(),
 			newDoctorCommand(),
+			newGrokBuildCommand(),
 			newInitCommand(),
 			newProviderCommand(),
 			newProfileCommand(),
@@ -198,11 +207,14 @@ func applicationFor(cmd *urfavecli.Command) (*app.Application, error) {
 		}
 	}
 	codexDir := ""
+	grokHome := ""
 	if cmd != nil {
 		codexDir = cmd.String(codexDirFlagName)
+		grokHome = cmd.String(grokHomeFlagName)
 	}
 	application, err := app.New(app.Config{
-		ConfigDir: configDirValue(cmd), CodexDir: codexDir, AgentAccess: agent.AccessUnrestricted,
+		ConfigDir: configDirValue(cmd), CodexDir: codexDir, GrokHome: grokHome,
+		AgentAccess: agent.AccessUnrestricted,
 	})
 	if err != nil {
 		return nil, err

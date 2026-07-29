@@ -1,6 +1,6 @@
 # 切换其他配置文件
 
-通用目标是高级 CLI 功能，用于切换用户明确选择的本地配置文件。Codex、Claude Code 和 Antigravity 必须使用各自的 Profile 命令；通用目标命令不能修改这些工具管理的登录或设置。
+通用目标是高级 CLI 功能，用于切换用户明确选择的本地配置文件。Codex、Claude Code、Antigravity 和 Grok Build 必须使用各自的 Profile 命令；通用目标命令不能修改这些工具管理的登录或设置。
 
 ## 开始前准备
 

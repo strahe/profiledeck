@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/providercoord"
 	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/switching/transaction"
@@ -156,6 +157,21 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 	if err := service.requireProviderWithStore(ctx, db, providerID); err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, initialMetadata, err)
 	}
+	storedProvider, err := db.GetProvider(ctx, providerID)
+	if err != nil {
+		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, initialMetadata, mapProviderStoreError(err))
+	}
+	guard, err := service.acquireProviderGuard(ctx, db, providercoord.Request{
+		OperationID:          operationID,
+		ProviderID:           providerID,
+		ProviderMetadataJSON: storedProvider.MetadataJSON,
+	})
+	if err != nil {
+		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, initialMetadata, err)
+	}
+	if guard != nil {
+		defer guard.Release()
+	}
 
 	previousActive, err := readPreviousActiveState(ctx, db, providerID)
 	if err != nil {
@@ -231,6 +247,9 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 		if op.Action != planActionCreate && op.Action != planActionUpdate {
 			continue
 		}
+		if err := validateProviderGuard(ctx, guard); err != nil {
+			return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, recoveryMetadata, err)
+		}
 		if err := writeTargetAtomicWithExecutor(ctx, executor, op); err != nil {
 			return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, recoveryMetadata, err)
 		}
@@ -239,6 +258,9 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 	// Re-read every target after all writes so an already failed or replaced
 	// working copy does not advance active state; external writers can still race
 	// after this final read.
+	if err := validateProviderGuard(ctx, guard); err != nil {
+		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, recoveryMetadata, err)
+	}
 	if err := verifyAppliedSwitchTargetsWithExecutor(ctx, executor, plan.Operations); err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, recoveryMetadata, err)
 	}
@@ -246,6 +268,9 @@ func (service *Service) Apply(ctx context.Context, req ApplySwitchRequest) (Appl
 	appliedMetadata, err := marshalSwitchOperationMetadata("applied", providerID, profileID, plan, switchRecoveryPoint{}, counts, previousActive)
 	if err != nil {
 		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, recoveryMetadata, apperror.Wrap(apperror.OperationUpdateFailed, "failed to encode switch operation metadata", err))
+	}
+	if err := validateProviderGuard(ctx, guard); err != nil {
+		return ApplySwitchResult{}, failSwitchOperation(ctx, db, operationID, recoveryMetadata, err)
 	}
 	if err := db.CompleteSwitchOperation(ctx, store.CompleteSwitchOperationParams{
 		ID: operationID, ProfileID: profileID, ProviderID: providerID,

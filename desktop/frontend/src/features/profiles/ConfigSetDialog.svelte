@@ -13,6 +13,7 @@
 	interface Props {
 		open?: boolean;
 		mode: ConfigSetDialogMode;
+		copyRoot?: "configSets" | "grokBuild.configSets";
 		busy: boolean;
 		configSetID?: string;
 		name?: string;
@@ -21,7 +22,7 @@
 		onSubmit: (value: { id: string; name: string; description: string }) => void;
 	}
 
-	let { open = $bindable(false), mode, busy, configSetID = "", name = "", description = "", onClose, onSubmit }: Props = $props();
+	let { open = $bindable(false), mode, copyRoot = "configSets", busy, configSetID = "", name = "", description = "", onClose, onSubmit }: Props = $props();
 	let id = $state("");
 	let displayName = $state("");
 	let details = $state("");
@@ -39,20 +40,20 @@
 <Dialog.Root {open} onOpenChange={(value) => { open = value; if (!value) onClose(); }}>
 	<Dialog.Content class="sm:max-w-lg">
 		<Dialog.Header>
-			<Dialog.Title>{$_(`configSets.dialog.${mode}Title`)}</Dialog.Title>
-			<Dialog.Description>{$_(`configSets.dialog.${mode}Description`)}</Dialog.Description>
+			<Dialog.Title>{$_(`${copyRoot}.dialog.${mode}Title`)}</Dialog.Title>
+			<Dialog.Description>{$_(`${copyRoot}.dialog.${mode}Description`)}</Dialog.Description>
 		</Dialog.Header>
 		<Field.FieldGroup>
 			<Field.Field data-disabled={mode === "edit"}>
-				<Field.FieldLabel for="config-set-id">{$_("configSets.id")}</Field.FieldLabel>
+				<Field.FieldLabel for="config-set-id">{$_(`${copyRoot}.id`)}</Field.FieldLabel>
 				<Input id="config-set-id" bind:value={id} disabled={mode === "edit"} autocomplete="off" spellcheck="false" />
 			</Field.Field>
 			<Field.Field>
-				<Field.FieldLabel for="config-set-name">{$_("configSets.name")}</Field.FieldLabel>
+				<Field.FieldLabel for="config-set-name">{$_(`${copyRoot}.name`)}</Field.FieldLabel>
 				<Input id="config-set-name" bind:value={displayName} maxlength={120} />
 			</Field.Field>
 			<Field.Field>
-				<Field.FieldLabel for="config-set-description">{$_("configSets.descriptionLabel")}</Field.FieldLabel>
+				<Field.FieldLabel for="config-set-description">{$_(`${copyRoot}.descriptionLabel`)}</Field.FieldLabel>
 				<Textarea id="config-set-description" bind:value={details} rows={3} maxlength={1000} />
 			</Field.Field>
 		</Field.FieldGroup>
