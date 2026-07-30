@@ -1,6 +1,6 @@
 # Codex Profiles
 
-A Codex Profile saves one login and one set of reusable Codex settings, called a Config Set. The login and settings can be shared or copied independently when you create another Profile.
+A Codex Profile saves one login and one set of reusable Codex settings, called a Config Set. The login and settings can be shared or copied independently when you fork them to a destination Profile.
 
 Each Config Set contains only the user-level `config.toml`. Sessions, logs, skills, plugin caches, project `.codex/config.toml` files, and system policy are not included.
 
@@ -77,7 +77,7 @@ profiledeck-cli codex profile set-config work shared
 
 ## Fork a Profile
 
-Forking creates another Profile from saved data. Copy the login or Config Set when the new Profile must be able to change that item without affecting the source Profile.
+Forking adds saved Codex data to a destination Profile. The destination can be new, or it can be an existing Profile that does not already contain Codex data. Any data for other Agents remains unchanged. Copy the login or Config Set when the destination Profile must be able to change that item without affecting the source Profile.
 
 Desktop presents the share-or-copy choice in the Fork form. In the CLI, at least one item must use `copy-new`:
 

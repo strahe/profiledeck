@@ -91,6 +91,7 @@
 	let profileName = $state("");
 	let profileDescription = $state("");
 	let formSubmitted = $state(false);
+	let createSourceError = $state("");
 	let configMode = $state<"reuse" | "new">("reuse");
 	let credentialBinding = $state<CodexForkBinding>("copy-new");
 	let configBinding = $state<CodexForkBinding>("share-parent");
@@ -220,6 +221,7 @@
 		configBinding = "share-parent";
 		newConfigSetID = "";
 		newConfigSetName = "";
+		createSourceError = "";
 	}
 
 	async function createProfile() {
@@ -231,7 +233,12 @@
 			new_config_set_name: configMode === "new" ? optional(newConfigSetName) : null,
 		};
 		await runAction("profile-create", async () => {
-			if (!isSourceReady(await refreshDetect())) return;
+			createSourceError = "";
+			const source = await refreshDetect();
+			if (!isSourceReady(source)) {
+				createSourceError = createSourceRecheckDescription(source);
+				return;
+			}
 			const result = await track("profile-create", CodexService.CreateProfile(request));
 			await refreshProfiles();
 			showResultWarnings(result);
@@ -501,6 +508,13 @@
 			auth: translate(`sourceStatus.${value?.auth_status || "missing"}`),
 		});
 	}
+	function createSourceRecheckDescription(value: CodexDetectResult | null): string {
+		return value ? sourceStatusDescription(value) : translate("profilePages.source.recheckFailed");
+	}
+	async function retryCreateSource() {
+		const source = await refreshDetect();
+		createSourceError = isSourceReady(source) ? "" : createSourceRecheckDescription(source);
+	}
 	function isSourceReady(value: CodexDetectResult | null | undefined): boolean {
 		return !!value?.profiledeck_initialized
 			&& value.provider_compatible
@@ -593,7 +607,7 @@
 {:else if route.kind === "config-sets"}
 	<ConfigSetPage {configSets} loading={configSetsLoading} error={configSetsError} busy={!!busyAction} formatUpdated={formatRelativeTime} onBack={() => push("/codex/profiles")} onCreate={() => openConfigDialog("create")} onCopy={(value) => openConfigDialog("copy", value)} onEdit={(value) => openConfigDialog("edit", value)} onDelete={deleteConfigSet} />
 {:else if route.kind === "new"}
-	<ProfileEditorPage mode="new" {detectResult} basePath="/codex/profiles" canChooseConfigSet={!!activeProfileID} busy={!!busyAction} bind:profileID bind:profileName bind:profileDescription bind:configMode bind:credentialBinding bind:configBinding bind:newConfigSetID bind:newConfigSetName idError={displayedIDError} nameError={displayedNameError} descriptionError={displayedDescriptionError} onCancel={() => push("/codex/profiles")} onSubmit={createProfile} onRetrySource={() => { void refreshDetect(); }} onDiagnostics={() => { void push("/diagnostics"); }} />
+	<ProfileEditorPage mode="new" {detectResult} basePath="/codex/profiles" sourceError={sourceStatusDescription()} submitError={createSourceError} canChooseConfigSet={!!activeProfileID} busy={!!busyAction} bind:profileID bind:profileName bind:profileDescription bind:configMode bind:credentialBinding bind:configBinding bind:newConfigSetID bind:newConfigSetName idError={displayedIDError} nameError={displayedNameError} descriptionError={displayedDescriptionError} onCancel={() => push("/codex/profiles")} onSubmit={createProfile} onRetrySource={() => { void retryCreateSource(); }} onDiagnostics={() => { void push("/diagnostics"); }} />
 {:else if detailLoading}
 	<div class="mx-auto flex w-full max-w-5xl flex-col gap-4"><Skeleton class="h-5 w-48" /><Skeleton class="h-20 w-full" /><Skeleton class="h-52 w-full" /></div>
 {:else if detailError || !detail}

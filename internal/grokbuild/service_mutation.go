@@ -251,10 +251,18 @@ func (service *Service) ForkProfile(ctx context.Context, req ForkProfileRequest)
 		if storedProvider.ID == "" {
 			return apperror.New(apperror.ProviderNotFound, "Grok Build Provider was not found")
 		}
-		if _, exists, err := preflightProfile(ctx, tx, profileID); err != nil {
+		_, profileExists, err := preflightProfile(ctx, tx, profileID)
+		if err != nil {
 			return err
-		} else if exists {
-			return apperror.New(apperror.ProfileAlreadyExists, "destination Profile already exists")
+		}
+		if profileExists {
+			hasBindings, err := profileHasBindings(ctx, tx, profileID)
+			if err != nil {
+				return err
+			}
+			if hasBindings {
+				return apperror.New(apperror.ProfileAlreadyExists, "Grok Build Profile already exists")
+			}
 		}
 		sourceTargets, err := grokprofile.StoredBindingTargets(ctx, tx, sourceID)
 		if err != nil {
@@ -298,7 +306,8 @@ func (service *Service) ForkProfile(ctx context.Context, req ForkProfileRequest)
 		}
 		storedProfile, err = grokprofile.UpsertProfile(ctx, tx, profileID, grokprofile.ProfileFields{
 			CreateName: fields.CreateName, CreateDescription: fields.CreateDescription,
-		}, false)
+			UpdateName: fields.UpdateName, UpdateDescription: fields.UpdateDescription,
+		}, profileExists)
 		if err != nil {
 			return err
 		}
@@ -415,6 +424,14 @@ func (service *Service) SaveActiveProfileState(ctx context.Context) (ProfileStat
 		configSet, err = grokprofile.RequireConfigSet(ctx, tx, configSetID)
 		if err != nil {
 			return err
+		}
+		// A missing working file must never erase the database-owned Config Set
+		// or allow the login to be updated without its settings.
+		if working.ConfigMissing {
+			return apperror.New(
+				apperror.GrokBuildInvalid,
+				"Grok Build config.toml is required to update the current Profile",
+			)
 		}
 		configSet, err = grokprofile.UpsertConfigSet(
 			ctx, tx, configSet.ID, configSet.Name, configSet.Description, working.ConfigContent,

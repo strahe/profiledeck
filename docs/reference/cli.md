@@ -51,7 +51,7 @@ profiledeck-cli codex detect [--codex-dir PATH] [--json]
 profiledeck-cli codex profile list [--json]
 profiledeck-cli codex profile show <profile-id> [--json]
 profiledeck-cli codex profile create <profile-id> [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
-profiledeck-cli codex profile fork <source-profile-id> <new-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
+profiledeck-cli codex profile fork <source-profile-id> <destination-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
 profiledeck-cli codex profile save-current [--codex-dir PATH] [--json]
 profiledeck-cli codex profile set-config <profile-id> <config-set-id> [--json]
 profiledeck-cli codex profile delete <profile-id> --yes [--json]
@@ -66,7 +66,7 @@ profiledeck-cli codex config-set delete <config-set-id> --yes [--json]
 
 The first `profile create` saves the current Codex login and settings and creates the `shared` Config Set. Later creates reuse the current Config Set unless you pass `--new-config-set`.
 
-`fork` requires choices for both the login and Config Set, and at least one choice must be `copy-new`. Copying settings also requires `--new-config-set`. `save-current` saves the login and settings currently used by Codex. `set-config` changes only a Profile that is not current.
+`fork` requires choices for both the login and Config Set, and at least one choice must be `copy-new`. The destination can be a new Profile or an existing Profile that has no Codex data. When reusing a Profile, omitted `--name` and `--description` values leave its details unchanged. Copying settings also requires `--new-config-set`. `save-current` saves the login and settings currently used by Codex. `set-config` changes only a Profile that is not current.
 
 `config-set create` saves the current `config.toml`. List and show commands return safe summaries. You can delete only a Config Set that no Profile uses.
 
@@ -79,7 +79,7 @@ profiledeck-cli grok-build detect [--json]
 profiledeck-cli grok-build profile list [--json]
 profiledeck-cli grok-build profile show <profile-id> [--json]
 profiledeck-cli grok-build profile create <profile-id> [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--name NAME] [--description TEXT] [--json]
-profiledeck-cli grok-build profile fork <source-profile-id> <new-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--name NAME] [--description TEXT] [--json]
+profiledeck-cli grok-build profile fork <source-profile-id> <destination-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--name NAME] [--description TEXT] [--json]
 profiledeck-cli grok-build profile save-current [--json]
 profiledeck-cli grok-build profile set-config <profile-id> <config-set-id> [--json]
 profiledeck-cli grok-build profile delete <profile-id> --yes [--json]
@@ -94,7 +94,7 @@ profiledeck-cli grok-build config-set delete <config-set-id> --yes [--json]
 
 The first `profile create` saves the current file-based login and uses the `shared` Config Set. If `shared` does not exist, ProfileDeck creates it from the current `config.toml`; a missing file becomes empty settings. A pre-created `shared` Config Set is reused without changing it. Later creates reuse the current Profile's saved Config Set without reading or overwriting the working `config.toml`, unless you pass `--new-config-set`. `auth.json` must be present, non-empty, and valid.
 
-`fork` requires choices for both the login and Config Set, and at least one choice must be `copy-new`. `save-current` saves both current files and fails without partially saving if `auth.json` is invalid. Config Set list and detail output never contains `config.toml`.
+`fork` requires choices for both the login and Config Set, and at least one choice must be `copy-new`. The destination can be a new Profile or an existing Profile that has no Grok Build data. When reusing a Profile, omitted `--name` and `--description` values leave its details unchanged. `save-current` requires a valid `auth.json` and an existing, valid `config.toml`; an empty `config.toml` is valid. If either requirement fails, neither the saved login nor settings change. Config Set list and detail output never contains `config.toml`.
 
 Set `--grok-home` before `grok-build` when needed:
 

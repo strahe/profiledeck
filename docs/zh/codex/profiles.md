@@ -1,6 +1,6 @@
 # Codex Profile
 
-一个 Codex Profile 保存一份登录和一组可复用的 Codex 设置，这组设置称为配置集。创建其他 Profile 时，可以分别选择共享或复制登录与设置。
+一个 Codex Profile 保存一份登录和一组可复用的 Codex 设置，这组设置称为配置集。Fork 到目标 Profile 时，可以分别选择共享或复制登录与设置。
 
 每个配置集只包含用户级 `config.toml`。会话、日志、Skills、插件缓存、项目 `.codex/config.toml` 和系统策略不在其中。
 
@@ -77,7 +77,7 @@ profiledeck-cli codex profile set-config work shared
 
 ## Fork Profile
 
-Fork 会基于已保存数据创建另一个 Profile。如果新 Profile 的登录或配置集需要独立变化，请复制对应内容，避免影响来源 Profile。
+Fork 会把已保存的 Codex 数据添加到目标 Profile。目标可以是新 Profile，也可以是尚无 Codex 数据的现有 Profile；其中其他 Agent 的数据不会改变。如果目标 Profile 的登录或配置集需要独立变化，请复制对应内容，避免影响来源 Profile。
 
 桌面端会在 Fork 表单中提供共享或复制选项。使用 CLI 时，至少一项必须使用 `copy-new`：
 

@@ -141,7 +141,7 @@ func newGrokBuildProfileCreateCommand() *urfavecli.Command {
 func newGrokBuildProfileForkCommand() *urfavecli.Command {
 	return &urfavecli.Command{
 		Name: "fork", Usage: "Fork a Grok Build Profile with explicit resource sharing",
-		ArgsUsage: "<source-profile-id> <new-profile-id>",
+		ArgsUsage: "<source-profile-id> <destination-profile-id>",
 		Flags: []urfavecli.Flag{
 			stringFlag(credentialBindingFlagName, "Login binding: share-parent or copy-new"),
 			stringFlag(configBindingFlagName, "Config Set binding: share-parent or copy-new"),

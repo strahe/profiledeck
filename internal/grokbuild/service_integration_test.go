@@ -2,7 +2,9 @@ package grokbuild_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,10 +14,14 @@ import (
 
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/app"
+	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/grokbuild"
 	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
 	grokcoord "github.com/strahe/profiledeck/internal/grokbuild/coordination"
 	grokpreset "github.com/strahe/profiledeck/internal/grokbuild/preset"
+	"github.com/strahe/profiledeck/internal/profile"
+	"github.com/strahe/profiledeck/internal/profiletarget"
+	"github.com/strahe/profiledeck/internal/provider"
 	"github.com/strahe/profiledeck/internal/providercoord"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/switching"
@@ -346,6 +352,228 @@ func TestCreateProfileReusesActiveConfigSetWithoutReadingWorkingConfig(t *testin
 	}
 }
 
+func TestForkProfileReusesGlobalProfileWithoutGrokBuildBindings(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	writePrivateFile(t, filepath.Join(home, grokconfig.AuthFileName), syntheticAuth("source", "SOURCE_AUTH"))
+	writePrivateFile(t, filepath.Join(home, grokconfig.ConfigFileName), "[ui]\nscreen_mode = \"minimal\"\n")
+	application := newApplication(t, home)
+
+	source, err := application.GrokBuild().CreateProfile(ctx, grokbuild.CreateProfileRequest{
+		ProfileID: "source", Name: stringPointer("Source"),
+	})
+	if err != nil {
+		t.Fatalf("create source Profile: %v", err)
+	}
+	if _, err := application.Providers().Create(ctx, provider.CreateRequest{
+		ID: "other-agent", Name: "Other Agent", AdapterID: "generic",
+	}); err != nil {
+		t.Fatalf("create unrelated Provider: %v", err)
+	}
+	if _, err := application.Profiles().Create(ctx, profile.CreateRequest{
+		ID: "existing", Name: "Existing Profile", Description: "Keep this description",
+	}); err != nil {
+		t.Fatalf("create existing global Profile: %v", err)
+	}
+	otherTargetPath := filepath.Join(t.TempDir(), "other-agent.json")
+	if _, err := application.Targets().Create(ctx, profiletarget.CreateProfileTargetRequest{
+		ProfileID: "existing", ProviderID: "other-agent", TargetID: "settings",
+		Path: otherTargetPath, Format: profiletarget.FormatJSON, Strategy: profiletarget.StrategyReplaceFile,
+		ValueJSON: `{"content":"other-agent-state"}`,
+	}); err != nil {
+		t.Fatalf("create unrelated Profile target: %v", err)
+	}
+
+	reused, err := application.GrokBuild().ForkProfile(ctx, grokbuild.ForkProfileRequest{
+		SourceProfileID: "source", ProfileID: "existing",
+		CredentialBinding: grokbuild.ForkBindingCopyNew,
+		ConfigBinding:     grokbuild.ForkBindingShareParent,
+	})
+	if err != nil {
+		t.Fatalf("fork into existing global Profile: %v", err)
+	}
+	if reused.Profile.Name != "Existing Profile" || reused.Profile.Description != "Keep this description" {
+		t.Fatalf("existing Profile metadata changed: %#v", reused.Profile)
+	}
+	if reused.ConfigSet.ID != source.ConfigSet.ID {
+		t.Fatalf("reused Config Set = %q, want %q", reused.ConfigSet.ID, source.ConfigSet.ID)
+	}
+	if _, err := application.Targets().Get(ctx, profiletarget.GetProfileTargetRequest{
+		ProfileID: "existing", ProviderID: "other-agent", TargetID: "settings",
+	}); err != nil {
+		t.Fatalf("unrelated Profile target was not preserved: %v", err)
+	}
+	if _, err := application.GrokBuild().ForkProfile(ctx, grokbuild.ForkProfileRequest{
+		SourceProfileID: "source", ProfileID: "existing",
+		CredentialBinding: grokbuild.ForkBindingCopyNew,
+		ConfigBinding:     grokbuild.ForkBindingShareParent,
+	}); err == nil {
+		t.Fatal("fork reused a Profile that already has Grok Build bindings")
+	} else {
+		assertErrorCode(t, err, apperror.ProfileAlreadyExists)
+	}
+
+	if _, err := application.Profiles().Create(ctx, profile.CreateRequest{
+		ID: "existing-updated", Name: "Old Name", Description: "Old description",
+	}); err != nil {
+		t.Fatalf("create global Profile for metadata update: %v", err)
+	}
+	updatedName := "Updated Name"
+	updatedDescription := "Updated description"
+	updated, err := application.GrokBuild().ForkProfile(ctx, grokbuild.ForkProfileRequest{
+		SourceProfileID: "source", ProfileID: "existing-updated",
+		CredentialBinding: grokbuild.ForkBindingCopyNew,
+		ConfigBinding:     grokbuild.ForkBindingShareParent,
+		Name:              &updatedName,
+		Description:       &updatedDescription,
+	})
+	if err != nil {
+		t.Fatalf("fork with explicit metadata: %v", err)
+	}
+	if updated.Profile.Name != updatedName || updated.Profile.Description != updatedDescription {
+		t.Fatalf("explicit Profile metadata was not applied: %#v", updated.Profile)
+	}
+
+	if _, err := application.Profiles().Create(ctx, profile.CreateRequest{
+		ID: "partial", Name: "Partial",
+	}); err != nil {
+		t.Fatalf("create partial Profile: %v", err)
+	}
+	db, err := application.Runtime().StoreFactory().OpenHealthy(ctx, false)
+	if err != nil {
+		t.Fatalf("open store for partial binding: %v", err)
+	}
+	if _, err := db.UpsertProfileConfigSetBinding(ctx, store.UpsertProfileConfigSetBindingParams{
+		ProfileID: "partial", ProviderID: grokconfig.ProviderID,
+		SlotID: grokpreset.ConfigSetSlotUserConfig, ConfigSetID: source.ConfigSet.ID,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("create partial Grok Build binding: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close store after partial binding: %v", err)
+	}
+	if _, err := application.GrokBuild().ForkProfile(ctx, grokbuild.ForkProfileRequest{
+		SourceProfileID: "source", ProfileID: "partial",
+		CredentialBinding: grokbuild.ForkBindingCopyNew,
+		ConfigBinding:     grokbuild.ForkBindingShareParent,
+	}); err == nil {
+		t.Fatal("fork reused a Profile with a partial Grok Build binding")
+	} else {
+		assertErrorCode(t, err, apperror.ProfileAlreadyExists)
+	}
+}
+
+func TestSaveCurrentRejectsMissingConfigWithoutChangingSavedState(t *testing.T) {
+	tests := []struct {
+		name   string
+		config string
+	}{
+		{name: "non-empty shared Config Set", config: "[ui]\nscreen_mode = \"minimal\"\n"},
+		{name: "empty Config Set", config: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			home := t.TempDir()
+			authPath := filepath.Join(home, grokconfig.AuthFileName)
+			configPath := filepath.Join(home, grokconfig.ConfigFileName)
+			originalAuth := syntheticAuth("original", "ORIGINAL_AUTH_SECRET")
+			writePrivateFile(t, authPath, originalAuth)
+			writePrivateFile(t, configPath, test.config)
+			application := newApplication(t, home)
+
+			first, err := application.GrokBuild().CreateProfile(ctx, grokbuild.CreateProfileRequest{
+				ProfileID: "first",
+			})
+			if err != nil {
+				t.Fatalf("create first Profile: %v", err)
+			}
+			second, err := application.GrokBuild().CreateProfile(ctx, grokbuild.CreateProfileRequest{
+				ProfileID: "second",
+			})
+			if err != nil {
+				t.Fatalf("create second Profile: %v", err)
+			}
+			firstBefore, err := application.GrokBuild().GetProfile(ctx, first.Profile.ID)
+			if err != nil {
+				t.Fatalf("show first Profile before save: %v", err)
+			}
+			secondBefore, err := application.GrokBuild().GetProfile(ctx, second.Profile.ID)
+			if err != nil {
+				t.Fatalf("show second Profile before save: %v", err)
+			}
+			activeProfileID := grokBuildActiveProfileID(t, ctx, application)
+			before, err := application.GrokBuild().GetConfigSet(ctx, first.ConfigSet.ID)
+			if err != nil {
+				t.Fatalf("get Config Set before save: %v", err)
+			}
+			if before.ReferenceCount != 2 {
+				t.Fatalf("Config Set reference count = %d, want 2", before.ReferenceCount)
+			}
+			operationsBefore := operationCount(t, ctx, application)
+
+			const changedAuthMarker = "CHANGED_AUTH_SECRET"
+			writePrivateFile(t, authPath, syntheticAuth("changed", changedAuthMarker))
+			if err := os.Remove(configPath); err != nil {
+				t.Fatalf("remove working config: %v", err)
+			}
+			_, err = application.GrokBuild().SaveActiveProfileState(ctx)
+			if err == nil {
+				t.Fatal("save-current accepted a missing config.toml")
+			}
+			assertErrorCode(t, err, apperror.GrokBuildInvalid)
+			if strings.Contains(err.Error(), changedAuthMarker) || (test.config != "" && strings.Contains(err.Error(), test.config)) {
+				t.Fatalf("save-current error exposed managed content: %v", err)
+			}
+
+			assertStoredCredential(t, ctx, application, first.Summary.CredentialID, originalAuth)
+			assertStoredCredential(t, ctx, application, second.Summary.CredentialID, originalAuth)
+			assertStoredConfig(t, ctx, application, first.ConfigSet.ID, test.config)
+			firstAfter, err := application.GrokBuild().GetProfile(ctx, first.Profile.ID)
+			if err != nil {
+				t.Fatalf("show first Profile after save: %v", err)
+			}
+			secondAfter, err := application.GrokBuild().GetProfile(ctx, second.Profile.ID)
+			if err != nil {
+				t.Fatalf("show second Profile after save: %v", err)
+			}
+			if firstAfter.Summary.CredentialReferenceCount != firstBefore.Summary.CredentialReferenceCount ||
+				secondAfter.Summary.CredentialReferenceCount != secondBefore.Summary.CredentialReferenceCount {
+				t.Fatal("rejected save changed credential reference counts")
+			}
+			after, err := application.GrokBuild().GetConfigSet(ctx, first.ConfigSet.ID)
+			if err != nil {
+				t.Fatalf("get Config Set after rejected save: %v", err)
+			}
+			if after.ReferenceCount != before.ReferenceCount {
+				t.Fatalf("Config Set reference count changed: before=%d after=%d", before.ReferenceCount, after.ReferenceCount)
+			}
+			if afterActiveProfileID := grokBuildActiveProfileID(t, ctx, application); afterActiveProfileID != activeProfileID {
+				t.Fatal("rejected save changed the active Profile")
+			}
+			db, err := application.Runtime().StoreFactory().OpenHealthy(ctx, true)
+			if err != nil {
+				t.Fatalf("open store after rejected save: %v", err)
+			}
+			incomplete, listErr := db.ListIncompleteOperations(ctx)
+			closeErr := db.Close()
+			if listErr != nil {
+				t.Fatalf("list incomplete operations: %v", listErr)
+			}
+			if closeErr != nil {
+				t.Fatalf("close store after rejected save: %v", closeErr)
+			}
+			if len(incomplete) != 0 {
+				t.Fatalf("rejected save left incomplete operations: %#v", incomplete)
+			}
+			if operationsAfter := operationCount(t, ctx, application); operationsAfter != operationsBefore {
+				t.Fatalf("operation count changed: before=%d after=%d", operationsBefore, operationsAfter)
+			}
+		})
+	}
+}
+
 func TestConfigSetManagementSurvivesInvalidActiveBinding(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
@@ -500,6 +728,7 @@ func TestCreateAndSaveCurrentReadWorkingCopyAfterGrokGuard(t *testing.T) {
 	assertStoredCredential(t, ctx, application, created.Summary.CredentialID, authAfterCreateRefresh)
 
 	authAfterSaveRefresh := syntheticAuth("login-a", "AUTH_AFTER_SAVE_REFRESH")
+	writePrivateFile(t, filepath.Join(home, grokconfig.ConfigFileName), "")
 	refreshGuard, err = refreshCoordinator.Acquire(ctx, providercoord.Request{
 		ProviderID: grokconfig.ProviderID,
 	})
@@ -598,6 +827,43 @@ func assertStoredConfig(t *testing.T, ctx context.Context, application *app.Appl
 	if value.PayloadText != expected {
 		t.Fatalf("stored config bytes changed")
 	}
+}
+
+func assertErrorCode(t *testing.T, err error, code apperror.Code) {
+	t.Helper()
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.Code != code {
+		t.Fatalf("error = %v, want code %s", err, code)
+	}
+}
+
+func grokBuildActiveProfileID(t *testing.T, ctx context.Context, application *app.Application) string {
+	t.Helper()
+	states, err := application.Providers().ListActiveStates(ctx)
+	if err != nil {
+		t.Fatalf("list active states: %v", err)
+	}
+	for _, state := range states {
+		if state.ProviderID == grokconfig.ProviderID {
+			return state.ProfileID
+		}
+	}
+	t.Fatal("Grok Build active Profile was not found")
+	return ""
+}
+
+func operationCount(t *testing.T, ctx context.Context, application *app.Application) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", application.Runtime().StoreFactory().DatabasePath())
+	if err != nil {
+		t.Fatalf("open database to count operations: %v", err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(1) FROM operations").Scan(&count); err != nil {
+		t.Fatalf("count operations: %v", err)
+	}
+	return count
 }
 
 func assertOperationProfiles(

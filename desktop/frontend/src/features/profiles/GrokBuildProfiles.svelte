@@ -111,6 +111,7 @@
 	let profileName = $state("");
 	let profileDescription = $state("");
 	let formSubmitted = $state(false);
+	let createSourceError = $state("");
 	let configMode = $state<"reuse" | "new">("reuse");
 	let credentialBinding = $state<CodexForkBinding>("copy-new");
 	let configBinding = $state<CodexForkBinding>("share-parent");
@@ -249,6 +250,7 @@
 		configBinding = "share-parent";
 		newConfigSetID = "";
 		newConfigSetName = "";
+		createSourceError = "";
 	}
 
 	async function createProfile() {
@@ -262,7 +264,12 @@
 			new_config_set_name: configMode === "new" ? optional(newConfigSetName) : null,
 		};
 		await runAction("profile-create", async () => {
-			if (!isSourceReady(await refreshDetect(), createRequiresCurrentConfig)) return;
+			createSourceError = "";
+			const source = await refreshDetect();
+			if (!isSourceReady(source, createRequiresCurrentConfig)) {
+				createSourceError = createSourceRecheckDescription(source);
+				return;
+			}
 			const result = await track("profile-create", GrokBuildService.CreateProfile(request));
 			await refreshProfiles();
 			showResultWarnings(result);
@@ -338,8 +345,8 @@
 	async function saveCurrent() {
 		await runAction("profile-save-current", async () => {
 			const source = await refreshDetect();
-			if (!isSourceReady(source)) {
-				saveCurrentSourceError = sourceStatusDescription(source);
+			if (!isSaveCurrentSourceReady(source)) {
+				saveCurrentSourceError = saveCurrentSourceDescription(source);
 				return;
 			}
 			saveCurrentSourceError = "";
@@ -360,8 +367,17 @@
 	}
 
 	function openSaveCurrent() {
-		saveCurrentSourceError = "";
+		saveCurrentSourceError = isSaveCurrentSourceReady(detectResult)
+			? ""
+			: saveCurrentSourceDescription(detectResult);
 		saveCurrentOpen = true;
+	}
+
+	async function retryCreateSource() {
+		const source = await refreshDetect();
+		createSourceError = isSourceReady(source, createRequiresCurrentConfig)
+			? ""
+			: createSourceRecheckDescription(source);
 	}
 
 	async function openSetConfig() {
@@ -590,11 +606,34 @@
 		});
 	}
 
+	function createSourceRecheckDescription(value: DetectResult | null): string {
+		return value
+			? sourceStatusDescription(value)
+			: translate("grokBuild.profilePages.source.recheckFailed");
+	}
+
+	function saveCurrentSourceDescription(value: DetectResult | null): string {
+		if (value?.config_status === "missing") {
+			return translate("grokBuild.profilePages.saveCurrent.configMissing");
+		}
+		return value
+			? sourceStatusDescription(value)
+			: translate("grokBuild.profilePages.source.recheckFailed");
+	}
+
 	function isSourceReady(value: DetectResult | null | undefined, requiresConfig = true): boolean {
 		return !!value?.profiledeck_initialized
 			&& value.provider_compatible
 			&& value.file_auth_supported
 			&& (!requiresConfig || value.config_status === "valid" || value.config_status === "missing")
+			&& value.auth_status === "valid";
+	}
+
+	function isSaveCurrentSourceReady(value: DetectResult | null | undefined): boolean {
+		return !!value?.profiledeck_initialized
+			&& value.provider_compatible
+			&& value.file_auth_supported
+			&& value.config_status === "valid"
 			&& value.auth_status === "valid";
 	}
 
@@ -740,6 +779,7 @@
 		allowMissingConfig
 		requiresCurrentConfig={createRequiresCurrentConfig}
 		sourceError={sourceStatusDescription()}
+		submitError={createSourceError}
 		createActionLabel={$_("grokBuild.actions.saveAsNewProfile")}
 		canChooseConfigSet={!!activeProfileID}
 		busy={!!busyAction}
@@ -756,7 +796,7 @@
 		descriptionError={displayedDescriptionError}
 		onCancel={() => push(basePath)}
 		onSubmit={createProfile}
-		onRetrySource={() => { void refreshDetect(); }}
+		onRetrySource={() => { void retryCreateSource(); }}
 		onDiagnostics={() => { void push("/diagnostics"); }}
 	/>
 {:else if detailLoading}

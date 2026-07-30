@@ -27,6 +27,7 @@
 		allowMissingConfig?: boolean;
 		requiresCurrentConfig?: boolean;
 		sourceError?: string;
+		submitError?: string;
 		createActionLabel?: string;
 		canChooseConfigSet?: boolean;
 		busy: boolean;
@@ -56,6 +57,7 @@
 		allowMissingConfig = false,
 		requiresCurrentConfig = true,
 		sourceError = "",
+		submitError = "",
 		createActionLabel = "",
 		canChooseConfigSet = true,
 		busy,
@@ -123,9 +125,9 @@
 			<Card.Content class="flex flex-wrap gap-2">
 				<Badge variant={configReady ? "secondary" : "destructive"}>config.toml · {sourceStatusLabel(detectResult?.config_status)}</Badge>
 				<Badge variant={detectResult?.auth_status === "valid" ? "secondary" : "destructive"}>auth.json · {sourceStatusLabel(detectResult?.auth_status)}</Badge>
-				{#if !sourceReady}
+				{#if !sourceReady || !!submitError}
 					<Alert.Root variant="destructive" class="basis-full">
-						<Alert.Description>{sourceError || $_(`${copyRoot}.source.statusDescription`, { values: { config: sourceStatusLabel(detectResult?.config_status), auth: sourceStatusLabel(detectResult?.auth_status) } })}</Alert.Description>
+						<Alert.Description>{submitError || sourceError || $_(`${copyRoot}.source.statusDescription`, { values: { config: sourceStatusLabel(detectResult?.config_status), auth: sourceStatusLabel(detectResult?.auth_status) } })}</Alert.Description>
 						<Alert.Action>
 							<div class="flex gap-2">
 								<Button size="xs" variant="outline" onclick={onRetrySource}><RefreshCwIcon />{$_("actions.retry")}</Button>
