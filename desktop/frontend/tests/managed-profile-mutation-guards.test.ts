@@ -300,10 +300,14 @@ describe("managed Profile mutation guards", () => {
 		const profileID = await screen.findByLabelText("Profile ID");
 		await user.clear(profileID);
 		await user.type(profileID, destinationProfile.id);
+		await waitFor(() => {
+			expect(screen.getByLabelText("Name")).toHaveValue(destinationProfile.name);
+			expect(screen.getByLabelText("Description")).toHaveValue(destinationProfile.description);
+		});
 		await user.click(screen.getByRole("button", { name: "Fork" }));
 
 		await waitFor(() => expect(backend.forkCodexProfile).toHaveBeenCalledOnce());
-		expect(backend.listProfiles).toHaveBeenCalledOnce();
+		expect(backend.listProfiles).toHaveBeenCalledTimes(2);
 		expect(backend.forkCodexProfile).toHaveBeenCalledWith(expect.objectContaining({
 			profile_id: destinationProfile.id,
 			name: null,
@@ -342,9 +346,14 @@ describe("managed Profile mutation guards", () => {
 		await user.clear(profileID);
 		await user.type(profileID, destinationProfile.id);
 		const name = screen.getByLabelText("Name");
+		await waitFor(() => expect(name).toHaveValue(destinationProfile.name));
 		await user.clear(name);
+		expect(await screen.findByText("Name is required.")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Fork" })).toBeDisabled();
+		expect(backend.forkCodexProfile).not.toHaveBeenCalled();
 		await user.type(name, "Updated shared Profile");
 		const description = screen.getByLabelText("Description");
+		expect(description).toHaveValue(destinationProfile.description);
 		await user.clear(description);
 		await user.click(screen.getByRole("button", { name: "Fork" }));
 
@@ -386,14 +395,70 @@ describe("managed Profile mutation guards", () => {
 		const profileID = await screen.findByLabelText("Profile ID");
 		await user.clear(profileID);
 		await user.type(profileID, destinationProfile.id);
+		await waitFor(() => {
+			expect(screen.getByLabelText("Name")).toHaveValue(destinationProfile.name);
+			expect(screen.getByLabelText("Description")).toHaveValue(destinationProfile.description);
+		});
 		await user.click(screen.getByRole("button", { name: "Fork" }));
 
 		await waitFor(() => expect(backend.forkGrokBuildProfile).toHaveBeenCalledOnce());
-		expect(backend.listProfiles).toHaveBeenCalledOnce();
+		expect(backend.listProfiles).toHaveBeenCalledTimes(2);
 		expect(backend.forkGrokBuildProfile).toHaveBeenCalledWith(expect.objectContaining({
 			profile_id: destinationProfile.id,
 			name: null,
 			description: null,
+		}));
+	});
+
+	it("validates and passes edited Grok Build Fork metadata for an existing destination", async () => {
+		const user = userEvent.setup();
+		backend.showGrokBuildProfile.mockReturnValue(cancellableResolved(grokBuildDetail));
+		backend.listProfiles.mockReturnValue(cancellableResolved([destinationProfile]));
+		backend.forkGrokBuildProfile.mockReturnValue(cancellableResolved({
+			profile: destinationProfile,
+			warnings: [],
+		}));
+
+		render(GrokBuildProfiles, {
+			route: { kind: "fork", profileID: "work" },
+			profiles: [grokBuildDetail.summary],
+			dashboardConfigSets: [grokBuildDetail.config_set!],
+			detectResult: validGrokBuildDetect,
+			detectError: "",
+			activeProfileID: "work",
+			loadingProfiles: false,
+			profileError: "",
+			useRequest: null,
+			refreshDetect: vi.fn().mockResolvedValue(validGrokBuildDetect),
+			refreshProfiles: vi.fn().mockResolvedValue(undefined),
+			cancelDetect: vi.fn(),
+			onUseRequestHandled: vi.fn(),
+			showError: vi.fn(),
+			showNotice: vi.fn(),
+		}, { wrapper: ProfileTestProviders });
+
+		const profileID = await screen.findByLabelText("Profile ID");
+		await user.clear(profileID);
+		await user.type(profileID, destinationProfile.id);
+		const name = screen.getByLabelText("Name");
+		await waitFor(() => expect(name).toHaveValue(destinationProfile.name));
+		await user.clear(name);
+		expect(await screen.findByText("Name is required.")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Fork" })).toBeDisabled();
+		expect(backend.forkGrokBuildProfile).not.toHaveBeenCalled();
+
+		await user.type(name, "Updated Grok Build Profile");
+		const description = screen.getByLabelText("Description");
+		expect(description).toHaveValue(destinationProfile.description);
+		await user.clear(description);
+		await user.type(description, "Updated Grok Build description");
+		await user.click(screen.getByRole("button", { name: "Fork" }));
+
+		await waitFor(() => expect(backend.forkGrokBuildProfile).toHaveBeenCalledOnce());
+		expect(backend.forkGrokBuildProfile).toHaveBeenCalledWith(expect.objectContaining({
+			profile_id: destinationProfile.id,
+			name: "Updated Grok Build Profile",
+			description: "Updated Grok Build description",
 		}));
 	});
 

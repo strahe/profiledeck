@@ -43,6 +43,7 @@
 		ProfileSaveResult,
 		ProfileSummary,
 	} from "../../../bindings/github.com/strahe/profiledeck/internal/grokbuild/models";
+	import type { Profile as GlobalProfile } from "../../../bindings/github.com/strahe/profiledeck/internal/profile/models";
 	import type { SwitchPlan } from "../../../bindings/github.com/strahe/profiledeck/internal/switching/models";
 
 	import ConfigSetDialog from "./ConfigSetDialog.svelte";
@@ -116,6 +117,11 @@
 	let createSourceFailureObserved = $state(false);
 	let forkNameEdited = $state(false);
 	let forkDescriptionEdited = $state(false);
+	let forkProfiles = $state<GlobalProfile[]>([]);
+	let forkProfilesLoaded = $state(false);
+	let forkDefaultName = $state("");
+	let forkDefaultDescription = $state("");
+	let appliedForkDestinationKey = "";
 	let configMode = $state<"reuse" | "new">("reuse");
 	let credentialBinding = $state<CodexForkBinding>("copy-new");
 	let configBinding = $state<CodexForkBinding>("share-parent");
@@ -161,15 +167,44 @@
 		isSourceReady(detectResult, !activeProfileID && !sharedConfigSetExists),
 	);
 	let sourceReady = $derived(isSourceReady(detectResult));
+	let forkDestination = $derived.by(() => {
+		if (route.kind !== "fork" || !forkProfilesLoaded) return null;
+		return forkProfiles.find((value) => value.id === profileID.trim()) ?? null;
+	});
+	let forkDestinationExists = $derived(!!forkDestination);
 	let rawIDError = $derived.by(() => { void $locale; return validateProfileID(profileID); });
-	let rawNameError = $derived.by(() => { void $locale; return validateOptionalName(profileName); });
+	let rawNameError = $derived.by(() => {
+		void $locale;
+		return validateOptionalName(profileName, forkDestinationExists);
+	});
 	let rawDescriptionError = $derived.by(() => { void $locale; return validateDescription(profileDescription); });
 	let displayedIDError = $derived(formSubmitted || profileID ? rawIDError : "");
-	let displayedNameError = $derived(formSubmitted || profileName ? rawNameError : "");
+	let displayedNameError = $derived(
+		formSubmitted || !!profileName || (route.kind === "fork" && forkNameEdited)
+			? rawNameError
+			: "",
+	);
 	let displayedDescriptionError = $derived(formSubmitted || profileDescription ? rawDescriptionError : "");
 
 	$effect(() => {
 		configSets = dashboardConfigSets;
+	});
+
+	$effect(() => {
+		if (route.kind !== "fork" || !forkProfilesLoaded) return;
+		const destinationKey = forkDestination
+			? `${forkDestination.id}:${forkDestination.updated_at_unix_ms}`
+			: "";
+		if (destinationKey === appliedForkDestinationKey) return;
+		appliedForkDestinationKey = destinationKey;
+		if (!forkNameEdited) {
+			profileName = forkDestination ? forkDestination.name : forkDefaultName;
+		}
+		if (!forkDescriptionEdited) {
+			profileDescription = forkDestination
+				? forkDestination.description
+				: forkDefaultDescription;
+		}
 	});
 
 	$effect(() => {
@@ -215,8 +250,7 @@
 		detailError = "";
 		formSubmitted = false;
 		clearCreateSourceError();
-		forkNameEdited = false;
-		forkDescriptionEdited = false;
+		resetForkState();
 		editOpen = false;
 		setConfigOpen = false;
 		if (next.kind === "list") {
@@ -242,21 +276,31 @@
 	async function loadDetail(id: string, prepareFork = false, sequence = routeSequence) {
 		detailLoading = true;
 		try {
-			const value = await track("profile-detail", GrokBuildService.ShowProfile(id));
+			const [value, globalProfiles] = await Promise.all([
+				track("profile-detail", GrokBuildService.ShowProfile(id)),
+				prepareFork
+					? track("global-profiles", ProfileService.ListProfiles())
+					: Promise.resolve(null),
+			]);
 			if (sequence !== routeSequence) return;
 			detail = value;
 			if (prepareFork) {
 				profileID = `${value.summary.profile.id}-copy`;
-				profileName = translate("profilePages.fork.copyName", {
+				forkDefaultName = translate("profilePages.fork.copyName", {
 					profile: value.summary.profile.name || value.summary.profile.id,
 				});
-				profileDescription = value.summary.profile.description || "";
+				forkDefaultDescription = value.summary.profile.description || "";
+				profileName = forkDefaultName;
+				profileDescription = forkDefaultDescription;
 				credentialBinding = "copy-new";
 				configBinding = "share-parent";
 				newConfigSetID = `${value.summary.profile.id}-config-copy`;
 				newConfigSetName = `${value.config_set?.name || value.summary.profile.name || value.summary.profile.id} copy`;
 				forkNameEdited = false;
 				forkDescriptionEdited = false;
+				appliedForkDestinationKey = "";
+				forkProfiles = globalProfiles ?? [];
+				forkProfilesLoaded = true;
 			}
 		} catch (error) {
 			if (sequence === routeSequence && !isCancelError(error)) detailError = formatError(error);
@@ -275,8 +319,7 @@
 		newConfigSetID = "";
 		newConfigSetName = "";
 		clearCreateSourceError();
-		forkNameEdited = false;
-		forkDescriptionEdited = false;
+		resetForkState();
 	}
 
 	async function createProfile() {
@@ -322,7 +365,10 @@
 		const descriptionEdited = forkDescriptionEdited;
 		await runAction("profile-fork", async () => {
 			const globalProfiles = await track("global-profiles", ProfileService.ListProfiles());
-			const destinationExists = !!globalProfiles?.some((value) => value.id === destinationProfileID);
+			forkProfiles = globalProfiles ?? [];
+			forkProfilesLoaded = true;
+			const destinationExists = forkProfiles.some((value) => value.id === destinationProfileID);
+			if (destinationExists && nameEdited && !submittedName.trim()) return;
 			const request: ForkGrokBuildProfileRequest = {
 				source_profile_id: sourceProfileID,
 				profile_id: destinationProfileID,
@@ -330,8 +376,18 @@
 				config_binding: submittedConfigBinding,
 				new_config_set_id: submittedConfigBinding === "copy-new" ? submittedConfigSetID : "",
 				new_config_set_name: submittedConfigBinding === "copy-new" ? optional(submittedConfigSetName) : null,
-				name: forkMetadata(submittedName, destinationExists, nameEdited),
-				description: forkMetadata(submittedDescription, destinationExists, descriptionEdited),
+				name: forkMetadata(
+					submittedName,
+					forkDefaultName,
+					destinationExists,
+					nameEdited,
+				),
+				description: forkMetadata(
+					submittedDescription,
+					forkDefaultDescription,
+					destinationExists,
+					descriptionEdited,
+				),
 			};
 			const result = await track("profile-fork", GrokBuildService.ForkProfile(request));
 			await refreshProfiles();
@@ -714,8 +770,10 @@
 		return /^[a-z0-9][a-z0-9._-]*$/.test(trimmed) ? "" : translate("profilePages.validation.idFormat");
 	}
 
-	function validateOptionalName(value: string): string {
-		return value.trim().length > 120 ? translate("profilePages.validation.nameTooLong") : "";
+	function validateOptionalName(value: string, required = false): string {
+		const trimmed = value.trim();
+		if (required && !trimmed) return translate("profilePages.validation.nameRequired");
+		return trimmed.length > 120 ? translate("profilePages.validation.nameTooLong") : "";
 	}
 
 	function validateDescription(value: string): string {
@@ -726,8 +784,25 @@
 		return value.trim() || null;
 	}
 
-	function forkMetadata(value: string, destinationExists: boolean, edited: boolean): string | null {
-		return destinationExists ? (edited ? value.trim() : null) : optional(value);
+	function forkMetadata(
+		value: string,
+		defaultValue: string,
+		destinationExists: boolean,
+		edited: boolean,
+	): string | null {
+		return destinationExists
+			? (edited ? value.trim() : null)
+			: optional(edited ? value : defaultValue);
+	}
+
+	function resetForkState() {
+		forkNameEdited = false;
+		forkDescriptionEdited = false;
+		forkProfiles = [];
+		forkProfilesLoaded = false;
+		forkDefaultName = "";
+		forkDefaultDescription = "";
+		appliedForkDestinationKey = "";
 	}
 
 	function formatError(value: unknown): string {
