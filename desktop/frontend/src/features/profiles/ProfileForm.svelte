@@ -13,6 +13,8 @@
 		idError = "",
 		nameError = "",
 		descriptionError = "",
+		onNameInput = () => {},
+		onDescriptionInput = () => {},
 	}: {
 		profileID?: string;
 		name?: string;
@@ -21,6 +23,8 @@
 		idError?: string;
 		nameError?: string;
 		descriptionError?: string;
+		onNameInput?: () => void;
+		onDescriptionInput?: () => void;
 	} = $props();
 </script>
 
@@ -53,6 +57,7 @@
 			autocapitalize="none"
 			autocomplete="off"
 			placeholder={$_("profilePages.form.namePlaceholder")}
+			oninput={onNameInput}
 		/>
 		<Field.FieldDescription>{$_("profilePages.form.nameHelp")}</Field.FieldDescription>
 		<Field.FieldError errors={nameError ? [{ message: nameError }] : []} />
@@ -68,6 +73,7 @@
 			maxlength={1000}
 			rows={3}
 			placeholder={$_("profilePages.form.descriptionPlaceholder")}
+			oninput={onDescriptionInput}
 		/>
 		<Field.FieldDescription>{$_("profilePages.form.descriptionHelp")}</Field.FieldDescription>
 		<Field.FieldError errors={descriptionError ? [{ message: descriptionError }] : []} />

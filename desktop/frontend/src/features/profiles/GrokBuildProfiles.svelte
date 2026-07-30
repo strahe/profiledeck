@@ -27,7 +27,7 @@
 	import { currentDesktopLocale, translate } from "$lib/i18n";
 	import { joinUserMessages, profileChangeWarningMessage } from "$lib/user-facing-messages";
 
-	import { GrokBuildService, SwitchService } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
+	import { GrokBuildService, ProfileService, SwitchService } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type {
 		CopyGrokBuildConfigSetRequest,
 		CreateGrokBuildConfigSetRequest,
@@ -112,6 +112,10 @@
 	let profileDescription = $state("");
 	let formSubmitted = $state(false);
 	let createSourceError = $state("");
+	let createSourceFailureKey = $state("");
+	let createSourceFailureObserved = $state(false);
+	let forkNameEdited = $state(false);
+	let forkDescriptionEdited = $state(false);
 	let configMode = $state<"reuse" | "new">("reuse");
 	let credentialBinding = $state<CodexForkBinding>("copy-new");
 	let configBinding = $state<CodexForkBinding>("share-parent");
@@ -169,6 +173,21 @@
 	});
 
 	$effect(() => {
+		if (!createSourceError || !createSourceFailureKey) return;
+		const currentKey = createSourceStateKey(detectResult, createRequiresCurrentConfig);
+		if (!createSourceFailureObserved) {
+			if (currentKey === createSourceFailureKey) createSourceFailureObserved = true;
+			return;
+		}
+		if (
+			currentKey !== createSourceFailureKey
+			&& isSourceReady(detectResult, createRequiresCurrentConfig)
+		) {
+			clearCreateSourceError();
+		}
+	});
+
+	$effect(() => {
 		const key = `${route.kind}:${route.profileID}`;
 		if (key === routeKey) return;
 		routeKey = key;
@@ -195,6 +214,9 @@
 		busyAction = "";
 		detailError = "";
 		formSubmitted = false;
+		clearCreateSourceError();
+		forkNameEdited = false;
+		forkDescriptionEdited = false;
 		editOpen = false;
 		setConfigOpen = false;
 		if (next.kind === "list") {
@@ -233,6 +255,8 @@
 				configBinding = "share-parent";
 				newConfigSetID = `${value.summary.profile.id}-config-copy`;
 				newConfigSetName = `${value.config_set?.name || value.summary.profile.name || value.summary.profile.id} copy`;
+				forkNameEdited = false;
+				forkDescriptionEdited = false;
 			}
 		} catch (error) {
 			if (sequence === routeSequence && !isCancelError(error)) detailError = formatError(error);
@@ -250,7 +274,9 @@
 		configBinding = "share-parent";
 		newConfigSetID = "";
 		newConfigSetName = "";
-		createSourceError = "";
+		clearCreateSourceError();
+		forkNameEdited = false;
+		forkDescriptionEdited = false;
 	}
 
 	async function createProfile() {
@@ -264,10 +290,10 @@
 			new_config_set_name: configMode === "new" ? optional(newConfigSetName) : null,
 		};
 		await runAction("profile-create", async () => {
-			createSourceError = "";
+			clearCreateSourceError();
 			const source = await refreshDetect();
 			if (!isSourceReady(source, createRequiresCurrentConfig)) {
-				createSourceError = createSourceRecheckDescription(source);
+				setCreateSourceError(source);
 				return;
 			}
 			const result = await track("profile-create", GrokBuildService.CreateProfile(request));
@@ -284,17 +310,29 @@
 	async function forkProfile() {
 		formSubmitted = true;
 		if (!detail || rawIDError || rawNameError || rawDescriptionError) return;
-		const request: ForkGrokBuildProfileRequest = {
-			source_profile_id: detail.summary.profile.id,
-			profile_id: profileID.trim(),
-			credential_binding: credentialBinding,
-			config_binding: configBinding,
-			new_config_set_id: configBinding === "copy-new" ? newConfigSetID.trim() : "",
-			new_config_set_name: configBinding === "copy-new" ? optional(newConfigSetName) : null,
-			name: optional(profileName),
-			description: optional(profileDescription),
-		};
+		const sourceProfileID = detail.summary.profile.id;
+		const destinationProfileID = profileID.trim();
+		const submittedName = profileName;
+		const submittedDescription = profileDescription;
+		const submittedCredentialBinding = credentialBinding;
+		const submittedConfigBinding = configBinding;
+		const submittedConfigSetID = newConfigSetID.trim();
+		const submittedConfigSetName = newConfigSetName;
+		const nameEdited = forkNameEdited;
+		const descriptionEdited = forkDescriptionEdited;
 		await runAction("profile-fork", async () => {
+			const globalProfiles = await track("global-profiles", ProfileService.ListProfiles());
+			const destinationExists = !!globalProfiles?.some((value) => value.id === destinationProfileID);
+			const request: ForkGrokBuildProfileRequest = {
+				source_profile_id: sourceProfileID,
+				profile_id: destinationProfileID,
+				credential_binding: submittedCredentialBinding,
+				config_binding: submittedConfigBinding,
+				new_config_set_id: submittedConfigBinding === "copy-new" ? submittedConfigSetID : "",
+				new_config_set_name: submittedConfigBinding === "copy-new" ? optional(submittedConfigSetName) : null,
+				name: forkMetadata(submittedName, destinationExists, nameEdited),
+				description: forkMetadata(submittedDescription, destinationExists, descriptionEdited),
+			};
 			const result = await track("profile-fork", GrokBuildService.ForkProfile(request));
 			await refreshProfiles();
 			showResultWarnings(result);
@@ -375,9 +413,41 @@
 
 	async function retryCreateSource() {
 		const source = await refreshDetect();
-		createSourceError = isSourceReady(source, createRequiresCurrentConfig)
-			? ""
-			: createSourceRecheckDescription(source);
+		if (isSourceReady(source, createRequiresCurrentConfig)) {
+			clearCreateSourceError();
+			return;
+		}
+		setCreateSourceError(source);
+	}
+
+	function setCreateSourceError(value: DetectResult | null) {
+		createSourceError = createSourceRecheckDescription(value);
+		createSourceFailureKey = createSourceStateKey(value, createRequiresCurrentConfig);
+		createSourceFailureObserved = createSourceStateKey(
+			detectResult,
+			createRequiresCurrentConfig,
+		) === createSourceFailureKey;
+	}
+
+	function clearCreateSourceError() {
+		createSourceError = "";
+		createSourceFailureKey = "";
+		createSourceFailureObserved = false;
+	}
+
+	function createSourceStateKey(
+		value: DetectResult | null | undefined,
+		requiresConfig: boolean,
+	): string {
+		if (!value) return `${requiresConfig}|unavailable`;
+		return [
+			requiresConfig,
+			value.profiledeck_initialized,
+			value.provider_compatible,
+			value.file_auth_supported,
+			value.config_status,
+			value.auth_status,
+		].join("|");
 	}
 
 	async function openSetConfig() {
@@ -656,6 +726,10 @@
 		return value.trim() || null;
 	}
 
+	function forkMetadata(value: string, destinationExists: boolean, edited: boolean): string | null {
+		return destinationExists ? (edited ? value.trim() : null) : optional(value);
+	}
+
 	function formatError(value: unknown): string {
 		return desktopErrorMessage(value, translate("errors.desktopUnavailable"));
 	}
@@ -854,6 +928,8 @@
 		descriptionError={displayedDescriptionError}
 		onCancel={() => push(`${basePath}/${encodeURIComponent(detail!.summary.profile.id)}`)}
 		onSubmit={forkProfile}
+		onProfileNameInput={() => (forkNameEdited = true)}
+		onProfileDescriptionInput={() => (forkDescriptionEdited = true)}
 	/>
 {/if}
 

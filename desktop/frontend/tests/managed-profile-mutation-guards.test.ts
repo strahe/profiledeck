@@ -4,31 +4,43 @@ import { locale } from "svelte-i18n";
 import { tick } from "svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CodexDetectResult } from "../bindings/github.com/strahe/profiledeck/internal/codex/models";
+import type {
+	CodexDetectResult,
+	CodexProfileDetail,
+} from "../bindings/github.com/strahe/profiledeck/internal/codex/models";
 import type {
 	DetectResult as GrokBuildDetectResult,
 	ProfileDetail as GrokBuildProfileDetail,
 } from "../bindings/github.com/strahe/profiledeck/internal/grokbuild/models";
+import type { Profile } from "../bindings/github.com/strahe/profiledeck/internal/profile/models";
 
 const backend = vi.hoisted(() => ({
 	createCodexProfile: vi.fn(),
 	createGrokBuildProfile: vi.fn(),
+	forkCodexProfile: vi.fn(),
+	forkGrokBuildProfile: vi.fn(),
 	saveGrokBuildProfile: vi.fn(),
+	showCodexProfile: vi.fn(),
 	showGrokBuildProfile: vi.fn(),
+	listProfiles: vi.fn(),
 	deleteProfile: vi.fn(),
 }));
 
 vi.mock("../bindings/github.com/strahe/profiledeck/desktop/backend", () => ({
 	CodexService: {
 		CreateProfile: backend.createCodexProfile,
+		ForkProfile: backend.forkCodexProfile,
+		ShowProfile: backend.showCodexProfile,
 	},
 	GrokBuildService: {
 		CreateProfile: backend.createGrokBuildProfile,
+		ForkProfile: backend.forkGrokBuildProfile,
 		SaveActiveProfileState: backend.saveGrokBuildProfile,
 		ShowProfile: backend.showGrokBuildProfile,
 	},
 	ProfileService: {
 		Delete: backend.deleteProfile,
+		ListProfiles: backend.listProfiles,
 	},
 	SwitchService: {},
 }));
@@ -68,6 +80,52 @@ const validCodexDetect: CodexDetectResult = {
 	provider_adapter_id: "codex",
 	provider_compatible: true,
 	warnings: [],
+};
+
+const destinationProfile: Profile = {
+	id: "shared-profile",
+	name: "Shared Profile",
+	description: "Keep this metadata",
+	metadata: {},
+	created_at_unix_ms: 1,
+	updated_at_unix_ms: 1,
+};
+
+const codexDetail: CodexProfileDetail = {
+	summary: {
+		profile: {
+			id: "work",
+			name: "Work",
+			description: "Source description",
+			metadata: {},
+			created_at_unix_ms: 1,
+			updated_at_unix_ms: 1,
+		},
+		provider_id: "codex",
+		credential_id: "credential",
+		credential_reference_count: 1,
+		config_set_id: "shared",
+		config_set_name: "Shared",
+		config_set_reference_count: 2,
+		active: true,
+		updated_at_unix_ms: 1,
+		warnings: [],
+	},
+	login: {
+		credential_id: "credential",
+		reference_count: 1,
+		updated_at_unix_ms: 1,
+	},
+	config_set: {
+		id: "shared",
+		name: "Shared",
+		description: "",
+		reference_count: 2,
+		active: true,
+		payload_sha256: "sha256",
+		created_at_unix_ms: 1,
+		updated_at_unix_ms: 1,
+	},
 };
 
 const grokBuildDetail: GrokBuildProfileDetail = {
@@ -127,7 +185,7 @@ describe("managed Profile mutation guards", () => {
 			.mockResolvedValueOnce(invalid)
 			.mockResolvedValueOnce(validGrokBuildDetect);
 
-		render(GrokBuildProfiles, {
+		const view = render(GrokBuildProfiles, {
 			route: { kind: "new", profileID: "" },
 			profiles: [],
 			dashboardConfigSets: [],
@@ -155,6 +213,15 @@ describe("managed Profile mutation guards", () => {
 
 		await user.click(screen.getByRole("button", { name: "Retry" }));
 		await waitFor(() => expect(screen.queryByText(message)).not.toBeInTheDocument());
+
+		refreshDetect.mockResolvedValueOnce(invalid);
+		await user.click(screen.getByRole("button", { name: "Save Current Grok Build as a New Profile" }));
+		expect(await screen.findByText(message)).toBeInTheDocument();
+
+		await view.rerender({ detectResult: invalid });
+		await view.rerender({ detectResult: validGrokBuildDetect });
+		await waitFor(() => expect(screen.queryByText(message)).not.toBeInTheDocument());
+		expect(backend.createGrokBuildProfile).not.toHaveBeenCalled();
 	});
 
 	it("shows Codex create recheck failures and does not create a Profile", async () => {
@@ -164,7 +231,7 @@ describe("managed Profile mutation guards", () => {
 			.mockResolvedValueOnce(null)
 			.mockResolvedValueOnce(validCodexDetect);
 
-		render(CodexProfiles, {
+		const view = render(CodexProfiles, {
 			route: { kind: "new", profileID: "" },
 			profiles: [],
 			dashboardConfigSets: [],
@@ -192,6 +259,142 @@ describe("managed Profile mutation guards", () => {
 
 		await user.click(screen.getByRole("button", { name: "Retry" }));
 		await waitFor(() => expect(screen.queryByText(message)).not.toBeInTheDocument());
+
+		refreshDetect.mockResolvedValueOnce(null);
+		await user.click(screen.getByRole("button", { name: "Save Current Codex as a New Profile" }));
+		expect(await screen.findByText(message)).toBeInTheDocument();
+
+		await view.rerender({ detectResult: null });
+		await view.rerender({ detectResult: validCodexDetect });
+		await waitFor(() => expect(screen.queryByText(message)).not.toBeInTheDocument());
+		expect(backend.createCodexProfile).not.toHaveBeenCalled();
+	});
+
+	it("preserves existing destination metadata when Codex Fork defaults are untouched", async () => {
+		const user = userEvent.setup();
+		backend.showCodexProfile.mockReturnValue(cancellableResolved(codexDetail));
+		backend.listProfiles.mockReturnValue(cancellableResolved([destinationProfile]));
+		backend.forkCodexProfile.mockReturnValue(cancellableResolved({
+			profile: destinationProfile,
+			warnings: [],
+		}));
+
+		render(CodexProfiles, {
+			route: { kind: "fork", profileID: "work" },
+			profiles: [codexDetail.summary],
+			dashboardConfigSets: [codexDetail.config_set!],
+			detectResult: validCodexDetect,
+			detectError: "",
+			activeProfileID: "work",
+			loadingProfiles: false,
+			profileError: "",
+			useRequest: null,
+			refreshDetect: vi.fn().mockResolvedValue(validCodexDetect),
+			refreshProfiles: vi.fn().mockResolvedValue(undefined),
+			cancelDetect: vi.fn(),
+			onUseRequestHandled: vi.fn(),
+			showError: vi.fn(),
+			showNotice: vi.fn(),
+		}, { wrapper: ProfileTestProviders });
+
+		const profileID = await screen.findByLabelText("Profile ID");
+		await user.clear(profileID);
+		await user.type(profileID, destinationProfile.id);
+		await user.click(screen.getByRole("button", { name: "Fork" }));
+
+		await waitFor(() => expect(backend.forkCodexProfile).toHaveBeenCalledOnce());
+		expect(backend.listProfiles).toHaveBeenCalledOnce();
+		expect(backend.forkCodexProfile).toHaveBeenCalledWith(expect.objectContaining({
+			profile_id: destinationProfile.id,
+			name: null,
+			description: null,
+		}));
+	});
+
+	it("passes explicitly edited Codex Fork metadata to an existing destination", async () => {
+		const user = userEvent.setup();
+		backend.showCodexProfile.mockReturnValue(cancellableResolved(codexDetail));
+		backend.listProfiles.mockReturnValue(cancellableResolved([destinationProfile]));
+		backend.forkCodexProfile.mockReturnValue(cancellableResolved({
+			profile: destinationProfile,
+			warnings: [],
+		}));
+
+		render(CodexProfiles, {
+			route: { kind: "fork", profileID: "work" },
+			profiles: [codexDetail.summary],
+			dashboardConfigSets: [codexDetail.config_set!],
+			detectResult: validCodexDetect,
+			detectError: "",
+			activeProfileID: "work",
+			loadingProfiles: false,
+			profileError: "",
+			useRequest: null,
+			refreshDetect: vi.fn().mockResolvedValue(validCodexDetect),
+			refreshProfiles: vi.fn().mockResolvedValue(undefined),
+			cancelDetect: vi.fn(),
+			onUseRequestHandled: vi.fn(),
+			showError: vi.fn(),
+			showNotice: vi.fn(),
+		}, { wrapper: ProfileTestProviders });
+
+		const profileID = await screen.findByLabelText("Profile ID");
+		await user.clear(profileID);
+		await user.type(profileID, destinationProfile.id);
+		const name = screen.getByLabelText("Name");
+		await user.clear(name);
+		await user.type(name, "Updated shared Profile");
+		const description = screen.getByLabelText("Description");
+		await user.clear(description);
+		await user.click(screen.getByRole("button", { name: "Fork" }));
+
+		await waitFor(() => expect(backend.forkCodexProfile).toHaveBeenCalledOnce());
+		expect(backend.forkCodexProfile).toHaveBeenCalledWith(expect.objectContaining({
+			profile_id: destinationProfile.id,
+			name: "Updated shared Profile",
+			description: "",
+		}));
+	});
+
+	it("preserves existing destination metadata when Grok Build Fork defaults are untouched", async () => {
+		const user = userEvent.setup();
+		backend.showGrokBuildProfile.mockReturnValue(cancellableResolved(grokBuildDetail));
+		backend.listProfiles.mockReturnValue(cancellableResolved([destinationProfile]));
+		backend.forkGrokBuildProfile.mockReturnValue(cancellableResolved({
+			profile: destinationProfile,
+			warnings: [],
+		}));
+
+		render(GrokBuildProfiles, {
+			route: { kind: "fork", profileID: "work" },
+			profiles: [grokBuildDetail.summary],
+			dashboardConfigSets: [grokBuildDetail.config_set!],
+			detectResult: validGrokBuildDetect,
+			detectError: "",
+			activeProfileID: "work",
+			loadingProfiles: false,
+			profileError: "",
+			useRequest: null,
+			refreshDetect: vi.fn().mockResolvedValue(validGrokBuildDetect),
+			refreshProfiles: vi.fn().mockResolvedValue(undefined),
+			cancelDetect: vi.fn(),
+			onUseRequestHandled: vi.fn(),
+			showError: vi.fn(),
+			showNotice: vi.fn(),
+		}, { wrapper: ProfileTestProviders });
+
+		const profileID = await screen.findByLabelText("Profile ID");
+		await user.clear(profileID);
+		await user.type(profileID, destinationProfile.id);
+		await user.click(screen.getByRole("button", { name: "Fork" }));
+
+		await waitFor(() => expect(backend.forkGrokBuildProfile).toHaveBeenCalledOnce());
+		expect(backend.listProfiles).toHaveBeenCalledOnce();
+		expect(backend.forkGrokBuildProfile).toHaveBeenCalledWith(expect.objectContaining({
+			profile_id: destinationProfile.id,
+			name: null,
+			description: null,
+		}));
 	});
 
 	it("blocks Grok Build save-current when config.toml is missing", async () => {

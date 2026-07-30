@@ -152,7 +152,7 @@ func newCodexProfileForkCommand() *urfavecli.Command {
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
 			if cmd.Args().Len() != 2 {
-				return apperror.New(apperror.ProfileInvalid, "expected source profile id and new profile id")
+				return apperror.New(apperror.ProfileInvalid, "expected source and destination Profile ids")
 			}
 			sourceID, appErr := appValidateCLIID(cmd.Args().Get(0), apperror.ProfileInvalid)
 			if appErr != nil {

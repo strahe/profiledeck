@@ -46,6 +46,8 @@
 		onSubmit: () => void;
 		onRetrySource?: () => void;
 		onDiagnostics?: () => void;
+		onProfileNameInput?: () => void;
+		onProfileDescriptionInput?: () => void;
 	}
 
 	let {
@@ -76,6 +78,8 @@
 		onSubmit,
 		onRetrySource = () => {},
 		onDiagnostics = () => {},
+		onProfileNameInput = () => {},
+		onProfileDescriptionInput = () => {},
 	}: Props = $props();
 
 	let configReady = $derived(
@@ -142,7 +146,18 @@
 
 	<Card.Root>
 		<Card.Header><Card.Title>{$_("profilePages.form.profile")}</Card.Title><Card.Description>{$_("profilePages.form.profileDescription")}</Card.Description></Card.Header>
-		<Card.Content><ProfileForm bind:profileID bind:name={profileName} bind:description={profileDescription} {idError} {nameError} {descriptionError} /></Card.Content>
+		<Card.Content>
+			<ProfileForm
+				bind:profileID
+				bind:name={profileName}
+				bind:description={profileDescription}
+				{idError}
+				{nameError}
+				{descriptionError}
+				onNameInput={onProfileNameInput}
+				onDescriptionInput={onProfileDescriptionInput}
+			/>
+		</Card.Content>
 	</Card.Root>
 
 	<Card.Root>
