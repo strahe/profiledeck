@@ -1,6 +1,6 @@
 # Grok Build Profile
 
-一个 Grok Build Profile 保存一份基于文件的登录和一组可复用的用户设置，这组设置称为配置集。创建其他 Profile 时，可以分别选择共享或复制登录与设置。
+一个 Grok Build Profile 保存一份基于文件的登录和一组可复用的用户设置，这组设置称为配置集。Fork 到目标 Profile 时，可以分别选择共享或复制登录与设置。
 
 ProfileDeck 只管理所选 Grok Home 中的 `auth.json` 和用户级 `config.toml`。会话、日志、插件、项目设置、托管配置及其他 Grok 文件不在其中。
 
@@ -82,7 +82,7 @@ profiledeck-cli grok-build profile set-config work shared
 
 ## Fork Profile
 
-Fork 会基于已保存数据创建另一个 Profile。如果新 Profile 的登录或配置集需要独立变化，请复制对应内容，避免影响来源 Profile。
+Fork 会把已保存的 Grok Build 数据添加到目标 Profile。目标可以是新 Profile，也可以是尚无 Grok Build 数据的现有 Profile；其中其他 Agent 的数据不会改变。如果目标 Profile 的登录或配置集需要独立变化，请复制对应内容，避免影响来源 Profile。
 
 桌面端会在 Fork 表单中提供共享或复制选项。使用 CLI 时，至少一项必须使用 `copy-new`：
 
@@ -105,7 +105,7 @@ Grok Build 继续使用普通的 `auth.json` 和 `config.toml` 文件。离开�
 profiledeck-cli grok-build profile save-current
 ```
 
-显式保存要求 `auth.json` 非空且有效；认证无效时，不会只保存设置。
+显式保存要求 `auth.json` 非空且有效，并且 `config.toml` 存在且有效；空的 `config.toml` 仍然有效。任一条件不满足时，ProfileDeck 都不会更改已保存的登录或设置。创建 Profile 时，如果缺少 `config.toml`，仍可创建空设置。
 
 在桌面端选择**使用 Profile**，审核操作、目标路径和警告，然后确认。使用 CLI 时运行：
 

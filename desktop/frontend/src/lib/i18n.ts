@@ -235,6 +235,7 @@ const messages = {
 					title: "Current Grok Build",
 					description: "A valid auth.json is required. ProfileDeck reads config.toml only when this Profile creates saved settings; a missing file is saved as empty settings.",
 					statusDescription: "Grok Build files are not ready: config.toml is {config}; auth.json is {auth}.",
+					recheckFailed: "ProfileDeck could not check the current Grok Build files. Retry before saving this Profile.",
 					customAuth: "Grok Build is using a custom authentication source. Unset GROK_AUTH and GROK_AUTH_PATH before managing file-backed Profiles.",
 					notReadyTitle: "Grok Build is not ready",
 					warningTitle: "Grok Build warning",
@@ -255,6 +256,7 @@ const messages = {
 				saveCurrent: {
 					title: "Update from Current Grok Build?",
 					description: "Update this Profile with the active login and settings in Grok Build.",
+					configMissing: "Grok Build config.toml is missing. Restore or recreate it before updating this Profile. ProfileDeck did not change the saved login or settings.",
 				},
 			},
 			configSets: {
@@ -486,7 +488,7 @@ const messages = {
 			},
 			fork: {
 				title: "Fork {profile}",
-				description: "Create a new Profile and choose which login and settings to share or copy.",
+				description: "Choose a destination Profile and which login and settings to share or copy. You can reuse a Profile that does not already contain data for this Agent.",
 				shareParent: "Share source login",
 				copyNew: "Copy login",
 				copyName: "{profile} copy",
@@ -494,7 +496,7 @@ const messages = {
 				configBinding: "Config Set",
 				shareConfig: "Share source Config Set",
 				copyConfig: "Copy to a new Config Set",
-				copyRequired: "Copy the login or Config Set so the new Profile can change independently.",
+				copyRequired: "Copy the login or Config Set so the destination Profile can change independently.",
 			},
 			configChoice: {
 				title: "Config Set",
@@ -536,6 +538,7 @@ const messages = {
 				notReadyTitle: "Codex is not ready",
 				notReadyDescription: "Open Codex, make sure it is configured and signed in, then retry.",
 				statusDescription: "Codex files are not ready: config.toml is {config}; auth.json is {auth}.",
+				recheckFailed: "ProfileDeck could not check the current Codex files. Retry before saving this Profile.",
 				readyTitle: "Codex is ready",
 				readyDescription: "This Profile will include the current Codex login and settings.",
 				warningTitle: "Codex warning",
@@ -1278,6 +1281,7 @@ const messages = {
 					title: "当前 Grok Build",
 					description: "保存 Profile 需要有效的 auth.json。只有创建已保存设置时才会读取 config.toml；文件缺失时会按空设置保存。",
 					statusDescription: "Grok Build 文件尚未就绪：config.toml 为{config}；auth.json 为{auth}。",
+					recheckFailed: "ProfileDeck 无法检查当前 Grok Build 文件。请重试后再保存此 Profile。",
 					customAuth: "Grok Build 正在使用自定义认证来源。管理文件认证 Profile 前，请取消 GROK_AUTH 和 GROK_AUTH_PATH。",
 					notReadyTitle: "Grok Build 尚未就绪",
 					warningTitle: "Grok Build 警告",
@@ -1298,6 +1302,7 @@ const messages = {
 				saveCurrent: {
 					title: "从当前 Grok Build 更新？",
 					description: "使用 Grok Build 当前的登录和设置更新此 Profile。",
+					configMissing: "找不到 Grok Build config.toml。请先恢复或重新创建该文件，再更新此 Profile。ProfileDeck 未更改已保存的登录或设置。",
 				},
 			},
 			configSets: {
@@ -1529,7 +1534,7 @@ const messages = {
 			},
 			fork: {
 				title: "Fork {profile}",
-				description: "创建新 Profile，并选择要共享或复制的登录和设置。",
+				description: "选择目标 Profile，并决定共享或复制哪些登录和设置。若已有 Profile 尚未包含当前 Agent 的数据，也可以直接使用。",
 				shareParent: "共享来源登录",
 				copyNew: "复制登录",
 				copyName: "{profile} 副本",
@@ -1537,7 +1542,7 @@ const messages = {
 				configBinding: "配置集",
 				shareConfig: "共享源配置集",
 				copyConfig: "复制为新配置集",
-				copyRequired: "请复制登录或配置集，让新 Profile 可以独立修改。",
+				copyRequired: "请复制登录或配置集，使目标 Profile 可以独立修改。",
 			},
 			configChoice: {
 				title: "配置集",
@@ -1579,6 +1584,7 @@ const messages = {
 				notReadyTitle: "Codex 尚未就绪",
 				notReadyDescription: "请打开 Codex，确认已经完成配置和登录，然后重试。",
 				statusDescription: "Codex 文件尚未就绪：config.toml 为{config}；auth.json 为{auth}。",
+				recheckFailed: "ProfileDeck 无法检查当前 Codex 文件。请重试后再保存此 Profile。",
 				readyTitle: "Codex 已就绪",
 				readyDescription: "此 Profile 将保存当前 Codex 登录和设置。",
 				warningTitle: "Codex 警告",

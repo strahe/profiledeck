@@ -13,7 +13,7 @@
 	import PageHeader from "$lib/components/app/PageHeader.svelte";
 	import * as Tooltip from "$lib/components/ui/tooltip";
 
-	import { CodexService, SwitchService } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
+	import { CodexService, ProfileService, SwitchService } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type {
 		CopyCodexConfigSetRequest,
 		CreateCodexConfigSetRequest,
@@ -29,6 +29,7 @@
 		CodexProfileSaveResult,
 		CodexProfileSummary,
 	} from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
+	import type { Profile as GlobalProfile } from "../../../bindings/github.com/strahe/profiledeck/internal/profile/models";
 	import type { SwitchPlan } from "../../../bindings/github.com/strahe/profiledeck/internal/switching/models";
 
 	import * as Alert from "$lib/components/ui/alert";
@@ -91,6 +92,16 @@
 	let profileName = $state("");
 	let profileDescription = $state("");
 	let formSubmitted = $state(false);
+	let createSourceError = $state("");
+	let createSourceFailureKey = $state("");
+	let createSourceFailureObserved = $state(false);
+	let forkNameEdited = $state(false);
+	let forkDescriptionEdited = $state(false);
+	let forkProfiles = $state<GlobalProfile[]>([]);
+	let forkProfilesLoaded = $state(false);
+	let forkDefaultName = $state("");
+	let forkDefaultDescription = $state("");
+	let appliedForkDestinationKey = "";
 	let configMode = $state<"reuse" | "new">("reuse");
 	let credentialBinding = $state<CodexForkBinding>("copy-new");
 	let configBinding = $state<CodexForkBinding>("share-parent");
@@ -129,15 +140,56 @@
 			.map(profileListItem);
 	});
 	let sourceReady = $derived(isSourceReady(detectResult));
+	let forkDestination = $derived.by(() => {
+		if (route.kind !== "fork" || !forkProfilesLoaded) return null;
+		return forkProfiles.find((value) => value.id === profileID.trim()) ?? null;
+	});
+	let forkDestinationExists = $derived(!!forkDestination);
 	let rawIDError = $derived.by(() => { void $locale; return validateProfileID(profileID); });
-	let rawNameError = $derived.by(() => { void $locale; return validateOptionalName(profileName); });
+	let rawNameError = $derived.by(() => {
+		void $locale;
+		return validateOptionalName(profileName, forkDestinationExists);
+	});
 	let rawDescriptionError = $derived.by(() => { void $locale; return validateDescription(profileDescription); });
 	let displayedIDError = $derived(formSubmitted || profileID ? rawIDError : "");
-	let displayedNameError = $derived(formSubmitted || profileName ? rawNameError : "");
+	let displayedNameError = $derived(
+		formSubmitted || !!profileName || (route.kind === "fork" && forkNameEdited)
+			? rawNameError
+			: "",
+	);
 	let displayedDescriptionError = $derived(formSubmitted || profileDescription ? rawDescriptionError : "");
 
 	$effect(() => {
 		configSets = dashboardConfigSets;
+	});
+
+	$effect(() => {
+		if (route.kind !== "fork" || !forkProfilesLoaded) return;
+		const destinationKey = forkDestination
+			? `${forkDestination.id}:${forkDestination.updated_at_unix_ms}`
+			: "";
+		if (destinationKey === appliedForkDestinationKey) return;
+		appliedForkDestinationKey = destinationKey;
+		if (!forkNameEdited) {
+			profileName = forkDestination ? forkDestination.name : forkDefaultName;
+		}
+		if (!forkDescriptionEdited) {
+			profileDescription = forkDestination
+				? forkDestination.description
+				: forkDefaultDescription;
+		}
+	});
+
+	$effect(() => {
+		if (!createSourceError || !createSourceFailureKey) return;
+		const currentKey = createSourceStateKey(detectResult);
+		if (!createSourceFailureObserved) {
+			if (currentKey === createSourceFailureKey) createSourceFailureObserved = true;
+			return;
+		}
+		if (currentKey !== createSourceFailureKey && isSourceReady(detectResult)) {
+			clearCreateSourceError();
+		}
 	});
 
 	$effect(() => {
@@ -167,6 +219,8 @@
 		busyAction = "";
 		detailError = "";
 		formSubmitted = false;
+		clearCreateSourceError();
+		resetForkState();
 		editOpen = false;
 		setConfigOpen = false;
 		if (next.kind === "list") {
@@ -192,17 +246,31 @@
 	async function loadDetail(id: string, prepareFork = false, sequence = routeSequence) {
 		detailLoading = true;
 		try {
-			const value = await track("profile-detail", CodexService.ShowProfile(id));
+			const [value, globalProfiles] = await Promise.all([
+				track("profile-detail", CodexService.ShowProfile(id)),
+				prepareFork
+					? track("global-profiles", ProfileService.ListProfiles())
+					: Promise.resolve(null),
+			]);
 			if (sequence !== routeSequence) return;
 			detail = value;
 			if (prepareFork) {
 				profileID = `${value.summary.profile.id}-copy`;
-				profileName = translate("profilePages.fork.copyName", { profile: value.summary.profile.name || value.summary.profile.id });
-				profileDescription = value.summary.profile.description || "";
+				forkDefaultName = translate("profilePages.fork.copyName", {
+					profile: value.summary.profile.name || value.summary.profile.id,
+				});
+				forkDefaultDescription = value.summary.profile.description || "";
+				profileName = forkDefaultName;
+				profileDescription = forkDefaultDescription;
 				credentialBinding = "copy-new";
 				configBinding = "share-parent";
 				newConfigSetID = `${value.summary.profile.id}-config-copy`;
 				newConfigSetName = `${value.config_set?.name || value.summary.profile.name || value.summary.profile.id} copy`;
+				forkNameEdited = false;
+				forkDescriptionEdited = false;
+				appliedForkDestinationKey = "";
+				forkProfiles = globalProfiles ?? [];
+				forkProfilesLoaded = true;
 			}
 		} catch (error) {
 			if (sequence === routeSequence && !isCancelError(error)) detailError = formatError(error);
@@ -220,6 +288,8 @@
 		configBinding = "share-parent";
 		newConfigSetID = "";
 		newConfigSetName = "";
+		clearCreateSourceError();
+		resetForkState();
 	}
 
 	async function createProfile() {
@@ -231,7 +301,12 @@
 			new_config_set_name: configMode === "new" ? optional(newConfigSetName) : null,
 		};
 		await runAction("profile-create", async () => {
-			if (!isSourceReady(await refreshDetect())) return;
+			clearCreateSourceError();
+			const source = await refreshDetect();
+			if (!isSourceReady(source)) {
+				setCreateSourceError(source);
+				return;
+			}
 			const result = await track("profile-create", CodexService.CreateProfile(request));
 			await refreshProfiles();
 			showResultWarnings(result);
@@ -243,14 +318,42 @@
 	async function forkProfile() {
 		formSubmitted = true;
 		if (!detail || rawIDError || rawNameError || rawDescriptionError) return;
-		const request: ForkCodexProfileRequest = {
-			source_profile_id: detail.summary.profile.id, profile_id: profileID.trim(),
-			credential_binding: credentialBinding, config_binding: configBinding,
-			new_config_set_id: configBinding === "copy-new" ? newConfigSetID.trim() : "",
-			new_config_set_name: configBinding === "copy-new" ? optional(newConfigSetName) : null,
-			name: optional(profileName), description: optional(profileDescription),
-		};
+		const sourceProfileID = detail.summary.profile.id;
+		const destinationProfileID = profileID.trim();
+		const submittedName = profileName;
+		const submittedDescription = profileDescription;
+		const submittedCredentialBinding = credentialBinding;
+		const submittedConfigBinding = configBinding;
+		const submittedConfigSetID = newConfigSetID.trim();
+		const submittedConfigSetName = newConfigSetName;
+		const nameEdited = forkNameEdited;
+		const descriptionEdited = forkDescriptionEdited;
 		await runAction("profile-fork", async () => {
+			const globalProfiles = await track("global-profiles", ProfileService.ListProfiles());
+			forkProfiles = globalProfiles ?? [];
+			forkProfilesLoaded = true;
+			const destinationExists = forkProfiles.some((value) => value.id === destinationProfileID);
+			if (destinationExists && nameEdited && !submittedName.trim()) return;
+			const request: ForkCodexProfileRequest = {
+				source_profile_id: sourceProfileID,
+				profile_id: destinationProfileID,
+				credential_binding: submittedCredentialBinding,
+				config_binding: submittedConfigBinding,
+				new_config_set_id: submittedConfigBinding === "copy-new" ? submittedConfigSetID : "",
+				new_config_set_name: submittedConfigBinding === "copy-new" ? optional(submittedConfigSetName) : null,
+				name: forkMetadata(
+					submittedName,
+					forkDefaultName,
+					destinationExists,
+					nameEdited,
+				),
+				description: forkMetadata(
+					submittedDescription,
+					forkDefaultDescription,
+					destinationExists,
+					descriptionEdited,
+				),
+			};
 			const result = await track("profile-fork", CodexService.ForkProfile(request));
 			await refreshProfiles();
 			showResultWarnings(result);
@@ -501,6 +604,36 @@
 			auth: translate(`sourceStatus.${value?.auth_status || "missing"}`),
 		});
 	}
+	function createSourceRecheckDescription(value: CodexDetectResult | null): string {
+		return value ? sourceStatusDescription(value) : translate("profilePages.source.recheckFailed");
+	}
+	async function retryCreateSource() {
+		const source = await refreshDetect();
+		if (isSourceReady(source)) {
+			clearCreateSourceError();
+			return;
+		}
+		setCreateSourceError(source);
+	}
+	function setCreateSourceError(value: CodexDetectResult | null) {
+		createSourceError = createSourceRecheckDescription(value);
+		createSourceFailureKey = createSourceStateKey(value);
+		createSourceFailureObserved = createSourceStateKey(detectResult) === createSourceFailureKey;
+	}
+	function clearCreateSourceError() {
+		createSourceError = "";
+		createSourceFailureKey = "";
+		createSourceFailureObserved = false;
+	}
+	function createSourceStateKey(value: CodexDetectResult | null | undefined): string {
+		if (!value) return "unavailable";
+		return [
+			value.profiledeck_initialized,
+			value.provider_compatible,
+			value.config_status,
+			value.auth_status,
+		].join("|");
+	}
 	function isSourceReady(value: CodexDetectResult | null | undefined): boolean {
 		return !!value?.profiledeck_initialized
 			&& value.provider_compatible
@@ -508,9 +641,32 @@
 			&& value.auth_status === "valid";
 	}
 	function validateProfileID(value: string): string { const trimmed = value.trim(); if (!trimmed) return translate("profilePages.validation.idRequired"); if (trimmed.length > 80) return translate("profilePages.validation.idTooLong"); return /^[a-z0-9][a-z0-9._-]*$/.test(trimmed) ? "" : translate("profilePages.validation.idFormat"); }
-	function validateOptionalName(value: string): string { return value.trim().length > 120 ? translate("profilePages.validation.nameTooLong") : ""; }
+	function validateOptionalName(value: string, required = false): string {
+		const trimmed = value.trim();
+		if (required && !trimmed) return translate("profilePages.validation.nameRequired");
+		return trimmed.length > 120 ? translate("profilePages.validation.nameTooLong") : "";
+	}
 	function validateDescription(value: string): string { return value.trim().length > 1000 ? translate("profilePages.validation.descriptionTooLong") : ""; }
 	function optional(value: string): string | null { return value.trim() || null; }
+	function forkMetadata(
+		value: string,
+		defaultValue: string,
+		destinationExists: boolean,
+		edited: boolean,
+	): string | null {
+		return destinationExists
+			? (edited ? value.trim() : null)
+			: optional(edited ? value : defaultValue);
+	}
+	function resetForkState() {
+		forkNameEdited = false;
+		forkDescriptionEdited = false;
+		forkProfiles = [];
+		forkProfilesLoaded = false;
+		forkDefaultName = "";
+		forkDefaultDescription = "";
+		appliedForkDestinationKey = "";
+	}
 	function formatError(value: unknown): string { return desktopErrorMessage(value, translate("errors.desktopUnavailable")); }
 </script>
 
@@ -593,7 +749,7 @@
 {:else if route.kind === "config-sets"}
 	<ConfigSetPage {configSets} loading={configSetsLoading} error={configSetsError} busy={!!busyAction} formatUpdated={formatRelativeTime} onBack={() => push("/codex/profiles")} onCreate={() => openConfigDialog("create")} onCopy={(value) => openConfigDialog("copy", value)} onEdit={(value) => openConfigDialog("edit", value)} onDelete={deleteConfigSet} />
 {:else if route.kind === "new"}
-	<ProfileEditorPage mode="new" {detectResult} basePath="/codex/profiles" canChooseConfigSet={!!activeProfileID} busy={!!busyAction} bind:profileID bind:profileName bind:profileDescription bind:configMode bind:credentialBinding bind:configBinding bind:newConfigSetID bind:newConfigSetName idError={displayedIDError} nameError={displayedNameError} descriptionError={displayedDescriptionError} onCancel={() => push("/codex/profiles")} onSubmit={createProfile} onRetrySource={() => { void refreshDetect(); }} onDiagnostics={() => { void push("/diagnostics"); }} />
+	<ProfileEditorPage mode="new" {detectResult} basePath="/codex/profiles" sourceError={sourceStatusDescription()} submitError={createSourceError} canChooseConfigSet={!!activeProfileID} busy={!!busyAction} bind:profileID bind:profileName bind:profileDescription bind:configMode bind:credentialBinding bind:configBinding bind:newConfigSetID bind:newConfigSetName idError={displayedIDError} nameError={displayedNameError} descriptionError={displayedDescriptionError} onCancel={() => push("/codex/profiles")} onSubmit={createProfile} onRetrySource={() => { void retryCreateSource(); }} onDiagnostics={() => { void push("/diagnostics"); }} />
 {:else if detailLoading}
 	<div class="mx-auto flex w-full max-w-5xl flex-col gap-4"><Skeleton class="h-5 w-48" /><Skeleton class="h-20 w-full" /><Skeleton class="h-52 w-full" /></div>
 {:else if detailError || !detail}
@@ -614,7 +770,7 @@
 		onDelete={() => openProfileDelete({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || translate("profile.unnamed") })}
 	/>
 {:else}
-	<ProfileEditorPage mode="fork" {detail} {detectResult} basePath="/codex/profiles" busy={!!busyAction} bind:profileID bind:profileName bind:profileDescription bind:configMode bind:credentialBinding bind:configBinding bind:newConfigSetID bind:newConfigSetName idError={displayedIDError} nameError={displayedNameError} descriptionError={displayedDescriptionError} onCancel={() => push(`/codex/profiles/${encodeURIComponent(detail!.summary.profile.id)}`)} onSubmit={forkProfile} />
+	<ProfileEditorPage mode="fork" {detail} {detectResult} basePath="/codex/profiles" busy={!!busyAction} bind:profileID bind:profileName bind:profileDescription bind:configMode bind:credentialBinding bind:configBinding bind:newConfigSetID bind:newConfigSetName idError={displayedIDError} nameError={displayedNameError} descriptionError={displayedDescriptionError} onCancel={() => push(`/codex/profiles/${encodeURIComponent(detail!.summary.profile.id)}`)} onSubmit={forkProfile} onProfileNameInput={() => (forkNameEdited = true)} onProfileDescriptionInput={() => (forkDescriptionEdited = true)} />
 {/if}
 
 <UseProfileDialog bind:open={useOpen} profile={useProfile} currentProfile={activeProfileID} plan={usePlan} building={useBuilding} applying={useApplying} inlineError={useInlineError} onClose={closeUse} onConfirm={confirmUse} />

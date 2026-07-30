@@ -141,7 +141,7 @@ func newCodexProfileCreateCommand() *urfavecli.Command {
 
 func newCodexProfileForkCommand() *urfavecli.Command {
 	return &urfavecli.Command{
-		Name: "fork", Usage: "Fork a Codex profile with explicit resource sharing", ArgsUsage: "<source-profile-id> <new-profile-id>",
+		Name: "fork", Usage: "Fork a Codex profile with explicit resource sharing", ArgsUsage: "<source-profile-id> <destination-profile-id>",
 		Flags: []urfavecli.Flag{
 			stringFlag(credentialBindingFlagName, "Credential binding: share-parent or copy-new"),
 			stringFlag(configBindingFlagName, "Config binding: share-parent or copy-new"),
@@ -152,7 +152,7 @@ func newCodexProfileForkCommand() *urfavecli.Command {
 		},
 		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
 			if cmd.Args().Len() != 2 {
-				return apperror.New(apperror.ProfileInvalid, "expected source profile id and new profile id")
+				return apperror.New(apperror.ProfileInvalid, "expected source and destination Profile ids")
 			}
 			sourceID, appErr := appValidateCLIID(cmd.Args().Get(0), apperror.ProfileInvalid)
 			if appErr != nil {

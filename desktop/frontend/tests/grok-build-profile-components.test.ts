@@ -1,5 +1,7 @@
 import { render, screen, within } from "@testing-library/svelte";
 import type { ComponentProps } from "svelte";
+import { tick } from "svelte";
+import { locale } from "svelte-i18n";
 import { describe, expect, it, vi } from "vitest";
 
 import type { SwitchPlan } from "../bindings/github.com/strahe/profiledeck/internal/switching/models";
@@ -157,6 +159,42 @@ describe("Grok Build managed Profile components", () => {
 		}, { wrapper: TestProviders });
 
 		expect(screen.getByRole("link", { name: "Profiles" })).toHaveAttribute("href", "#/grok-build/profiles");
+	});
+
+	it("describes Fork as a destination Profile in English and Simplified Chinese", async () => {
+		locale.set("en");
+		await tick();
+		let view = render(ProfileEditorPage, {
+			mode: "fork",
+			detectResult: null,
+			basePath: "/grok-build/profiles",
+			busy: false,
+			idError: "",
+			nameError: "",
+			descriptionError: "",
+			onCancel: noop,
+			onSubmit: noop,
+		}, { wrapper: TestProviders });
+		expect(screen.getByText("Choose a destination Profile and which login and settings to share or copy. You can reuse a Profile that does not already contain data for this Agent.")).toBeInTheDocument();
+		view.unmount();
+
+		locale.set("zh-CN");
+		await tick();
+		view = render(ProfileEditorPage, {
+			mode: "fork",
+			detectResult: null,
+			basePath: "/grok-build/profiles",
+			busy: false,
+			idError: "",
+			nameError: "",
+			descriptionError: "",
+			onCancel: noop,
+			onSubmit: noop,
+		}, { wrapper: TestProviders });
+		expect(screen.getByText("选择目标 Profile，并决定共享或复制哪些登录和设置。若已有 Profile 尚未包含当前 Agent 的数据，也可以直接使用。")).toBeInTheDocument();
+		view.unmount();
+		locale.set("en");
+		await tick();
 	});
 
 	it("shows only Grok Build actions, paths, and warnings in switch review", async () => {

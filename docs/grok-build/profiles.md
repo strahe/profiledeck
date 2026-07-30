@@ -1,6 +1,6 @@
 # Grok Build Profiles
 
-A Grok Build Profile saves one file-based login and one set of reusable user settings, called a Config Set. The login and settings can be shared or copied independently when you create another Profile.
+A Grok Build Profile saves one file-based login and one set of reusable user settings, called a Config Set. The login and settings can be shared or copied independently when you fork them to a destination Profile.
 
 ProfileDeck manages only `auth.json` and the user-level `config.toml` in the selected Grok Home. Sessions, logs, plugins, project settings, managed configuration, and other Grok files are not included.
 
@@ -82,7 +82,7 @@ profiledeck-cli grok-build profile set-config work shared
 
 ## Fork a Profile
 
-Forking creates another Profile from saved data. Copy the login or Config Set when the new Profile must be able to change that item without affecting the source Profile.
+Forking adds saved Grok Build data to a destination Profile. The destination can be new, or it can be an existing Profile that does not already contain Grok Build data. Any data for other Agents remains unchanged. Copy the login or Config Set when the destination Profile must be able to change that item without affecting the source Profile.
 
 Desktop presents the share-or-copy choice in the Fork form. In the CLI, at least one item must use `copy-new`:
 
@@ -105,7 +105,7 @@ Grok Build continues to use normal `auth.json` and `config.toml` files. Before s
 profiledeck-cli grok-build profile save-current
 ```
 
-An explicit save requires a valid, non-empty `auth.json`; it does not partially save only the settings.
+An explicit save requires a valid, non-empty `auth.json` and an existing, valid `config.toml`. An empty `config.toml` is valid. If either requirement fails, ProfileDeck changes neither the saved login nor settings. Profile creation can still create empty settings when `config.toml` is missing.
 
 In Desktop, choose **Use Profile**, review the actions, target paths, and warnings, then confirm. In the CLI:
 

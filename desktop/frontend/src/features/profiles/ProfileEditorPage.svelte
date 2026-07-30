@@ -27,6 +27,7 @@
 		allowMissingConfig?: boolean;
 		requiresCurrentConfig?: boolean;
 		sourceError?: string;
+		submitError?: string;
 		createActionLabel?: string;
 		canChooseConfigSet?: boolean;
 		busy: boolean;
@@ -45,6 +46,8 @@
 		onSubmit: () => void;
 		onRetrySource?: () => void;
 		onDiagnostics?: () => void;
+		onProfileNameInput?: () => void;
+		onProfileDescriptionInput?: () => void;
 	}
 
 	let {
@@ -56,6 +59,7 @@
 		allowMissingConfig = false,
 		requiresCurrentConfig = true,
 		sourceError = "",
+		submitError = "",
 		createActionLabel = "",
 		canChooseConfigSet = true,
 		busy,
@@ -74,6 +78,8 @@
 		onSubmit,
 		onRetrySource = () => {},
 		onDiagnostics = () => {},
+		onProfileNameInput = () => {},
+		onProfileDescriptionInput = () => {},
 	}: Props = $props();
 
 	let configReady = $derived(
@@ -123,9 +129,9 @@
 			<Card.Content class="flex flex-wrap gap-2">
 				<Badge variant={configReady ? "secondary" : "destructive"}>config.toml · {sourceStatusLabel(detectResult?.config_status)}</Badge>
 				<Badge variant={detectResult?.auth_status === "valid" ? "secondary" : "destructive"}>auth.json · {sourceStatusLabel(detectResult?.auth_status)}</Badge>
-				{#if !sourceReady}
+				{#if !sourceReady || !!submitError}
 					<Alert.Root variant="destructive" class="basis-full">
-						<Alert.Description>{sourceError || $_(`${copyRoot}.source.statusDescription`, { values: { config: sourceStatusLabel(detectResult?.config_status), auth: sourceStatusLabel(detectResult?.auth_status) } })}</Alert.Description>
+						<Alert.Description>{submitError || sourceError || $_(`${copyRoot}.source.statusDescription`, { values: { config: sourceStatusLabel(detectResult?.config_status), auth: sourceStatusLabel(detectResult?.auth_status) } })}</Alert.Description>
 						<Alert.Action>
 							<div class="flex gap-2">
 								<Button size="xs" variant="outline" onclick={onRetrySource}><RefreshCwIcon />{$_("actions.retry")}</Button>
@@ -140,7 +146,18 @@
 
 	<Card.Root>
 		<Card.Header><Card.Title>{$_("profilePages.form.profile")}</Card.Title><Card.Description>{$_("profilePages.form.profileDescription")}</Card.Description></Card.Header>
-		<Card.Content><ProfileForm bind:profileID bind:name={profileName} bind:description={profileDescription} {idError} {nameError} {descriptionError} /></Card.Content>
+		<Card.Content>
+			<ProfileForm
+				bind:profileID
+				bind:name={profileName}
+				bind:description={profileDescription}
+				{idError}
+				{nameError}
+				{descriptionError}
+				onNameInput={onProfileNameInput}
+				onDescriptionInput={onProfileDescriptionInput}
+			/>
+		</Card.Content>
 	</Card.Root>
 
 	<Card.Root>

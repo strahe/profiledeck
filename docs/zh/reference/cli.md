@@ -51,7 +51,7 @@ profiledeck-cli codex detect [--codex-dir PATH] [--json]
 profiledeck-cli codex profile list [--json]
 profiledeck-cli codex profile show <profile-id> [--json]
 profiledeck-cli codex profile create <profile-id> [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
-profiledeck-cli codex profile fork <source-profile-id> <new-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
+profiledeck-cli codex profile fork <source-profile-id> <destination-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
 profiledeck-cli codex profile save-current [--codex-dir PATH] [--json]
 profiledeck-cli codex profile set-config <profile-id> <config-set-id> [--json]
 profiledeck-cli codex profile delete <profile-id> --yes [--json]
@@ -66,7 +66,7 @@ profiledeck-cli codex config-set delete <config-set-id> --yes [--json]
 
 第一次运行 `profile create` 会保存当前 Codex 登录和设置，并创建 `shared` 配置集。后续创建默认复用当前配置集，除非传入 `--new-config-set`。
 
-`fork` 要求同时选择登录和配置集的处理方式，且至少一项必须是 `copy-new`。复制设置时还必须提供 `--new-config-set`。`save-current` 保存 Codex 当前使用的登录和设置；`set-config` 只能更改非当前 Profile。
+`fork` 要求同时选择登录和配置集的处理方式，且至少一项必须是 `copy-new`。目标可以是新 Profile，也可以是尚无 Codex 数据的现有 Profile。复用 Profile 时，省略 `--name` 或 `--description` 会保留相应详情。复制设置时还必须提供 `--new-config-set`。`save-current` 保存 Codex 当前使用的登录和设置；`set-config` 只能更改非当前 Profile。
 
 `config-set create` 保存当前 `config.toml`。列表和详情命令只返回安全摘要。只有未被任何 Profile 使用的配置集才能删除。
 
@@ -79,7 +79,7 @@ profiledeck-cli grok-build detect [--json]
 profiledeck-cli grok-build profile list [--json]
 profiledeck-cli grok-build profile show <profile-id> [--json]
 profiledeck-cli grok-build profile create <profile-id> [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--name NAME] [--description TEXT] [--json]
-profiledeck-cli grok-build profile fork <source-profile-id> <new-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--name NAME] [--description TEXT] [--json]
+profiledeck-cli grok-build profile fork <source-profile-id> <destination-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--name NAME] [--description TEXT] [--json]
 profiledeck-cli grok-build profile save-current [--json]
 profiledeck-cli grok-build profile set-config <profile-id> <config-set-id> [--json]
 profiledeck-cli grok-build profile delete <profile-id> --yes [--json]
@@ -94,7 +94,7 @@ profiledeck-cli grok-build config-set delete <config-set-id> --yes [--json]
 
 第一次运行 `profile create` 会保存当前基于文件的登录并使用 `shared` 配置集。如果 `shared` 尚不存在，ProfileDeck 会根据当前 `config.toml` 创建；文件缺失时会保存为空设置。预先创建的 `shared` 会原样复用。后续创建默认复用当前 Profile 的已保存配置集，不读取或覆盖当前 `config.toml`；传入 `--new-config-set` 时才会保存当前设置。`auth.json` 必须存在、非空且有效。
 
-`fork` 要求同时选择登录和配置集的处理方式，且至少一项必须是 `copy-new`。`save-current` 会保存两个当前文件；如果 `auth.json` 无效，操作会整体失败，不会只保存设置。配置集列表和详情输出不会包含 `config.toml`。
+`fork` 要求同时选择登录和配置集的处理方式，且至少一项必须是 `copy-new`。目标可以是新 Profile，也可以是尚无 Grok Build 数据的现有 Profile。复用 Profile 时，省略 `--name` 或 `--description` 会保留相应详情。`save-current` 要求 `auth.json` 有效，并且 `config.toml` 存在且有效；空的 `config.toml` 仍然有效。任一条件不满足时，已保存的登录和设置都不会改变。配置集列表和详情输出不会包含 `config.toml`。
 
 需要时，请把 `--grok-home` 放在 `grok-build` 前：
 
