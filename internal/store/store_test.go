@@ -36,18 +36,19 @@ func TestMigrateCreatesInitialSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected migrations to succeed, got %v", err)
 	}
-	if result.Applied != 1 {
-		t.Fatalf("expected one Stable baseline migration to apply, got %d", result.Applied)
+	if result.Applied != len(schemaContracts) {
+		t.Fatalf("expected all current migrations to apply, got %d", result.Applied)
 	}
 
 	for _, table := range []string{"bun_migrations", "bun_migration_locks"} {
 		assertSQLiteObjectExists(t, ctx, db, "table", table)
 	}
 	assertSQLiteObjectExists(t, ctx, db, "index", "bun_migrations_name_unique")
-	assertSchemaObjectsMatchContract(t, ctx, db, schemaContracts[0])
-	healthy, err := db.schemaContractHealthy(ctx, schemaContracts[0])
+	currentContract := schemaContracts[len(schemaContracts)-1]
+	assertSchemaObjectsMatchContract(t, ctx, db, currentContract)
+	healthy, err := db.schemaContractHealthy(ctx, currentContract)
 	if err != nil || !healthy {
-		t.Fatalf("migration output does not match the Stable contract: healthy=%t err=%v", healthy, err)
+		t.Fatalf("migration output does not match the current contract: healthy=%t err=%v", healthy, err)
 	}
 }
 
@@ -108,8 +109,8 @@ func TestMigrationCompatibilityAcceptsKnownSchemas(t *testing.T) {
 
 func TestMigrationIntegrityContractRegistryUsesFilenameDerivedSemanticKey(t *testing.T) {
 	registered := storemigrations.Migrations.Sorted()
-	if len(registered) != 1 {
-		t.Fatalf("Stable baseline migration count = %d, want 1", len(registered))
+	if len(registered) != len(schemaContracts) {
+		t.Fatalf("migration count = %d, want %d", len(registered), len(schemaContracts))
 	}
 	for index := range registered {
 		registered[index].Name = fmt.Sprintf("9%013d", index)
@@ -203,7 +204,8 @@ func TestAppliedSchemaUsesItsVersionedContract(t *testing.T) {
 	originalContracts := schemaContracts
 	defer func() { schemaContracts = originalContracts }()
 
-	future := schemaContracts[0]
+	currentContractIndex := len(schemaContracts) - 1
+	future := schemaContracts[currentContractIndex]
 	future.migrationKey = "future_contract"
 	future.tableSpecs = append([]tableSpec(nil), future.tableSpecs...)
 	for index, spec := range future.tableSpecs {
@@ -219,20 +221,23 @@ func TestAppliedSchemaUsesItsVersionedContract(t *testing.T) {
 	}
 	schemaContracts = append(append([]schemaContract(nil), schemaContracts...), future)
 
-	healthy, err := db.schemaHealthyForApplied(ctx, 1)
+	healthy, err := db.schemaHealthyForApplied(ctx, currentContractIndex+1)
 	if err != nil || !healthy {
-		t.Fatalf("V1 database rejected by its own contract: healthy=%t err=%v", healthy, err)
+		t.Fatalf("current database rejected by its own contract: healthy=%t err=%v", healthy, err)
 	}
-	healthy, err = db.schemaHealthyForApplied(ctx, 2)
+	healthy, err = db.schemaHealthyForApplied(ctx, currentContractIndex+2)
 	if err != nil || healthy {
-		t.Fatalf("V1 database accepted by the future contract: healthy=%t err=%v", healthy, err)
+		t.Fatalf("current database accepted by the future contract: healthy=%t err=%v", healthy, err)
 	}
 
 	if _, err := db.db.DB.ExecContext(ctx, `DELETE FROM bun_migrations`); err != nil {
 		t.Fatalf("remove Stable marker: %v", err)
 	}
+	if _, err := db.db.DB.ExecContext(ctx, `DROP TABLE grok_build_usage_import_files`); err != nil {
+		t.Fatalf("restore unmarked Stable schema: %v", err)
+	}
 	if err := db.validateUnmarkedStableBaseline(ctx); err != nil {
-		t.Fatalf("unmarked V1 baseline was checked against future contracts: %v", err)
+		t.Fatalf("unmarked Stable baseline was checked against future contracts: %v", err)
 	}
 }
 
@@ -592,8 +597,8 @@ func TestConcurrentMigrateIsIdempotent(t *testing.T) {
 	if err := db.db.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM bun_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("expected migration count query to succeed, got %v", err)
 	}
-	if migrationCount != 1 {
-		t.Fatalf("expected one Stable baseline row after concurrent migration, got %d", migrationCount)
+	if migrationCount != len(schemaContracts) {
+		t.Fatalf("expected all migration rows after concurrent migration, got %d", migrationCount)
 	}
 }
 
@@ -644,8 +649,8 @@ func TestMigrateRetriesTransientSQLiteBusy(t *testing.T) {
 	if attempts != 2 {
 		t.Fatalf("Migrate() attempts = %d, want 2", attempts)
 	}
-	if result.Applied != 1 {
-		t.Fatalf("Migrate() applied = %d, want 1", result.Applied)
+	if result.Applied != len(schemaContracts) {
+		t.Fatalf("Migrate() applied = %d, want %d", result.Applied, len(schemaContracts))
 	}
 }
 

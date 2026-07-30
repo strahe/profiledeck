@@ -28,7 +28,8 @@ const enAntigravity = [
 ]
 
 const enGrokBuild = [
-  { text: 'Profiles', link: '/grok-build/profiles' }
+  { text: 'Profiles', link: '/grok-build/profiles' },
+  { text: 'Usage and Cost', link: '/grok-build/usage-cost' }
 ]
 
 const enSafety = [
@@ -62,7 +63,8 @@ const zhAntigravity = [
 ]
 
 const zhGrokBuild = [
-  { text: 'Profile', link: '/zh/grok-build/profiles' }
+  { text: 'Profile', link: '/zh/grok-build/profiles' },
+  { text: '用量与成本', link: '/zh/grok-build/usage-cost' }
 ]
 
 const zhSafety = [

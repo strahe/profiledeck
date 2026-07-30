@@ -23,6 +23,7 @@ import (
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/codex"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	"github.com/strahe/profiledeck/internal/grokbuild"
 	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/settings"
@@ -212,7 +213,11 @@ func TestDisabledAgentsRejectStaticServiceCallsButKeepSafetyServices(t *testing.
 		t.Fatalf("Desktop preference blocked shared Usage service: summary=%#v err=%v", summary, err)
 	}
 	assertDesktopServiceErrorCode(t, func() error {
-		_, err := services.Usage.AutoSyncStatus(ctx)
+		_, err := services.Usage.AutoSyncStatus(ctx, codexconfig.ProviderID)
+		return err
+	}(), apperror.AgentDisabled)
+	assertDesktopServiceErrorCode(t, func() error {
+		_, err := services.Usage.SyncNow(ctx, codexconfig.ProviderID)
 		return err
 	}(), apperror.AgentDisabled)
 	assertDesktopServiceErrorCode(t, func() error {
@@ -463,12 +468,70 @@ func TestCodexSettingsServiceKeepsConcurrentUsageIntervalUpdatesConsistent(t *te
 	if err != nil {
 		t.Fatalf("expected settings reload to succeed, got %v", err)
 	}
-	runtime, err := services.Usage.AutoSyncStatus(ctx)
+	runtime, err := services.Usage.AutoSyncStatus(ctx, codexconfig.ProviderID)
 	if err != nil {
 		t.Fatalf("expected runtime status to succeed, got %v", err)
 	}
 	if runtime.IntervalSeconds != persisted.UsageSyncIntervalSeconds {
 		t.Fatalf("expected persisted and runtime intervals to match, persisted=%#v runtime=%#v", persisted, runtime)
+	}
+}
+
+func TestGrokBuildSettingsKeepProviderIntervalsIndependentUnderConcurrency(t *testing.T) {
+	ctx := context.Background()
+	services := newTestServices(t, app.DefaultInfo(), Environment{
+		ConfigDir: t.TempDir(),
+		CodexDir:  t.TempDir(),
+		GrokHome:  t.TempDir(),
+	}, nil)
+	if _, err := services.App.Initialize(ctx); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	if _, err := services.GrokBuild.application.Usage().SyncGrokBuild(ctx); err != nil {
+		t.Fatalf("provision Grok Build Provider: %v", err)
+	}
+	codexBefore := services.codexUsageSync.Status()
+
+	start := make(chan struct{})
+	errorsByUpdate := make(chan error, 4)
+	var wg sync.WaitGroup
+	for _, interval := range []int{5, 15, 30, 60} {
+		interval := interval
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := services.GrokBuild.UpdateSettings(ctx, grokbuild.UpdateSettingsRequest{
+				UsageSyncIntervalSeconds: &interval,
+			})
+			errorsByUpdate <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errorsByUpdate)
+	for err := range errorsByUpdate {
+		if err != nil {
+			t.Fatalf("concurrent Grok interval update: %v", err)
+		}
+	}
+
+	persisted, err := services.GrokBuild.GetSettings(ctx)
+	if err != nil {
+		t.Fatalf("reload Grok settings: %v", err)
+	}
+	grokStatus, err := services.Usage.AutoSyncStatus(ctx, grokconfig.ProviderID)
+	if err != nil {
+		t.Fatalf("read Grok runtime: %v", err)
+	}
+	if grokStatus.ProviderID != grokconfig.ProviderID ||
+		grokStatus.IntervalSeconds != persisted.UsageSyncIntervalSeconds {
+		t.Fatalf("Grok persisted/runtime mismatch: persisted=%#v runtime=%#v", persisted, grokStatus)
+	}
+	codexAfter := services.codexUsageSync.Status()
+	if codexAfter.ProviderID != codexconfig.ProviderID ||
+		codexAfter.IntervalSeconds != codexBefore.IntervalSeconds {
+		t.Fatalf("Grok update changed Codex runtime: before=%#v after=%#v", codexBefore, codexAfter)
 	}
 }
 

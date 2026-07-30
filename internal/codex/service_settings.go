@@ -14,15 +14,12 @@ import (
 	codexautomation "github.com/strahe/profiledeck/internal/codex/automation"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/strahe/profiledeck/internal/store"
+	"github.com/strahe/profiledeck/internal/usage"
 )
 
 const (
-	CodexUsageSyncIntervalDefault = codexautomation.UsageSyncIntervalDefault
+	CodexUsageSyncIntervalDefault = usage.UsageSyncIntervalDefault
 )
-
-type codexProviderSettingsV1 struct {
-	UsageSyncIntervalSeconds int `json:"usage_sync_interval_seconds"`
-}
 
 type codexProfileSettingsV1 struct {
 	QuotaRefreshIntervalSeconds int  `json:"quota_refresh_interval_seconds"`
@@ -103,7 +100,7 @@ func (service *Service) UpdateSettings(ctx context.Context, req UpdateCodexSetti
 			if appErr != nil {
 				return appErr
 			}
-			if err := upsertCodexProviderSettings(ctx, txStore, codexProviderSettingsV1{
+			if err := upsertCodexProviderSettings(ctx, txStore, usage.ProviderSyncSettings{
 				UsageSyncIntervalSeconds: interval,
 			}); err != nil {
 				return err
@@ -283,47 +280,29 @@ func getCodexSettings(ctx context.Context, db *store.Store) (CodexSettings, erro
 }
 
 func getCodexUsageSyncInterval(ctx context.Context, db *store.Store) (int, error) {
-	setting, err := db.GetProviderSetting(ctx, codexconfig.ProviderID)
-	if errors.Is(err, store.ErrNotFound) {
-		return CodexUsageSyncIntervalDefault, nil
-	}
-	if err != nil {
-		return 0, apperror.Wrap(apperror.StoreStatusFailed, "failed to load Codex usage sync interval", err)
-	}
-	if setting.SchemaVersion != store.ProviderSettingsSchemaVersion {
-		return 0, apperror.New(apperror.SettingInvalid, "Codex settings version is unsupported")
-	}
-	var payload codexProviderSettingsV1
-	if err := decodeStrictSettings(setting.SettingsJSON, &payload); err != nil {
-		return 0, apperror.Wrap(apperror.SettingInvalid, "Codex usage sync interval is invalid", err)
-	}
-	normalized, appErr := normalizeCodexUsageSyncInterval(payload.UsageSyncIntervalSeconds)
-	if appErr != nil {
-		return 0, appErr
-	}
-	return normalized, nil
+	settings, err := usage.LoadProviderSyncSettings(
+		ctx,
+		db,
+		codexconfig.ProviderID,
+		"Codex",
+	)
+	return settings.UsageSyncIntervalSeconds, err
 }
 
 func normalizeCodexUsageSyncInterval(value int) (int, *apperror.Error) {
-	return codexautomation.NormalizeUsageSyncInterval(value)
+	return usage.NormalizeUsageSyncInterval(value)
 }
 
 func normalizeCodexQuotaRefreshInterval(value int) (int, *apperror.Error) {
 	return codexautomation.NormalizeQuotaRefreshInterval(value)
 }
 
-func upsertCodexProviderSettings(ctx context.Context, db *store.Store, value codexProviderSettingsV1) error {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return apperror.Wrap(apperror.SettingInvalid, "failed to encode Codex settings", err)
-	}
-	if _, err := db.UpsertProviderSetting(ctx, store.UpsertProviderSettingParams{
-		ProviderID: codexconfig.ProviderID, SchemaVersion: store.ProviderSettingsSchemaVersion,
-		SettingsJSON: string(raw),
-	}); err != nil {
-		return apperror.Wrap(apperror.StoreStatusFailed, "failed to save Codex setting", err)
-	}
-	return nil
+func upsertCodexProviderSettings(
+	ctx context.Context,
+	db *store.Store,
+	value usage.ProviderSyncSettings,
+) error {
+	return usage.SaveProviderSyncSettings(ctx, db, codexconfig.ProviderID, "Codex", value)
 }
 
 func decodeCodexProfileSettings(setting store.ProviderProfileSetting) (codexProfileSettingsV1, error) {

@@ -103,7 +103,10 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 	if accessMode != agent.AccessUnrestricted && accessMode != agent.AccessDesktopPreferences {
 		return nil, fmt.Errorf("unsupported Agent access mode %q", accessMode)
 	}
-	usageRegistry, err := usage.NewRegistry(usage.NewCodexIntegration(config.CodexDir))
+	usageRegistry, err := usage.NewRegistry(
+		usage.NewCodexIntegration(config.CodexDir),
+		usage.NewGrokBuildIntegration(config.GrokHome),
+	)
 	if err != nil {
 		return nil, err
 	}

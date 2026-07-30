@@ -10,5 +10,7 @@ export type {
     ProfileListResult,
     ProfileSaveResult,
     ProfileStateSaveResult,
-    ProfileSummary
+    ProfileSummary,
+    Settings,
+    UpdateSettingsRequest
 } from "./models.js";

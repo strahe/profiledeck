@@ -389,6 +389,38 @@ var stableBaselineTableSpecs = []tableSpec{
 	},
 }
 
+var grokBuildUsageImportTableSpec = tableSpec{
+	name:   "grok_build_usage_import_files",
+	strict: true,
+	columns: []columnSpec{
+		{name: "source_id", columnType: "INTEGER", notNull: true, primaryKey: true},
+		{name: "file_key", columnType: "BLOB", notNull: true, primaryKey: true},
+		{name: "modified_unix_ms", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+		{name: "size_bytes", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+		{name: "imported_facts", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+		{name: "invalid_lines", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+		{name: "unsupported_lines", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+		{name: "parser_revision", columnType: "INTEGER", notNull: true},
+		{name: "identity_revision", columnType: "INTEGER", notNull: true},
+		{name: "event_digest", columnType: "BLOB", notNull: true},
+		{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
+	},
+	checks: []string{
+		"CHECK (typeof(file_key) = 'blob' AND length(file_key) = 32 AND file_key <> zeroblob(32))",
+		"CHECK (modified_unix_ms >= 0)",
+		"CHECK (size_bytes >= 0)",
+		"CHECK (imported_facts >= 0)",
+		"CHECK (invalid_lines >= 0)",
+		"CHECK (unsupported_lines >= 0)",
+		"CHECK (parser_revision > 0)",
+		"CHECK (identity_revision > 0)",
+		"CHECK (typeof(event_digest) = 'blob' AND length(event_digest) = 32 AND event_digest <> zeroblob(32))",
+		"CHECK (updated_at_unix_ms >= 0)",
+		"FOREIGN KEY (source_id) REFERENCES usage_sources(id) ON UPDATE RESTRICT ON DELETE CASCADE",
+		"WITHOUT ROWID",
+	},
+}
+
 var stableBaselineIndexSpecs = []indexSpec{
 	{name: "idx_providers_adapter_id", table: "providers", columns: []string{"adapter_id"}},
 	{name: "idx_provider_profile_settings_provider_id", table: "provider_profile_settings", columns: []string{"provider_id"}},

@@ -586,6 +586,7 @@ func TestCurrentUsageBaselineRejectsLegacyDevelopmentSchemaWithoutMutation(t *te
 		t.Fatalf("migrate database: %v", err)
 	}
 	for _, statement := range []string{
+		`DROP TABLE grok_build_usage_import_files`,
 		`DROP TABLE codex_usage_import_files`,
 		`DROP TABLE usage_facts`,
 		`DROP TABLE usage_models`,
@@ -608,7 +609,10 @@ func TestCurrentUsageBaselineRejectsLegacyDevelopmentSchemaWithoutMutation(t *te
 	var legacyTables, compactTables int
 	if err := db.executor().QueryRowContext(ctx, `
 		SELECT SUM(name IN ('usage_events', 'usage_import_cursors')),
-			SUM(name IN ('usage_sources', 'usage_sessions', 'usage_models', 'usage_facts', 'codex_usage_import_files'))
+			SUM(name IN (
+				'usage_sources', 'usage_sessions', 'usage_models', 'usage_facts',
+				'codex_usage_import_files', 'grok_build_usage_import_files'
+			))
 		FROM sqlite_master WHERE type = 'table'
 	`).Scan(&legacyTables, &compactTables); err != nil {
 		t.Fatalf("inspect legacy schema: %v", err)

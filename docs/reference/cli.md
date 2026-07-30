@@ -151,11 +151,13 @@ profiledeck-cli switch --yes [--plan-fingerprint FINGERPRINT] [--json] <provider
 
 ```bash
 profiledeck-cli usage sync codex [--codex-dir PATH] [--json]
-profiledeck-cli usage summary [--provider codex] [--json]
-profiledeck-cli usage report [--provider codex] [--range today|7d|30d|all] [--json]
+profiledeck-cli usage sync grok-build [--json]
+profiledeck-cli --grok-home PATH usage sync grok-build [--json]
+profiledeck-cli usage summary [--provider codex|grok-build] [--json]
+profiledeck-cli usage report [--provider codex|grok-build] [--range today|7d|30d|all] [--json]
 ```
 
-Only local Codex usage is supported. `report` defaults to `7d`; `summary` gives a shorter all-time view. See [Codex Usage and Cost](../codex/usage-cost.md) for report fields and estimation limits.
+Only local Codex and Grok Build usage is supported. The default Provider is Codex. `report` defaults to `7d`; `summary` gives a shorter all-time view. See [Codex Usage and Cost](../codex/usage-cost.md) or [Grok Build Usage and Cost](../grok-build/usage-cost.md) for report fields and estimation limits.
 
 ## Other tools and configuration files
 

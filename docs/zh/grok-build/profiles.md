@@ -128,4 +128,4 @@ profiledeck-cli grok-build profile delete work --yes
 
 这会从所有 Agent 中删除完整的全局 Profile，而不只是 Grok Build 数据。只有该 Profile 使用的已保存登录和配置集也会删除，共享数据会保留。当前 Profile 或存在未完成操作的 Profile 不能删除。删除不会修改 Grok Build 当前使用的文件。
 
-此集成暂不支持 Grok Build 用量、配额、credits 或自定义认证来源。
+此集成可以根据本地会话记录提供 [Grok Build 用量与估算成本](./usage-cost.md)，但不支持配额、credits、实际账单或自定义认证来源。

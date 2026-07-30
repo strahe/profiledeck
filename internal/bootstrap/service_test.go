@@ -32,7 +32,8 @@ func TestInitializeCreatesRuntimeWithoutBackupAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
-	if !first.Initialized || !first.SchemaHealthy || first.MigrationsApplied != 1 {
+	if !first.Initialized || !first.SchemaHealthy ||
+		first.MigrationsApplied != len(storemigrations.Migrations.Sorted()) {
 		t.Fatalf("unexpected first initialization result: %#v", first)
 	}
 	if backups.calls != 0 {
@@ -176,6 +177,7 @@ func TestInitializeBacksUpValidatedMarkerGapBeforeReapplyingMarker(t *testing.T)
 	ctx := context.Background()
 	runtimeService := newRuntimeService(t)
 	createStableMarkerGap(t, ctx, runtimeService)
+	migrationCount := len(storemigrations.Migrations.Sorted())
 	insertSetting(t, ctx, runtimeService.Paths().Database, "upgrade-data", `{"kept":true}`)
 	backups := &recordingBackupCreator{
 		inspect: func(req appbackup.CreateRequest) {
@@ -183,7 +185,8 @@ func TestInitializeBacksUpValidatedMarkerGapBeforeReapplyingMarker(t *testing.T)
 				t.Fatalf("backup request = %#v", req)
 			}
 			snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
-			if len(snapshot.markers) != 0 || !snapshot.usageTable || !snapshot.pathKeyIndex {
+			if len(snapshot.markers) != 0 ||
+				!snapshot.usageTable || snapshot.grokUsageTable || !snapshot.pathKeyIndex {
 				t.Fatalf("database changed before backup: %#v", snapshot)
 			}
 		},
@@ -194,11 +197,13 @@ func TestInitializeBacksUpValidatedMarkerGapBeforeReapplyingMarker(t *testing.T)
 	if err != nil {
 		t.Fatalf("reapply Stable marker: %v", err)
 	}
-	if result.MigrationsApplied != 1 || backups.calls != 1 {
+	if result.MigrationsApplied != migrationCount || backups.calls != 1 {
 		t.Fatalf("upgrade result = %#v, backups = %d", result, backups.calls)
 	}
 	snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
-	if len(snapshot.markers) != 1 || !snapshot.usageTable || !snapshot.pathKeyIndex || snapshot.setting != `{"kept":true}` {
+	if len(snapshot.markers) != migrationCount ||
+		!snapshot.usageTable || !snapshot.grokUsageTable || !snapshot.pathKeyIndex ||
+		snapshot.setting != `{"kept":true}` {
 		t.Fatalf("database after upgrade = %#v", snapshot)
 	}
 	if _, err := service.Initialize(ctx); err != nil || backups.calls != 1 {
@@ -284,6 +289,40 @@ func TestInitializeRejectsMarkerGapSchemaDriftBeforeBackup(t *testing.T) {
 	}
 }
 
+func TestInitializeBacksUpStableBaselineBeforeGrokBuildUsageMigration(t *testing.T) {
+	ctx := context.Background()
+	runtimeService := newRuntimeService(t)
+	createPreviousStableBaseline(t, ctx, runtimeService)
+	insertSetting(t, ctx, runtimeService.Paths().Database, "upgrade-data", `{"kept":true}`)
+	backups := &recordingBackupCreator{
+		inspect: func(req appbackup.CreateRequest) {
+			if req.Kind != appbackup.KindAutomatic || req.Reason != appbackup.ReasonBeforeMigration {
+				t.Fatalf("backup request = %#v", req)
+			}
+			snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
+			if len(snapshot.markers) != len(storemigrations.Migrations.Sorted())-1 ||
+				!snapshot.usageTable || snapshot.grokUsageTable || !snapshot.pathKeyIndex ||
+				snapshot.setting != `{"kept":true}` {
+				t.Fatalf("stable baseline changed before backup: %#v", snapshot)
+			}
+		},
+	}
+
+	result, err := NewService(runtimeService, backups, nil).Initialize(ctx)
+	if err != nil {
+		t.Fatalf("apply Grok Build usage migration: %v", err)
+	}
+	if result.MigrationsApplied != 1 || backups.calls != 1 {
+		t.Fatalf("upgrade result = %#v, backups = %d", result, backups.calls)
+	}
+	snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
+	if len(snapshot.markers) != len(storemigrations.Migrations.Sorted()) ||
+		!snapshot.usageTable || !snapshot.grokUsageTable || !snapshot.pathKeyIndex ||
+		snapshot.setting != `{"kept":true}` {
+		t.Fatalf("database after upgrade = %#v", snapshot)
+	}
+}
+
 func TestInitializeRejectsInvalidAppliedBaselineBeforeBackup(t *testing.T) {
 	for _, defect := range []string{"quick", "foreign_keys", "schema", "json", "references"} {
 		t.Run(defect, func(t *testing.T) {
@@ -338,11 +377,12 @@ func (creator *recordingBackupCreator) Create(
 }
 
 type databaseSnapshot struct {
-	schemaVersion int
-	markers       []string
-	usageTable    bool
-	pathKeyIndex  bool
-	setting       string
+	schemaVersion  int
+	markers        []string
+	usageTable     bool
+	grokUsageTable bool
+	pathKeyIndex   bool
+	setting        string
 }
 
 func newRuntimeService(t *testing.T) *runtime.Service {
@@ -365,11 +405,25 @@ func createStableMarkerGap(t *testing.T, ctx context.Context, runtimeService *ru
 	t.Helper()
 	createCurrentBaseline(t, ctx, runtimeService)
 	registered := storemigrations.Migrations.Sorted()
-	if len(registered) != 1 {
-		t.Fatalf("registered migrations = %d, want 1", len(registered))
+	if len(registered) < 2 {
+		t.Fatalf("registered migrations = %d, want at least 2", len(registered))
 	}
 	execDatabaseStatements(t, runtimeService.Paths().Database,
-		`DELETE FROM bun_migrations WHERE name = '`+registered[0].Name+`'`,
+		`DROP TABLE grok_build_usage_import_files`,
+		`DELETE FROM bun_migrations`,
+	)
+}
+
+func createPreviousStableBaseline(t *testing.T, ctx context.Context, runtimeService *runtime.Service) {
+	t.Helper()
+	createCurrentBaseline(t, ctx, runtimeService)
+	registered := storemigrations.Migrations.Sorted()
+	if len(registered) < 2 {
+		t.Fatalf("registered migrations = %d, want at least 2", len(registered))
+	}
+	execDatabaseStatements(t, runtimeService.Paths().Database,
+		`DROP TABLE grok_build_usage_import_files`,
+		`DELETE FROM bun_migrations WHERE name = '`+registered[len(registered)-1].Name+`'`,
 	)
 }
 
@@ -416,6 +470,15 @@ func inspectDatabaseSnapshot(t *testing.T, path string) databaseSnapshot {
 		t.Fatal(err)
 	}
 	snapshot.usageTable = usageCount > 0
+	var grokUsageCount int
+	if err := db.QueryRow(`
+		SELECT COUNT(1)
+		FROM sqlite_master
+		WHERE type = 'table' AND name = 'grok_build_usage_import_files'
+	`).Scan(&grokUsageCount); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.grokUsageTable = grokUsageCount > 0
 	var pathKeyIndexCount int
 	if err := db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_profile_targets_path_key'`).Scan(&pathKeyIndexCount); err != nil {
 		t.Fatal(err)

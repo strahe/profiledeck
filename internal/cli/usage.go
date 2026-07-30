@@ -66,6 +66,7 @@ func newUsageSyncCommand() *urfavecli.Command {
 		Usage: "Import local token usage",
 		Commands: []*urfavecli.Command{
 			newUsageSyncCodexCommand(),
+			newUsageSyncGrokBuildCommand(),
 		},
 	}
 }
@@ -84,6 +85,31 @@ func newUsageSyncCodexCommand() *urfavecli.Command {
 				return err
 			}
 			result, err := application.Usage().SyncCodex(ctx)
+			if err != nil {
+				return err
+			}
+			w := outputWriter(cmd)
+			if cmd.Bool(jsonFlagName) {
+				return writeJSON(w, result)
+			}
+			return writeUsageSyncResult(w, result)
+		},
+	}
+}
+
+func newUsageSyncGrokBuildCommand() *urfavecli.Command {
+	return &urfavecli.Command{
+		Name:  "grok-build",
+		Usage: "Import Grok Build local session usage",
+		Flags: []urfavecli.Flag{
+			boolFlag(jsonFlagName, "Write JSON output"),
+		},
+		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			result, err := application.Usage().SyncGrokBuild(ctx)
 			if err != nil {
 				return err
 			}
@@ -147,12 +173,29 @@ func writeUsageSyncResult(w io.Writer, result usage.UsageSyncResult) error {
 		return err
 	}
 	for _, item := range result.Errors {
-		fileName := item.FileName
-		if fileName == "" {
-			fileName = "unknown"
-		}
-		if _, err := fmt.Fprintf(w, "- file: %s source_key: %s error: %s\n", fileName, item.SourceKey, item.Message); err != nil {
-			return err
+		switch {
+		case item.FileName != "" && item.SourceKey != "":
+			if _, err := fmt.Fprintf(
+				w,
+				"- file: %s source_key: %s error: %s\n",
+				item.FileName,
+				item.SourceKey,
+				item.Message,
+			); err != nil {
+				return err
+			}
+		case item.FileName != "":
+			if _, err := fmt.Fprintf(w, "- file: %s error: %s\n", item.FileName, item.Message); err != nil {
+				return err
+			}
+		case item.SourceKey != "":
+			if _, err := fmt.Fprintf(w, "- source_key: %s error: %s\n", item.SourceKey, item.Message); err != nil {
+				return err
+			}
+		default:
+			if _, err := fmt.Fprintf(w, "- error: %s\n", item.Message); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

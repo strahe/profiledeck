@@ -13,8 +13,8 @@ import * as usage$0 from "../../internal/usage/models.js";
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
-export function AutoSyncStatus(): $CancellablePromise<$models.UsageAutoSyncStatus> {
-    return $Call.ByID(2973972616);
+export function AutoSyncStatus(providerID: string): $CancellablePromise<$models.UsageAutoSyncStatus> {
+    return $Call.ByID(2973972616, providerID);
 }
 
 export function Report(providerID: string, rangeValue: string): $CancellablePromise<usage$0.UsageReportResult> {
@@ -23,4 +23,8 @@ export function Report(providerID: string, rangeValue: string): $CancellableProm
 
 export function Summary(providerID: string): $CancellablePromise<usage$0.UsageSummaryResult> {
     return $Call.ByID(2239958706, providerID);
+}
+
+export function SyncNow(providerID: string): $CancellablePromise<$models.UsageAutoSyncStatus> {
+    return $Call.ByID(1464515367, providerID);
 }

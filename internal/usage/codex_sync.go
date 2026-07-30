@@ -174,7 +174,7 @@ func beginCodexUsageSync(
 	var source store.UsageSource
 	err := db.WithTransaction(ctx, func(txStore *store.Store) error {
 		if provisioner == nil {
-			return errors.New("Codex usage Provider provisioner is required")
+			return errors.New("usage Provider provisioner for Codex is required")
 		}
 		if err := provisioner.Ensure(ctx, txStore, mode); err != nil {
 			return err
@@ -294,20 +294,36 @@ func usageEventsToFactParams(sourceID int64, events []Event) []store.CreateUsage
 }
 
 func backfillPartialUsageCosts(ctx context.Context, db *store.Store) error {
+	return backfillUnknownUsageCosts(
+		ctx,
+		db,
+		ProviderCodex,
+		codexPriceCatalog.Supports,
+		EstimateCostMicros,
+	)
+}
+
+func backfillUnknownUsageCosts(
+	ctx context.Context,
+	db *store.Store,
+	providerID string,
+	supports func(string) bool,
+	estimate func(string, TokenCounts) (*int64, store.UsageCostStatus),
+) error {
 	const batchSize = 256
-	models, err := db.ListUnknownUsageCostModels(ctx, ProviderCodex)
+	models, err := db.ListUnknownUsageCostModels(ctx, providerID)
 	if err != nil {
 		return err
 	}
 	for _, model := range models {
-		if _, supported := staticPrices[pricingModelID(model.Model)]; !supported {
+		if !supports(model.Model) {
 			continue
 		}
 		var afterID int64
 		for {
 			candidates, err := db.ListUnknownUsageFactCostCandidates(
 				ctx,
-				ProviderCodex,
+				providerID,
 				model.SourceID,
 				model.ModelID,
 				afterID,
@@ -321,7 +337,7 @@ func backfillPartialUsageCosts(ctx context.Context, db *store.Store) error {
 			}
 			updates := make([]store.UpdateUsageFactCostParams, 0, len(candidates))
 			for _, candidate := range candidates {
-				cost, status := EstimateCostMicros(model.Model, TokenCounts{
+				cost, status := estimate(model.Model, TokenCounts{
 					InputTokens:       candidate.InputTokens,
 					CachedInputTokens: candidate.CachedInputTokens,
 					OutputTokens:      candidate.OutputTokens,
@@ -338,7 +354,7 @@ func backfillPartialUsageCosts(ctx context.Context, db *store.Store) error {
 			}
 			// Only unknown facts are eligible, so concurrent import/backfill runs are
 			// idempotent and never overwrite an already classified historical fact.
-			if _, err := db.UpdateUnknownUsageFactCosts(ctx, ProviderCodex, updates); err != nil {
+			if _, err := db.UpdateUnknownUsageFactCosts(ctx, providerID, updates); err != nil {
 				return err
 			}
 			afterID = candidates[len(candidates)-1].ID

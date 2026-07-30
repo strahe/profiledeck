@@ -20,9 +20,9 @@ Universal 桌面端要求 macOS 14 或更高版本，可在 Apple 芯片和 Inte
 | Codex | 已保存登录和可复用的用户级设置 | 会话、日志、Skills、项目设置和系统策略 |
 | Claude Code | `/login` 账号登录 | Claude Code 设置、插件、API Key、云服务和 Claude Desktop |
 | Antigravity | 个人 OAuth 登录 | 登录流程、设置、配额、Manager 数据以及 SSH 或容器登录文件 |
-| Grok Build | 基于文件的登录和可复用的用户级设置 | 会话、日志、插件、项目设置、托管配置、用量和配额 |
+| Grok Build | 基于文件的登录和可复用的用户级设置 | 会话、日志、插件、项目设置、托管配置和配额 |
 
-Codex 用量报告与 Profile 切换相互独立。报告汇总本地会话数据，不会把用量归属到某个 Profile 或账号。
+Codex 和 Grok Build 用量报告与 Profile 切换相互独立。报告汇总本地会话数据，不会把用量归属到某个 Profile、已保存登录或账号。
 
 桌面端还可以显示当前 Codex 或 Antigravity Profile 的临时使用限额快照。检查不会改变限额，也不会增加活动归属信息。
 
@@ -43,4 +43,5 @@ Codex 用量报告与 Profile 切换相互独立。报告汇总本地会话数�
 - [管理 Claude Code Profile](./claude-code/profiles.md)
 - [管理 Antigravity Profile](./antigravity/profiles.md)
 - [管理 Grok Build Profile](./grok-build/profiles.md)
+- [查看 Grok Build 用量与估算成本](./grok-build/usage-cost.md)
 - [了解数据与安全](./reference/data-security.md)

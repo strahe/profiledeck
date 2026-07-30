@@ -50,6 +50,8 @@ type CodexService struct {
 type GrokBuildService struct {
 	application *app.Application
 	changes     *ChangeNotifier
+	autoSync    *usageAutoSyncRuntime
+	settingsMu  sync.Mutex
 }
 
 type AntigravityService struct {
@@ -90,7 +92,7 @@ type BackupService struct {
 
 type UsageService struct {
 	application *app.Application
-	autoSync    *usageAutoSyncRuntime
+	autoSync    map[string]*usageAutoSyncRuntime
 }
 
 type SettingsService struct {
@@ -103,23 +105,24 @@ type AgentService struct {
 }
 
 type Services struct {
-	App         *AppService
-	Agent       *AgentService
-	Antigravity *AntigravityService
-	ClaudeCode  *ClaudeCodeService
-	Codex       *CodexService
-	GrokBuild   *GrokBuildService
-	Profile     *ProfileService
-	Switch      *SwitchService
-	Doctor      *DoctorService
-	Backup      *BackupService
-	Usage       *UsageService
-	Settings    *SettingsService
-	changes     *ChangeNotifier
-	autoSync    *usageAutoSyncRuntime
-	quota       *codexQuotaRuntime
-	runtimes    *agentRuntimeManager
-	backups     *applicationBackupRuntime
+	App                *AppService
+	Agent              *AgentService
+	Antigravity        *AntigravityService
+	ClaudeCode         *ClaudeCodeService
+	Codex              *CodexService
+	GrokBuild          *GrokBuildService
+	Profile            *ProfileService
+	Switch             *SwitchService
+	Doctor             *DoctorService
+	Backup             *BackupService
+	Usage              *UsageService
+	Settings           *SettingsService
+	changes            *ChangeNotifier
+	codexUsageSync     *usageAutoSyncRuntime
+	grokBuildUsageSync *usageAutoSyncRuntime
+	quota              *codexQuotaRuntime
+	runtimes           *agentRuntimeManager
+	backups            *applicationBackupRuntime
 }
 
 type DashboardResult struct {
@@ -282,7 +285,30 @@ type UpdateClaudeCodeProfileRequest struct {
 
 func NewServices(application *app.Application, info app.Info, env Environment, startupErr error) Services {
 	changes := NewChangeNotifier()
-	autoSync := newUsageAutoSyncRuntime(application.Codex().GetSettings, application.Usage().SyncCodexBackground)
+	codexUsageSync := newUsageAutoSyncRuntime(
+		codexconfig.ProviderID,
+		func(ctx context.Context) (usage.ProviderSyncSettings, error) {
+			value, err := application.Codex().GetSettings(ctx)
+			return usage.ProviderSyncSettings{
+				UsageSyncIntervalSeconds: value.UsageSyncIntervalSeconds,
+			}, err
+		},
+		func(ctx context.Context) (usage.UsageSyncResult, error) {
+			return application.Usage().SyncProviderBackground(ctx, codexconfig.ProviderID)
+		},
+	)
+	grokBuildUsageSync := newUsageAutoSyncRuntime(
+		grokconfig.ProviderID,
+		func(ctx context.Context) (usage.ProviderSyncSettings, error) {
+			value, err := application.GrokBuild().GetSettings(ctx)
+			return usage.ProviderSyncSettings{
+				UsageSyncIntervalSeconds: value.UsageSyncIntervalSeconds,
+			}, err
+		},
+		func(ctx context.Context) (usage.UsageSyncResult, error) {
+			return application.Usage().SyncProviderBackground(ctx, grokconfig.ProviderID)
+		},
+	)
 	quota := newCodexQuotaRuntime(application.Codex().ListAutomationTargets, application.Codex().RunCredentialJob)
 	backups := newApplicationBackupRuntime(
 		application.Settings().Get,
@@ -297,21 +323,29 @@ func NewServices(application *app.Application, info app.Info, env Environment, s
 		Agent:       &AgentService{application: application, changes: changes},
 		Antigravity: &AntigravityService{application: application, changes: changes},
 		ClaudeCode:  &ClaudeCodeService{application: application, changes: changes},
-		Codex:       &CodexService{application: application, changes: changes, autoSync: autoSync, quota: quota},
-		GrokBuild:   &GrokBuildService{application: application, changes: changes},
+		Codex:       &CodexService{application: application, changes: changes, autoSync: codexUsageSync, quota: quota},
+		GrokBuild:   &GrokBuildService{application: application, changes: changes, autoSync: grokBuildUsageSync},
 		Profile:     &ProfileService{application: application, changes: changes, quota: quota},
 		Switch:      &SwitchService{application: application, changes: changes, quota: quota},
 		Doctor:      &DoctorService{application: application, changes: changes, quota: quota},
 		Backup:      &BackupService{application: application, changes: changes, runtime: backups},
-		Usage:       &UsageService{application: application, autoSync: autoSync},
-		Settings:    &SettingsService{application: application},
-		changes:     changes,
-		autoSync:    autoSync,
-		quota:       quota,
-		runtimes:    runtimes,
-		backups:     backups,
+		Usage: &UsageService{
+			application: application,
+			autoSync: map[string]*usageAutoSyncRuntime{
+				codexconfig.ProviderID: codexUsageSync,
+				grokconfig.ProviderID:  grokBuildUsageSync,
+			},
+		},
+		Settings:           &SettingsService{application: application},
+		changes:            changes,
+		codexUsageSync:     codexUsageSync,
+		grokBuildUsageSync: grokBuildUsageSync,
+		quota:              quota,
+		runtimes:           runtimes,
+		backups:            backups,
 	}
-	runtimes.Register(agent.Codex, autoSync)
+	runtimes.Register(agent.Codex, codexUsageSync)
+	runtimes.Register(agent.GrokBuild, grokBuildUsageSync)
 	runtimes.Register(agent.Codex, quota)
 	return services
 }
@@ -321,12 +355,15 @@ func (s Services) SubscribeChanges(listener func(DesktopChangeEvent)) func() {
 }
 
 func (s Services) StartUsageAutoSync(ctx context.Context, emitter func(UsageAutoSyncStatus)) {
-	s.autoSync.SetEmitter(emitter)
-	s.runtimes.Activate(ctx, agent.Codex, s.autoSync)
+	s.codexUsageSync.SetEmitter(emitter)
+	s.grokBuildUsageSync.SetEmitter(emitter)
+	s.runtimes.Activate(ctx, agent.Codex, s.codexUsageSync)
+	s.runtimes.Activate(ctx, agent.GrokBuild, s.grokBuildUsageSync)
 }
 
 func (s Services) StopUsageAutoSync() {
-	s.runtimes.Deactivate(agent.Codex, s.autoSync)
+	s.runtimes.Deactivate(agent.Codex, s.codexUsageSync)
+	s.runtimes.Deactivate(agent.GrokBuild, s.grokBuildUsageSync)
 }
 
 func (s Services) StartCodexQuotaRuntime(ctx context.Context, emitter func(CodexQuotaRuntimeStatus)) {
@@ -731,6 +768,28 @@ func (s *GrokBuildService) ShowProfile(ctx context.Context, profileID string) (g
 	return s.application.GrokBuild().GetProfile(ctx, profileID)
 }
 
+func (s *GrokBuildService) GetSettings(ctx context.Context) (grokbuild.Settings, error) {
+	return s.application.GrokBuild().GetSettings(ctx)
+}
+
+func (s *GrokBuildService) UpdateSettings(
+	ctx context.Context,
+	req grokbuild.UpdateSettingsRequest,
+) (grokbuild.Settings, error) {
+	// Persist and update only this Provider's runtime under one serial order so
+	// a slower older request cannot restore a stale interval.
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	value, err := s.application.GrokBuild().UpdateSettings(ctx, req)
+	if err != nil {
+		return grokbuild.Settings{}, err
+	}
+	if req.UsageSyncIntervalSeconds != nil {
+		s.autoSync.SetInterval(value.UsageSyncIntervalSeconds)
+	}
+	return value, nil
+}
+
 func (s *GrokBuildService) CreateProfile(ctx context.Context, req CreateGrokBuildProfileRequest) (grokbuild.ProfileSaveResult, error) {
 	result, err := s.application.GrokBuild().CreateProfile(ctx, grokbuild.CreateProfileRequest{
 		ProfileID:               req.ProfileID,
@@ -1049,11 +1108,46 @@ func (s *UsageService) Summary(ctx context.Context, providerID string) (usage.Us
 	return s.application.Usage().Summary(ctx, usage.UsageSummaryRequest{ProviderID: providerID})
 }
 
-func (s *UsageService) AutoSyncStatus(ctx context.Context) (UsageAutoSyncStatus, error) {
-	if err := s.application.Agents().RequireAgent(ctx, agent.Codex); err != nil {
+func (s *UsageService) AutoSyncStatus(
+	ctx context.Context,
+	providerID string,
+) (UsageAutoSyncStatus, error) {
+	runtime, err := s.autoSyncRuntime(ctx, providerID)
+	if err != nil {
 		return UsageAutoSyncStatus{}, err
 	}
-	return s.autoSync.Status(), nil
+	return runtime.Status(), nil
+}
+
+func (s *UsageService) SyncNow(
+	ctx context.Context,
+	providerID string,
+) (UsageAutoSyncStatus, error) {
+	runtime, err := s.autoSyncRuntime(ctx, providerID)
+	if err != nil {
+		return UsageAutoSyncStatus{}, err
+	}
+	return runtime.SyncNow(ctx), nil
+}
+
+func (s *UsageService) autoSyncRuntime(
+	ctx context.Context,
+	providerID string,
+) (*usageAutoSyncRuntime, error) {
+	if providerID == "" {
+		providerID = codexconfig.ProviderID
+	}
+	runtime, ok := s.autoSync[providerID]
+	if !ok {
+		return nil, apperror.New(
+			apperror.UsageInvalid,
+			"Unsupported usage provider",
+		)
+	}
+	if err := s.application.Agents().RequireProvider(ctx, providerID); err != nil {
+		return nil, err
+	}
+	return runtime, nil
 }
 
 func (s *UsageService) Report(ctx context.Context, providerID, rangeValue string) (usage.UsageReportResult, error) {

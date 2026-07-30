@@ -111,6 +111,7 @@
 	const loadClaudeCodeProfiles = () => import("../profiles/ClaudeCodeProfiles.svelte");
 	const loadUsagePage = () => import("../usage/UsagePage.svelte");
 	const loadCodexSettings = () => import("../settings/CodexSettings.svelte");
+	const loadGrokBuildSettings = () => import("../settings/GrokBuildSettings.svelte");
 	const loadGlobalSettings = () => import("./GlobalSettings.svelte");
 	const loadDiagnosticsPage = () => import("./DiagnosticsPage.svelte");
 	const inFlight = new Map<string, CancellablePromise<unknown>>();
@@ -197,8 +198,10 @@
 		const enabled = new Set<string>(states.filter((state) => state.enabled).map((state) => String(state.manifest.id)));
 		return agents.filter((agent) => enabled.has(agent.id));
 	});
-	let activeAgentTab = $derived(workspaceRoute.view === "codex-settings"
+	let activeAgentTab = $derived(workspaceRoute.view === "codex-settings" || workspaceRoute.view === "grok-build-settings"
 		? "settings"
+		: workspaceRoute.view === "grok-build-usage"
+			? "usage"
 		: workspaceRoute.view === "antigravity-profiles"
 			|| workspaceRoute.view === "claude-code-profiles"
 			|| workspaceRoute.view === "grok-build-profiles"
@@ -208,6 +211,15 @@
 	let grokBuildActiveProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === grokBuildProviderID)?.profile_id ?? "");
 	let antigravityActiveProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === antigravityProviderID)?.profile_id ?? "");
 	let claudeCodeActiveProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === claudeCodeProviderID)?.profile_id ?? "");
+	let codexProviderExists = $derived(dashboard?.providers?.some((provider) => provider.id === codexProviderID) ?? false);
+	let grokBuildProviderExists = $derived(
+		dashboard?.providers?.some((provider) => provider.id === grokBuildProviderID)
+			?? grokBuildDetectResult?.provider_exists
+			?? false,
+	);
+	let usageProviderID = $derived(workspaceRoute.view === "grok-build-usage" ? grokBuildProviderID : codexProviderID);
+	let usageProviderName = $derived(workspaceRoute.view === "grok-build-usage" ? "Grok Build" : "Codex");
+	let usageProviderExists = $derived(workspaceRoute.view === "grok-build-usage" ? grokBuildProviderExists : codexProviderExists);
 	let activeProfileID = $derived(
 		selectedAgent === "grok-build"
 			? grokBuildActiveProfileID
@@ -853,19 +865,20 @@
 	}
 
 	function selectAgentTab(value: string) {
-		if (selectedAgent !== "codex") {
+		if (selectedAgent !== "codex" && selectedAgent !== "grok-build") {
 			if (selectedAgent) void push(agentHome(selectedAgent));
 			return;
 		}
+		const basePath = selectedAgent === "grok-build" ? "/grok-build" : "/codex";
 		switch (value) {
 			case "profiles":
-				void push("/codex/profiles");
+				void push(`${basePath}/profiles`);
 				break;
 			case "usage":
-				void push("/codex/usage");
+				void push(`${basePath}/usage`);
 				break;
 			case "settings":
-				void push("/codex/settings");
+				void push(`${basePath}/settings`);
 				break;
 		}
 	}
@@ -1104,7 +1117,7 @@
 					<Tabs.Root value={activeAgentTab} onValueChange={selectAgentTab}>
 						<Tabs.List variant="line" class="h-auto bg-transparent p-0">
 							<Tabs.Trigger value="profiles">{$_("tabs.profiles")}</Tabs.Trigger>
-							{#if selectedAgent === "codex"}
+							{#if selectedAgent === "codex" || selectedAgent === "grok-build"}
 								<Tabs.Trigger value="usage">{$_("tabs.usage")}</Tabs.Trigger>
 								<Tabs.Trigger value="settings">{$_("tabs.settings")}</Tabs.Trigger>
 							{/if}
@@ -1253,19 +1266,40 @@
 					{:catch}
 						<WorkspaceViewStatus state="error" />
 					{/await}
-				{:else if workspaceRoute.view === "usage"}
-					{#await loadUsagePage()}
-						<WorkspaceViewStatus state="loading" />
-					{:then { default: UsagePage }}
-						<UsagePage {showError} />
-					{:catch}
-						<WorkspaceViewStatus state="error" />
-					{/await}
+				{:else if workspaceRoute.view === "usage" || workspaceRoute.view === "grok-build-usage"}
+					{#key `${usageProviderID}:${usageProviderExists}`}
+						{#await loadUsagePage()}
+							<WorkspaceViewStatus state="loading" />
+						{:then { default: UsagePage }}
+							<UsagePage
+								providerID={usageProviderID}
+								providerName={usageProviderName}
+								providerExists={usageProviderExists}
+								onOpenProfiles={() => push(usageProviderID === grokBuildProviderID ? "/grok-build/profiles" : "/codex/profiles")}
+								{showError}
+							/>
+						{:catch}
+							<WorkspaceViewStatus state="error" />
+						{/await}
+					{/key}
 				{:else if workspaceRoute.view === "codex-settings"}
 					{#await loadCodexSettings()}
 						<WorkspaceViewStatus state="loading" />
 					{:then { default: CodexSettings }}
 						<CodexSettings />
+					{:catch}
+						<WorkspaceViewStatus state="error" />
+					{/await}
+				{:else if workspaceRoute.view === "grok-build-settings"}
+					{#await loadGrokBuildSettings()}
+						<WorkspaceViewStatus state="loading" />
+					{:then { default: GrokBuildSettings }}
+						<GrokBuildSettings
+							providerExists={grokBuildProviderExists}
+							onOpenProfiles={() => push("/grok-build/profiles")}
+							{showError}
+							{showNotice}
+						/>
 					{:catch}
 						<WorkspaceViewStatus state="error" />
 					{/await}

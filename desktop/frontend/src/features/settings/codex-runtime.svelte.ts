@@ -15,8 +15,9 @@ import type {
 import { isCancelError } from "$lib/desktop-errors";
 import { translate } from "$lib/i18n";
 
+import { usageIntervals } from "./usage-sync-settings";
+
 export const quotaIntervals = [0, 300, 600, 1800, 3600] as const;
-export const usageIntervals = [5, 15, 30, 60] as const;
 
 type RuntimeOptions = {
 	showError: (value: unknown) => void;

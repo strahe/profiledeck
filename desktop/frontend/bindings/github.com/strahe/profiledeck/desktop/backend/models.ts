@@ -220,6 +220,8 @@ export interface UsageAutoSyncError {
 }
 
 export interface UsageAutoSyncStatus {
+    "provider_id": string;
+    "revision": number;
     "interval_seconds": number;
     "syncing": boolean;
     "outcome": string;

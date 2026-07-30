@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/strahe/profiledeck/internal/apperror"
+	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/validate"
 )
@@ -19,7 +20,7 @@ func NewService(stores store.Factory, registry Registry) *Service {
 }
 
 type UsageImportError struct {
-	SourceKey string `json:"source_key"`
+	SourceKey string `json:"source_key,omitempty"`
 	FileName  string `json:"file_name,omitempty"`
 	Message   string `json:"message"`
 }
@@ -121,6 +122,18 @@ func (service *Service) SyncCodex(ctx context.Context) (UsageSyncResult, error) 
 // sync remains the only action that may recreate it.
 func (service *Service) SyncCodexBackground(ctx context.Context) (UsageSyncResult, error) {
 	return service.sync(ctx, UsageSyncRequest{ProviderID: ProviderCodex}, SyncExistingProvider)
+}
+
+func (service *Service) SyncGrokBuild(ctx context.Context) (UsageSyncResult, error) {
+	return service.Sync(ctx, UsageSyncRequest{ProviderID: grokconfig.ProviderID})
+}
+
+// SyncProviderBackground never provisions a deleted Provider.
+func (service *Service) SyncProviderBackground(
+	ctx context.Context,
+	providerID string,
+) (UsageSyncResult, error) {
+	return service.sync(ctx, UsageSyncRequest{ProviderID: providerID}, SyncExistingProvider)
 }
 
 func (service *Service) Summary(ctx context.Context, req UsageSummaryRequest) (UsageSummaryResult, error) {
