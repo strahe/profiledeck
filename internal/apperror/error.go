@@ -57,6 +57,7 @@ const (
 	UsageMigrationRequired           Code = "USAGE_MIGRATION_REQUIRED"
 	UsageSyncConflict                Code = "USAGE_SYNC_CONFLICT"
 	CodexInvalid                     Code = "CODEX_INVALID"
+	GrokBuildInvalid                 Code = "GROK_BUILD_INVALID"
 	AntigravityInvalid               Code = "ANTIGRAVITY_INVALID"
 	ClaudeCodeInvalid                Code = "CLAUDE_CODE_INVALID"
 	SettingInvalid                   Code = "SETTING_INVALID"
@@ -180,6 +181,7 @@ func KnownCode(code Code) bool {
 		UsageMigrationRequired,
 		UsageSyncConflict,
 		CodexInvalid,
+		GrokBuildInvalid,
 		AntigravityInvalid,
 		ClaudeCodeInvalid,
 		SettingInvalid,

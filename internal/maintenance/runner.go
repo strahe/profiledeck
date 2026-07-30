@@ -4,17 +4,19 @@ package maintenance
 import (
 	"context"
 
+	"github.com/strahe/profiledeck/internal/providercoord"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
 type Request struct {
-	Operation         string
-	ProfileID         string
-	ProviderID        string
-	RelatedProfileIDs []string
-	ActiveProfileID   string
-	MetadataJSON      string
-	Record            bool
+	Operation           string
+	ProfileID           string
+	ProviderID          string
+	RelatedProfileIDs   []string
+	ActiveProfileID     string
+	MetadataJSON        string
+	Record              bool
+	CoordinationTargets []providercoord.Target
 }
 
 type Func func(context.Context, *store.Store, string) error

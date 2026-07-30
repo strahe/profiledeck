@@ -6,11 +6,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/profiletarget"
+	"github.com/strahe/profiledeck/internal/provider"
+	"github.com/strahe/profiledeck/internal/providercoord"
 	"github.com/strahe/profiledeck/internal/store"
 	switchtarget "github.com/strahe/profiledeck/internal/switching/target"
 	"github.com/strahe/profiledeck/internal/switching/transaction"
@@ -77,6 +80,61 @@ func TestRecoverOperationRemovesPartiallyCreatedTargetsAndResolvesSource(t *test
 	incomplete, err := db.ListIncompleteOperations(ctx)
 	if err != nil || len(incomplete) != 0 {
 		t.Fatalf("resolved source remained in diagnostics: %#v error=%v", incomplete, err)
+	}
+}
+
+func TestRecoverOperationUsesProviderGuardForInspectionRestoreAndCommit(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	initResult, err := initSwitchingTestRuntime(ctx, configDir)
+	if err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+	createGenericProviderAndProfile(t, ctx, configDir)
+
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "target-a.txt")
+	secondPath := filepath.Join(dir, "missing", "target-b.txt")
+	createProfileTargetForRecovery(t, ctx, configDir, "profile-a", "target-a", firstPath, "first\n")
+	createProfileTargetForRecovery(t, ctx, configDir, "profile-a", "target-b", secondPath, "second\n")
+	_, err = newSwitchingTestEnvironment(t, configDir).service.Apply(ctx, ApplySwitchRequest{
+		ProviderID: "provider-a", ProfileID: "profile-a", Confirm: true,
+	})
+	assertErrorCode(t, err, apperror.TargetWriteFailed)
+	failedSwitchID := singleOperationIDByTypeStatus(
+		t,
+		initResult.DatabasePath,
+		store.OperationTypeSwitch,
+		store.OperationStatusFailed,
+	)
+
+	coordinator := &recordingProviderCoordinator{}
+	environment := newSwitchingTestEnvironmentWithOptions(
+		t,
+		configDir,
+		switchtarget.MustRegistry(switchtarget.FileBackend{}),
+		providerCoordinatorOption(coordinator),
+	)
+	if _, err := environment.service.RecoverOperation(ctx, RecoverOperationParams{
+		OperationID: failedSwitchID, Confirm: true,
+	}); err != nil {
+		t.Fatalf("RecoverOperation: %v", err)
+	}
+	events, requests := coordinator.snapshot()
+	if len(events) < 4 || events[0] != "acquire" || events[len(events)-1] != "release" {
+		t.Fatalf("coordination events = %v", events)
+	}
+	validations := 0
+	for _, event := range events {
+		if event == "validate" {
+			validations++
+		}
+	}
+	if validations < 2 {
+		t.Fatalf("guard validations = %d, events = %v", validations, events)
+	}
+	if len(requests) != 1 || requests[0].ProviderID != "provider-a" || len(requests[0].Targets) != 2 {
+		t.Fatalf("coordination requests = %#v", requests)
 	}
 }
 
@@ -214,6 +272,89 @@ func TestRecoverOperationClosesRecordBeforeTargetWrites(t *testing.T) {
 	}
 }
 
+func TestRecoverOperationClosesCreatedCheckpointWithoutFailedProviderGuard(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	initResult, err := initSwitchingTestRuntime(ctx, configDir)
+	if err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+	createGenericProviderAndProfile(t, ctx, configDir)
+	environment := newSwitchingTestEnvironment(t, configDir)
+	targetPath := filepath.Join(t.TempDir(), "provider-a.txt")
+	if _, err := environment.targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
+		ProfileID: "profile-a", ProviderID: "provider-a", TargetID: "target-a",
+		Path: targetPath, Format: "text", Strategy: "replace-file",
+		ValueJSON: contentValueJSON(t, "provider-a\n"),
+	}); err != nil {
+		t.Fatalf("create provider-a target: %v", err)
+	}
+	coordinator := &rejectingProviderCoordinator{}
+	guarded := newSwitchingTestEnvironmentWithOptions(
+		t,
+		configDir,
+		switchtarget.MustRegistry(switchtarget.FileBackend{}),
+		providerCoordinatorOption(coordinator),
+	)
+	_, err = guarded.service.Apply(ctx, ApplySwitchRequest{
+		ProviderID: "provider-a", ProfileID: "profile-a", Confirm: true,
+	})
+	assertErrorCode(t, err, apperror.LockAcquireFailed)
+	if coordinator.callCount() != 1 {
+		t.Fatalf("guard acquire calls after Apply = %d, want 1", coordinator.callCount())
+	}
+	failedSwitchID := singleOperationIDByTypeStatus(
+		t,
+		initResult.DatabasePath,
+		store.OperationTypeSwitch,
+		store.OperationStatusFailed,
+	)
+	db := openAppTestStore(t, ctx, initResult.DatabasePath)
+	operation := mustOperation(t, ctx, db, failedSwitchID)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(operation.MetadataJSON, `"checkpoint":"created"`) {
+		t.Fatalf("guard failure did not retain a created checkpoint: %#v", operation)
+	}
+
+	result, err := guarded.service.RecoverOperation(ctx, RecoverOperationParams{
+		OperationID: failedSwitchID,
+		Confirm:     true,
+	})
+	if err != nil || result.Action != RecoveryActionClose {
+		t.Fatalf("close created checkpoint: result=%#v err=%v", result, err)
+	}
+	if coordinator.callCount() != 1 {
+		t.Fatalf("pre-write recovery reacquired the failed guard: calls=%d", coordinator.callCount())
+	}
+
+	if _, err := environment.providers.Create(ctx, provider.CreateRequest{
+		ID: "provider-b", Name: "Provider B", AdapterID: "generic",
+	}); err != nil {
+		t.Fatalf("create provider-b: %v", err)
+	}
+	if _, err := environment.profiles.Create(ctx, profile.CreateRequest{
+		ID: "profile-b", Name: "Profile B",
+	}); err != nil {
+		t.Fatalf("create profile-b: %v", err)
+	}
+	secondPath := filepath.Join(t.TempDir(), "provider-b.txt")
+	if _, err := environment.targets.Create(ctx, profiletarget.CreateProfileTargetRequest{
+		ProfileID: "profile-b", ProviderID: "provider-b", TargetID: "target-b",
+		Path: secondPath, Format: "text", Strategy: "replace-file",
+		ValueJSON: contentValueJSON(t, "provider-b\n"),
+	}); err != nil {
+		t.Fatalf("create provider-b target: %v", err)
+	}
+	if _, err := environment.service.Apply(ctx, ApplySwitchRequest{
+		ProviderID: "provider-b", ProfileID: "profile-b", Confirm: true,
+	}); err != nil {
+		t.Fatalf("switch after pre-write recovery remained globally blocked: %v", err)
+	}
+	assertFileContent(t, secondPath, "provider-b\n")
+}
+
 func TestRecoverOperationClosesWhenTargetsAreAlreadyBeforeSwitch(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
@@ -235,15 +376,37 @@ func TestRecoverOperationClosesWhenTargetsAreAlreadyBeforeSwitch(t *testing.T) {
 	if err := os.Remove(firstPath); err != nil {
 		t.Fatalf("restore target to pre-switch state: %v", err)
 	}
-	inspection, err := newSwitchingTestEnvironment(t, configDir).service.InspectRecovery(ctx, failedSwitchID)
+	coordinator := &recordingProviderCoordinator{}
+	coordinated := newSwitchingTestEnvironmentWithOptions(
+		t,
+		configDir,
+		switchtarget.MustRegistry(switchtarget.FileBackend{}),
+		providerCoordinatorOption(coordinator),
+	)
+	inspection, err := coordinated.service.InspectRecovery(ctx, failedSwitchID)
 	if err != nil || inspection.Status != RecoveryStatusClosable || inspection.Reason != "targets_already_before_switch" {
 		t.Fatalf("unexpected inspection: %#v error=%v", inspection, err)
 	}
-	result, err := newSwitchingTestEnvironment(t, configDir).service.RecoverOperation(ctx, RecoverOperationParams{
+	events, requests := coordinator.snapshot()
+	if strings.Join(events, ",") != "acquire,validate,release" {
+		t.Fatalf("target-aware inspection coordination events = %v", events)
+	}
+	if len(requests) != 1 || len(requests[0].Targets) != 2 {
+		t.Fatalf("target-aware inspection coordination request = %#v", requests)
+	}
+	result, err := coordinated.service.RecoverOperation(ctx, RecoverOperationParams{
 		OperationID: failedSwitchID, Confirm: true,
 	})
 	if err != nil || result.Action != RecoveryActionClose {
 		t.Fatalf("close unchanged operation: %#v error=%v", result, err)
+	}
+	events, requests = coordinator.snapshot()
+	if strings.Join(events, ",") != "acquire,validate,release,acquire,validate,release" {
+		t.Fatalf("target-aware close coordination events = %v", events)
+	}
+	if len(requests) != 2 || requests[1].OperationID != "recover-"+failedSwitchID ||
+		len(requests[1].Targets) != 2 {
+		t.Fatalf("target-aware close coordination request = %#v", requests)
 	}
 	db := openAppTestStore(t, ctx, initResult.DatabasePath)
 	defer db.Close()
@@ -502,6 +665,71 @@ func TestInspectRecoveryRejectsLegacySwitchMetadata(t *testing.T) {
 	assertErrorCode(t, err, apperror.RecoveryUnsupported)
 	if countOperationsByType(t, initResult.DatabasePath, store.OperationTypeRecovery) != 0 {
 		t.Fatal("legacy operation metadata created a recovery operation")
+	}
+}
+
+func TestRecoveryRejectsOperationProviderOwnershipMismatchBeforeCoordination(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	initResult, err := initSwitchingTestRuntime(ctx, configDir)
+	if err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+	createGenericProviderAndProfile(t, ctx, configDir)
+	db := openWritableAppTestStore(t, ctx, initResult.DatabasePath)
+	if _, err := db.CreatePendingSwitchOperation(ctx, store.CreateSwitchOperationParams{
+		ID:                    "switch-provider-mismatch",
+		ProviderID:            "provider-a",
+		ProfileIDs:            []string{"profile-a"},
+		MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+		MetadataJSON:          `{"checkpoint":"recovery_created","provider_id":"provider-a","profile_id":"profile-a"}`,
+	}); err != nil {
+		t.Fatalf("create pending switch: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rawDB, err := sql.Open("sqlite", initResult.DatabasePath)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+	if _, err := rawDB.ExecContext(ctx, `
+		UPDATE operations
+		SET metadata_json = '{"checkpoint":"recovery_created","provider_id":"provider-b","profile_id":"profile-a"}'
+		WHERE id = 'switch-provider-mismatch'
+	`); err != nil {
+		_ = rawDB.Close()
+		t.Fatalf("corrupt Provider ownership: %v", err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close raw database: %v", err)
+	}
+
+	coordinator := &recordingProviderCoordinator{}
+	environment := newSwitchingTestEnvironmentWithOptions(
+		t,
+		configDir,
+		switchtarget.MustRegistry(switchtarget.FileBackend{}),
+		WithProviderCoordinators(providercoord.MustRegistry(providercoord.Registration{
+			ProviderID:  "provider-b",
+			Coordinator: coordinator,
+		})),
+	)
+	inspection, err := environment.service.InspectRecovery(ctx, "switch-provider-mismatch")
+	if err != nil {
+		t.Fatalf("InspectRecovery: %v", err)
+	}
+	if inspection.Status != RecoveryStatusUnrecoverable || inspection.Reason != "operation_metadata_invalid" {
+		t.Fatalf("Provider mismatch inspection = %#v", inspection)
+	}
+	_, err = environment.service.RecoverOperation(ctx, RecoverOperationParams{
+		OperationID: "switch-provider-mismatch",
+		Confirm:     true,
+	})
+	assertErrorCode(t, err, apperror.RecoveryUnsupported)
+	events, _ := coordinator.snapshot()
+	if len(events) != 0 {
+		t.Fatalf("Provider mismatch acquired metadata-selected coordination: %v", events)
 	}
 }
 

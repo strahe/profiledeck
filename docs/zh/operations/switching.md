@@ -1,10 +1,10 @@
 # 审核并切换 Profile
 
-切换会改变 Codex、Claude Code 或 Antigravity 使用的登录或设置。ProfileDeck 会让你先检查变更，并在应用前创建临时恢复点。
+切换会改变 Codex、Claude Code、Antigravity 或 Grok Build 使用的登录或设置。ProfileDeck 会让你先检查变更，并在应用前创建临时恢复点。
 
 ## 在桌面端切换
 
-1. 打开 **Codex**、**Claude Code** 或 **Antigravity**。
+1. 打开 **Codex**、**Claude Code**、**Antigravity** 或 **Grok Build**。
 2. 选择要使用的 Profile。
 3. 选择**使用 Profile**。
 4. 检查将要变更的文件或登录，以及所有警告。
@@ -20,6 +20,7 @@
 profiledeck-cli switch codex work --dry-run
 profiledeck-cli switch claude-code personal --dry-run
 profiledeck-cli switch antigravity work --dry-run
+profiledeck-cli switch grok-build work --dry-run
 ```
 
 如需结构化输出，可添加 `--json`：
@@ -28,7 +29,7 @@ profiledeck-cli switch antigravity work --dry-run
 profiledeck-cli switch codex work --dry-run --json
 ```
 
-对于文件，预览会显示路径将被创建、更新还是保持不变。对于已保存的登录，预览只显示安全的目标名称和操作。所有预览都会隐藏敏感登录内容。
+对于普通文件，预览会显示路径将被创建、更新还是保持不变。Grok Build 会把登录和设置都视为敏感内容，其预览只显示操作、目标、路径和警告。所有预览都会隐藏敏感值和完整的 Grok Build 文件正文。
 
 警告会说明文件或登录是否缺失、无效、不受支持或无法安全变更。请先处理阻止切换的警告。
 
@@ -38,6 +39,7 @@ profiledeck-cli switch codex work --dry-run --json
 profiledeck-cli switch codex work --yes
 profiledeck-cli switch claude-code personal --yes
 profiledeck-cli switch antigravity work --yes
+profiledeck-cli switch grok-build work --yes
 ```
 
 如需确保应用的状态与之前检查的内容完全一致，请复制 `switch --dry-run` 返回的指纹：
@@ -65,6 +67,6 @@ profiledeck-cli switch codex work \
 
 ## 妥善保护恢复数据
 
-未完成切换的恢复点可能包含之前的 Codex 文件、Claude Code 账号登录或 Antigravity 登录。请保持 ProfileDeck 数据目录私有，不要提交、上传或分享其中的恢复文件。
+未完成切换的恢复点可能包含之前的 Codex 或 Grok Build 文件、Claude Code 账号登录或 Antigravity 登录。请保持 ProfileDeck 数据目录私有，不要提交、上传或分享其中的恢复文件。
 
 恢复会把未完成切换影响的目标还原到切换前状态，但不会改变当前 Profile。如果未完成切换后当前 Profile 已发生变化，ProfileDeck 会在写入前拒绝恢复。已经保存到 Profile 中的更新仍会保留。成功切换不能撤销；如需更换配置，请切换到目标 Profile。可用操作见[诊断、备份与恢复](./recovery.md)。

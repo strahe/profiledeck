@@ -36,8 +36,8 @@ func TestUnrestrictedPolicyDoesNotReadDesktopPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unrestricted Agent list should not open the database: %v", err)
 	}
-	if len(states) != 3 {
-		t.Fatalf("expected three built-in Agents, got %d", len(states))
+	if len(states) != 4 {
+		t.Fatalf("expected four built-in Agents, got %d", len(states))
 	}
 	for _, state := range states {
 		if !state.Enabled {
@@ -78,6 +78,7 @@ func TestDesktopPolicyUsesDefaultsAndIndependentOverrides(t *testing.T) {
 	assertEnabled(t, states, Codex, true)
 	assertEnabled(t, states, Antigravity, true)
 	assertEnabled(t, states, ClaudeCode, false)
+	assertEnabled(t, states, GrokBuild, true)
 	if err := service.RequireAgent(ctx, ClaudeCode); !isCode(err, apperror.AgentDisabled) {
 		t.Fatalf("expected disabled Agent error, got %v", err)
 	}

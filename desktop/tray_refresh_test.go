@@ -19,6 +19,8 @@ import (
 	claudecodeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
 	"github.com/strahe/profiledeck/internal/codex"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	"github.com/strahe/profiledeck/internal/grokbuild"
+	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/settings"
 )
@@ -28,8 +30,12 @@ func newDesktopTestServices(t *testing.T, env backend.Environment) backend.Servi
 	if env.ConfigDir == "" {
 		env.ConfigDir = t.TempDir()
 	}
+	if env.GrokHome == "" {
+		env.GrokHome = t.TempDir()
+	}
 	core, err := app.New(app.Config{
-		ConfigDir: env.ConfigDir, CodexDir: env.CodexDir, AgentAccess: agent.AccessDesktopPreferences,
+		ConfigDir: env.ConfigDir, CodexDir: env.CodexDir, GrokHome: env.GrokHome,
+		AgentAccess: agent.AccessDesktopPreferences,
 	})
 	if err != nil {
 		t.Fatalf("create test Application: %v", err)
@@ -163,6 +169,30 @@ func TestBuildTrayMenuUsesDashboardAntigravityProfiles(t *testing.T) {
 	})
 }
 
+func TestBuildTrayMenuUsesDashboardGrokBuildProfiles(t *testing.T) {
+	t.Run("unavailable", func(t *testing.T) {
+		menu := buildEnglishTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{})
+		submenu := requireMenuSubmenu(t, menu, "Grok Build Profiles")
+		if got := submenu.ItemAt(0).Label(); got != trayGrokBuildProfilesUnavailableLabel {
+			t.Fatalf("expected unavailable Grok Build label, got %q", got)
+		}
+	})
+
+	t.Run("profiles", func(t *testing.T) {
+		menu := buildEnglishTrayMenu(dashboardWithGrokBuildProfiles(
+			grokBuildProfileSummary("work", "Work", true),
+			grokBuildProfileSummary("personal", "", false),
+		), nil, trayMenuActions{})
+		submenu := requireMenuSubmenu(t, menu, "Grok Build Profiles")
+		if got := submenu.ItemAt(0).Label(); got != "Work" || !submenu.ItemAt(0).Checked() || !submenu.ItemAt(0).IsRadio() {
+			t.Fatalf("expected active Grok Build Profile radio, got label=%q checked=%t radio=%t", got, submenu.ItemAt(0).Checked(), submenu.ItemAt(0).IsRadio())
+		}
+		if got := submenu.ItemAt(1).Label(); got != "personal" {
+			t.Fatalf("expected Grok Build Profile id fallback, got %q", got)
+		}
+	})
+}
+
 func TestBuildTrayMenuUsesDashboardClaudeCodeProfiles(t *testing.T) {
 	t.Run("unavailable", func(t *testing.T) {
 		menu := buildEnglishTrayMenu(backend.DashboardResult{}, nil, trayMenuActions{})
@@ -188,13 +218,13 @@ func TestBuildTrayMenuUsesDashboardClaudeCodeProfiles(t *testing.T) {
 }
 
 func TestBuildTrayMenuKeepsSafetyActionsWhenAllAgentsDisabled(t *testing.T) {
-	states := make([]agent.State, 0, 3)
+	states := make([]agent.State, 0, 4)
 	for _, manifest := range agent.BuiltinRegistry().Manifests() {
 		states = append(states, agent.State{Manifest: manifest, Enabled: false})
 	}
 	menu := buildEnglishTrayMenu(backend.DashboardResult{Agents: states}, nil, trayMenuActions{})
 
-	for _, label := range []string{"Codex Profiles", "Antigravity Profiles", "Claude Code Profiles"} {
+	for _, label := range []string{"Codex Profiles", "Grok Build Profiles", "Antigravity Profiles", "Claude Code Profiles"} {
 		if item := menu.FindByLabel(label); item != nil {
 			t.Fatalf("disabled Agent remained in tray menu: %q", label)
 		}
@@ -223,6 +253,10 @@ func TestBuildTrayMenuSupportsSimplifiedChinese(t *testing.T) {
 	codexMenu := requireMenuSubmenu(t, menu, "Codex Profile")
 	if got := codexMenu.ItemAt(0).Label(); got != "工作" || !codexMenu.ItemAt(0).Checked() || !codexMenu.ItemAt(0).IsRadio() {
 		t.Fatalf("unexpected localized Codex Profile item: label=%q checked=%t radio=%t", got, codexMenu.ItemAt(0).Checked(), codexMenu.ItemAt(0).IsRadio())
+	}
+	grokBuildMenu := requireMenuSubmenu(t, menu, "Grok Build Profile")
+	if got := grokBuildMenu.ItemAt(0).Label(); got != traySimplifiedChineseMessages.grokBuildUnavailable {
+		t.Fatalf("unexpected localized Grok Build unavailable label: %q", got)
 	}
 	antigravityMenu := requireMenuSubmenu(t, menu, "Antigravity Profile")
 	if got := antigravityMenu.ItemAt(0).Label(); got != traySimplifiedChineseMessages.antigravityUnavailable {
@@ -486,6 +520,7 @@ func TestTrayErrorLabelDoesNotExposeRawError(t *testing.T) {
 	for _, label := range []string{
 		trayErrorLabel(err, trayDashboardUnavailableLabel),
 		trayErrorLabel(err, trayCodexProfilesUnavailableLabel),
+		trayErrorLabel(err, trayGrokBuildProfilesUnavailableLabel),
 		trayErrorLabel(err, trayClaudeCodeProfilesUnavailableLabel),
 	} {
 		if strings.Contains(label, rawPath) || strings.Contains(label, "permission denied") {
@@ -588,6 +623,10 @@ func dashboardWithAntigravityProfiles(profiles ...antigravity.AntigravityProfile
 	return backend.DashboardResult{AntigravityProfiles: &antigravity.AntigravityProfileListResult{Profiles: profiles}}
 }
 
+func dashboardWithGrokBuildProfiles(profiles ...grokbuild.ProfileSummary) backend.DashboardResult {
+	return backend.DashboardResult{GrokBuildProfiles: &grokbuild.ProfileListResult{Profiles: profiles}}
+}
+
 func dashboardWithClaudeCodeProfiles(profiles ...claudecode.ClaudeCodeProfileSummary) backend.DashboardResult {
 	return backend.DashboardResult{ClaudeCodeProfiles: &claudecode.ClaudeCodeProfileListResult{Profiles: profiles}}
 }
@@ -606,6 +645,12 @@ func codexProfileSummary(profileID, name string, active bool) codex.CodexProfile
 func antigravityProfileSummary(profileID, name string, active bool) antigravity.AntigravityProfileSummary {
 	return antigravity.AntigravityProfileSummary{
 		Profile: profile.Profile{ID: profileID, Name: name}, ProviderID: agyconfig.ProviderID, Active: active,
+	}
+}
+
+func grokBuildProfileSummary(profileID, name string, active bool) grokbuild.ProfileSummary {
+	return grokbuild.ProfileSummary{
+		Profile: profile.Profile{ID: profileID, Name: name}, ProviderID: grokconfig.ProviderID, Active: active,
 	}
 }
 

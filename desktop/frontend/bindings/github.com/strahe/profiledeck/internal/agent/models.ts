@@ -10,6 +10,7 @@ export enum ID {
     Codex = "codex",
     Antigravity = "antigravity",
     ClaudeCode = "claude-code",
+    GrokBuild = "grok-build",
 };
 
 export interface Manifest {

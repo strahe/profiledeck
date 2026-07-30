@@ -10,9 +10,12 @@
 
 ```text
 --config-dir string  Use a custom ProfileDeck config directory
+--grok-home string   Use a custom Grok Build Home
 ```
 
-该值是用户配置根目录。ProfileDeck 会在其下创建或使用 `profiledeck` 文件夹。
+`--config-dir` 是用户配置根目录。ProfileDeck 会在其下创建或使用 `profiledeck` 文件夹。
+
+`--grok-home` 会覆盖 `GROK_HOME` 和默认的 `~/.grok` 位置。全局选项应放在命令名称前。
 
 ## 命令
 
@@ -23,6 +26,7 @@
 | `claude-code` | 保存和管理 Claude Code 账号登录 Profile。 |
 | `codex` | 管理 Codex Profile 和已保存设置（配置集）。 |
 | `doctor` | 诊断本地数据、权限和中断操作的问题。 |
+| `grok-build` | 管理 Grok Build Profile 和已保存设置（配置集）。 |
 | `init` | 创建 ProfileDeck 本地数据。 |
 | `provider` | 为其他 AI 工具配置高级文件切换。 |
 | `profile` | 管理 Profile 和高级文件目标。 |
@@ -67,6 +71,38 @@ profiledeck-cli codex config-set delete <config-set-id> --yes [--json]
 `config-set create` 保存当前 `config.toml`。列表和详情命令只返回安全摘要。只有未被任何 Profile 使用的配置集才能删除。
 
 任务示例与安全说明见 [Codex Profile](../codex/profiles.md)。
+
+## Grok Build
+
+```bash
+profiledeck-cli grok-build detect [--json]
+profiledeck-cli grok-build profile list [--json]
+profiledeck-cli grok-build profile show <profile-id> [--json]
+profiledeck-cli grok-build profile create <profile-id> [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--name NAME] [--description TEXT] [--json]
+profiledeck-cli grok-build profile fork <source-profile-id> <new-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--name NAME] [--description TEXT] [--json]
+profiledeck-cli grok-build profile save-current [--json]
+profiledeck-cli grok-build profile set-config <profile-id> <config-set-id> [--json]
+profiledeck-cli grok-build profile delete <profile-id> --yes [--json]
+
+profiledeck-cli grok-build config-set list [--json]
+profiledeck-cli grok-build config-set show <config-set-id> [--json]
+profiledeck-cli grok-build config-set create <config-set-id> [--name NAME] [--description TEXT] [--json]
+profiledeck-cli grok-build config-set copy <source-id> <new-id> [--name NAME] [--description TEXT] [--json]
+profiledeck-cli grok-build config-set update <config-set-id> [--name NAME] [--description TEXT] [--json]
+profiledeck-cli grok-build config-set delete <config-set-id> --yes [--json]
+```
+
+第一次运行 `profile create` 会保存当前基于文件的登录并使用 `shared` 配置集。如果 `shared` 尚不存在，ProfileDeck 会根据当前 `config.toml` 创建；文件缺失时会保存为空设置。预先创建的 `shared` 会原样复用。后续创建默认复用当前 Profile 的已保存配置集，不读取或覆盖当前 `config.toml`；传入 `--new-config-set` 时才会保存当前设置。`auth.json` 必须存在、非空且有效。
+
+`fork` 要求同时选择登录和配置集的处理方式，且至少一项必须是 `copy-new`。`save-current` 会保存两个当前文件；如果 `auth.json` 无效，操作会整体失败，不会只保存设置。配置集列表和详情输出不会包含 `config.toml`。
+
+需要时，请把 `--grok-home` 放在 `grok-build` 前：
+
+```bash
+profiledeck-cli --grok-home /path/to/grok-home grok-build detect
+```
+
+Provider 会一直绑定到首次初始化使用的 Home。当设置了 `GROK_AUTH` 或 `GROK_AUTH_PATH` 时，创建 Profile、`save-current` 和切换不可用。切换与安全说明见 [Grok Build Profile](../grok-build/profiles.md)。
 
 ## Claude Code
 
@@ -123,7 +159,7 @@ profiledeck-cli usage report [--provider codex] [--range today|7d|30d|all] [--js
 
 ## 其他工具与配置文件
 
-以下命令是面向其他工具的高级 CLI 功能。Codex、Claude Code 和 Antigravity 必须使用上方各自的专用命令；通用文件目标命令不能管理它们保存的登录或设置。
+以下命令是面向其他工具的高级 CLI 功能。Codex、Claude Code、Antigravity 和 Grok Build 必须使用上方各自的专用命令；通用文件目标命令不能管理它们保存的登录或设置。
 
 ```bash
 profiledeck-cli provider list [--json]
@@ -141,7 +177,7 @@ profiledeck-cli profile delete <id> --yes [--json]
 
 删除 Provider 会清除全部由它拥有的 ProfileDeck 数据，包括设置、已保存资源及绑定、文件目标、当前 Profile 状态、用量报告和已完成操作记录。全局 Profile、桌面端 Agent 偏好，以及工具当前使用的登录、设置和文件会保留。Provider 存在未完成操作时，删除会停止。
 
-以上四种 Profile 删除命令执行同一个全局删除。即使 Profile 只包含其他 Agent 的数据，从某个 Agent 命令进入也会删除整个 Profile。Profile 是任一 Agent 的当前 Profile，或存在未完成操作时，删除会停止。只有该 Profile 使用的已保存登录和配置集会一并删除；共享数据和无关的未绑定数据会保留。引用该 Profile 的已完成操作记录也会删除。工具当前使用的登录、设置和文件不会改变。
+以上五种 Profile 删除命令执行同一个全局删除。即使 Profile 只包含其他 Agent 的数据，从某个 Agent 命令进入也会删除整个 Profile。Profile 是任一 Agent 的当前 Profile，或存在未完成操作时，删除会停止。只有该 Profile 使用的已保存登录和配置集会一并删除；共享数据和无关的未绑定数据会保留。引用该 Profile 的已完成操作记录也会删除。工具当前使用的登录、设置和文件不会改变。
 
 文件目标命令：
 

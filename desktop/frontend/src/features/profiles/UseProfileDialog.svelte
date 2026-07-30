@@ -32,7 +32,7 @@
 		open?: boolean;
 		profile: SwitchProfileItem | null;
 		agent?: string;
-		mode?: "codex" | "antigravity" | "claude-code";
+		mode?: "codex" | "grok-build" | "antigravity" | "claude-code";
 		currentProfile: string;
 		plan: SwitchPlan | null;
 		building: boolean;
@@ -43,15 +43,15 @@
 	} = $props();
 
 	let operations = $derived(plan?.operations ?? []);
-	let fileOperations = $derived(operations.filter((operation) => operation.backend_id === "file" && mode !== "claude-code"));
+	let fileOperations = $derived(operations.filter((operation) => operation.backend_id === "file" && mode !== "claude-code" && mode !== "grok-build"));
 	// Unknown non-file backends stay on the safe summary-only path. Their public
 	// plans may intentionally omit locators, hashes, and previews. Claude Code
 	// file credentials use the same summary-only treatment as Keychain items.
-	let sensitiveOperations = $derived(operations.filter((operation) => operation.backend_id !== "file" || mode === "claude-code"));
+	let sensitiveOperations = $derived(operations.filter((operation) => operation.backend_id !== "file" || mode === "claude-code" || mode === "grok-build"));
 	let unsupportedCount = $derived(operations.filter((operation) => operation.action === "unsupported").length);
 	let loginChanges = $derived(!!plan?.bindings?.find((binding) => binding.target_id === "auth")?.changed);
 	let configChanges = $derived(!!plan?.bindings?.find((binding) => binding.target_id === "config")?.changed);
-	let managedLoginPrefix = $derived(mode === "claude-code" ? "claudeCode" : "antigravity");
+	let managedLoginPrefix = $derived(mode === "claude-code" ? "claudeCode" : mode === "grok-build" ? "grokBuild" : "antigravity");
 	let changeSummary = $derived(mode !== "codex"
 		? (operations.some((operation) => operation.action === "create" || operation.action === "update") ? $_(`${managedLoginPrefix}.use.loginChange`) : $_(`${managedLoginPrefix}.use.loginSame`))
 		: (loginChanges && configChanges ? $_("useDialog.bothChange") : loginChanges ? $_("useDialog.loginOnly") : configChanges ? $_("useDialog.configOnly") : $_("useDialog.sameBindings")));
@@ -72,6 +72,7 @@
 	function targetLabel(operation: PlanOperation): string {
 		if (mode === "antigravity" && operation.backend_id === "keyring") return $_("antigravity.use.targetLabel");
 		if (mode === "claude-code") return $_("claudeCode.use.targetLabel");
+		if (mode === "grok-build") return operation.target_id === "auth" ? $_("grokBuild.use.loginTarget") : $_("grokBuild.use.settingsTarget");
 		if (operation.target_id === "auth") return $_("useDialog.loginFile");
 		if (operation.target_id === "config") return $_("useDialog.settingsFile");
 		if (operation.target_label) return operation.target_label;
@@ -183,6 +184,9 @@
 						</Alert.Title>
 						<Alert.Description>
 							<div>{sensitiveStatus(operation)}</div>
+							{#if mode === "grok-build" && operation.path}
+								<div class="mt-1 truncate font-mono text-xs">{operation.path}</div>
+							{/if}
 							{#if operationWarnings(operation).length}<div class="mt-1">{operationWarnings(operation).join(" ")}</div>{/if}
 						</Alert.Description>
 					</Alert.Root>

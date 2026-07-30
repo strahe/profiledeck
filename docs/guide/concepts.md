@@ -9,6 +9,7 @@ A Profile names the login and settings you want to use for one supported tool. S
 | Codex | One Codex login | Saved Codex settings, called a Config Set |
 | Claude Code | One account login | Not included |
 | Antigravity | One consumer OAuth login | Not included |
+| Grok Build | One file-based login | Saved Grok Build settings, called a Config Set |
 
 Each Profile has a permanent ID used by CLI commands and links. Profile IDs share one namespace across tools, and one Profile can contain saved data for more than one tool.
 
@@ -19,8 +20,9 @@ ProfileDeck records one current Profile for each supported tool. The current Pro
 - Codex uses `auth.json` and `config.toml` in the active Codex home.
 - Claude Code stores its account login in Keychain on macOS or a credential file on Linux and Windows.
 - Antigravity uses its current login in the system credential store.
+- Grok Build uses `auth.json` and `config.toml` in the bound Grok Home.
 
-Before leaving the current Profile, ProfileDeck preserves a valid refreshed login or valid Codex settings when it can do so safely. Missing, invalid, or unsupported content is reported instead of being saved silently.
+Before leaving the current Profile, ProfileDeck preserves a valid refreshed login or valid Codex or Grok Build settings when it can do so safely. Missing, invalid, or unsupported content is reported instead of being saved silently.
 
 ## Saved logins
 
@@ -28,13 +30,13 @@ A saved login can be shared by more than one Profile. Updating a shared login ch
 
 ProfileDeck may show the final characters of a Codex Account ID to help distinguish logins. This value is display information only; it does not decide which login is updated or shared.
 
-## Codex Config Sets
+## Config Sets
 
-A Config Set is a reusable copy of the Codex settings in the user-level `config.toml`. The first Codex Profile creates one named `shared`. Later Profiles can reuse it or save a separate copy.
+A Config Set is a reusable copy of the user-level `config.toml` for Codex or Grok Build. Each tool owns separate Config Sets. The first Profile for that tool uses one named `shared`, creating it from the current settings when needed; later Profiles can reuse it or save a separate copy.
 
-When Profiles share a Config Set, saving changed Codex settings updates all of them. Copy the Config Set when one Profile needs settings that can change independently. A Config Set can be deleted only when no Profile uses it.
+When Profiles share a Config Set, saving changed settings updates all of them. Copy the Config Set when one Profile needs settings that can change independently. A Config Set can be deleted only when no Profile uses it.
 
-Config Sets do not include sessions, logs, skills, plugin caches, project `.codex/config.toml` files, or system policy.
+Config Sets do not include sessions, logs, plugins, skills, project settings, managed configuration, or system policy.
 
 ## Delete a Profile
 

@@ -18,6 +18,8 @@ import (
 	"github.com/strahe/profiledeck/internal/codex"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/strahe/profiledeck/internal/doctor"
+	"github.com/strahe/profiledeck/internal/grokbuild"
+	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/provider"
@@ -43,6 +45,11 @@ type CodexService struct {
 	autoSync    *usageAutoSyncRuntime
 	quota       *codexQuotaRuntime
 	settingsMu  sync.Mutex
+}
+
+type GrokBuildService struct {
+	application *app.Application
+	changes     *ChangeNotifier
 }
 
 type AntigravityService struct {
@@ -101,6 +108,7 @@ type Services struct {
 	Antigravity *AntigravityService
 	ClaudeCode  *ClaudeCodeService
 	Codex       *CodexService
+	GrokBuild   *GrokBuildService
 	Profile     *ProfileService
 	Switch      *SwitchService
 	Doctor      *DoctorService
@@ -124,6 +132,8 @@ type DashboardResult struct {
 	ActiveStates        []provider.ActiveState                    `json:"active_states"`
 	CodexProfiles       *codex.CodexProfileListResult             `json:"codex_profiles,omitempty"`
 	CodexConfigSets     *codex.CodexConfigSetListResult           `json:"codex_config_sets,omitempty"`
+	GrokBuildProfiles   *grokbuild.ProfileListResult              `json:"grok_build_profiles,omitempty"`
+	GrokBuildConfigSets *grokbuild.ConfigSetListResult            `json:"grok_build_config_sets,omitempty"`
 	AntigravityProfiles *antigravity.AntigravityProfileListResult `json:"antigravity_profiles,omitempty"`
 	ClaudeCodeProfiles  *claudecode.ClaudeCodeProfileListResult   `json:"claude_code_profiles,omitempty"`
 	Usage               *usage.UsageSummaryResult                 `json:"usage,omitempty"`
@@ -195,6 +205,57 @@ type UpdateCodexProfileMetadataRequest struct {
 	Description *string `json:"description,omitempty"`
 }
 
+type CreateGrokBuildProfileRequest struct {
+	ProfileID               string  `json:"profile_id"`
+	Name                    *string `json:"name,omitempty"`
+	Description             *string `json:"description,omitempty"`
+	NewConfigSetID          string  `json:"new_config_set_id,omitempty"`
+	NewConfigSetName        *string `json:"new_config_set_name,omitempty"`
+	NewConfigSetDescription *string `json:"new_config_set_description,omitempty"`
+}
+
+type ForkGrokBuildProfileRequest struct {
+	SourceProfileID         string  `json:"source_profile_id"`
+	ProfileID               string  `json:"profile_id"`
+	CredentialBinding       string  `json:"credential_binding"`
+	ConfigBinding           string  `json:"config_binding"`
+	NewConfigSetID          string  `json:"new_config_set_id,omitempty"`
+	NewConfigSetName        *string `json:"new_config_set_name,omitempty"`
+	NewConfigSetDescription *string `json:"new_config_set_description,omitempty"`
+	Name                    *string `json:"name,omitempty"`
+	Description             *string `json:"description,omitempty"`
+}
+
+type UpdateGrokBuildProfileConfigSetRequest struct {
+	ProfileID   string `json:"profile_id"`
+	ConfigSetID string `json:"config_set_id"`
+}
+
+type CreateGrokBuildConfigSetRequest struct {
+	ConfigSetID string `json:"config_set_id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type CopyGrokBuildConfigSetRequest struct {
+	SourceConfigSetID string `json:"source_config_set_id"`
+	ConfigSetID       string `json:"config_set_id"`
+	Name              string `json:"name"`
+	Description       string `json:"description,omitempty"`
+}
+
+type UpdateGrokBuildConfigSetRequest struct {
+	ConfigSetID string  `json:"config_set_id"`
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+}
+
+type UpdateGrokBuildProfileMetadataRequest struct {
+	ProfileID   string  `json:"profile_id"`
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+}
+
 type CreateAntigravityProfileRequest struct {
 	ProfileID   string  `json:"profile_id"`
 	Name        *string `json:"name,omitempty"`
@@ -237,6 +298,7 @@ func NewServices(application *app.Application, info app.Info, env Environment, s
 		Antigravity: &AntigravityService{application: application, changes: changes},
 		ClaudeCode:  &ClaudeCodeService{application: application, changes: changes},
 		Codex:       &CodexService{application: application, changes: changes, autoSync: autoSync, quota: quota},
+		GrokBuild:   &GrokBuildService{application: application, changes: changes},
 		Profile:     &ProfileService{application: application, changes: changes, quota: quota},
 		Switch:      &SwitchService{application: application, changes: changes, quota: quota},
 		Doctor:      &DoctorService{application: application, changes: changes, quota: quota},
@@ -373,6 +435,14 @@ func (s *AppService) Dashboard(ctx context.Context) (DashboardResult, error) {
 		}
 		if usageSummary, summaryErr := s.application.Usage().Summary(ctx, usage.UsageSummaryRequest{ProviderID: codexconfig.ProviderID}); summaryErr == nil {
 			result.Usage = &usageSummary
+		}
+	}
+	if agentEnabled(agents, agent.GrokBuild) {
+		if grokProfiles, listErr := s.application.GrokBuild().ListProfiles(ctx); listErr == nil {
+			result.GrokBuildProfiles = &grokProfiles
+		}
+		if grokConfigSets, listErr := s.application.GrokBuild().ListConfigSets(ctx); listErr == nil {
+			result.GrokBuildConfigSets = &grokConfigSets
 		}
 	}
 	if agentEnabled(agents, agent.Antigravity) {
@@ -649,6 +719,123 @@ func (s *CodexService) UpdateProfileMetadata(ctx context.Context, req UpdateCode
 	return result, err
 }
 
+func (s *GrokBuildService) Detect(ctx context.Context) (grokbuild.DetectResult, error) {
+	return s.application.GrokBuild().Detect(ctx)
+}
+
+func (s *GrokBuildService) ListProfiles(ctx context.Context) (grokbuild.ProfileListResult, error) {
+	return s.application.GrokBuild().ListProfiles(ctx)
+}
+
+func (s *GrokBuildService) ShowProfile(ctx context.Context, profileID string) (grokbuild.ProfileDetail, error) {
+	return s.application.GrokBuild().GetProfile(ctx, profileID)
+}
+
+func (s *GrokBuildService) CreateProfile(ctx context.Context, req CreateGrokBuildProfileRequest) (grokbuild.ProfileSaveResult, error) {
+	result, err := s.application.GrokBuild().CreateProfile(ctx, grokbuild.CreateProfileRequest{
+		ProfileID:               req.ProfileID,
+		Name:                    req.Name,
+		Description:             req.Description,
+		NewConfigSetID:          req.NewConfigSetID,
+		NewConfigSetName:        req.NewConfigSetName,
+		NewConfigSetDescription: req.NewConfigSetDescription,
+	})
+	profileID := result.Profile.ID
+	if profileID == "" {
+		profileID = strings.TrimSpace(req.ProfileID)
+	}
+	s.notifyMutationResult(DesktopChangeGrokBuildProfileChanged, "grok-build.createProfile", grokconfig.ProviderID, profileID, result.OperationID, err)
+	return result, err
+}
+
+func (s *GrokBuildService) ForkProfile(ctx context.Context, req ForkGrokBuildProfileRequest) (grokbuild.ProfileSaveResult, error) {
+	result, err := s.application.GrokBuild().ForkProfile(ctx, grokbuild.ForkProfileRequest{
+		SourceProfileID:         req.SourceProfileID,
+		ProfileID:               req.ProfileID,
+		CredentialBinding:       req.CredentialBinding,
+		ConfigBinding:           req.ConfigBinding,
+		NewConfigSetID:          req.NewConfigSetID,
+		NewConfigSetName:        req.NewConfigSetName,
+		NewConfigSetDescription: req.NewConfigSetDescription,
+		Name:                    req.Name,
+		Description:             req.Description,
+	})
+	profileID := result.Profile.ID
+	if profileID == "" {
+		profileID = strings.TrimSpace(req.ProfileID)
+	}
+	s.notifyMutationResult(DesktopChangeGrokBuildProfileChanged, "grok-build.forkProfile", grokconfig.ProviderID, profileID, result.OperationID, err)
+	return result, err
+}
+
+func (s *GrokBuildService) SaveActiveProfileState(ctx context.Context) (grokbuild.ProfileStateSaveResult, error) {
+	result, err := s.application.GrokBuild().SaveActiveProfileState(ctx)
+	s.notifyMutationResult(DesktopChangeGrokBuildProfileChanged, "grok-build.saveActiveProfileState", grokconfig.ProviderID, result.ProfileID, result.OperationID, err)
+	return result, err
+}
+
+func (s *GrokBuildService) SetProfileConfig(ctx context.Context, req UpdateGrokBuildProfileConfigSetRequest) (grokbuild.ProfileDetail, error) {
+	result, err := s.application.GrokBuild().UpdateProfileConfigSet(ctx, grokbuild.UpdateProfileConfigSetRequest{
+		ProfileID: req.ProfileID, ConfigSetID: req.ConfigSetID,
+	})
+	s.notifyMutationResult(DesktopChangeGrokBuildProfileChanged, "grok-build.setProfileConfig", grokconfig.ProviderID, strings.TrimSpace(req.ProfileID), "", err)
+	return result, err
+}
+
+func (s *GrokBuildService) ListConfigSets(ctx context.Context) (grokbuild.ConfigSetListResult, error) {
+	return s.application.GrokBuild().ListConfigSets(ctx)
+}
+
+func (s *GrokBuildService) ShowConfigSet(ctx context.Context, configSetID string) (grokbuild.ConfigSet, error) {
+	return s.application.GrokBuild().GetConfigSet(ctx, configSetID)
+}
+
+func (s *GrokBuildService) CreateConfigSet(ctx context.Context, req CreateGrokBuildConfigSetRequest) (grokbuild.ConfigSet, error) {
+	result, err := s.application.GrokBuild().CreateConfigSet(ctx, grokbuild.CreateConfigSetRequest{
+		ConfigSetID: req.ConfigSetID, Name: req.Name, Description: req.Description,
+	})
+	s.notifyMutationResult(DesktopChangeGrokBuildConfigSetChanged, "grok-build.createConfigSet", grokconfig.ProviderID, "", "", err)
+	return result, err
+}
+
+func (s *GrokBuildService) CopyConfigSet(ctx context.Context, req CopyGrokBuildConfigSetRequest) (grokbuild.ConfigSet, error) {
+	result, err := s.application.GrokBuild().CopyConfigSet(ctx, grokbuild.CopyConfigSetRequest{
+		SourceConfigSetID: req.SourceConfigSetID,
+		ConfigSetID:       req.ConfigSetID,
+		Name:              req.Name,
+		Description:       req.Description,
+	})
+	s.notifyMutationResult(DesktopChangeGrokBuildConfigSetChanged, "grok-build.copyConfigSet", grokconfig.ProviderID, "", "", err)
+	return result, err
+}
+
+func (s *GrokBuildService) UpdateConfigSet(ctx context.Context, req UpdateGrokBuildConfigSetRequest) (grokbuild.ConfigSet, error) {
+	result, err := s.application.GrokBuild().UpdateConfigSet(ctx, grokbuild.UpdateConfigSetRequest{
+		ConfigSetID: req.ConfigSetID, Name: req.Name, Description: req.Description,
+	})
+	s.notifyMutationResult(DesktopChangeGrokBuildConfigSetChanged, "grok-build.updateConfigSet", grokconfig.ProviderID, "", "", err)
+	return result, err
+}
+
+func (s *GrokBuildService) DeleteConfigSet(ctx context.Context, configSetID string) error {
+	err := s.application.GrokBuild().DeleteConfigSet(ctx, configSetID)
+	s.notifyMutationResult(DesktopChangeGrokBuildConfigSetChanged, "grok-build.deleteConfigSet", grokconfig.ProviderID, "", "", err)
+	return err
+}
+
+func (s *GrokBuildService) UpdateProfileMetadata(ctx context.Context, req UpdateGrokBuildProfileMetadataRequest) (profile.Profile, error) {
+	profileID := strings.TrimSpace(req.ProfileID)
+	if _, err := s.application.GrokBuild().GetProfile(ctx, profileID); err != nil {
+		s.notifyMutationResult(DesktopChangeGrokBuildProfileChanged, "grok-build.updateProfileMetadata", grokconfig.ProviderID, profileID, "", err)
+		return profile.Profile{}, err
+	}
+	result, err := s.application.Profiles().Update(ctx, profile.UpdateRequest{
+		ID: profileID, Name: req.Name, Description: req.Description,
+	})
+	s.notifyMutationResult(DesktopChangeGrokBuildProfileChanged, "grok-build.updateProfileMetadata", grokconfig.ProviderID, profileID, "", err)
+	return result, err
+}
+
 func (s *ProfileService) ListProviders(ctx context.Context) ([]provider.Provider, error) {
 	return s.application.Providers().List(ctx)
 }
@@ -898,6 +1085,10 @@ func (s *CodexService) notifyMutationResult(kind, source, providerID, profileID,
 	}
 }
 
+func (s *GrokBuildService) notifyMutationResult(kind, source, providerID, profileID, operationID string, err error) {
+	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
+}
+
 func (s *AntigravityService) notifyMutationResult(kind, source, providerID, profileID, operationID string, err error) {
 	notifyMutationResult(s.changes, kind, source, providerID, profileID, operationID, err)
 }
@@ -942,11 +1133,11 @@ func notifyMutationResult(changes *ChangeNotifier, kind, source, providerID, pro
 		OperationID: operationID,
 	}
 	switch kind {
-	case DesktopChangeCodexProfileChanged:
+	case DesktopChangeCodexProfileChanged, DesktopChangeGrokBuildProfileChanged:
 		event.ProfileChanged = true
 		event.ConfigSetsChanged = strings.Contains(source, "createProfile") || strings.Contains(source, "forkProfile") || strings.Contains(source, "saveActiveProfileState") || strings.Contains(source, "setProfileConfig")
 		event.ActiveStateChanged = strings.Contains(source, "createProfile")
-	case DesktopChangeCodexConfigSetChanged:
+	case DesktopChangeCodexConfigSetChanged, DesktopChangeGrokBuildConfigSetChanged:
 		event.ConfigSetsChanged = true
 	case DesktopChangeAntigravityProfileChanged:
 		event.ProfileChanged = true
@@ -955,8 +1146,8 @@ func notifyMutationResult(changes *ChangeNotifier, kind, source, providerID, pro
 		event.ProfileChanged = true
 		event.ConfigSetsChanged = true
 	case DesktopChangeSwitchApplied, DesktopChangeSwitchRecovered:
-		event.ProfileChanged = providerID == codexconfig.ProviderID || providerID == agyconfig.ProviderID
-		event.ConfigSetsChanged = providerID == codexconfig.ProviderID
+		event.ProfileChanged = providerID == codexconfig.ProviderID || providerID == grokconfig.ProviderID || providerID == agyconfig.ProviderID
+		event.ConfigSetsChanged = providerID == codexconfig.ProviderID || providerID == grokconfig.ProviderID
 		event.ActiveStateChanged = true
 	}
 	if err != nil {

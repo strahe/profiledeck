@@ -26,6 +26,7 @@ import (
 	"github.com/strahe/profiledeck/internal/codex"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/strahe/profiledeck/internal/doctor"
+	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/provider"
@@ -79,6 +80,19 @@ func TestNewCommandBuildsRootCommand(t *testing.T) {
 		codexCommand.Command("profile").Command("sync") != nil ||
 		codexCommand.Command("config-set") == nil {
 		t.Fatalf("expected Codex profile and Config Set commands")
+	}
+	grokBuildCommand := cmd.Command("grok-build")
+	if grokBuildCommand == nil || grokBuildCommand.Command("detect") == nil ||
+		grokBuildCommand.Command("profile") == nil ||
+		grokBuildCommand.Command("profile").Command("list") == nil ||
+		grokBuildCommand.Command("profile").Command("show") == nil ||
+		grokBuildCommand.Command("profile").Command("create") == nil ||
+		grokBuildCommand.Command("profile").Command("fork") == nil ||
+		grokBuildCommand.Command("profile").Command("save-current") == nil ||
+		grokBuildCommand.Command("profile").Command("set-config") == nil ||
+		grokBuildCommand.Command("profile").Command("delete") == nil ||
+		grokBuildCommand.Command("config-set") == nil {
+		t.Fatalf("expected Grok Build Profile and Config Set commands")
 	}
 	codexProfileCommand := codexCommand.Command("profile")
 	if codexProfileCommand.Command("export") != nil || codexProfileCommand.Command("import") != nil {
@@ -299,6 +313,58 @@ func TestClaudeCodeProfileCLIUsesOfficialLoginWithoutExposingTokens(t *testing.T
 		for _, secret := range []string{"cli-claude-access-secret", "cli-claude-refresh-secret", "accessToken", "refreshToken"} {
 			if strings.Contains(output, secret) {
 				t.Fatalf("Claude Code CLI %s output exposed %q: %s", boundary, secret, output)
+			}
+		}
+	}
+}
+
+func TestGrokBuildCLIOutputsNeverExposeManagedFileBodies(t *testing.T) {
+	configDir := t.TempDir()
+	grokHome := t.TempDir()
+	auth := "{\n" +
+		"  \"synthetic\": {\n" +
+		"    \"key\": \"CLI_GROK_AUTH_SECRET\",\n" +
+		"    \"auth_mode\": \"web_login\",\n" +
+		"    \"create_time\": \"2026-01-01T00:00:00Z\",\n" +
+		"    \"user_id\": \"synthetic-user\",\n" +
+		"    \"email\": null\n" +
+		"  }\n" +
+		"}\n"
+	config := "# CLI_GROK_CONFIG_SECRET\n"
+	if err := os.WriteFile(filepath.Join(grokHome, grokconfig.AuthFileName), []byte(auth), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(grokHome, grokconfig.ConfigFileName), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"--config-dir", configDir, "--grok-home", grokHome}
+	if _, err := runCLI(t, append(base, "init", "--json")...); err != nil {
+		t.Fatalf("initialize CLI runtime: %v", err)
+	}
+	created, err := runCLI(t, append(base, "grok-build", "profile", "create", "work", "--json")...)
+	if err != nil {
+		t.Fatalf("create Grok Build Profile: %v", err)
+	}
+	listed, err := runCLI(t, append(base, "grok-build", "profile", "list", "--json")...)
+	if err != nil {
+		t.Fatalf("list Grok Build Profiles: %v", err)
+	}
+	shown, err := runCLI(t, append(base, "grok-build", "profile", "show", "work", "--json")...)
+	if err != nil {
+		t.Fatalf("show Grok Build Profile: %v", err)
+	}
+	planned, err := runCLI(t, append(base, "switch", grokconfig.ProviderID, "work", "--dry-run", "--json")...)
+	if err != nil {
+		t.Fatalf("preview Grok Build switch: %v", err)
+	}
+	for boundary, output := range map[string]string{
+		"create": created, "list": listed, "show": shown, "switch": planned,
+	} {
+		for _, forbidden := range []string{
+			"CLI_GROK_AUTH_SECRET", "CLI_GROK_CONFIG_SECRET", "\"key\"", "auth_mode",
+		} {
+			if strings.Contains(output, forbidden) {
+				t.Fatalf("Grok Build CLI %s output exposed %q: %s", boundary, forbidden, output)
 			}
 		}
 	}

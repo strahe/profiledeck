@@ -11,15 +11,18 @@
 	import OrbitIcon from "@lucide/svelte/icons/orbit";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import SettingsIcon from "@lucide/svelte/icons/settings";
+	import SparklesIcon from "@lucide/svelte/icons/sparkles";
 	import StethoscopeIcon from "@lucide/svelte/icons/stethoscope";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 
 	import {
 		AppService,
+		AgentService,
 		AntigravityService,
 		ClaudeCodeService,
 		CodexService,
 		DoctorService,
+		GrokBuildService,
 		SettingsService,
 	} from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
 	import type { DashboardResult, DesktopError } from "../../../bindings/github.com/strahe/profiledeck/desktop/backend";
@@ -27,6 +30,11 @@
 	import type { AntigravityDetectResult, AntigravityProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/antigravity/models";
 	import type { ClaudeCodeDetectResult, ClaudeCodeProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/claudecode/models";
 	import type { CodexConfigSet, CodexDetectResult, CodexProfileSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
+	import type {
+		ConfigSet as GrokBuildConfigSet,
+		DetectResult as GrokBuildDetectResult,
+		ProfileSummary as GrokBuildProfileSummary,
+	} from "../../../bindings/github.com/strahe/profiledeck/internal/grokbuild/models";
 	import type { DoctorResult } from "../../../bindings/github.com/strahe/profiledeck/internal/doctor/models";
 	import { darkThemeAppIconURL, lightThemeAppIconURL } from "$lib/app-icon";
 	import StatusBadge from "$lib/components/app/StatusBadge.svelte";
@@ -88,14 +96,17 @@
 	};
 
 	const codexProviderID = "codex";
+	const grokBuildProviderID = "grok-build";
 	const antigravityProviderID = "antigravity";
 	const claudeCodeProviderID = "claude-code";
 	const agents: Array<{ id: AgentID; name: string; icon: typeof BotIcon }> = [
 		{ id: "codex", name: "Codex", icon: BotIcon },
+		{ id: "grok-build", name: "Grok Build", icon: SparklesIcon },
 		{ id: "antigravity", name: "Antigravity", icon: OrbitIcon },
 		{ id: "claude-code", name: "Claude Code", icon: BotIcon },
 	];
 	const loadCodexProfiles = () => import("../profiles/CodexProfiles.svelte");
+	const loadGrokBuildProfiles = () => import("../profiles/GrokBuildProfiles.svelte");
 	const loadAntigravityProfiles = () => import("../profiles/AntigravityProfiles.svelte");
 	const loadClaudeCodeProfiles = () => import("../profiles/ClaudeCodeProfiles.svelte");
 	const loadUsagePage = () => import("../usage/UsagePage.svelte");
@@ -107,11 +118,13 @@
 	let platform = $state<Platform>(detectPlatform());
 	let loading = $state(false);
 	let loadingProfiles = $state(true);
+	let loadingGrokBuildProfiles = $state(true);
 	let loadingAntigravityProfiles = $state(true);
 	let loadingClaudeCodeProfiles = $state(true);
 	let actionBusy = $state("");
 	let languageBusy = $state(false);
 	let appearanceBusy = $state(false);
+	let agentBusy = $state("");
 	let updateBusy = $state("");
 	let sidebarBusy = $state(false);
 	let languagePreference = $state<DesktopLanguage>("auto");
@@ -144,22 +157,28 @@
 
 	let dashboard = $state<DashboardResult | null>(null);
 	let detectResult = $state<CodexDetectResult | null>(null);
+	let grokBuildDetectResult = $state<GrokBuildDetectResult | null>(null);
 	let antigravityDetectResult = $state<AntigravityDetectResult | null>(null);
 	let claudeCodeDetectResult = $state<ClaudeCodeDetectResult | null>(null);
 	let doctorResult = $state<DoctorResult | null>(null);
 	let codexProfileSummaries = $state<CodexProfileSummary[]>([]);
+	let grokBuildProfileSummaries = $state<GrokBuildProfileSummary[]>([]);
 	let antigravityProfileSummaries = $state<AntigravityProfileSummary[]>([]);
 	let claudeCodeProfileSummaries = $state<ClaudeCodeProfileSummary[]>([]);
 	let codexConfigSets = $state<CodexConfigSet[]>([]);
+	let grokBuildConfigSets = $state<GrokBuildConfigSet[]>([]);
 	let dashboardError = $state("");
 	let detectError = $state("");
+	let grokBuildDetectError = $state("");
 	let antigravityDetectError = $state("");
 	let claudeCodeDetectError = $state("");
 	let doctorError = $state("");
 	let profileError = $state("");
+	let grokBuildProfileError = $state("");
 	let antigravityProfileError = $state("");
 	let claudeCodeProfileError = $state("");
 	let useRequest = $state<ProfileUseRequest | null>(null);
+	let grokBuildUseRequest = $state<ProfileUseRequest | null>(null);
 	let antigravityUseRequest = $state<ProfileUseRequest | null>(null);
 	let claudeCodeUseRequest = $state<ProfileUseRequest | null>(null);
 	let useRequestSequence = 0;
@@ -178,18 +197,35 @@
 		const enabled = new Set<string>(states.filter((state) => state.enabled).map((state) => String(state.manifest.id)));
 		return agents.filter((agent) => enabled.has(agent.id));
 	});
-	let activeAgentTab = $derived(workspaceRoute.view === "codex-settings" ? "settings" : workspaceRoute.view === "antigravity-profiles" || workspaceRoute.view === "claude-code-profiles" ? "profiles" : workspaceRoute.view);
+	let activeAgentTab = $derived(workspaceRoute.view === "codex-settings"
+		? "settings"
+		: workspaceRoute.view === "antigravity-profiles"
+			|| workspaceRoute.view === "claude-code-profiles"
+			|| workspaceRoute.view === "grok-build-profiles"
+			? "profiles"
+			: workspaceRoute.view);
 	let codexActiveProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === codexProviderID)?.profile_id ?? "");
+	let grokBuildActiveProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === grokBuildProviderID)?.profile_id ?? "");
 	let antigravityActiveProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === antigravityProviderID)?.profile_id ?? "");
 	let claudeCodeActiveProfileID = $derived(dashboard?.active_states?.find((state) => state.provider_id === claudeCodeProviderID)?.profile_id ?? "");
-	let activeProfileID = $derived(selectedAgent === "antigravity" ? antigravityActiveProfileID : selectedAgent === "claude-code" ? claudeCodeActiveProfileID : codexActiveProfileID);
+	let activeProfileID = $derived(
+		selectedAgent === "grok-build"
+			? grokBuildActiveProfileID
+			: selectedAgent === "antigravity"
+				? antigravityActiveProfileID
+				: selectedAgent === "claude-code"
+					? claudeCodeActiveProfileID
+					: codexActiveProfileID,
+	);
 	let currentProfileName = $derived.by(() => {
 		void $locale;
-		const active = selectedAgent === "antigravity"
-			? antigravityProfileSummaries.find((summary) => summary.profile.id === activeProfileID)
-			: selectedAgent === "claude-code"
-				? claudeCodeProfileSummaries.find((summary) => summary.profile.id === activeProfileID)
-				: codexProfileSummaries.find((summary) => summary.profile.id === activeProfileID);
+		const active = selectedAgent === "grok-build"
+			? grokBuildProfileSummaries.find((summary) => summary.profile.id === activeProfileID)
+			: selectedAgent === "antigravity"
+				? antigravityProfileSummaries.find((summary) => summary.profile.id === activeProfileID)
+				: selectedAgent === "claude-code"
+					? claudeCodeProfileSummaries.find((summary) => summary.profile.id === activeProfileID)
+					: codexProfileSummaries.find((summary) => summary.profile.id === activeProfileID);
 		if (active?.profile.name) return active.profile.name;
 		const id = active?.profile.id || activeProfileID;
 		return id ? `${translate("profile.unnamed")} · ${shortID(id)}` : "";
@@ -199,7 +235,11 @@
 		switch (workspaceRoute.view) {
 			case "settings": return translate("settings.title");
 			case "diagnostics": return translate("diagnosticsPage.title");
-			default: return selectedAgent === "antigravity" ? "Antigravity" : selectedAgent === "claude-code" ? "Claude Code" : "Codex";
+			default: return selectedAgent === "grok-build"
+				? "Grok Build"
+				: selectedAgent === "antigravity"
+					? "Antigravity"
+					: selectedAgent === "claude-code" ? "Claude Code" : "Codex";
 		}
 	});
 	let titlebarOffset = $derived(sidebarOpen ? "10rem" : platform === "macos" ? "5rem" : "3rem");
@@ -278,6 +318,9 @@
 				if (payload.provider_id === codexProviderID && isAgentEnabled("codex")) {
 					useRequest = { profileID: payload.profile_id, sequence: ++useRequestSequence };
 					void push("/codex/profiles");
+				} else if (payload.provider_id === grokBuildProviderID && isAgentEnabled("grok-build")) {
+					grokBuildUseRequest = { profileID: payload.profile_id, sequence: ++useRequestSequence };
+					void push("/grok-build/profiles");
 				} else if (payload.provider_id === antigravityProviderID && isAgentEnabled("antigravity")) {
 					antigravityUseRequest = { profileID: payload.profile_id, sequence: ++useRequestSequence };
 					void push("/antigravity/profiles");
@@ -327,7 +370,13 @@
 			const tasks: Promise<unknown>[] = [];
 			const routeAgent = agentForWorkspace(workspaceRoute.view);
 			if (routeAgent && isAgentEnabled(routeAgent)) {
-				tasks.push(routeAgent === "antigravity" ? refreshAntigravityDetect() : routeAgent === "claude-code" ? refreshClaudeCodeDetect() : refreshDetect());
+				tasks.push(
+					routeAgent === "grok-build"
+						? refreshGrokBuildDetect()
+						: routeAgent === "antigravity"
+							? refreshAntigravityDetect()
+							: routeAgent === "claude-code" ? refreshClaudeCodeDetect() : refreshDetect(),
+				);
 			}
 			if (reloadRuntime && isAgentEnabled("codex")) {
 				const runtimeReady = codexRuntime.load();
@@ -347,6 +396,7 @@
 				showError(error);
 			}
 			loadingProfiles = false;
+			loadingGrokBuildProfiles = false;
 			loadingAntigravityProfiles = false;
 			loadingClaudeCodeProfiles = false;
 		} finally {
@@ -499,6 +549,23 @@
 		}
 	}
 
+	async function changeAgentEnabled(agentID: string, enabled: boolean) {
+		if (agentBusy) return;
+		agentBusy = agentID;
+		try {
+			await track(`agent:${agentID}`, AgentService.SetEnabled(agentID, enabled));
+			await refreshAll(false);
+			showNotice(
+				translate("settings.agents.savedTitle"),
+				translate(enabled ? "settings.agents.enabledDescription" : "settings.agents.disabledDescription", { agent: agentName(agentID) }),
+			);
+		} catch (error) {
+			if (!isCancelError(error)) showError(error);
+		} finally {
+			agentBusy = "";
+		}
+	}
+
 	async function saveSidebarState(open: boolean) {
 		if (!settingsLoaded) return;
 		if (sidebarBusy) {
@@ -544,6 +611,34 @@
 			if (!isCancelError(error)) profileError = formatError(error);
 		} finally {
 			loadingProfiles = false;
+		}
+	}
+
+	async function refreshGrokBuildDetect() {
+		try {
+			const result = await track("grok-build-detect", GrokBuildService.Detect());
+			grokBuildDetectResult = result;
+			grokBuildDetectError = "";
+			return result;
+		} catch (error) {
+			if (!isCancelError(error)) {
+				grokBuildDetectResult = null;
+				grokBuildDetectError = formatError(error);
+			}
+			return null;
+		}
+	}
+
+	async function refreshGrokBuildProfiles() {
+		loadingGrokBuildProfiles = true;
+		try {
+			const result = await track("grok-build-profiles", GrokBuildService.ListProfiles());
+			grokBuildProfileSummaries = result.profiles ?? [];
+			grokBuildProfileError = "";
+		} catch (error) {
+			if (!isCancelError(error)) grokBuildProfileError = formatError(error);
+		} finally {
+			loadingGrokBuildProfiles = false;
 		}
 	}
 
@@ -690,6 +785,7 @@
 		if (payload.event?.profile_changed || payload.event?.active_state_changed) {
 			if (payload.event.provider_id === antigravityProviderID && isAgentEnabled("antigravity")) void refreshAntigravityDetect();
 			else if (payload.event.provider_id === claudeCodeProviderID && isAgentEnabled("claude-code")) void refreshClaudeCodeDetect();
+			else if (payload.event.provider_id === grokBuildProviderID && isAgentEnabled("grok-build")) void refreshGrokBuildDetect();
 			else if (payload.event.provider_id === codexProviderID && isAgentEnabled("codex")) void refreshDetect();
 		}
 		if (payload.event?.kind === "agent-state-changed" && payload.event.agent_id === "codex" && payload.event.agent_enabled) {
@@ -703,6 +799,10 @@
 			detectResult = null;
 			detectError = "";
 			codexRuntime.reset();
+		}
+		if (!agentEnabled(next.agents ?? [], "grok-build")) {
+			grokBuildDetectResult = null;
+			grokBuildDetectError = "";
 		}
 		if (!agentEnabled(next.agents ?? [], "antigravity")) {
 			antigravityDetectResult = null;
@@ -718,6 +818,9 @@
 		codexProfileSummaries = next.codex_profiles?.profiles ?? [];
 		loadingProfiles = false;
 		codexConfigSets = next.codex_config_sets?.config_sets ?? [];
+		grokBuildProfileSummaries = next.grok_build_profiles?.profiles ?? [];
+		loadingGrokBuildProfiles = false;
+		grokBuildConfigSets = next.grok_build_config_sets?.config_sets ?? [];
 		antigravityProfileSummaries = next.antigravity_profiles?.profiles ?? [];
 		loadingAntigravityProfiles = false;
 		claudeCodeProfileSummaries = next.claude_code_profiles?.profiles ?? [];
@@ -751,7 +854,7 @@
 
 	function selectAgentTab(value: string) {
 		if (selectedAgent !== "codex") {
-			void push(selectedAgent === "claude-code" ? "/claude-code/profiles" : "/antigravity/profiles");
+			if (selectedAgent) void push(agentHome(selectedAgent));
 			return;
 		}
 		switch (value) {
@@ -781,6 +884,12 @@
 		return value.length > 8 ? `…${value.slice(-8)}` : value;
 	}
 
+	function agentName(agentID: string): string {
+		return dashboard?.agents?.find((state) => state.manifest.id === agentID)?.manifest.display_name
+			|| agents.find((agent) => agent.id === agentID)?.name
+			|| agentID;
+	}
+
 	function detectPlatform(): Platform {
 		if (typeof navigator === "undefined") return "macos";
 		const hint = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform || navigator.userAgent;
@@ -802,6 +911,11 @@
 	function cancelDetect() {
 		inFlight.get("detect")?.cancel("route-change");
 		inFlight.delete("detect");
+	}
+
+	function cancelGrokBuildDetect() {
+		inFlight.get("grok-build-detect")?.cancel("route-change");
+		inFlight.delete("grok-build-detect");
 	}
 
 	function cancelAll() {
@@ -1064,6 +1178,32 @@
 					{:catch}
 						<WorkspaceViewStatus state="error" />
 					{/await}
+				{:else if workspaceRoute.view === "grok-build-profiles"}
+					{#await loadGrokBuildProfiles()}
+						<WorkspaceViewStatus state="loading" />
+					{:then { default: GrokBuildProfiles }}
+						<GrokBuildProfiles
+							route={workspaceRoute.grokBuildProfile}
+							profiles={grokBuildProfileSummaries}
+							dashboardConfigSets={grokBuildConfigSets}
+							detectResult={grokBuildDetectResult}
+							detectError={grokBuildDetectError}
+							activeProfileID={grokBuildActiveProfileID}
+							loadingProfiles={loadingGrokBuildProfiles}
+							profileError={grokBuildProfileError}
+							useRequest={grokBuildUseRequest}
+							refreshDetect={refreshGrokBuildDetect}
+							refreshProfiles={refreshGrokBuildProfiles}
+							cancelDetect={cancelGrokBuildDetect}
+							onUseRequestHandled={(sequence) => {
+								if (grokBuildUseRequest?.sequence === sequence) grokBuildUseRequest = null;
+							}}
+							{showError}
+							{showNotice}
+						/>
+					{:catch}
+						<WorkspaceViewStatus state="error" />
+					{/await}
 				{:else if workspaceRoute.view === "antigravity-profiles"}
 					{#await loadAntigravityProfiles()}
 						<WorkspaceViewStatus state="loading" />
@@ -1139,10 +1279,13 @@
 							{appearance}
 							{languageBusy}
 							{appearanceBusy}
+							agents={dashboard?.agents ?? []}
+							{agentBusy}
 							{updateStatus}
 							{updateBusy}
 							onLanguageChange={changeLanguage}
 							onAppearanceChange={changeAppearance}
+							onAgentEnabledChange={changeAgentEnabled}
 							onChannelChange={changeUpdateChannel}
 							onAutomaticChange={changeAutomaticUpdates}
 							onCheckForUpdates={checkForUpdates}

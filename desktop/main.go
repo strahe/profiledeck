@@ -54,6 +54,7 @@ func main() {
 	core, err := app.New(app.Config{
 		ConfigDir:   env.ConfigDir,
 		CodexDir:    env.CodexDir,
+		GrokHome:    env.GrokHome,
 		AgentAccess: agent.AccessDesktopPreferences,
 	})
 	if err != nil {
@@ -79,6 +80,7 @@ func main() {
 			application.NewService(services.Antigravity),
 			application.NewService(services.ClaudeCode),
 			application.NewService(services.Codex),
+			application.NewService(services.GrokBuild),
 			application.NewService(services.Profile),
 			application.NewService(services.Switch),
 			application.NewService(services.Doctor),

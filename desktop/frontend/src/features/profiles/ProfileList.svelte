@@ -26,7 +26,7 @@
 
 	import ProfileQuotaFreshness from "./ProfileQuotaFreshness.svelte";
 	import ProfileQuotaSummary from "./ProfileQuotaSummary.svelte";
-	import type { CodexProfileListItem } from "./types";
+	import type { ManagedProfileListItem } from "./types";
 
 	let {
 		profiles,
@@ -34,6 +34,8 @@
 		error,
 		busy,
 		canCreate = false,
+		emptyDescription = "",
+		createLabel = "",
 		onNew,
 		onUse,
 		onDetails,
@@ -42,17 +44,19 @@
 		onRefreshQuota,
 		onRetrySource,
 	}: {
-		profiles: CodexProfileListItem[];
+		profiles: ManagedProfileListItem[];
 		loading: boolean;
 		error: string;
 		busy: boolean;
 		canCreate?: boolean;
+		emptyDescription?: string;
+		createLabel?: string;
 		onNew?: () => void;
-		onUse: (profile: CodexProfileListItem) => void;
-		onDetails: (profile: CodexProfileListItem) => void;
-		onFork: (profile: CodexProfileListItem) => void;
-		onDelete: (profile: CodexProfileListItem) => void;
-		onRefreshQuota: (profile: CodexProfileListItem) => void;
+		onUse: (profile: ManagedProfileListItem) => void;
+		onDetails: (profile: ManagedProfileListItem) => void;
+		onFork: (profile: ManagedProfileListItem) => void;
+		onDelete: (profile: ManagedProfileListItem) => void;
+		onRefreshQuota?: (profile: ManagedProfileListItem) => void;
 		onRetrySource?: () => void;
 	} = $props();
 
@@ -65,7 +69,7 @@
 		return () => window.clearInterval(timer);
 	});
 
-	function showID(profile: CodexProfileListItem): boolean {
+	function showID(profile: ManagedProfileListItem): boolean {
 		const name = profile.summary.profile.name.trim();
 		if (!name) return true;
 		return profiles.filter((item) => item.summary.profile.name.trim() === name).length > 1;
@@ -104,10 +108,10 @@
 				<Empty.Header>
 					<Empty.Media variant="icon"><PlusIcon /></Empty.Media>
 					<Empty.Title>{$_("empty.noProfilesTitle")}</Empty.Title>
-					<Empty.Description>{$_("profilePages.list.emptyDescription")}</Empty.Description>
+					<Empty.Description>{emptyDescription || $_("profilePages.list.emptyDescription")}</Empty.Description>
 				</Empty.Header>
 				{#if canCreate}
-					<Empty.Content><Button size="sm" onclick={onNew}><PlusIcon />{$_("actions.saveAsNewProfile")}</Button></Empty.Content>
+					<Empty.Content><Button size="sm" onclick={onNew}><PlusIcon />{createLabel || $_("actions.saveAsNewProfile")}</Button></Empty.Content>
 				{/if}
 			</Empty.Root>
 		{:else}
@@ -126,18 +130,20 @@
 							</div>
 
 							<div class="ml-auto flex shrink-0 items-center justify-end gap-2">
-								<ProfileQuotaFreshness
-									checkedAtUnixMS={profile.quotaCheckedAtUnixMS}
-									checkOutcome={profile.quotaCheckOutcome}
-									{nowUnixMS}
-								/>
-								<IconAction
-									label={$_("actions.refreshProfileQuota", { values: { profile: profile.name } })}
-									disabled={busy || profile.quotaLoading}
-									onclick={() => onRefreshQuota(profile)}
-								>
-									{#if profile.quotaLoading}<Spinner />{:else}<RefreshCwIcon />{/if}
-								</IconAction>
+								{#if onRefreshQuota}
+									<ProfileQuotaFreshness
+										checkedAtUnixMS={profile.quotaCheckedAtUnixMS ?? 0}
+										checkOutcome={profile.quotaCheckOutcome ?? "never"}
+										{nowUnixMS}
+									/>
+									<IconAction
+										label={$_("actions.refreshProfileQuota", { values: { profile: profile.name } })}
+										disabled={busy || profile.quotaLoading}
+										onclick={() => onRefreshQuota?.(profile)}
+									>
+										{#if profile.quotaLoading}<Spinner />{:else}<RefreshCwIcon />{/if}
+									</IconAction>
+								{/if}
 								{#if !profile.summary.active}<Button size="sm" disabled={busy} onclick={() => onUse(profile)}>{$_("actions.useProfile")}</Button>{/if}
 								<DropdownMenu.Root>
 									<DropdownMenu.Trigger>
@@ -156,11 +162,13 @@
 							</div>
 						</div>
 
-						<ProfileQuotaSummary
-							quota={profile.quota}
-							loading={profile.quotaLoading}
-							{nowUnixMS}
-						/>
+						{#if onRefreshQuota}
+							<ProfileQuotaSummary
+								quota={profile.quota ?? null}
+								loading={profile.quotaLoading ?? false}
+								{nowUnixMS}
+							/>
+						{/if}
 					</div>
 
 					{#if profile.summary.warnings?.length}

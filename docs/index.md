@@ -20,6 +20,7 @@ The Universal Desktop app requires macOS 14 or later and runs natively on Apple 
 | Codex | A saved login and reusable user-level settings | Sessions, logs, skills, project settings, and system policy |
 | Claude Code | Account login from `/login` | Claude Code settings, plugins, API keys, cloud providers, and Claude Desktop |
 | Antigravity | A consumer OAuth login | Sign-in flow, settings, quotas, Manager data, and SSH or container login files |
+| Grok Build | A file-based login and reusable user-level settings | Sessions, logs, plugins, project settings, managed configuration, usage, and quotas |
 
 Codex usage reports are separate from Profile switching. They summarize local session data without assigning activity to a Profile or account.
 
@@ -41,4 +42,5 @@ If a change does not finish, open Diagnostics or run `profiledeck-cli doctor` be
 - [Manage Codex Profiles](./codex/profiles.md)
 - [Manage Claude Code Profiles](./claude-code/profiles.md)
 - [Manage Antigravity Profiles](./antigravity/profiles.md)
+- [Manage Grok Build Profiles](./grok-build/profiles.md)
 - [Review data and security](./reference/data-security.md)

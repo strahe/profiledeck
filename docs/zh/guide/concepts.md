@@ -9,6 +9,7 @@ Profile 用来标记某个受支持工具应使用的登录和设置。保存 Pr
 | Codex | 一份 Codex 登录 | 一组已保存的 Codex 设置（配置集） |
 | Claude Code | 一份账号登录 | 不包含设置 |
 | Antigravity | 一份个人 OAuth 登录 | 不包含设置 |
+| Grok Build | 一份基于文件的登录 | 一组已保存的 Grok Build 设置（配置集） |
 
 每个 Profile 都有用于 CLI 命令和链接的永久 ID。不同工具共用同一个 Profile ID 命名空间，一个 Profile 也可以包含多个工具的已保存数据。
 
@@ -19,8 +20,9 @@ ProfileDeck 会分别记录每个受支持工具的当前 Profile。当前 Profi
 - Codex 使用当前 Codex 目录中的 `auth.json` 和 `config.toml`。
 - Claude Code 在 macOS 上将账号登录保存在 Keychain，在 Linux 和 Windows 上保存在凭据文件。
 - Antigravity 使用系统凭据存储中的当前登录。
+- Grok Build 使用已绑定 Grok Home 中的 `auth.json` 和 `config.toml`。
 
-离开当前 Profile 前，ProfileDeck 会在可以安全保存时保留有效的刷新登录或 Codex 设置。内容缺失、无效或不受支持时，ProfileDeck 会报告问题，不会静默保存。
+离开当前 Profile 前，ProfileDeck 会在可以安全保存时保留有效的刷新登录或有效的 Codex、Grok Build 设置。内容缺失、无效或不受支持时，ProfileDeck 会报告问题，不会静默保存。
 
 ## 已保存登录
 
@@ -28,13 +30,13 @@ ProfileDeck 会分别记录每个受支持工具的当前 Profile。当前 Profi
 
 ProfileDeck 可能显示 Codex Account ID 的末尾字符，帮助区分不同登录。这个值只用于显示，不会决定更新或共享哪份登录。
 
-## Codex 配置集
+## 配置集
 
-配置集是一组可复用的 Codex 设置，内容来自用户级 `config.toml`。第一个 Codex Profile 会创建名为 `shared` 的配置集；后续 Profile 可以复用它，也可以保存独立副本。
+配置集是 Codex 或 Grok Build 用户级 `config.toml` 的可复用副本。两个工具分别拥有自己的配置集。每个工具的第一个 Profile 使用名为 `shared` 的配置集；如尚不存在，会根据当前设置创建；后续 Profile 可以复用它，也可以保存独立副本。
 
-多个 Profile 共享配置集时，保存更改后的 Codex 设置会同时更新这些 Profile。如果某个 Profile 的设置需要独立变化，请复制配置集。只有未被任何 Profile 使用的配置集才能删除。
+多个 Profile 共享配置集时，保存更改后的设置会同时更新这些 Profile。如果某个 Profile 的设置需要独立变化，请复制配置集。只有未被任何 Profile 使用的配置集才能删除。
 
-配置集不包含会话、日志、Skills、插件缓存、项目 `.codex/config.toml` 或系统策略。
+配置集不包含会话、日志、插件、Skills、项目设置、托管配置或系统策略。
 
 ## 删除 Profile
 

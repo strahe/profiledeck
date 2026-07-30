@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/providercoord"
 	"github.com/strahe/profiledeck/internal/store"
 	switchplan "github.com/strahe/profiledeck/internal/switching/plan"
 	switchtarget "github.com/strahe/profiledeck/internal/switching/target"
@@ -359,6 +360,7 @@ func (service *Service) applyRecoveryTargets(
 	lastMetadata string,
 	metadataBase recoveryOperationMetadata,
 	source recoverySource,
+	guard providercoord.Guard,
 ) (RecoveryCounts, []string, error) {
 	var counts RecoveryCounts
 	processed := []string{}
@@ -372,6 +374,9 @@ func (service *Service) applyRecoveryTargets(
 			counts.Noop++
 			processed = append(processed, target.TargetID)
 		} else {
+			if err := validateProviderGuard(ctx, guard); err != nil {
+				return counts, processed, failRecoveryWithProcessed(ctx, db, operationID, lastMetadata, metadataBase, counts, processed, err)
+			}
 			switch target.Action {
 			case planActionUpdate:
 				recoveryFile := filepath.Join(source.RecoveryPath, target.RecoveryRelPath)

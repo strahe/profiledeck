@@ -10,7 +10,7 @@
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 
-	import type { CodexProfileDetail, CodexProfileQuota } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
+	import type { CodexProfileQuota } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
 	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
 	import PageHeader from "$lib/components/app/PageHeader.svelte";
 	import SectionCard from "$lib/components/app/SectionCard.svelte";
@@ -24,23 +24,43 @@
 	import ProfileAutomationSettings from "../settings/ProfileAutomationSettings.svelte";
 	import { useCodexRuntime } from "../settings/codex-runtime.svelte.js";
 	import ProfileQuotaCard from "./ProfileQuotaCard.svelte";
+	import type { ManagedProfileDetail } from "./types";
 
 	interface Props {
-		detail: CodexProfileDetail;
+		detail: ManagedProfileDetail;
+		mode?: "codex" | "grok-build";
+		basePath?: string;
+		updateFromCurrentLabel?: string;
 		busyAction: string;
 		updated: string;
-		quota: CodexProfileQuota | null;
-		quotaLoading: boolean;
+		quota?: CodexProfileQuota | null;
+		quotaLoading?: boolean;
 		onUse: () => void;
 		onFork: () => void;
 		onEdit: () => void;
 		onSaveCurrent: () => void;
 		onSetConfig: () => void;
-		onRefreshQuota: () => void;
+		onRefreshQuota?: () => void;
 		onDelete: () => void;
 	}
 
-	let { detail, busyAction, updated, quota, quotaLoading, onUse, onFork, onEdit, onSaveCurrent, onSetConfig, onRefreshQuota, onDelete }: Props = $props();
+	let {
+		detail,
+		mode = "codex",
+		basePath = "/codex/profiles",
+		updateFromCurrentLabel = "",
+		busyAction,
+		updated,
+		quota = null,
+		quotaLoading = false,
+		onUse,
+		onFork,
+		onEdit,
+		onSaveCurrent,
+		onSetConfig,
+		onRefreshQuota = () => {},
+		onDelete,
+	}: Props = $props();
 	const runtime = useCodexRuntime();
 	let profileName = $derived(detail.summary.profile.name || detail.summary.profile.id);
 	let automation = $derived(runtime.settingsProfile(detail.summary.profile.id));
@@ -56,7 +76,7 @@
 		{#snippet breadcrumbs()}
 			<Breadcrumb.Root>
 				<Breadcrumb.List>
-					<Breadcrumb.Item><Breadcrumb.Link href="#/codex/profiles">{$_("tabs.profiles")}</Breadcrumb.Link></Breadcrumb.Item>
+					<Breadcrumb.Item><Breadcrumb.Link href={`#${basePath}`}>{$_("tabs.profiles")}</Breadcrumb.Link></Breadcrumb.Item>
 					<Breadcrumb.Separator />
 					<Breadcrumb.Item><Breadcrumb.Page>{profileName}</Breadcrumb.Page></Breadcrumb.Item>
 				</Breadcrumb.List>
@@ -89,7 +109,7 @@
 						<DropdownMenu.Item onSelect={onEdit}><PencilIcon />{$_("actions.editDetails")}</DropdownMenu.Item>
 						<DropdownMenu.Item onSelect={onFork}><GitForkIcon />{$_("actions.fork")}</DropdownMenu.Item>
 						{#if detail.summary.active}
-							<DropdownMenu.Item onSelect={onSaveCurrent}><SaveIcon />{$_("actions.updateFromCurrent")}</DropdownMenu.Item>
+							<DropdownMenu.Item onSelect={onSaveCurrent}><SaveIcon />{updateFromCurrentLabel || $_("actions.updateFromCurrent")}</DropdownMenu.Item>
 						{:else}
 							<DropdownMenu.Item onSelect={onSetConfig}><SlidersHorizontalIcon />{$_("actions.changeConfigSet")}</DropdownMenu.Item>
 						{/if}
@@ -115,19 +135,21 @@
 				<dd class="truncate text-sm font-medium">{detail.config_set?.name || "—"}</dd>
 				<dd class="truncate font-mono text-xs text-muted-foreground">{detail.config_set?.id || "—"}</dd>
 			</div>
-			<div class="flex min-w-0 flex-col gap-1">
-				<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.model")}</dt>
-				<dd class="truncate text-sm">{detail.config_set?.model || "—"}</dd>
-			</div>
-			<div class="flex min-w-0 flex-col gap-1">
-				<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.provider")}</dt>
-				<dd class="truncate text-sm">{detail.config_set?.model_provider || "—"}</dd>
-			</div>
-			<div class="flex min-w-0 flex-col gap-1">
-				<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.accountMetadata")}</dt>
-				<dd class="font-mono text-sm">{accountSuffix(detail.login?.codex_account_id)}</dd>
-				<dd class="text-xs text-muted-foreground">{$_("profilePages.detail.accountMetadataDescription")}</dd>
-			</div>
+			{#if mode === "codex"}
+				<div class="flex min-w-0 flex-col gap-1">
+					<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.model")}</dt>
+					<dd class="truncate text-sm">{detail.config_set?.model || "—"}</dd>
+				</div>
+				<div class="flex min-w-0 flex-col gap-1">
+					<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.provider")}</dt>
+					<dd class="truncate text-sm">{detail.config_set?.model_provider || "—"}</dd>
+				</div>
+				<div class="flex min-w-0 flex-col gap-1">
+					<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.accountMetadata")}</dt>
+					<dd class="font-mono text-sm">{accountSuffix(detail.login?.codex_account_id)}</dd>
+					<dd class="text-xs text-muted-foreground">{$_("profilePages.detail.accountMetadataDescription")}</dd>
+				</div>
+			{/if}
 			<div class="flex min-w-0 flex-col gap-1">
 				<dt class="text-xs text-muted-foreground">{$_("profilePages.detail.credentialReferences")}</dt>
 				<dd class="text-sm">{detail.login?.reference_count ?? 0}</dd>
@@ -139,15 +161,17 @@
 		</dl>
 	</SectionCard>
 
-	<ProfileQuotaCard {quota} loading={quotaLoading} disabled={!!busyAction} onRefresh={onRefreshQuota} />
+	{#if mode === "codex"}
+		<ProfileQuotaCard {quota} loading={quotaLoading} disabled={!!busyAction} onRefresh={onRefreshQuota} />
 
-	<SectionCard title={$_("profilePages.detail.automation")} description={$_("profilePages.detail.automationDescription")}>
-		{#if runtime.loading}
-			<div class="flex justify-center py-6"><Spinner /></div>
-		{:else if automation}
-			<ProfileAutomationSettings profile={automation} showName={false} />
-		{:else}
-			<p class="text-sm text-muted-foreground">{$_("profilePages.detail.automationUnavailable")}</p>
-		{/if}
-	</SectionCard>
+		<SectionCard title={$_("profilePages.detail.automation")} description={$_("profilePages.detail.automationDescription")}>
+			{#if runtime.loading}
+				<div class="flex justify-center py-6"><Spinner /></div>
+			{:else if automation}
+				<ProfileAutomationSettings profile={automation} showName={false} />
+			{:else}
+				<p class="text-sm text-muted-foreground">{$_("profilePages.detail.automationUnavailable")}</p>
+			{/if}
+		</SectionCard>
+	{/if}
 </ContentContainer>

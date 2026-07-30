@@ -63,7 +63,7 @@ func TestAppContainsOnlyCompositionAndBuildInfoAPI(t *testing.T) {
 	}
 	allowedApplicationMethods := map[string]struct{}{
 		"Runtime": {}, "Backups": {}, "Agents": {}, "Providers": {}, "Profiles": {}, "Targets": {}, "Switching": {},
-		"Doctor": {}, "Usage": {}, "Settings": {}, "Codex": {}, "Antigravity": {}, "ClaudeCode": {},
+		"Doctor": {}, "Usage": {}, "Settings": {}, "Codex": {}, "GrokBuild": {}, "Antigravity": {}, "ClaudeCode": {},
 		"Initialize": {}, "Close": {},
 	}
 	err := walkProductionGo(root, func(path string, file *ast.File) error {
@@ -107,7 +107,7 @@ func TestAppContainsOnlyCompositionAndBuildInfoAPI(t *testing.T) {
 
 func TestProviderAdaptersUseOnlyPlanTargetAndTheirOwnDomain(t *testing.T) {
 	root := repositoryRoot(t)
-	for _, domain := range []string{"codex", "antigravity", "claudecode"} {
+	for _, domain := range []string{"codex", "grokbuild", "antigravity", "claudecode"} {
 		directory := filepath.Join(root, "internal", domain, "adapter")
 		err := walkProductionGo(directory, func(path string, file *ast.File) error {
 			for _, imported := range importPaths(file) {

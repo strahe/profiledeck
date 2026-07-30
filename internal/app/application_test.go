@@ -33,7 +33,8 @@ func TestApplicationExposesOneTypedServiceGraph(t *testing.T) {
 	if application.Runtime() == nil || application.Agents() == nil || application.Providers() == nil ||
 		application.Profiles() == nil || application.Targets() == nil || application.Switching() == nil ||
 		application.Doctor() == nil || application.Usage() == nil || application.Settings() == nil ||
-		application.Codex() == nil || application.Antigravity() == nil || application.ClaudeCode() == nil {
+		application.Codex() == nil || application.GrokBuild() == nil ||
+		application.Antigravity() == nil || application.ClaudeCode() == nil {
 		t.Fatal("application composition returned a nil typed service")
 	}
 }

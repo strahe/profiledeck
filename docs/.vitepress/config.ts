@@ -27,6 +27,10 @@ const enAntigravity = [
   { text: 'Profiles', link: '/antigravity/profiles' }
 ]
 
+const enGrokBuild = [
+  { text: 'Profiles', link: '/grok-build/profiles' }
+]
+
 const enSafety = [
   { text: 'Review and Switch', link: '/operations/switching' },
   { text: 'Recover or Undo', link: '/operations/recovery' },
@@ -55,6 +59,10 @@ const zhClaudeCode = [
 
 const zhAntigravity = [
   { text: 'Profile', link: '/zh/antigravity/profiles' }
+]
+
+const zhGrokBuild = [
+  { text: 'Profile', link: '/zh/grok-build/profiles' }
 ]
 
 const zhSafety = [
@@ -104,6 +112,7 @@ export default defineConfig({
       { text: 'Codex', link: '/codex/profiles' },
       { text: 'Claude Code', link: '/claude-code/profiles' },
       { text: 'Antigravity', link: '/antigravity/profiles' },
+      { text: 'Grok Build', link: '/grok-build/profiles' },
       { text: 'Safety & Recovery', link: '/operations/switching' },
       { text: 'CLI & Advanced', link: '/reference/cli' }
     ],
@@ -112,6 +121,7 @@ export default defineConfig({
       { text: 'Codex', items: enCodex },
       { text: 'Claude Code', items: enClaudeCode },
       { text: 'Antigravity', items: enAntigravity },
+      { text: 'Grok Build', items: enGrokBuild },
       { text: 'Safety & Recovery', items: enSafety },
       { text: 'CLI & Advanced', items: enCLI }
     ],
@@ -135,6 +145,7 @@ export default defineConfig({
           { text: 'Codex', link: '/zh/codex/profiles' },
           { text: 'Claude Code', link: '/zh/claude-code/profiles' },
           { text: 'Antigravity', link: '/zh/antigravity/profiles' },
+          { text: 'Grok Build', link: '/zh/grok-build/profiles' },
           { text: '安全与恢复', link: '/zh/operations/switching' },
           { text: 'CLI 与高级用法', link: '/zh/reference/cli' }
         ],
@@ -143,6 +154,7 @@ export default defineConfig({
           { text: 'Codex', items: zhCodex },
           { text: 'Claude Code', items: zhClaudeCode },
           { text: 'Antigravity', items: zhAntigravity },
+          { text: 'Grok Build', items: zhGrokBuild },
           { text: '安全与恢复', items: zhSafety },
           { text: 'CLI 与高级用法', items: zhCLI }
         ],

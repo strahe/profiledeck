@@ -20,25 +20,26 @@
 	import { Separator } from "$lib/components/ui/separator";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 
-	import type { CodexConfigSet } from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
+	import type { ManagedConfigSet } from "./types";
 
 	interface Props {
-		configSets: CodexConfigSet[];
+		configSets: ManagedConfigSet[];
+		copyRoot?: "configSets" | "grokBuild.configSets";
 		loading: boolean;
 		error: string;
 		busy: boolean;
 		formatUpdated: (value: number) => string;
 		onBack: () => void;
 		onCreate: () => void;
-		onCopy: (configSet: CodexConfigSet) => void;
-		onEdit: (configSet: CodexConfigSet) => void;
-		onDelete: (configSet: CodexConfigSet) => void;
+		onCopy: (configSet: ManagedConfigSet) => void;
+		onEdit: (configSet: ManagedConfigSet) => void;
+		onDelete: (configSet: ManagedConfigSet) => void;
 	}
 
-	let { configSets, loading, error, busy, formatUpdated, onBack, onCreate, onCopy, onEdit, onDelete }: Props = $props();
-	let deleting = $state<CodexConfigSet | null>(null);
+	let { configSets, copyRoot = "configSets", loading, error, busy, formatUpdated, onBack, onCreate, onCopy, onEdit, onDelete }: Props = $props();
+	let deleting = $state<ManagedConfigSet | null>(null);
 
-	function showID(configSet: CodexConfigSet): boolean {
+	function showID(configSet: ManagedConfigSet): boolean {
 		if (!configSet.name.trim()) return true;
 		return configSets.filter((item) => item.name.trim() === configSet.name.trim()).length > 1;
 	}
@@ -49,14 +50,14 @@
 </script>
 
 <ContentContainer>
-	<PageHeader title={$_("configSets.title")} description={$_("configSets.description")}>
+	<PageHeader title={$_(`${copyRoot}.title`)} description={$_(`${copyRoot}.description`)}>
 		{#snippet meta()}
 			<Button variant="link" class="h-auto w-fit p-0 text-muted-foreground" onclick={onBack}>
 				<ArrowLeftIcon data-icon="inline-start" />{$_("actions.backToProfiles")}
 			</Button>
 		{/snippet}
 		{#snippet actions()}
-			<Button size="sm" onclick={onCreate} disabled={busy}><PlusIcon />{$_("configSets.create")}</Button>
+			<Button size="sm" onclick={onCreate} disabled={busy}><PlusIcon />{$_(`${copyRoot}.create`)}</Button>
 		{/snippet}
 	</PageHeader>
 
@@ -70,18 +71,18 @@
 				<div class="p-4"><Alert.Root variant="destructive"><Alert.Description>{error}</Alert.Description></Alert.Root></div>
 			{:else if configSets.length === 0}
 				<Empty.Root class="border-0 py-12">
-					<Empty.Header><Empty.Title>{$_("configSets.emptyTitle")}</Empty.Title><Empty.Description>{$_("configSets.emptyDescription")}</Empty.Description></Empty.Header>
-					<Empty.Content><Button size="sm" onclick={onCreate}><PlusIcon data-icon="inline-start" />{$_("configSets.create")}</Button></Empty.Content>
+					<Empty.Header><Empty.Title>{$_(`${copyRoot}.emptyTitle`)}</Empty.Title><Empty.Description>{$_(`${copyRoot}.emptyDescription`)}</Empty.Description></Empty.Header>
+					<Empty.Content><Button size="sm" onclick={onCreate}><PlusIcon data-icon="inline-start" />{$_(`${copyRoot}.create`)}</Button></Empty.Content>
 				</Empty.Root>
 			{:else}
 				{#each configSets as configSet, index (configSet.id)}
 					<div class="flex items-center gap-4 px-4 py-3">
 						<div class="flex min-w-0 flex-1 flex-col gap-1">
 							<div class="flex flex-wrap items-center gap-2">
-								<span class="font-medium">{configSet.name || $_("configSets.unnamed")}</span>
+								<span class="font-medium">{configSet.name || $_(`${copyRoot}.unnamed`)}</span>
 								{#if showID(configSet)}<span class="font-mono text-xs text-muted-foreground">{shortID(configSet.id)}</span>{/if}
 								{#if configSet.active}<StatusBadge tone="current">{$_("status.current")}</StatusBadge>{/if}
-								<Badge variant="outline">{$_("configSets.references", { values: { count: configSet.reference_count } })}</Badge>
+								<Badge variant="outline">{$_(`${copyRoot}.references`, { values: { count: configSet.reference_count } })}</Badge>
 							</div>
 							{#if configSet.description}<p class="truncate text-sm text-muted-foreground">{configSet.description}</p>{/if}
 							<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -113,8 +114,8 @@
 <AlertDialog.Root open={!!deleting} onOpenChange={(open) => { if (!open) deleting = null; }}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>{$_("configSets.deleteTitle")}</AlertDialog.Title>
-			<AlertDialog.Description>{$_("configSets.deleteDescription", { values: { name: deleting?.name ?? "" } })}</AlertDialog.Description>
+			<AlertDialog.Title>{$_(`${copyRoot}.deleteTitle`)}</AlertDialog.Title>
+			<AlertDialog.Description>{$_(`${copyRoot}.deleteDescription`, { values: { name: deleting?.name ?? "" } })}</AlertDialog.Description>
 		</AlertDialog.Header>
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel>{$_("actions.cancel")}</AlertDialog.Cancel>

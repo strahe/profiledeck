@@ -18,6 +18,11 @@ export function switchWarningMessage(message: string): string {
 	const normalized = message.toLowerCase();
 	if (normalized.includes("shared") && normalized.includes("login")) return translate("warnings.change.sharedLogin");
 	if (normalized.includes("symlink")) return translate("warnings.switch.symlink");
+	if (normalized.includes("grok build")) {
+		if (normalized.includes("finish active") && normalized.includes("session")) return translate("warnings.grokBuild.endSession");
+		if (normalized.includes("override") && normalized.includes("login")) return translate("warnings.grokBuild.authOverride");
+		if (normalized.includes("working copy") || normalized.includes("will not be saved")) return translate("warnings.grokBuild.currentNotCaptured");
+	}
 	if (normalized.includes("claude code")) {
 		if (normalized.includes("different claude_config_dir") || normalized.includes("saved target")) return translate("warnings.claudeCode.savedTarget");
 		if (normalized.includes("expiry could not be determined")) return translate("warnings.claudeCode.expiryUnknown");
@@ -40,7 +45,8 @@ export function switchWarningMessage(message: string): string {
 export function profileChangeWarningMessage(message: string): string {
 	const normalized = message.toLowerCase();
 	if (normalized.includes("shared") && normalized.includes("login")) return translate("warnings.change.sharedLogin");
-	if (normalized.includes("shared codex config")) return translate("warnings.change.sharedSettings");
+	if (normalized.includes("shared") && (normalized.includes("config") || normalized.includes("setting"))) return translate("warnings.change.sharedSettings");
+	if (normalized.includes("grok build") && normalized.includes("override") && normalized.includes("login")) return translate("warnings.grokBuild.authOverride");
 	return profileWarningMessage(message);
 }
 

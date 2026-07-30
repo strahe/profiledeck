@@ -20,11 +20,11 @@ ProfileDeck 会在你的设备上保存 Profile、登录、设置、用量报告
 
 如果传入 `--config-dir <directory>`，ProfileDeck 会改用 `<directory>/profiledeck`。
 
-该目录包含 `profiledeck.db`、加密应用备份，以及未完成切换所需的临时恢复数据。ProfileDeck 可能在数据库或操作恢复数据中保存 Codex、Claude Code 和 Antigravity 登录，以便安全切换 Profile。
+该目录包含 `profiledeck.db`、加密应用备份，以及未完成切换所需的临时恢复数据。ProfileDeck 可能在数据库或操作恢复数据中保存 Codex、Claude Code、Antigravity 和 Grok Build 登录，以便安全切换 Profile。已保存的 Grok Build 配置集可能包含完整的本地 `config.toml`。
 
 ## 保护本地数据
 
-ProfileDeck 使用 age X25519 加密 `.profiledeck-backup` 文件。当前数据库和未完成切换的恢复数据不会单独加密，因此能读取你本地文件的人仍可能读取已保存的登录。操作系统允许时，ProfileDeck 会限制这些文件的权限。
+ProfileDeck 使用 age X25519 加密 `.profiledeck-backup` 文件。当前数据库和未完成切换的恢复数据不会单独加密，因此能读取你本地文件的人仍可能读取已保存的登录。操作系统允许时，ProfileDeck 会限制这些文件的权限。桌面端“诊断”和 `profiledeck-cli doctor` 会报告 ProfileDeck、Codex、Grok Build 或 Claude Code 路径中可能允许其他本地用户访问的权限问题。检查不会阻止启动或 Profile 切换，也不会更改这些工具拥有的文件。
 
 - 启用操作系统的全盘加密和屏幕锁定。
 - 不要同步、提交、上传或分享完整的 ProfileDeck 数据目录。
@@ -41,7 +41,7 @@ Claude Code 支持与 Claude Desktop 相互独立。ProfileDeck 不会读取或�
 
 私有 X25519 恢复密钥保存在操作系统凭据存储中，不会写入备份。把备份移到其他系统前，请单独导出密钥；替换当前密钥也不会重新加密已有备份。
 
-切换修改外部工具前，ProfileDeck 会在 `recovery/<operation-id>/` 下创建私有恢复点。其中可能包含未经过应用备份加密的完整 Codex 文件、Claude Code 账号登录或 Antigravity 登录。恢复点只为未完成切换保留，成功后会删除；它不会出现在备份列表中，不能导出，也不能用于撤销成功切换。
+切换修改外部工具前，ProfileDeck 会在 `recovery/<operation-id>/` 下创建私有恢复点。其中可能包含未经过应用备份加密的完整 Codex 或 Grok Build 文件、Claude Code 账号登录或 Antigravity 登录。恢复点只为未完成切换保留，成功后会删除；它不会出现在备份列表中，不能导出，也不能用于撤销成功切换。
 
 操作状态正式生效前，ProfileDeck 会先登记清理责任；只有恢复目录完成同步后才会清除该责任。因此，崩溃或文件系统错误可能使已完成操作的恢复数据仍然存在，并显示清理警告。警告存在时，Profile 切换和应用恢复会暂停，但读取、诊断和应用备份仍可使用。请运行 `profiledeck-cli doctor retry-cleanup --yes`，或在桌面端“诊断”中选择**重试清理**。清理不会改变工具登录信息或设置。
 

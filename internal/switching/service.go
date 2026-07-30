@@ -12,6 +12,7 @@ import (
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/maintenance"
+	"github.com/strahe/profiledeck/internal/providercoord"
 	"github.com/strahe/profiledeck/internal/recoverycleanup"
 	"github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
@@ -106,6 +107,20 @@ func (service *Service) RunMaintenance(ctx context.Context, req maintenance.Requ
 	if err := service.reconcileRecoveryCleanupLocked(ctx, db); err != nil {
 		return err
 	}
+	var guard providercoord.Guard
+	if len(req.CoordinationTargets) > 0 {
+		guard, err = service.acquireProviderGuard(ctx, db, providercoord.Request{
+			OperationID: operationID,
+			ProviderID:  req.ProviderID,
+			Targets:     append([]providercoord.Target(nil), req.CoordinationTargets...),
+		})
+		if err != nil {
+			return err
+		}
+		if guard != nil {
+			defer guard.Release()
+		}
+	}
 
 	return db.WithTransaction(ctx, func(tx *store.Store) error {
 		relatedProfileIDs := append([]string(nil), req.RelatedProfileIDs...)
@@ -118,24 +133,79 @@ func (service *Service) RunMaintenance(ctx context.Context, req maintenance.Requ
 		if err := mutation(ctx, tx, operationID); err != nil {
 			return err
 		}
-		if !req.Record {
-			return nil
+		if req.Record {
+			metadata := strings.TrimSpace(req.MetadataJSON)
+			if metadata == "" {
+				metadata = "{}"
+			}
+			if _, err := tx.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
+				ID: operationID, ProviderID: req.ProviderID,
+				RelatedProfileIDs:     relatedProfileIDs,
+				ActiveProfileID:       req.ActiveProfileID,
+				MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
+				MetadataJSON:          metadata,
+			}); err != nil {
+				return apperror.Wrap(apperror.OperationCreateFailed, "failed to record maintenance operation", err)
+			}
 		}
-		metadata := strings.TrimSpace(req.MetadataJSON)
-		if metadata == "" {
-			metadata = "{}"
-		}
-		if _, err := tx.CreateAppliedMaintenanceOperation(ctx, store.CreateAppliedMaintenanceOperationParams{
-			ID: operationID, ProviderID: req.ProviderID,
-			RelatedProfileIDs:     relatedProfileIDs,
-			ActiveProfileID:       req.ActiveProfileID,
-			MetadataSchemaVersion: store.OperationMetadataSchemaVersion,
-			MetadataJSON:          metadata,
-		}); err != nil {
-			return apperror.Wrap(apperror.OperationCreateFailed, "failed to record maintenance operation", err)
-		}
-		return nil
+		// Provider ownership must still be live at the database commit boundary;
+		// otherwise external working-copy reads cannot be persisted safely.
+		return validateProviderGuard(ctx, guard)
 	})
+}
+
+func (service *Service) acquireProviderGuard(
+	ctx context.Context,
+	db *store.Store,
+	request providercoord.Request,
+) (providercoord.Guard, error) {
+	coordinator, ok := service.dependencies.Coordinators.Coordinator(request.ProviderID)
+	if !ok {
+		return nil, nil
+	}
+	if strings.TrimSpace(request.ProviderMetadataJSON) == "" && db != nil {
+		provider, err := db.GetProvider(ctx, request.ProviderID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return nil, apperror.Wrap(apperror.StoreStatusFailed, "failed to read Provider coordination metadata", err)
+		}
+		if err == nil {
+			request.ProviderMetadataJSON = provider.MetadataJSON
+		}
+	}
+	guard, err := coordinator.Acquire(ctx, request)
+	if err != nil {
+		var appErr *apperror.Error
+		if errors.As(err, &appErr) {
+			return nil, appErr
+		}
+		return nil, apperror.Wrap(
+			apperror.LockAcquireFailed,
+			"another tool is changing this Provider's files; wait for it to finish and try again",
+			err,
+		)
+	}
+	if guard == nil {
+		return nil, apperror.New(apperror.LockAcquireFailed, "Provider file coordination did not return a guard")
+	}
+	return guard, nil
+}
+
+func validateProviderGuard(ctx context.Context, guard providercoord.Guard) error {
+	if guard == nil {
+		return nil
+	}
+	if err := guard.Validate(ctx); err != nil {
+		var appErr *apperror.Error
+		if errors.As(err, &appErr) {
+			return appErr
+		}
+		return apperror.Wrap(
+			apperror.TargetChanged,
+			"Provider file coordination changed; no further files were written",
+			err,
+		)
+	}
+	return nil
 }
 
 func (service *Service) RunWithSharedLock(ctx context.Context, operation string, run func(context.Context) error) error {

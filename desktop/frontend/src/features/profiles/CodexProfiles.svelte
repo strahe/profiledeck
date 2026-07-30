@@ -53,7 +53,7 @@
 	import ProfileEditorPage from "./ProfileEditorPage.svelte";
 	import ProfileList from "./ProfileList.svelte";
 	import UseProfileDialog from "./UseProfileDialog.svelte";
-	import type { CodexForkBinding, CodexProfileListItem, CodexProfileRoute, ConfigSetDialogState, ProfileUseRequest } from "./types";
+	import type { CodexForkBinding, CodexProfileListItem, CodexProfileRoute, ConfigSetDialogState, ManagedConfigSet, ProfileUseRequest } from "./types";
 	import { useCodexRuntime } from "../settings/codex-runtime.svelte.js";
 
 	interface Props {
@@ -340,7 +340,7 @@
 		}
 	}
 
-	function openConfigDialog(mode: ConfigSetDialogState["mode"], source: CodexConfigSet | null = null) {
+	function openConfigDialog(mode: ConfigSetDialogState["mode"], source: ManagedConfigSet | null = null) {
 		configDialog = { mode, source };
 		configDialogOpen = true;
 	}
@@ -362,7 +362,7 @@
 		});
 	}
 
-	async function deleteConfigSet(configSet: CodexConfigSet) {
+	async function deleteConfigSet(configSet: ManagedConfigSet) {
 		await runAction("config-set-delete", async () => {
 			await track("config-set-delete", CodexService.DeleteConfigSet(configSet.id));
 			await refreshConfigSets();
@@ -593,7 +593,7 @@
 {:else if route.kind === "config-sets"}
 	<ConfigSetPage {configSets} loading={configSetsLoading} error={configSetsError} busy={!!busyAction} formatUpdated={formatRelativeTime} onBack={() => push("/codex/profiles")} onCreate={() => openConfigDialog("create")} onCopy={(value) => openConfigDialog("copy", value)} onEdit={(value) => openConfigDialog("edit", value)} onDelete={deleteConfigSet} />
 {:else if route.kind === "new"}
-	<ProfileEditorPage mode="new" {detectResult} canChooseConfigSet={!!activeProfileID} busy={!!busyAction} bind:profileID bind:profileName bind:profileDescription bind:configMode bind:credentialBinding bind:configBinding bind:newConfigSetID bind:newConfigSetName idError={displayedIDError} nameError={displayedNameError} descriptionError={displayedDescriptionError} onCancel={() => push("/codex/profiles")} onSubmit={createProfile} onRetrySource={() => { void refreshDetect(); }} onDiagnostics={() => { void push("/diagnostics"); }} />
+	<ProfileEditorPage mode="new" {detectResult} basePath="/codex/profiles" canChooseConfigSet={!!activeProfileID} busy={!!busyAction} bind:profileID bind:profileName bind:profileDescription bind:configMode bind:credentialBinding bind:configBinding bind:newConfigSetID bind:newConfigSetName idError={displayedIDError} nameError={displayedNameError} descriptionError={displayedDescriptionError} onCancel={() => push("/codex/profiles")} onSubmit={createProfile} onRetrySource={() => { void refreshDetect(); }} onDiagnostics={() => { void push("/diagnostics"); }} />
 {:else if detailLoading}
 	<div class="mx-auto flex w-full max-w-5xl flex-col gap-4"><Skeleton class="h-5 w-48" /><Skeleton class="h-20 w-full" /><Skeleton class="h-52 w-full" /></div>
 {:else if detailError || !detail}
@@ -614,7 +614,7 @@
 		onDelete={() => openProfileDelete({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || translate("profile.unnamed") })}
 	/>
 {:else}
-	<ProfileEditorPage mode="fork" {detail} {detectResult} busy={!!busyAction} bind:profileID bind:profileName bind:profileDescription bind:configMode bind:credentialBinding bind:configBinding bind:newConfigSetID bind:newConfigSetName idError={displayedIDError} nameError={displayedNameError} descriptionError={displayedDescriptionError} onCancel={() => push(`/codex/profiles/${encodeURIComponent(detail!.summary.profile.id)}`)} onSubmit={forkProfile} />
+	<ProfileEditorPage mode="fork" {detail} {detectResult} basePath="/codex/profiles" busy={!!busyAction} bind:profileID bind:profileName bind:profileDescription bind:configMode bind:credentialBinding bind:configBinding bind:newConfigSetID bind:newConfigSetName idError={displayedIDError} nameError={displayedNameError} descriptionError={displayedDescriptionError} onCancel={() => push(`/codex/profiles/${encodeURIComponent(detail!.summary.profile.id)}`)} onSubmit={forkProfile} />
 {/if}
 
 <UseProfileDialog bind:open={useOpen} profile={useProfile} currentProfile={activeProfileID} plan={usePlan} building={useBuilding} applying={useApplying} inlineError={useInlineError} onClose={closeUse} onConfirm={confirmUse} />

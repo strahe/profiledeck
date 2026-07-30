@@ -14,7 +14,7 @@
 1. 从 [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases) 下载最新的 macOS Universal DMG。正式版使用 `X.Y.Z`，Beta 版使用 `X.Y.Z-beta.N`。
 2. 打开 DMG，把 `ProfileDeck.app` 拖到“应用程序”文件夹。
 3. 打开 ProfileDeck。应用会自动创建本地数据。如果已有当前 Codex 或 Antigravity Profile，启动时还会检查其限额。Codex 可能在检查过程中刷新已保存登录；Antigravity 检查只读取数据。
-4. 在侧栏选择 Codex、Claude Code 或 Antigravity，然后打开 **Profiles**。
+4. 在侧栏选择 Codex、Claude Code、Antigravity 或 Grok Build，然后打开 **Profiles**。
 
 发布的 DMG 已使用 Developer ID 签名并通过 Apple 公证。如果 macOS 提示应用已损坏或无法验证开发者，请删除该副本，并从官方 Releases 页面重新下载，不要绕过安全警告。
 
@@ -106,6 +106,7 @@ ProfileDeck 会在该目录下创建 `profiledeck` 文件夹。
 - **Codex：**确认 `CODEX_HOME` 或 `~/.codex` 中存在 `config.toml` 和 `auth.json`。如果缺少 `auth.json`，请完成 [Codex 前置设置](../codex/profiles.md#开始前准备)。
 - **Claude Code：**在 Claude Code 中运行 `/login`。
 - **Antigravity：**登录 Antigravity，并确认可以正常使用。
+- **Grok Build：**登录后确认 `GROK_HOME` 或 `~/.grok` 中存在非空且有效的 `auth.json`。详见 [Grok Build 前置设置](../grok-build/profiles.md#开始前准备)。
 
 在桌面端选择工具，然后使用 Profiles 页面中的保存操作。输入创建后不会改变的 Profile ID 和用于显示的名称。要保存另一个账号，请先在对应工具中切换登录，再回到 ProfileDeck 保存另一个 Profile。
 
@@ -144,6 +145,17 @@ profiledeck-cli switch antigravity work --yes
 
 条件允许时，请先关闭 Antigravity，切换后再重新启动。
 
+### Grok Build
+
+```bash
+profiledeck-cli grok-build detect
+profiledeck-cli grok-build profile create work
+profiledeck-cli switch grok-build work --dry-run
+profiledeck-cli switch grok-build work --yes
+```
+
+保存或切换文件前，请先结束活动 Grok 会话，完成后再启动新会话。
+
 ## 确认结果
 
 切换成功后，桌面端会把所选 Profile 标记为**当前**。在 CLI 中，可以查看对应工具的 Profile 列表：
@@ -152,6 +164,7 @@ profiledeck-cli switch antigravity work --yes
 profiledeck-cli codex profile list
 profiledeck-cli claude-code profile list
 profiledeck-cli antigravity profile list
+profiledeck-cli grok-build profile list
 ```
 
 如果 ProfileDeck 报告未完成的更改，或阻止继续切换，请打开**诊断**，或运行：
@@ -167,6 +180,7 @@ profiledeck-cli doctor
 - [Codex Profile](../codex/profiles.md)
 - [Claude Code Profile](../claude-code/profiles.md)
 - [Antigravity Profile](../antigravity/profiles.md)
+- [Grok Build Profile](../grok-build/profiles.md)
 - [更新桌面端](./updates.md)
 - [安全切换](../operations/switching.md)
 - [数据与安全](../reference/data-security.md)

@@ -14,7 +14,7 @@ Use the Desktop app for a visual workflow, or use the CLI for terminal work. Bot
 1. Download the latest macOS Universal DMG from [ProfileDeck Releases](https://github.com/strahe/profiledeck/releases). Stable releases use `X.Y.Z`; Beta releases use `X.Y.Z-beta.N`.
 2. Open the DMG and drag `ProfileDeck.app` to Applications.
 3. Open ProfileDeck. The app creates its local data automatically. If you already have a current Codex or Antigravity Profile, startup also checks its limits. Codex may refresh its saved login during that check; Antigravity checks are read-only.
-4. Select Codex, Claude Code, or Antigravity in the sidebar, then open **Profiles**.
+4. Select Codex, Claude Code, Antigravity, or Grok Build in the sidebar, then open **Profiles**.
 
 Published DMGs are Developer ID signed and notarized by Apple. If macOS reports that the app is damaged or cannot verify its developer, delete that copy and download it again from the official Releases page instead of bypassing the warning.
 
@@ -106,6 +106,7 @@ Prepare the selected tool first:
 - **Codex:** confirm that `config.toml` and `auth.json` exist in `CODEX_HOME` or `~/.codex`. If `auth.json` is missing, follow the [Codex prerequisite](../codex/profiles.md#before-you-start).
 - **Claude Code:** run `/login` in Claude Code.
 - **Antigravity:** sign in to Antigravity and confirm that it works.
+- **Grok Build:** sign in and confirm that a valid, non-empty `auth.json` exists in `GROK_HOME` or `~/.grok`. See [Grok Build prerequisites](../grok-build/profiles.md#before-you-start).
 
 In Desktop, select the tool and use the save action on its Profiles page. Enter a permanent Profile ID and a display name. To save another account, sign in to that account in the tool, return to ProfileDeck, and save another Profile.
 
@@ -144,6 +145,17 @@ profiledeck-cli switch antigravity work --yes
 
 Close Antigravity before switching when practical, then restart it afterward.
 
+### Grok Build
+
+```bash
+profiledeck-cli grok-build detect
+profiledeck-cli grok-build profile create work
+profiledeck-cli switch grok-build work --dry-run
+profiledeck-cli switch grok-build work --yes
+```
+
+End active Grok sessions before saving or switching files, then start a new session afterward.
+
 ## Confirm the result
 
 Desktop marks the selected Profile as **Current** after a successful switch. In the CLI, list the Profiles for the selected tool:
@@ -152,6 +164,7 @@ Desktop marks the selected Profile as **Current** after a successful switch. In 
 profiledeck-cli codex profile list
 profiledeck-cli claude-code profile list
 profiledeck-cli antigravity profile list
+profiledeck-cli grok-build profile list
 ```
 
 If ProfileDeck reports an incomplete change or blocks another switch, open **Diagnostics** or run:
@@ -167,6 +180,7 @@ Follow only the recovery action that Diagnostics recommends. See [Diagnostics an
 - [Codex Profiles](../codex/profiles.md)
 - [Claude Code Profiles](../claude-code/profiles.md)
 - [Antigravity Profiles](../antigravity/profiles.md)
+- [Grok Build Profiles](../grok-build/profiles.md)
 - [Update the Desktop app](./updates.md)
 - [Switching safely](../operations/switching.md)
 - [Data and security](../reference/data-security.md)
