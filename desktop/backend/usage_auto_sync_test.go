@@ -258,9 +258,7 @@ func TestUsageAutoSyncStartupLoadFailureDoesNotOverwriteCompletedSyncNow(t *test
 	}
 	close(releaseLoad)
 	waitUsageSyncSignal(t, tickerCreated)
-	select {
-	case <-time.After(50 * time.Millisecond):
-	}
+	time.Sleep(50 * time.Millisecond)
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("startup failure repeated a completed Provider sync, calls=%d", got)
 	}
