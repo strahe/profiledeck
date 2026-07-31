@@ -198,6 +198,13 @@ type UpdateUsageFactCostParams struct {
 	CostStatus          UsageCostStatus
 }
 
+type usageFactSessionPolicy int
+
+const (
+	usageFactSessionStrict usageFactSessionPolicy = iota
+	usageFactSessionCanonicalAlias
+)
+
 func withUsageTransactionResult[T any](
 	ctx context.Context,
 	store *Store,
@@ -367,6 +374,17 @@ func (s *Store) insertUsageFactsForWrite(ctx context.Context, params InsertUsage
 }
 
 func (s *Store) insertUsageFacts(ctx context.Context, facts []CreateUsageFactParams) (UsageInsertResult, error) {
+	return s.insertUsageFactsWithSessionPolicy(ctx, facts, usageFactSessionStrict)
+}
+
+func (s *Store) insertUsageFactsWithSessionPolicy(
+	ctx context.Context,
+	facts []CreateUsageFactParams,
+	sessionPolicy usageFactSessionPolicy,
+) (UsageInsertResult, error) {
+	if sessionPolicy != usageFactSessionStrict && sessionPolicy != usageFactSessionCanonicalAlias {
+		return UsageInsertResult{}, errors.New("usage fact session policy is invalid")
+	}
 	insertStmt, err := s.executor().PrepareContext(ctx, `
 		INSERT INTO usage_facts (
 			event_key, source_id, session_id, model_id, occurred_at_unix_ms,
@@ -382,8 +400,8 @@ func (s *Store) insertUsageFacts(ctx context.Context, facts []CreateUsageFactPar
 
 	canonicalObservationStmt, err := s.executor().PrepareContext(ctx, `
 		UPDATE usage_facts
-		SET model_id = ?, occurred_at_unix_ms = ?
-		WHERE id = ? AND ? > 0 AND (occurred_at_unix_ms = 0 OR occurred_at_unix_ms > ?)
+		SET session_id = ?, model_id = ?, occurred_at_unix_ms = ?
+		WHERE id = ?
 	`)
 	if err != nil {
 		return UsageInsertResult{}, err
@@ -447,18 +465,24 @@ func (s *Store) insertUsageFacts(ctx context.Context, facts []CreateUsageFactPar
 			continue
 		}
 
-		var existingID, existingSourceID int64
+		var existingID, existingSourceID, existingOccurredAtUnixMS int64
 		var existingSessionID sql.NullInt64
+		var existingSessionKey string
 		var inputTokens, cachedInputTokens, outputTokens, totalTokens int64
 		if err := s.executor().QueryRowContext(ctx, `
-			SELECT id, source_id, session_id,
-				input_tokens, cached_input_tokens, output_tokens, total_tokens
-			FROM usage_facts
-			WHERE event_key = ?
+			SELECT facts.id, facts.source_id, facts.session_id,
+				COALESCE(sessions.session_key, ''), facts.occurred_at_unix_ms,
+				facts.input_tokens, facts.cached_input_tokens, facts.output_tokens, facts.total_tokens
+			FROM usage_facts AS facts
+			LEFT JOIN usage_sessions AS sessions
+				ON sessions.source_id = facts.source_id AND sessions.id = facts.session_id
+			WHERE facts.event_key = ?
 		`, fact.EventKey).Scan(
 			&existingID,
 			&existingSourceID,
 			&existingSessionID,
+			&existingSessionKey,
+			&existingOccurredAtUnixMS,
 			&inputTokens,
 			&cachedInputTokens,
 			&outputTokens,
@@ -466,27 +490,42 @@ func (s *Store) insertUsageFacts(ctx context.Context, facts []CreateUsageFactPar
 		); err != nil {
 			return UsageInsertResult{}, err
 		}
-		if existingSourceID != fact.SourceID || !sameUsageDimensionID(existingSessionID, sessionID) ||
+		sessionMatches := sameUsageDimensionID(existingSessionID, sessionID)
+		if existingSourceID != fact.SourceID ||
+			(sessionPolicy == usageFactSessionStrict && !sessionMatches) ||
 			inputTokens != fact.InputTokens || cachedInputTokens != fact.CachedInputTokens ||
 			outputTokens != fact.OutputTokens || totalTokens != fact.TotalTokens {
 			return UsageInsertResult{}, ErrUsageFactConflict
 		}
 
-		// Fork copies can carry a different timestamp, model spelling, or pricing
-		// classification. Keep the earliest dated observation; an undated copy
-		// cannot replace a known time. Pricing remains monotonic so observation order
-		// cannot erase an already classified historical cost.
-		if _, err := canonicalObservationStmt.ExecContext(
-			ctx,
-			modelID,
-			fact.OccurredAtUnixMS,
-			existingID,
-			fact.OccurredAtUnixMS,
-			fact.OccurredAtUnixMS,
-		); err != nil {
-			return UsageInsertResult{}, err
+		replaceObservation := fact.OccurredAtUnixMS > 0 &&
+			(existingOccurredAtUnixMS == 0 || fact.OccurredAtUnixMS < existingOccurredAtUnixMS)
+		if sessionPolicy == usageFactSessionCanonicalAlias {
+			if fact.SessionKey == "" || existingSessionKey == "" {
+				return UsageInsertResult{}, ErrUsageFactConflict
+			}
+			replaceObservation = canonicalUsageObservationBefore(
+				fact.OccurredAtUnixMS,
+				fact.SessionKey,
+				existingOccurredAtUnixMS,
+				existingSessionKey,
+			)
 		}
-		if status != UsageCostStatusUnknown {
+		if replaceObservation {
+			// Grok Build forks copy completed turns into a new session. Keep one
+			// deterministic observation so file discovery order cannot change
+			// report grouping, while cost classification remains monotonic.
+			if _, err := canonicalObservationStmt.ExecContext(
+				ctx,
+				nullableUsageDimensionID(sessionID),
+				modelID,
+				fact.OccurredAtUnixMS,
+				existingID,
+			); err != nil {
+				return UsageInsertResult{}, err
+			}
+		}
+		if sessionPolicy == usageFactSessionStrict && status != UsageCostStatusUnknown {
 			if _, err := costUpgradeStmt.ExecContext(
 				ctx,
 				cost,
@@ -500,6 +539,24 @@ func (s *Store) insertUsageFacts(ctx context.Context, facts []CreateUsageFactPar
 		result.Duplicates++
 	}
 	return result, nil
+}
+
+func canonicalUsageObservationBefore(
+	candidateTime int64,
+	candidateSession string,
+	existingTime int64,
+	existingSession string,
+) bool {
+	switch {
+	case candidateTime > 0 && existingTime == 0:
+		return true
+	case candidateTime == 0 && existingTime > 0:
+		return false
+	case candidateTime > 0 && existingTime > 0 && candidateTime != existingTime:
+		return candidateTime < existingTime
+	default:
+		return candidateSession < existingSession
+	}
 }
 
 func validateUsageFact(fact CreateUsageFactParams) error {

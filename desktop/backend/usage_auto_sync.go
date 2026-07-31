@@ -3,10 +3,10 @@ package backend
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/strahe/profiledeck/internal/codex"
 	"github.com/strahe/profiledeck/internal/usage"
 )
 
@@ -28,6 +28,8 @@ type UsageAutoSyncError struct {
 }
 
 type UsageAutoSyncStatus struct {
+	ProviderID            string              `json:"provider_id"`
+	Revision              uint64              `json:"revision"`
 	IntervalSeconds       int                 `json:"interval_seconds"`
 	Syncing               bool                `json:"syncing"`
 	Outcome               string              `json:"outcome"`
@@ -65,28 +67,33 @@ type usageAutoSyncRuntime struct {
 	status           UsageAutoSyncStatus
 	emitter          func(UsageAutoSyncStatus)
 	intervalRevision uint64
+	syncRevision     uint64
 
 	lifecycleMu sync.Mutex
 	started     bool
+	runCtx      context.Context
 	cancel      context.CancelFunc
 	pause       chan struct{}
 	loopWG      sync.WaitGroup
 	workerWG    sync.WaitGroup
+	syncDone    chan struct{}
 
 	intervalUpdates chan struct{}
 	now             func() time.Time
 	newTicker       func(time.Duration) usageAutoSyncTicker
 	timeout         time.Duration
-	loadSettings    func(context.Context) (codex.CodexSettings, error)
-	syncCodex       func(context.Context) (usage.UsageSyncResult, error)
+	loadSettings    func(context.Context) (usage.ProviderSyncSettings, error)
+	syncProvider    func(context.Context) (usage.UsageSyncResult, error)
 }
 
 func newUsageAutoSyncRuntime(
-	loadSettings func(context.Context) (codex.CodexSettings, error),
-	syncCodex func(context.Context) (usage.UsageSyncResult, error),
+	providerID string,
+	loadSettings func(context.Context) (usage.ProviderSyncSettings, error),
+	syncProvider func(context.Context) (usage.UsageSyncResult, error),
 ) *usageAutoSyncRuntime {
+	providerID = strings.TrimSpace(providerID)
 	return &usageAutoSyncRuntime{
-		status:          defaultUsageAutoSyncStatus(),
+		status:          defaultUsageAutoSyncStatus(providerID),
 		intervalUpdates: make(chan struct{}, 1),
 		now:             time.Now,
 		newTicker: func(interval time.Duration) usageAutoSyncTicker {
@@ -94,13 +101,14 @@ func newUsageAutoSyncRuntime(
 		},
 		timeout:      usageAutoSyncTimeout,
 		loadSettings: loadSettings,
-		syncCodex:    syncCodex,
+		syncProvider: syncProvider,
 	}
 }
 
-func defaultUsageAutoSyncStatus() UsageAutoSyncStatus {
+func defaultUsageAutoSyncStatus(providerID string) UsageAutoSyncStatus {
 	return UsageAutoSyncStatus{
-		IntervalSeconds: codex.CodexUsageSyncIntervalDefault,
+		ProviderID:      strings.TrimSpace(providerID),
+		IntervalSeconds: usage.UsageSyncIntervalDefault,
 		Outcome:         UsageAutoSyncOutcomeIdle,
 	}
 }
@@ -123,6 +131,7 @@ func (r *usageAutoSyncRuntime) Start(ctx context.Context, emitter func(UsageAuto
 	// concurrent shutdown could call Wait while Start is still about to call Add.
 	r.loopWG.Add(1)
 	r.started = true
+	r.runCtx = runCtx
 	r.cancel = cancel
 	r.pause = pause
 	go r.run(runCtx, pause)
@@ -176,6 +185,7 @@ func (r *usageAutoSyncRuntime) stop(graceful bool) {
 		r.cancel()
 	}
 	r.started = false
+	r.runCtx = nil
 	r.cancel = nil
 	r.pause = nil
 	r.lifecycleMu.Unlock()
@@ -183,7 +193,7 @@ func (r *usageAutoSyncRuntime) stop(graceful bool) {
 
 func (r *usageAutoSyncRuntime) Status() UsageAutoSyncStatus {
 	if r == nil {
-		return defaultUsageAutoSyncStatus()
+		return defaultUsageAutoSyncStatus("")
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -196,6 +206,7 @@ func (r *usageAutoSyncRuntime) SetInterval(interval int) {
 	}
 	r.mu.Lock()
 	r.status.IntervalSeconds = interval
+	r.status.Revision++
 	r.intervalRevision++
 	r.mu.Unlock()
 
@@ -208,12 +219,41 @@ func (r *usageAutoSyncRuntime) SetInterval(interval int) {
 	}
 }
 
+// SyncNow joins the current Provider sync or starts one under the scheduler's
+// lifecycle context. It never resumes a runtime paused by Agent preferences.
+func (r *usageAutoSyncRuntime) SyncNow(ctx context.Context) UsageAutoSyncStatus {
+	if r == nil {
+		return defaultUsageAutoSyncStatus("")
+	}
+	r.lifecycleMu.Lock()
+	if !r.started || r.runCtx == nil {
+		r.lifecycleMu.Unlock()
+		return r.Status()
+	}
+	r.startSync(r.runCtx)
+	r.mu.RLock()
+	done := r.syncDone
+	status := cloneUsageAutoSyncStatus(r.status)
+	r.mu.RUnlock()
+	r.lifecycleMu.Unlock()
+
+	if done == nil || !status.Syncing {
+		return status
+	}
+	select {
+	case <-ctx.Done():
+	case <-done:
+	}
+	return r.Status()
+}
+
 func (r *usageAutoSyncRuntime) run(ctx context.Context, pause <-chan struct{}) {
 	defer r.loopWG.Done()
 
-	interval := codex.CodexUsageSyncIntervalDefault
+	interval := usage.UsageSyncIntervalDefault
 	r.mu.RLock()
 	loadRevision := r.intervalRevision
+	startupSyncRevision := r.syncRevision
 	r.mu.RUnlock()
 	settings, err := r.loadSettings(ctx)
 	if err == nil {
@@ -226,7 +266,7 @@ func (r *usageAutoSyncRuntime) run(ctx context.Context, pause <-chan struct{}) {
 		interval = r.status.IntervalSeconds
 		r.mu.Unlock()
 	} else if ctx.Err() == nil {
-		r.completeWithError(err)
+		r.reportStartupError(err, startupSyncRevision)
 	}
 	if ctx.Err() != nil {
 		return
@@ -234,7 +274,7 @@ func (r *usageAutoSyncRuntime) run(ctx context.Context, pause <-chan struct{}) {
 
 	ticker := r.newTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
-	r.startSync(ctx)
+	r.startSyncIfRevision(ctx, startupSyncRevision)
 
 	for {
 		select {
@@ -255,14 +295,34 @@ func (r *usageAutoSyncRuntime) run(ctx context.Context, pause <-chan struct{}) {
 }
 
 func (r *usageAutoSyncRuntime) startSync(parent context.Context) bool {
+	return r.startSyncWithRevision(parent, 0, false)
+}
+
+func (r *usageAutoSyncRuntime) startSyncIfRevision(
+	parent context.Context,
+	expectedRevision uint64,
+) bool {
+	return r.startSyncWithRevision(parent, expectedRevision, true)
+}
+
+func (r *usageAutoSyncRuntime) startSyncWithRevision(
+	parent context.Context,
+	expectedRevision uint64,
+	requireRevision bool,
+) bool {
 	r.mu.Lock()
-	if r.status.Syncing || parent.Err() != nil {
+	if r.status.Syncing || parent.Err() != nil ||
+		(requireRevision && r.syncRevision != expectedRevision) {
 		r.mu.Unlock()
 		return false
 	}
+	r.syncRevision++
 	r.status.Syncing = true
 	r.status.Outcome = UsageAutoSyncOutcomeSyncing
+	r.status.Error = nil
 	r.status.LastStartedAtUnixMS = r.now().UnixMilli()
+	r.status.Revision++
+	r.syncDone = make(chan struct{})
 	r.mu.Unlock()
 	r.emitStatus()
 
@@ -271,11 +331,14 @@ func (r *usageAutoSyncRuntime) startSync(parent context.Context) bool {
 		defer r.workerWG.Done()
 		ctx, cancel := context.WithTimeout(parent, r.timeout)
 		defer cancel()
-		result, err := r.syncCodex(ctx)
+		result, err := r.syncProvider(ctx)
 		if parent.Err() != nil {
 			r.mu.Lock()
 			r.status.Syncing = false
 			r.status.Outcome = UsageAutoSyncOutcomeIdle
+			r.status.Error = nil
+			r.status.Revision++
+			r.finishSyncLocked()
 			r.mu.Unlock()
 			return
 		}
@@ -301,6 +364,8 @@ func (r *usageAutoSyncRuntime) completeWithResult(result usage.UsageSyncResult) 
 	r.status.LastSuccessAtUnixMS = completedAt
 	r.status.ImportErrorCount = int64(len(result.Errors))
 	r.status.Error = nil
+	r.status.Revision++
+	r.finishSyncLocked()
 	r.mu.Unlock()
 	r.emitStatus()
 }
@@ -313,8 +378,36 @@ func (r *usageAutoSyncRuntime) completeWithError(err error) {
 	r.status.LastCompletedAtUnixMS = completedAt
 	r.status.ImportErrorCount = 0
 	r.status.Error = formatUsageAutoSyncError(err)
+	r.status.Revision++
+	r.finishSyncLocked()
 	r.mu.Unlock()
 	r.emitStatus()
+}
+
+func (r *usageAutoSyncRuntime) reportStartupError(err error, expectedSyncRevision uint64) {
+	completedAt := r.now().UnixMilli()
+	r.mu.Lock()
+	// SyncNow can join the runtime while its startup settings read is still in
+	// flight. That read must not complete or supersede the active Provider sync.
+	if r.status.Syncing || r.syncRevision != expectedSyncRevision {
+		r.mu.Unlock()
+		return
+	}
+	r.status.Outcome = UsageAutoSyncOutcomeError
+	r.status.LastCompletedAtUnixMS = completedAt
+	r.status.ImportErrorCount = 0
+	r.status.Error = formatUsageAutoSyncError(err)
+	r.status.Revision++
+	r.mu.Unlock()
+	r.emitStatus()
+}
+
+func (r *usageAutoSyncRuntime) finishSyncLocked() {
+	if r.syncDone == nil {
+		return
+	}
+	close(r.syncDone)
+	r.syncDone = nil
 }
 
 func (r *usageAutoSyncRuntime) emitStatus() {

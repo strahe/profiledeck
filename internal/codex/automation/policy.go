@@ -1,17 +1,15 @@
 package automation
 
-import "github.com/strahe/profiledeck/internal/apperror"
+import (
+	"github.com/strahe/profiledeck/internal/apperror"
+	"github.com/strahe/profiledeck/internal/usage"
+)
 
-const UsageSyncIntervalDefault = 15
+const UsageSyncIntervalDefault = usage.UsageSyncIntervalDefault
 
 // NormalizeUsageSyncInterval accepts the supported local usage-refresh cadence.
 func NormalizeUsageSyncInterval(value int) (int, *apperror.Error) {
-	switch value {
-	case 5, 15, 30, 60:
-		return value, nil
-	default:
-		return 0, apperror.New(apperror.SettingInvalid, "unsupported Codex usage sync interval").WithDetail("usage_sync_interval_seconds", value)
-	}
+	return usage.NormalizeUsageSyncInterval(value)
 }
 
 // NormalizeQuotaRefreshInterval accepts opt-in quota automation intervals.

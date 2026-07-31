@@ -15,6 +15,8 @@ describe("Workspace route policy", () => {
 		["/claude-code/profiles", "claude-code-profiles"],
 		["/codex/usage", "usage"],
 		["/codex/settings", "codex-settings"],
+		["/grok-build/usage", "grok-build-usage"],
+		["/grok-build/settings", "grok-build-settings"],
 		["/settings", "settings"],
 		["/diagnostics", "diagnostics"],
 	] as const)("maps %s to %s", (path, view) => {
@@ -55,6 +57,8 @@ describe("Workspace route policy", () => {
 		expect(agentForWorkspace("usage")).toBe("codex");
 		expect(agentForWorkspace("codex-settings")).toBe("codex");
 		expect(agentForWorkspace("grok-build-profiles")).toBe("grok-build");
+		expect(agentForWorkspace("grok-build-usage")).toBe("grok-build");
+		expect(agentForWorkspace("grok-build-settings")).toBe("grok-build");
 		expect(agentForWorkspace("antigravity-profiles")).toBe("antigravity");
 		expect(agentForWorkspace("claude-code-profiles")).toBe("claude-code");
 		expect(agentForWorkspace("settings")).toBeNull();

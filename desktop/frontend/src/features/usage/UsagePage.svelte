@@ -12,6 +12,7 @@
 	import * as Accordion from "$lib/components/ui/accordion";
 	import * as Alert from "$lib/components/ui/alert";
 	import { Badge } from "$lib/components/ui/badge";
+	import { Button } from "$lib/components/ui/button";
 	import * as Card from "$lib/components/ui/card";
 	import * as Empty from "$lib/components/ui/empty";
 	import { Spinner } from "$lib/components/ui/spinner";
@@ -24,10 +25,20 @@
 	type UsageRange = "today" | "7d" | "30d" | "all";
 	type UsageMetric = "cost" | "tokens";
 	type Props = {
+		providerID: string;
+		providerName: string;
+		providerExists: boolean;
+		onOpenProfiles: () => void;
 		showError: (value: unknown) => void;
 	};
 
-	let { showError }: Props = $props();
+	let {
+		providerID,
+		providerName,
+		providerExists,
+		onOpenProfiles,
+		showError,
+	}: Props = $props();
 	let range = $state<UsageRange>("7d");
 	let rangeSelection = $state<string>("7d");
 	let metric = $state<UsageMetric>("cost");
@@ -38,21 +49,26 @@
 	let reportError = $state("");
 	let reportRequest: CancellablePromise<UsageReportResult> | null = null;
 	let statusRequest: CancellablePromise<UsageAutoSyncStatus> | null = null;
+	let latestStatusRevision = -1;
+	let reportStatusRevision = -1;
 	let pendingReportRefresh = false;
+	let initialSyncPending = $state(false);
 	let disposed = false;
 
 	onMount(() => {
 		disposed = false;
-		void refreshReport(range, true);
-		void refreshAutoSyncStatus();
+		initialSyncPending = providerExists;
 		const offUsageSyncStatus = Events.On("profiledeck:usage-sync-status", (event) => {
 			const status = event.data as UsageAutoSyncStatus | null;
-			if (!status) return;
-			autoSyncStatus = status;
-			if (status.outcome === "success" || status.outcome === "warning") {
-				void refreshReport(range, false, true);
-			}
+			if (!applyAutoSyncStatus(status)) return;
+			refreshReportAfterStatus(status, false);
 		});
+		if (providerExists) {
+			void initializeUsage();
+			void refreshReport(range, true);
+		} else {
+			loading = false;
+		}
 		return () => {
 			disposed = true;
 			pendingReportRefresh = false;
@@ -62,17 +78,41 @@
 		};
 	});
 
-	async function refreshAutoSyncStatus() {
+	function applyAutoSyncStatus(status: UsageAutoSyncStatus | null): status is UsageAutoSyncStatus {
+		if (!status || status.provider_id !== providerID || status.revision < latestStatusRevision) {
+			return false;
+		}
+		latestStatusRevision = status.revision;
+		autoSyncStatus = status;
+		return true;
+	}
+
+	function refreshReportAfterStatus(status: UsageAutoSyncStatus, announceError: boolean) {
+		if (status.syncing || status.outcome === "idle" || status.revision <= reportStatusRevision) {
+			return;
+		}
+		reportStatusRevision = status.revision;
+		void refreshReport(range, announceError, !announceError);
+	}
+
+	async function initializeUsage() {
 		statusRequest?.cancel("usage status replaced");
-		const request = UsageService.AutoSyncStatus();
+		const request = UsageService.SyncNow(providerID);
 		statusRequest = request;
 		try {
 			const status = await request;
-			if (statusRequest === request) autoSyncStatus = status;
+			if (statusRequest !== request || !applyAutoSyncStatus(status)) return;
+			if (status.outcome !== "idle" || status.syncing) {
+				refreshReportAfterStatus(status, true);
+			}
 		} catch (error) {
-			if (statusRequest === request && !isCancelError(error)) showError(error);
+			if (statusRequest !== request || isCancelError(error)) return;
+			showError(error);
 		} finally {
-			if (statusRequest === request) statusRequest = null;
+			if (statusRequest === request) {
+				statusRequest = null;
+				initialSyncPending = false;
+			}
 		}
 	}
 
@@ -89,7 +129,7 @@
 		if (report?.range.preset !== nextRange) report = null;
 		reportError = "";
 		loading = true;
-		const request = UsageService.Report("codex", nextRange);
+		const request = UsageService.Report(providerID, nextRange);
 		reportRequest = request;
 		try {
 			const next = await request;
@@ -194,25 +234,44 @@
 <ContentContainer class="max-w-6xl">
 	<PageHeader title={$_("usage.title")}>
 		{#snippet meta()}
-			<div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-				{#if autoSyncStatus?.syncing}<Spinner />{/if}
-				<span class={autoSyncStatus?.error ? "text-destructive" : ""}>
-					{autoSyncStatus?.error
-						? $_("usage.autoSync.failedDescription")
-						: $_("usage.autoSync.summary", { values: { seconds: autoSyncStatus?.interval_seconds ?? 15, value: formatLastSync(lastSuccessfulSync()) } })}
-				</span>
-			</div>
+			{#if providerExists}
+				<div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+					{#if initialSyncPending || autoSyncStatus?.syncing}<Spinner />{/if}
+					<span class={autoSyncStatus?.error && !initialSyncPending && !autoSyncStatus?.syncing ? "text-destructive" : ""}>
+						{initialSyncPending || autoSyncStatus?.syncing
+							? $_("usage.autoSync.syncing")
+							: autoSyncStatus?.error
+								? $_("usage.autoSync.failedDescription")
+							: $_("usage.autoSync.summary", { values: { seconds: autoSyncStatus?.interval_seconds ?? 15, value: formatLastSync(lastSuccessfulSync()) } })}
+					</span>
+				</div>
+			{/if}
 		{/snippet}
 		{#snippet actions()}
-			<ToggleGroup.Root type="single" bind:value={rangeSelection} onValueChange={changeRange} variant="outline" size="sm" aria-label={$_("usage.range.label")}>
-				<ToggleGroup.Item value="today">{$_("usage.range.today")}</ToggleGroup.Item>
-				<ToggleGroup.Item value="7d">{$_("usage.range.sevenDays")}</ToggleGroup.Item>
-				<ToggleGroup.Item value="30d">{$_("usage.range.thirtyDays")}</ToggleGroup.Item>
-				<ToggleGroup.Item value="all">{$_("usage.range.all")}</ToggleGroup.Item>
-			</ToggleGroup.Root>
+			{#if providerExists}
+				<ToggleGroup.Root type="single" bind:value={rangeSelection} onValueChange={changeRange} variant="outline" size="sm" aria-label={$_("usage.range.label")}>
+					<ToggleGroup.Item value="today">{$_("usage.range.today")}</ToggleGroup.Item>
+					<ToggleGroup.Item value="7d">{$_("usage.range.sevenDays")}</ToggleGroup.Item>
+					<ToggleGroup.Item value="30d">{$_("usage.range.thirtyDays")}</ToggleGroup.Item>
+					<ToggleGroup.Item value="all">{$_("usage.range.all")}</ToggleGroup.Item>
+				</ToggleGroup.Root>
+			{/if}
 		{/snippet}
 	</PageHeader>
 
+	{#if !providerExists}
+		<Empty.Root class="rounded-lg border bg-card py-12">
+			<Empty.Header>
+				<Empty.Title>{$_("usage.providerUnavailableTitle")}</Empty.Title>
+				<Empty.Description>
+					{$_("usage.providerUnavailableDescription", { values: { provider: providerName } })}
+				</Empty.Description>
+			</Empty.Header>
+			<Empty.Content>
+				<Button onclick={onOpenProfiles}>{$_("usage.openProfiles")}</Button>
+			</Empty.Content>
+		</Empty.Root>
+	{:else}
 	{#if reportError}
 		<Alert.Root variant="destructive">
 			<Alert.Title>{$_("usage.loadFailedTitle")}</Alert.Title>
@@ -220,7 +279,7 @@
 		</Alert.Root>
 	{/if}
 
-	{#if loading && !report}
+	{#if (loading && (!report || report.summary.event_count === 0)) || (report?.summary.event_count === 0 && initialSyncPending)}
 		<div class="grid min-h-56 place-items-center rounded-lg border bg-card"><Spinner class="size-5" /></div>
 	{:else if report}
 		{#if autoSyncStatus?.outcome === "warning" || report.import.invalid_lines > 0 || report.import.unsupported_lines > 0 || report.summary.undated_event_count > 0 || report.summary.partial_cost_event_count > 0 || (report.summary.event_count > 0 && report.summary.unknown_cost_event_count > 0)}
@@ -307,5 +366,6 @@
 				<Card.Content class="px-0 pb-0"><UsageModelTable models={report.models ?? []} /></Card.Content>
 			</Card.Root>
 		{/if}
+	{/if}
 	{/if}
 </ContentContainer>

@@ -128,4 +128,4 @@ profiledeck-cli grok-build profile delete work --yes
 
 This deletes the complete global Profile from every Agent, not only its Grok Build data. It also deletes saved logins and Config Sets used only by that Profile, while shared saved data remains. A current Profile or one with an unfinished operation cannot be deleted. Deletion does not change Grok Build's working files.
 
-Grok Build usage, quotas, credits, and custom authentication sources are not supported by this integration.
+[Grok Build usage and estimated cost](./usage-cost.md) are available from local session records. Quotas, credits, actual billing, and custom authentication sources are not supported by this integration.

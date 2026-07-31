@@ -716,6 +716,78 @@ func TestUsageSyncCodexAndSummaryJSON(t *testing.T) {
 	}
 }
 
+func TestUsageSyncGrokBuildUsesGlobalHomeAndOmitsFileIdentifiers(t *testing.T) {
+	configDir := t.TempDir()
+	grokHome := t.TempDir()
+	writeCLIGrokBuildUsageFixture(t, grokHome, "workspace", "valid", `{"timestamp":1750000000,"method":"_x.ai/session/update","params":{"sessionId":"synthetic-session","update":{"sessionUpdate":"turn_completed","prompt_id":"synthetic-prompt","stop_reason":"end_turn","agent_result":"discarded synthetic result","usage":{"inputTokens":100,"outputTokens":20,"totalTokens":120,"cachedReadTokens":40,"reasoningTokens":5,"modelCalls":1,"apiDurationMs":10,"costUsdTicks":999,"costIsPartial":false,"modelUsage":{"grok-build-latest":{"inputTokens":100,"outputTokens":20,"totalTokens":120,"cachedReadTokens":40,"reasoningTokens":5,"modelCalls":1,"apiDurationMs":10,"costUsdTicks":999,"costIsPartial":false}},"numTurns":1}}}}`)
+	writeCLIGrokBuildUsageFixture(t, grokHome, "workspace", "malformed", `{"timestamp":`)
+
+	base := []string{"--config-dir", configDir, "--grok-home", grokHome}
+	if _, err := runCLI(t, append(base, "init", "--json")...); err != nil {
+		t.Fatalf("initialize CLI runtime: %v", err)
+	}
+	syncOut, err := runCLI(t, append(base, "usage", "sync", "grok-build", "--json")...)
+	if err != nil {
+		t.Fatalf("sync Grok Build usage: %v", err)
+	}
+	if strings.Contains(syncOut, grokHome) ||
+		strings.Contains(syncOut, `"file_name"`) ||
+		strings.Contains(syncOut, `"source_key"`) ||
+		strings.Contains(syncOut, "malformed") {
+		t.Fatalf("Grok sync JSON leaked a file identifier: %s", syncOut)
+	}
+	var synced usage.UsageSyncResult
+	decodeCLIJSON(t, []byte(syncOut), &synced)
+	if synced.ProviderID != grokconfig.ProviderID ||
+		synced.Source != usage.SourceGrokBuildSessionJSONL ||
+		synced.ScannedFiles != 2 ||
+		synced.ImportedEvents != 1 ||
+		synced.InvalidLines != 1 ||
+		len(synced.Errors) != 1 {
+		t.Fatalf("Grok sync result = %#v", synced)
+	}
+
+	human, err := runCLI(t, append(base, "usage", "sync", "grok-build")...)
+	if err != nil {
+		t.Fatalf("repeat Grok Build sync: %v", err)
+	}
+	for _, expected := range []string{"provider: grok-build", "errors: 1", "- error:"} {
+		if !strings.Contains(human, expected) {
+			t.Fatalf("human Grok sync missing %q: %q", expected, human)
+		}
+	}
+	for _, forbidden := range []string{"file:", "source_key:", grokHome, "malformed"} {
+		if strings.Contains(human, forbidden) {
+			t.Fatalf("human Grok sync leaked %q: %q", forbidden, human)
+		}
+	}
+
+	summaryOut, err := runCLI(t, append(base, "usage", "summary", "--provider", grokconfig.ProviderID, "--json")...)
+	if err != nil {
+		t.Fatalf("summarize Grok Build usage: %v", err)
+	}
+	var summary usage.UsageSummaryResult
+	decodeCLIJSON(t, []byte(summaryOut), &summary)
+	if summary.ProviderID != grokconfig.ProviderID ||
+		summary.EventCount != 1 ||
+		summary.TotalTokens != 120 ||
+		summary.CostStatus != "estimated" {
+		t.Fatalf("Grok summary = %#v", summary)
+	}
+	reportOut, err := runCLI(t, append(base, "usage", "report", "--provider", grokconfig.ProviderID, "--range", "all", "--json")...)
+	if err != nil {
+		t.Fatalf("report Grok Build usage: %v", err)
+	}
+	var report usage.UsageReportResult
+	decodeCLIJSON(t, []byte(reportOut), &report)
+	if report.ProviderID != grokconfig.ProviderID ||
+		report.Summary.EventCount != 1 ||
+		len(report.Models) != 1 ||
+		report.Models[0].Model != "grok-build-latest" {
+		t.Fatalf("Grok report = %#v", report)
+	}
+}
+
 func TestUsageSyncCodexDefaultsToCodexHomeEnv(t *testing.T) {
 	configDir := t.TempDir()
 	codexDir := t.TempDir()
@@ -2131,6 +2203,23 @@ func writeCLIUsageFixture(t *testing.T, codexDir, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("expected usage fixture write to succeed, got %v", err)
+	}
+}
+
+func writeCLIGrokBuildUsageFixture(
+	t *testing.T,
+	grokHome string,
+	workspace string,
+	session string,
+	content string,
+) {
+	t.Helper()
+	path := filepath.Join(grokHome, "sessions", workspace, session, "updates.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create Grok Build usage fixture directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write Grok Build usage fixture: %v", err)
 	}
 }
 

@@ -40,6 +40,10 @@ export function ForkProfile(req: $models.ForkGrokBuildProfileRequest): $Cancella
     return $Call.ByID(84190781, req);
 }
 
+export function GetSettings(): $CancellablePromise<grokbuild$0.Settings> {
+    return $Call.ByID(3051965125);
+}
+
 export function ListConfigSets(): $CancellablePromise<grokbuild$0.ConfigSetListResult> {
     return $Call.ByID(2533374179);
 }
@@ -70,4 +74,8 @@ export function UpdateConfigSet(req: $models.UpdateGrokBuildConfigSetRequest): $
 
 export function UpdateProfileMetadata(req: $models.UpdateGrokBuildProfileMetadataRequest): $CancellablePromise<profile$0.Profile> {
     return $Call.ByID(2613071443, req);
+}
+
+export function UpdateSettings(req: grokbuild$0.UpdateSettingsRequest): $CancellablePromise<grokbuild$0.Settings> {
+    return $Call.ByID(1525180976, req);
 }

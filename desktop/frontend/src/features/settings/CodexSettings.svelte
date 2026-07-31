@@ -5,15 +5,14 @@
 
 	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
 	import SectionCard from "$lib/components/app/SectionCard.svelte";
-	import SettingsRow from "$lib/components/app/SettingsRow.svelte";
 	import * as Alert from "$lib/components/ui/alert";
 	import * as Empty from "$lib/components/ui/empty";
-	import * as Select from "$lib/components/ui/select";
 	import { Separator } from "$lib/components/ui/separator";
 	import { Spinner } from "$lib/components/ui/spinner";
 
 	import ProfileAutomationSettings from "./ProfileAutomationSettings.svelte";
-	import { usageIntervals, useCodexRuntime } from "./codex-runtime.svelte.js";
+	import UsageSyncSettings from "./UsageSyncSettings.svelte";
+	import { useCodexRuntime } from "./codex-runtime.svelte.js";
 
 	const controller = useCodexRuntime();
 
@@ -35,27 +34,14 @@
 		</Alert.Root>
 	{/if}
 
-	<SectionCard title={$_("codexSettings.usageSync.title")} description={$_("codexSettings.usageSync.description")}>
-		<SettingsRow label={$_("codexSettings.usageSync.label")} forID="codex-usage-sync">
-			{#snippet control()}
-				{#if controller.isBusy("usage")}<Spinner />{/if}
-				<Select.Root
-					type="single"
-					value={String(controller.settings?.usage_sync_interval_seconds ?? 15)}
-					onValueChange={(value) => controller.changeUsageSyncInterval(value)}
-				>
-					<Select.Trigger id="codex-usage-sync" class="min-w-32" disabled={controller.loading || controller.isBusy("usage")}>
-						{$_("codexSettings.usageSync.seconds", { values: { count: controller.settings?.usage_sync_interval_seconds ?? 15 } })}
-					</Select.Trigger>
-					<Select.Content><Select.Group>
-						{#each usageIntervals as seconds (seconds)}
-							<Select.Item value={String(seconds)} label={$_("codexSettings.usageSync.seconds", { values: { count: seconds } })} />
-						{/each}
-					</Select.Group></Select.Content>
-				</Select.Root>
-			{/snippet}
-		</SettingsRow>
-	</SectionCard>
+	<UsageSyncSettings
+		id="codex-usage-sync"
+		interval={controller.settings?.usage_sync_interval_seconds ?? 15}
+		description={$_("codexSettings.usageSync.description")}
+		loading={controller.loading}
+		busy={controller.isBusy("usage")}
+		onChange={(value) => controller.changeUsageSyncInterval(value)}
+	/>
 
 	<SectionCard title={$_("codexSettings.profiles.title")} description={$_("codexSettings.profiles.description")} contentClass="px-0">
 		{#if controller.loading}

@@ -108,8 +108,8 @@ var (
 	}
 )
 
-var schemaContracts = []schemaContract{
-	{
+var schemaContracts = func() []schemaContract {
+	stable := schemaContract{
 		migrationKey: "stable_baseline",
 		tableSpecs:   stableBaselineTableSpecs,
 		indexSpecs:   stableBaselineIndexSpecs,
@@ -221,8 +221,22 @@ var schemaContracts = []schemaContract{
 		checkContentHashes:             true,
 		operationMetadataSchemaVersion: stableBaselineOperationMetadataSchemaVersion,
 		checkTargetRegistry:            true,
-	},
-}
+	}
+	grokBuild := stable
+	grokBuild.migrationKey = "grok_build_usage_import"
+	grokBuild.tableSpecs = append(append([]tableSpec(nil), stable.tableSpecs...), grokBuildUsageImportTableSpec)
+	grokBuild.referenceQueries = append(
+		append([]string(nil), stable.referenceQueries...),
+		`SELECT COUNT(1) FROM grok_build_usage_import_files AS value
+			WHERE NOT EXISTS (
+				SELECT 1 FROM usage_sources
+				WHERE usage_sources.id = value.source_id
+					AND usage_sources.provider_id = 'grok-build'
+					AND usage_sources.identity_revision = value.identity_revision
+			)`,
+	)
+	return []schemaContract{stable, grokBuild}
+}()
 
 func jsonObjectExpression(column string) string {
 	// CASE prevents json_type from evaluating malformed JSON.

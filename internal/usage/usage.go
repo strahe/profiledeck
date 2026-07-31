@@ -21,6 +21,9 @@ const (
 	PricingBasis             = "openai-standard-api"
 	PricingSourceURL         = "https://developers.openai.com/api/docs/pricing"
 	PricingVerifiedAt        = "2026-07-10"
+	GrokBuildPricingBasis    = "xai-standard-api-short-context"
+	GrokBuildPricingSource   = "https://docs.x.ai/developers/models/grok-4.5"
+	GrokBuildPricingVerified = "2026-07-30"
 )
 
 // CodexUsageIdentityRevision changes whenever fact identity semantics change;
@@ -67,13 +70,27 @@ type Price struct {
 	OutputMicrosPerMillion      int64
 }
 
+// PriceCatalog owns a provider-scoped, immutable price snapshot. Callers can
+// estimate against it but cannot mutate or inspect its backing map.
+type PriceCatalog struct {
+	prices map[string]Price
+}
+
+func newPriceCatalog(prices map[string]Price) PriceCatalog {
+	copied := make(map[string]Price, len(prices))
+	for model, modelPrice := range prices {
+		copied[pricingModelID(model)] = modelPrice
+	}
+	return PriceCatalog{prices: copied}
+}
+
 // Static price source: OpenAI API pricing, accessed 2026-07-10.
 // These local estimates use Standard API prices. For models with multiple
 // context tiers, the table uses the short-context rate until Codex logs expose
 // enough billing context to select batch, flex, priority, or long-context rates.
 // GPT-5.6 logs do not expose cache-write tokens, so their stored amount is the
 // verifiable input/cache-read/output subtotal and remains explicitly partial.
-var staticPrices = map[string]Price{
+var codexPriceCatalog = newPriceCatalog(map[string]Price{
 	"gpt-5.6-sol":   priceWithCacheWrite(5_000_000, 500_000, 6_250_000, 30_000_000),
 	"gpt-5.6-terra": priceWithCacheWrite(2_500_000, 250_000, 3_125_000, 15_000_000),
 	"gpt-5.6-luna":  priceWithCacheWrite(1_000_000, 100_000, 1_250_000, 6_000_000),
@@ -95,10 +112,37 @@ var staticPrices = map[string]Price{
 	"gpt-4.1":       price(2_000_000, 500_000, 8_000_000),
 	"gpt-4.1-mini":  price(400_000, 100_000, 1_600_000),
 	"gpt-4.1-nano":  price(100_000, 25_000, 400_000),
-}
+})
+
+// Static price source: xAI Grok 4.5 and pricing documentation, accessed
+// 2026-07-30. Aggregated Grok Build records do not identify long-context calls,
+// so estimates intentionally use only the short-context Standard API tier.
+// Grok Build session records may emit grok-4.5-build for Grok 4.5 work.
+var grokBuildPriceCatalog = newPriceCatalog(map[string]Price{
+	"grok-4.5":          price(2_000_000, 300_000, 6_000_000),
+	"grok-4.5-build":    price(2_000_000, 300_000, 6_000_000),
+	"grok-4.5-latest":   price(2_000_000, 300_000, 6_000_000),
+	"grok-build-latest": price(2_000_000, 300_000, 6_000_000),
+})
 
 func EstimateCostMicros(model string, tokens TokenCounts) (*int64, store.UsageCostStatus) {
-	price, ok := staticPrices[pricingModelID(model)]
+	return codexPriceCatalog.EstimateCostMicros(model, tokens)
+}
+
+func EstimateGrokBuildCostMicros(model string, tokens TokenCounts) (*int64, store.UsageCostStatus) {
+	return grokBuildPriceCatalog.EstimateCostMicros(model, tokens)
+}
+
+func (catalog PriceCatalog) Supports(model string) bool {
+	_, ok := catalog.prices[pricingModelID(model)]
+	return ok
+}
+
+func (catalog PriceCatalog) EstimateCostMicros(
+	model string,
+	tokens TokenCounts,
+) (*int64, store.UsageCostStatus) {
+	price, ok := catalog.prices[pricingModelID(model)]
 	if !ok || tokens.CachedInputTokens > tokens.InputTokens {
 		return nil, CostStatusUnknown
 	}

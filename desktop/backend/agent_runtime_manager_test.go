@@ -111,6 +111,41 @@ func TestAgentRuntimeManagerReconcilesDesktopPreferenceChanges(t *testing.T) {
 	}
 }
 
+func TestAgentRuntimeManagerPausesOnlyTheDisabledProviderRuntime(t *testing.T) {
+	ctx := context.Background()
+	application, err := app.New(app.Config{
+		ConfigDir: t.TempDir(), AgentAccess: agent.AccessDesktopPreferences,
+	})
+	if err != nil {
+		t.Fatalf("create Application: %v", err)
+	}
+	defer application.Close()
+	if _, err := application.Initialize(ctx); err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+
+	codexRuntime := &fakeAgentRuntime{}
+	grokRuntime := &fakeAgentRuntime{}
+	manager := newAgentRuntimeManager(application.Agents())
+	manager.Register(agent.Codex, codexRuntime)
+	manager.Register(agent.GrokBuild, grokRuntime)
+	manager.Activate(ctx, agent.Codex, codexRuntime)
+	manager.Activate(ctx, agent.GrokBuild, grokRuntime)
+
+	if _, err := application.Agents().SetEnabled(ctx, agent.GrokBuild, false); err != nil {
+		t.Fatalf("disable Grok Build Agent: %v", err)
+	}
+	if starts, graceful, hard := grokRuntime.counts(); starts != 1 || graceful != 1 || hard != 0 {
+		t.Fatalf("Grok runtime counts: start=%d graceful=%d hard=%d", starts, graceful, hard)
+	}
+	if starts, graceful, hard := codexRuntime.counts(); starts != 1 || graceful != 0 || hard != 0 {
+		t.Fatalf("Codex runtime was affected: start=%d graceful=%d hard=%d", starts, graceful, hard)
+	}
+
+	manager.Deactivate(agent.Codex, codexRuntime)
+	manager.Deactivate(agent.GrokBuild, grokRuntime)
+}
+
 func TestAgentRuntimeManagerSerializesActivationWithDisable(t *testing.T) {
 	ctx := context.Background()
 	application, err := app.New(app.Config{ConfigDir: t.TempDir(), AgentAccess: agent.AccessDesktopPreferences})

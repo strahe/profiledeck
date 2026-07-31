@@ -670,9 +670,13 @@ const messages = {
 			trendTitle: "Usage trend",
 			modelsTitle: "Models",
 			emptyTitle: "No usage in this range",
-			emptyDescription: "ProfileDeck imports local Codex usage while it is running. Try a wider date range if needed.",
+			emptyDescription: "ProfileDeck imports local usage while it is running. Try a wider date range if needed.",
+			providerUnavailableTitle: "Usage is not ready",
+			providerUnavailableDescription: "Create a {provider} Profile, or run an explicit CLI usage sync, before viewing local usage.",
+			openProfiles: "Open Profiles",
 			autoSync: {
 				summary: "Auto-sync {seconds}s · {value}",
+				syncing: "Syncing usage…",
 				failedTitle: "Automatic sync failed",
 				failedDescription: "ProfileDeck will retry on the next interval.",
 			},
@@ -697,8 +701,8 @@ const messages = {
 				metricLabel: "Trend metric",
 				cost: "Cost",
 				tokens: "Tokens",
-				costTitle: "Codex API-equivalent cost trend",
-				tokenTitle: "Codex token usage trend",
+				costTitle: "API-equivalent cost trend",
+				tokenTitle: "Token usage trend",
 				costDescription: "Estimated API-equivalent cost over time, using your local time.",
 				tokenDescription: "Input, cached input, and output tokens over time, using your local time.",
 				costBucketAria: "{bucket}: known API-equivalent cost {cost}, pricing coverage {coverage}",
@@ -721,6 +725,12 @@ const messages = {
 				partialEstimate: "Base estimate · some cache-write cost is not included",
 				coverage: "Cost available for {coverage} of tokens",
 			},
+		},
+		usageSettings: {
+			title: "Usage reports",
+			label: "Update frequency",
+			description: "Keep Usage reports up to date from this Agent's local activity.",
+			seconds: "{count} seconds",
 		},
 		settings: {
 			title: "Settings",
@@ -875,10 +885,7 @@ const messages = {
 		codexSettings: {
 			title: "Codex settings",
 			usageSync: {
-				title: "Usage reports",
-				label: "Update frequency",
 				description: "Keep Usage reports up to date from local Codex activity. Account limits are checked separately.",
-				seconds: "{count} seconds",
 			},
 			profiles: {
 				title: "Profile updates",
@@ -962,6 +969,7 @@ const messages = {
 				title: "Settings saved",
 				description: "Desktop preferences updated.",
 				codexDescription: "Codex settings updated.",
+				grokBuildDescription: "Grok Build settings updated.",
 			},
 		},
 		warnings: {
@@ -1716,9 +1724,13 @@ const messages = {
 			trendTitle: "用量趋势",
 			modelsTitle: "模型统计",
 			emptyTitle: "此范围内没有用量",
-			emptyDescription: "ProfileDeck 运行时会导入本地 Codex 用量；也可以尝试更大的日期范围。",
+			emptyDescription: "ProfileDeck 运行时会导入本地用量；也可以尝试更大的日期范围。",
+			providerUnavailableTitle: "用量尚未就绪",
+			providerUnavailableDescription: "请先创建 {provider} Profile，或通过 CLI 显式同步用量，再查看本地用量。",
+			openProfiles: "打开 Profiles",
 			autoSync: {
 				summary: "自动同步 {seconds} 秒 · {value}",
+				syncing: "正在同步用量…",
 				failedTitle: "自动同步失败",
 				failedDescription: "ProfileDeck 会在下一个同步周期重试。",
 			},
@@ -1743,8 +1755,8 @@ const messages = {
 				metricLabel: "趋势指标",
 				cost: "成本",
 				tokens: "Tokens",
-				costTitle: "Codex API 等价成本趋势",
-				tokenTitle: "Codex Token 用量趋势",
+				costTitle: "API 等价成本趋势",
+				tokenTitle: "Token 用量趋势",
 				costDescription: "按本地时间显示 API 等价估算成本变化。",
 				tokenDescription: "按本地时间显示输入、缓存输入和输出 Tokens 变化。",
 				costBucketAria: "{bucket}：已知 API 等价成本 {cost}，定价覆盖率 {coverage}",
@@ -1767,6 +1779,12 @@ const messages = {
 				partialEstimate: "基础估算 · 未包含部分 cache-write 成本",
 				coverage: "{coverage} 的 Tokens 有成本估算",
 			},
+		},
+		usageSettings: {
+			title: "用量报告",
+			label: "更新频率",
+			description: "根据此 Agent 的本地活动更新用量报告。",
+			seconds: "{count} 秒",
 		},
 		settings: {
 			title: "设置",
@@ -1921,10 +1939,7 @@ const messages = {
 		codexSettings: {
 			title: "Codex 设置",
 			usageSync: {
-				title: "用量报告",
-				label: "更新频率",
 				description: "从本地 Codex 活动更新用量报告；账号限额会单独检查。",
-				seconds: "{count} 秒",
 			},
 			profiles: {
 				title: "Profile 更新",
@@ -2008,6 +2023,7 @@ const messages = {
 				title: "设置已保存",
 				description: "桌面端偏好已更新。",
 				codexDescription: "Codex 设置已更新。",
+				grokBuildDescription: "Grok Build 设置已更新。",
 			},
 		},
 		warnings: {

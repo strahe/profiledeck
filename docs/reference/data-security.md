@@ -51,7 +51,7 @@ Backup lists and previews show only safe metadata. Keep encrypted backup files p
 
 Most ProfileDeck actions use local data only.
 
-- Usage sync and reports read local Codex session files and do not contact a billing service.
+- Usage sync and reports read local Codex or Grok Build session files and do not contact a billing service.
 - Codex limit checks contact Codex or OpenAI with the selected saved login. That login is never sent to a custom model-service URL from the saved Codex settings. Limit results are temporary and are not added to usage reports.
 - Antigravity limit checks send the current Antigravity access token to a fixed, unpublished Google Cloud Code service. Using this service may carry account risk. ProfileDeck does not refresh, save, or write back the token during a check. The result stays in app memory and is not added to the database, usage reports, or application backups.
 - Desktop update checks and downloads contact the public ProfileDeck release on GitHub.
@@ -62,4 +62,4 @@ ProfileDeck does not provide cloud sync and does not send telemetry or analytics
 
 Normal previews, commands, logs, errors, and backup summaries hide saved login values and other sensitive-looking settings. Exported application backups remain encrypted; recovery-key exports are separate sensitive files that must be kept private.
 
-Usage reports store token counts, model names, time information, and cost estimates. They do not store raw prompts, raw completions, API keys, complete session records, or full source-file paths. Local Codex activity cannot reliably identify the Profile or ChatGPT account that served a request, so ProfileDeck does not guess that attribution.
+Usage reports store token counts, model names, time information, derived session identifiers, and cost estimates. They do not store raw prompts, raw completions, agent results, API keys, direct session identifiers, complete session records, or full source-file paths. Local Codex and Grok Build activity cannot reliably identify the Profile, saved login, or account that served a request, so ProfileDeck does not guess that attribution.
