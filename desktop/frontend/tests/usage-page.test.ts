@@ -177,4 +177,5 @@ describe("UsagePage initial sync", () => {
 		expect(await screen.findByText("$8.00")).toBeInTheDocument();
 		expect(screen.queryByText("No usage yet")).not.toBeInTheDocument();
 	});
+
 });

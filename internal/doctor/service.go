@@ -492,6 +492,8 @@ func (service *Service) inspectSensitivePathPermissions(ctx context.Context, pat
 	runtimeChecks := []pathPermissionCheck{
 		{path: paths.Root, want: 0o700, id: "runtime_root_permissions_weak", level: LevelError, message: "ProfileDeck data directory may allow access by other users"},
 		{path: paths.Database, want: 0o600, id: "database_permissions_weak", level: LevelError, message: "application database may allow access by other users"},
+		{path: paths.Database + "-wal", want: 0o600, id: "database_wal_permissions_weak", level: LevelError, message: "application database WAL file may allow access by other users"},
+		{path: paths.Database + "-shm", want: 0o600, id: "database_shm_permissions_weak", level: LevelError, message: "application database SHM file may allow access by other users"},
 		{path: paths.Backups, want: 0o700, id: "backups_permissions_weak", level: LevelWarning, message: "backup directory may allow access by other users"},
 		{path: paths.Recovery, want: 0o700, id: "recovery_permissions_weak", level: LevelError, message: "operation recovery directory may allow access by other users"},
 		{path: paths.Logs, want: 0o700, id: "logs_permissions_weak", level: LevelWarning, message: "log directory may allow access by other users"},

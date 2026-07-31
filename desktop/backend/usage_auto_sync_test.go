@@ -81,6 +81,80 @@ func TestUsageAutoSyncResetsIntervalWithoutImmediateSync(t *testing.T) {
 	}
 }
 
+func TestUsageAutoSyncStartDelayDefersFirstSync(t *testing.T) {
+	runtime, _ := newTestUsageAutoSyncRuntime()
+	delayRequested := make(chan time.Duration, 1)
+	runtime.startDelayFunc = func() time.Duration { return 5 * time.Millisecond }
+	runtime.afterFunc = func(d time.Duration) <-chan time.Time {
+		delayRequested <- d
+		ch := make(chan time.Time, 1)
+		ch <- time.Now()
+		return ch
+	}
+	syncStarted := make(chan struct{}, 1)
+	runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+		syncStarted <- struct{}{}
+		return usage.UsageSyncResult{ProviderID: "codex"}, nil
+	}
+	runtime.Start(context.Background(), nil)
+	t.Cleanup(runtime.Stop)
+
+	select {
+	case d := <-delayRequested:
+		if d != 5*time.Millisecond {
+			t.Fatalf("start delay = %v, want 5ms", d)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("start delay was not scheduled")
+	}
+	select {
+	case <-syncStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("first sync did not run after start delay")
+	}
+}
+
+func TestUsageAutoSyncSyncNowDoesNotWaitForStartDelay(t *testing.T) {
+	runtime, _ := newTestUsageAutoSyncRuntime()
+	releaseDelay := make(chan struct{})
+	runtime.startDelayFunc = func() time.Duration { return time.Hour }
+	runtime.afterFunc = func(time.Duration) <-chan time.Time {
+		ch := make(chan time.Time)
+		go func() {
+			<-releaseDelay
+			ch <- time.Now()
+		}()
+		return ch
+	}
+	syncStarted := make(chan struct{}, 1)
+	runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+		syncStarted <- struct{}{}
+		return usage.UsageSyncResult{ProviderID: "codex"}, nil
+	}
+	runtime.Start(context.Background(), nil)
+	t.Cleanup(runtime.Stop)
+	t.Cleanup(func() { close(releaseDelay) })
+
+	status := runtime.SyncNow(context.Background())
+	if status.Outcome != UsageAutoSyncOutcomeSuccess {
+		t.Fatalf("SyncNow during start delay = %#v", status)
+	}
+	select {
+	case <-syncStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("SyncNow did not start a sync during start delay")
+	}
+}
+
+func TestRandomUsageAutoSyncStartDelayIsWithinRange(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		d := randomUsageAutoSyncStartDelay()
+		if d < usageAutoSyncStartDelayMin || d > usageAutoSyncStartDelayMax {
+			t.Fatalf("delay %v outside [%v, %v]", d, usageAutoSyncStartDelayMin, usageAutoSyncStartDelayMax)
+		}
+	}
+}
+
 func TestUsageAutoSyncStatusIsProviderScoped(t *testing.T) {
 	codex := newUsageAutoSyncRuntime(
 		"codex",
@@ -510,6 +584,7 @@ func newTestUsageAutoSyncRuntime() (*usageAutoSyncRuntime, *fakeUsageAutoSyncTic
 		return usage.ProviderSyncSettings{UsageSyncIntervalSeconds: usage.UsageSyncIntervalDefault}, nil
 	}
 	runtime.newTicker = func(time.Duration) usageAutoSyncTicker { return ticker }
+	runtime.startDelayFunc = func() time.Duration { return 0 }
 	return runtime, ticker
 }
 

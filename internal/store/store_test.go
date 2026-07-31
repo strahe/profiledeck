@@ -1290,6 +1290,14 @@ func TestOpenConfiguresSQLiteConnection(t *testing.T) {
 	if timeoutMS != int(sqliteBusyTimeout.Milliseconds()) {
 		t.Fatalf("expected busy_timeout %d, got %d", sqliteBusyTimeout.Milliseconds(), timeoutMS)
 	}
+
+	var journalMode string
+	if err := db.db.DB.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatalf("expected journal_mode query to succeed, got %v", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(journalMode), "wal") {
+		t.Fatalf("expected writable open to enable WAL, journal_mode=%q", journalMode)
+	}
 }
 
 func TestWithTransactionRollsBackCRUD(t *testing.T) {
@@ -1343,6 +1351,17 @@ func TestSQLiteDSNNormalizesWindowsPathAndSetsBusyTimeout(t *testing.T) {
 	}
 	if !strings.Contains(dsn, "_pragma=busy_timeout%285000%29") {
 		t.Fatalf("expected busy_timeout pragma in DSN, got %q", dsn)
+	}
+	if !strings.Contains(dsn, "_pragma=journal_mode%28WAL%29") {
+		t.Fatalf("expected writable DSN to request journal_mode(WAL), got %q", dsn)
+	}
+
+	roDSN := sqliteDSN(`C:\Users\profiledeck\profiledeck.db`, true)
+	if !strings.Contains(roDSN, "mode=ro") {
+		t.Fatalf("expected read-only mode in DSN, got %q", roDSN)
+	}
+	if strings.Contains(roDSN, "journal_mode") {
+		t.Fatalf("expected read-only DSN not to set journal_mode, got %q", roDSN)
 	}
 }
 
