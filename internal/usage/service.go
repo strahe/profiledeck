@@ -98,8 +98,8 @@ func (service *Service) sync(
 }
 
 func (service *Service) acquireSyncForWork(ctx context.Context) (context.Context, func(), error) {
-	workBudget, hasBudget := workTimeoutBudget(ctx)
-	waitCtx, stopWait := waitContextIgnoringDeadline(ctx)
+	budget, hasBudget := syncTimeoutBudget(ctx)
+	waitCtx, stopWait := syncWaitContext(ctx, budget, hasBudget)
 	defer stopWait()
 
 	if err := service.acquireSync(waitCtx); err != nil {
@@ -110,7 +110,7 @@ func (service *Service) acquireSyncForWork(ctx context.Context) (context.Context
 	release := func() { service.syncMu.Unlock() }
 	if hasBudget {
 		var cancel context.CancelFunc
-		workCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), workBudget)
+		workCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), budget)
 		release = func() {
 			cancel()
 			service.syncMu.Unlock()
@@ -129,7 +129,7 @@ func (service *Service) acquireSyncForWork(ctx context.Context) (context.Context
 	return workCtx, release, nil
 }
 
-func workTimeoutBudget(ctx context.Context) (time.Duration, bool) {
+func syncTimeoutBudget(ctx context.Context) (time.Duration, bool) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		return 0, false
@@ -141,16 +141,24 @@ func workTimeoutBudget(ctx context.Context) (time.Duration, bool) {
 	return budget, true
 }
 
-func waitContextIgnoringDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
-	waitCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+func syncWaitContext(ctx context.Context, budget time.Duration, hasBudget bool) (context.Context, context.CancelFunc) {
+	base, cancelBase := context.WithCancel(context.WithoutCancel(ctx))
 	stop := context.AfterFunc(ctx, func() {
 		if errors.Is(ctx.Err(), context.Canceled) {
-			cancel()
+			cancelBase()
 		}
 	})
-	return waitCtx, func() {
+	cleanup := func() {
 		stop()
-		cancel()
+		cancelBase()
+	}
+	if !hasBudget {
+		return base, cleanup
+	}
+	waitCtx, cancelWait := context.WithTimeout(base, budget)
+	return waitCtx, func() {
+		cancelWait()
+		cleanup()
 	}
 }
 
