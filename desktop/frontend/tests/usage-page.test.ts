@@ -142,6 +142,17 @@ describe("UsagePage initial sync", () => {
 		expect(screen.getByText("Syncing usage…")).toBeInTheDocument();
 		expect(screen.queryByText("No usage yet")).not.toBeInTheDocument();
 
+		await act(() => runtime.handler?.({ data: syncStatus({
+			provider_id: "codex",
+			revision: 99,
+			syncing: false,
+			outcome: "error",
+			error: { code: "TIMEOUT", message: "other Provider failed" },
+		}) }));
+		expect(backend.report).toHaveBeenCalledTimes(1);
+		expect(screen.getByText("Syncing usage…")).toBeInTheDocument();
+		expect(screen.queryByText("ProfileDeck will retry on the next interval.")).not.toBeInTheDocument();
+
 		const syncing = syncStatus({
 			error: { code: "TIMEOUT", message: "stale error" },
 		});

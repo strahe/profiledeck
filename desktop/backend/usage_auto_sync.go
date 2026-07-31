@@ -67,6 +67,7 @@ type usageAutoSyncRuntime struct {
 	status           UsageAutoSyncStatus
 	emitter          func(UsageAutoSyncStatus)
 	intervalRevision uint64
+	syncRevision     uint64
 
 	lifecycleMu sync.Mutex
 	started     bool
@@ -252,6 +253,7 @@ func (r *usageAutoSyncRuntime) run(ctx context.Context, pause <-chan struct{}) {
 	interval := usage.UsageSyncIntervalDefault
 	r.mu.RLock()
 	loadRevision := r.intervalRevision
+	startupSyncRevision := r.syncRevision
 	r.mu.RUnlock()
 	settings, err := r.loadSettings(ctx)
 	if err == nil {
@@ -264,7 +266,7 @@ func (r *usageAutoSyncRuntime) run(ctx context.Context, pause <-chan struct{}) {
 		interval = r.status.IntervalSeconds
 		r.mu.Unlock()
 	} else if ctx.Err() == nil {
-		r.completeWithError(err)
+		r.reportStartupError(err, startupSyncRevision)
 	}
 	if ctx.Err() != nil {
 		return
@@ -272,7 +274,7 @@ func (r *usageAutoSyncRuntime) run(ctx context.Context, pause <-chan struct{}) {
 
 	ticker := r.newTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
-	r.startSync(ctx)
+	r.startSyncIfRevision(ctx, startupSyncRevision)
 
 	for {
 		select {
@@ -293,11 +295,28 @@ func (r *usageAutoSyncRuntime) run(ctx context.Context, pause <-chan struct{}) {
 }
 
 func (r *usageAutoSyncRuntime) startSync(parent context.Context) bool {
+	return r.startSyncWithRevision(parent, 0, false)
+}
+
+func (r *usageAutoSyncRuntime) startSyncIfRevision(
+	parent context.Context,
+	expectedRevision uint64,
+) bool {
+	return r.startSyncWithRevision(parent, expectedRevision, true)
+}
+
+func (r *usageAutoSyncRuntime) startSyncWithRevision(
+	parent context.Context,
+	expectedRevision uint64,
+	requireRevision bool,
+) bool {
 	r.mu.Lock()
-	if r.status.Syncing || parent.Err() != nil {
+	if r.status.Syncing || parent.Err() != nil ||
+		(requireRevision && r.syncRevision != expectedRevision) {
 		r.mu.Unlock()
 		return false
 	}
+	r.syncRevision++
 	r.status.Syncing = true
 	r.status.Outcome = UsageAutoSyncOutcomeSyncing
 	r.status.Error = nil
@@ -361,6 +380,24 @@ func (r *usageAutoSyncRuntime) completeWithError(err error) {
 	r.status.Error = formatUsageAutoSyncError(err)
 	r.status.Revision++
 	r.finishSyncLocked()
+	r.mu.Unlock()
+	r.emitStatus()
+}
+
+func (r *usageAutoSyncRuntime) reportStartupError(err error, expectedSyncRevision uint64) {
+	completedAt := r.now().UnixMilli()
+	r.mu.Lock()
+	// SyncNow can join the runtime while its startup settings read is still in
+	// flight. That read must not complete or supersede the active Provider sync.
+	if r.status.Syncing || r.syncRevision != expectedSyncRevision {
+		r.mu.Unlock()
+		return
+	}
+	r.status.Outcome = UsageAutoSyncOutcomeError
+	r.status.LastCompletedAtUnixMS = completedAt
+	r.status.ImportErrorCount = 0
+	r.status.Error = formatUsageAutoSyncError(err)
+	r.status.Revision++
 	r.mu.Unlock()
 	r.emitStatus()
 }

@@ -11,19 +11,21 @@
 	let {
 		id,
 		interval,
+		description,
 		loading = false,
 		busy = false,
 		onChange,
 	}: {
 		id: string;
 		interval: number;
+		description?: string;
 		loading?: boolean;
 		busy?: boolean;
 		onChange: (value: string) => void;
 	} = $props();
 </script>
 
-<SectionCard title={$_("usageSettings.title")} description={$_("usageSettings.description")}>
+<SectionCard title={$_("usageSettings.title")} description={description ?? $_("usageSettings.description")}>
 	<SettingsRow label={$_("usageSettings.label")} forID={id}>
 		{#snippet control()}
 			{#if busy}<Spinner />{/if}

@@ -157,7 +157,7 @@ profiledeck-cli usage summary [--provider codex|grok-build] [--json]
 profiledeck-cli usage report [--provider codex|grok-build] [--range today|7d|30d|all] [--json]
 ```
 
-目前只支持本地 Codex 和 Grok Build 用量，缺省 Provider 仍为 Codex。`report` 默认范围为 `7d`；`summary` 提供更简短的全量视图。报告字段和估算限制见 [Codex 用量与成本](../codex/usage-cost.md)或 [Grok Build 用量与成本](../grok-build/usage-cost.md)。
+目前只支持本地 Codex 和 Grok Build 用量，缺省 Provider 仍为 Codex。`report` 默认范围为 `7d`；`summary` 提供更简短的全量视图。报告字段和估算限制见 [Codex 用量与成本](../codex/usage-cost.md) 或 [Grok Build 用量与成本](../grok-build/usage-cost.md)。
 
 ## 其他工具与配置文件
 

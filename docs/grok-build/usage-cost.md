@@ -18,7 +18,7 @@ Run:
 profiledeck-cli usage sync grok-build
 ```
 
-ProfileDeck uses the Grok Home already bound to the Provider. Before the Provider exists, Grok Home is resolved from `--grok-home`, then `GROK_HOME`, then `~/.grok`. To use an explicit location:
+ProfileDeck resolves Grok Home from `--grok-home`, then `GROK_HOME`, then `~/.grok`. If the Provider already exists, the resolved location must match its saved Grok Home. To use an explicit location:
 
 ```bash
 profiledeck-cli --grok-home /path/to/grok-home usage sync grok-build

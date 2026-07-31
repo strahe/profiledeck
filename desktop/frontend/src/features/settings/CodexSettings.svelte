@@ -37,6 +37,7 @@
 	<UsageSyncSettings
 		id="codex-usage-sync"
 		interval={controller.settings?.usage_sync_interval_seconds ?? 15}
+		description={$_("codexSettings.usageSync.description")}
 		loading={controller.loading}
 		busy={controller.isBusy("usage")}
 		onChange={(value) => controller.changeUsageSyncInterval(value)}

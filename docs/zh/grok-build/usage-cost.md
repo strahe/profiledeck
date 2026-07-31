@@ -8,7 +8,7 @@ ProfileDeck 读取本地 Grok Build 会话记录，展示令牌用量、活动�
 
 如需调整间隔，请打开 **Grok Build → 设置 → 用量报告 → 更新频率**，选择 5、15、30 或 60 秒；默认值为 15 秒。Codex 与 Grok Build 分别使用独立的间隔和同步状态。
 
-后台同步只使用现有 Grok Build Provider。如果尚未创建，请打开 **Grok Build → Profile** 创建一个 Profile，或明确运行一次 CLI 同步。
+后台同步只使用现有 Grok Build Provider。如果尚未创建，请打开 **Grok Build → Profiles** 创建一个 Profile，或明确运行一次 CLI 同步。
 
 ## 使用 CLI 同步
 
@@ -18,7 +18,7 @@ ProfileDeck 读取本地 Grok Build 会话记录，展示令牌用量、活动�
 profiledeck-cli usage sync grok-build
 ```
 
-ProfileDeck 会使用已绑定到 Provider 的 Grok Home。Provider 尚不存在时，Grok Home 按 `--grok-home`、`GROK_HOME`、`~/.grok` 的顺序确定。如需指定位置：
+ProfileDeck 按 `--grok-home`、`GROK_HOME`、`~/.grok` 的顺序确定 Grok Home。Provider 已存在时，解析出的位置必须与其中保存的 Grok Home 一致。如需指定位置：
 
 ```bash
 profiledeck-cli --grok-home /path/to/grok-home usage sync grok-build
@@ -79,4 +79,4 @@ Grok Build 记录的金额不会作为账单数据导入。未识别模型仍会
 
 ## 隐私范围
 
-用量存储不包含原始提示词、代理结果、API 密钥、直接会话标识或完整源文件路径。ProfileDeck 不会上传用量数据，也不会将其用于遥测。存储与备份建议见[本地数据与安全](../reference/data-security.md)。
+用量存储不包含原始提示词、代理结果、API 密钥、直接会话标识或完整源文件路径。ProfileDeck 不会上传用量数据，也不会将其用于遥测。存储与备份建议见 [本地数据与安全](../reference/data-security.md)。

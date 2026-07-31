@@ -152,6 +152,123 @@ func TestUsageAutoSyncStartupLoadDoesNotOverwriteNewerInterval(t *testing.T) {
 	}
 }
 
+func TestUsageAutoSyncStartupLoadFailureDoesNotSupersedeSyncNow(t *testing.T) {
+	runtime, ticker := newTestUsageAutoSyncRuntime()
+	loadStarted := make(chan struct{})
+	releaseLoad := make(chan struct{})
+	runtime.loadSettings = func(context.Context) (usage.ProviderSyncSettings, error) {
+		close(loadStarted)
+		<-releaseLoad
+		return usage.ProviderSyncSettings{}, fmt.Errorf("settings unavailable")
+	}
+	tickerCreated := make(chan struct{})
+	runtime.newTicker = func(time.Duration) usageAutoSyncTicker {
+		close(tickerCreated)
+		return ticker
+	}
+	syncStarted := make(chan int32, 2)
+	releaseSync := make(chan struct{})
+	var calls atomic.Int32
+	runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+		syncStarted <- calls.Add(1)
+		<-releaseSync
+		return usage.UsageSyncResult{}, nil
+	}
+	runtime.Start(context.Background(), nil)
+	t.Cleanup(runtime.Stop)
+	t.Cleanup(func() {
+		select {
+		case <-releaseLoad:
+		default:
+			close(releaseLoad)
+		}
+		select {
+		case <-releaseSync:
+		default:
+			close(releaseSync)
+		}
+	})
+	waitUsageSyncSignal(t, loadStarted)
+
+	completed := make(chan UsageAutoSyncStatus, 1)
+	go func() {
+		completed <- runtime.SyncNow(context.Background())
+	}()
+	if call := waitUsageSyncCall(t, syncStarted); call != 1 {
+		t.Fatalf("expected requested sync, got %d", call)
+	}
+	close(releaseLoad)
+	waitUsageSyncSignal(t, tickerCreated)
+	select {
+	case call := <-syncStarted:
+		t.Fatalf("startup failure started an overlapping sync: %d", call)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if status := runtime.Status(); !status.Syncing || status.Outcome != UsageAutoSyncOutcomeSyncing {
+		t.Fatalf("startup failure superseded active sync: %#v", status)
+	}
+
+	close(releaseSync)
+	select {
+	case status := <-completed:
+		if status.Syncing || status.Outcome != UsageAutoSyncOutcomeSuccess {
+			t.Fatalf("requested sync result = %#v", status)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("SyncNow did not return after the Provider sync completed")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected one Provider sync, got %d", got)
+	}
+}
+
+func TestUsageAutoSyncStartupLoadFailureDoesNotOverwriteCompletedSyncNow(t *testing.T) {
+	runtime, ticker := newTestUsageAutoSyncRuntime()
+	loadStarted := make(chan struct{})
+	releaseLoad := make(chan struct{})
+	runtime.loadSettings = func(context.Context) (usage.ProviderSyncSettings, error) {
+		close(loadStarted)
+		<-releaseLoad
+		return usage.ProviderSyncSettings{}, fmt.Errorf("settings unavailable")
+	}
+	tickerCreated := make(chan struct{})
+	runtime.newTicker = func(time.Duration) usageAutoSyncTicker {
+		close(tickerCreated)
+		return ticker
+	}
+	var calls atomic.Int32
+	runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+		calls.Add(1)
+		return usage.UsageSyncResult{}, nil
+	}
+	runtime.Start(context.Background(), nil)
+	t.Cleanup(runtime.Stop)
+	t.Cleanup(func() {
+		select {
+		case <-releaseLoad:
+		default:
+			close(releaseLoad)
+		}
+	})
+	waitUsageSyncSignal(t, loadStarted)
+
+	completed := runtime.SyncNow(context.Background())
+	if completed.Syncing || completed.Outcome != UsageAutoSyncOutcomeSuccess {
+		t.Fatalf("requested sync result = %#v", completed)
+	}
+	close(releaseLoad)
+	waitUsageSyncSignal(t, tickerCreated)
+	select {
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("startup failure repeated a completed Provider sync, calls=%d", got)
+	}
+	if status := runtime.Status(); status.Outcome != UsageAutoSyncOutcomeSuccess || status.Error != nil {
+		t.Fatalf("startup failure overwrote completed sync: %#v", status)
+	}
+}
+
 func TestUsageAutoSyncRetriesAfterTimeout(t *testing.T) {
 	runtime, ticker := newTestUsageAutoSyncRuntime()
 	runtime.timeout = 20 * time.Millisecond

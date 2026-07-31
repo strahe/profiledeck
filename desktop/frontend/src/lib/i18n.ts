@@ -884,6 +884,9 @@ const messages = {
 		},
 		codexSettings: {
 			title: "Codex settings",
+			usageSync: {
+				description: "Keep Usage reports up to date from local Codex activity. Account limits are checked separately.",
+			},
 			profiles: {
 				title: "Profile updates",
 				description: "Set how each Profile checks limits and stays signed in.",
@@ -1935,6 +1938,9 @@ const messages = {
 		},
 		codexSettings: {
 			title: "Codex 设置",
+			usageSync: {
+				description: "从本地 Codex 活动更新用量报告；账号限额会单独检查。",
+			},
 			profiles: {
 				title: "Profile 更新",
 				description: "设置每个 Profile 如何检查限额并保持登录。",
