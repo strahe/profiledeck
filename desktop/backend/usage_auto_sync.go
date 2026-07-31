@@ -360,7 +360,11 @@ func (r *usageAutoSyncRuntime) startSyncWithRevision(
 	r.workerWG.Add(1)
 	go func() {
 		defer r.workerWG.Done()
-		ctx, cancel := context.WithTimeout(parent, r.timeout)
+		timeout := r.timeout
+		if timeout <= 0 {
+			timeout = usageAutoSyncTimeout
+		}
+		ctx, cancel := context.WithTimeout(usage.WithPhaseTimeout(parent, timeout), 2*timeout)
 		defer cancel()
 		result, err := r.syncProvider(ctx)
 		if parent.Err() != nil {

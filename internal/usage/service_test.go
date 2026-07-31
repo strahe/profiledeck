@@ -57,10 +57,12 @@ func (integration *pausedUsageIntegration) Sync(
 }
 
 type serialUsageIntegration struct {
-	release   chan struct{}
-	inFlight  atomic.Int32
-	maxFlight atomic.Int32
-	entered   atomic.Int32
+	release         chan struct{}
+	workHold        time.Duration
+	workHoldFromEnt int32
+	inFlight        atomic.Int32
+	maxFlight       atomic.Int32
+	entered         atomic.Int32
 }
 
 func (*serialUsageIntegration) ProviderID() string { return ProviderCodex }
@@ -81,14 +83,23 @@ func (integration *serialUsageIntegration) Sync(
 			break
 		}
 	}
-	integration.entered.Add(1)
+	entry := integration.entered.Add(1)
 	defer integration.inFlight.Add(-1)
 	select {
 	case <-integration.release:
-		return UsageSyncResult{ProviderID: ProviderCodex, Source: SourceCodexSessionJSONL}, nil
 	case <-ctx.Done():
 		return UsageSyncResult{}, ctx.Err()
 	}
+	if integration.workHold > 0 && (integration.workHoldFromEnt == 0 || entry >= integration.workHoldFromEnt) {
+		timer := time.NewTimer(integration.workHold)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return UsageSyncResult{}, ctx.Err()
+		}
+	}
+	return UsageSyncResult{ProviderID: ProviderCodex, Source: SourceCodexSessionJSONL}, nil
 }
 
 func TestUsageSyncSerializesConcurrentImports(t *testing.T) {
@@ -134,7 +145,17 @@ func TestUsageSyncSerializesConcurrentImports(t *testing.T) {
 }
 
 func TestUsageSyncWorkTimeoutStartsAfterLock(t *testing.T) {
-	integration := &serialUsageIntegration{release: make(chan struct{})}
+	// Phase budget 300ms. Wait ~100ms then work 220ms:
+	// remaining-deadline implementations fail; re-armed phase budget succeeds.
+	const phase = 300 * time.Millisecond
+	const queueWait = 100 * time.Millisecond
+	const workHold = 220 * time.Millisecond
+
+	integration := &serialUsageIntegration{
+		release:         make(chan struct{}),
+		workHold:        workHold,
+		workHoldFromEnt: 2,
+	}
 	service := NewService(store.NewFactory(filepath.Join(t.TempDir(), "usage.db")), MustRegistry(integration))
 
 	firstDone := make(chan error, 1)
@@ -144,16 +165,14 @@ func TestUsageSyncWorkTimeoutStartsAfterLock(t *testing.T) {
 	}()
 	waitEntered(t, integration, 1)
 
-	budget := 80 * time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
-	defer cancel()
+	ctx := WithPhaseTimeout(context.Background(), phase)
 	secondDone := make(chan error, 1)
 	go func() {
 		_, err := service.SyncCodex(ctx)
 		secondDone <- err
 	}()
 
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(queueWait)
 	if got := integration.entered.Load(); got != 1 {
 		t.Fatalf("queued sync entered early, entered=%d", got)
 	}
@@ -170,10 +189,13 @@ func TestUsageSyncWorkTimeoutStartsAfterLock(t *testing.T) {
 	select {
 	case err := <-secondDone:
 		if err != nil {
-			t.Fatalf("queued sync should keep full work budget after short lock wait, got %v", err)
+			t.Fatalf("queued sync should re-arm full phase work budget after lock wait, got %v", err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("queued sync did not finish")
+	}
+	if got := integration.entered.Load(); got != 2 {
+		t.Fatalf("entered=%d, want 2", got)
 	}
 }
 
@@ -185,9 +207,7 @@ func TestUsageSyncWaitTimeoutDoesNotEnterWork(t *testing.T) {
 	go func() { _, _ = service.SyncCodex(context.Background()) }()
 	waitEntered(t, integration, 1)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
-	defer cancel()
-	_, err := service.SyncCodex(ctx)
+	_, err := service.SyncCodex(WithPhaseTimeout(context.Background(), 40*time.Millisecond))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("queued sync wait error=%v, want deadline exceeded", err)
 	}

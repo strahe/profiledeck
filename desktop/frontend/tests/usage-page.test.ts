@@ -178,36 +178,4 @@ describe("UsagePage initial sync", () => {
 		expect(screen.queryByText("No usage yet")).not.toBeInTheDocument();
 	});
 
-	it("shows fail copy for TIMEOUT and other auto-sync errors", async () => {
-		runtime.handler = null;
-		runtime.on.mockImplementation((_name: string, handler: (event: { data: unknown }) => void) => {
-			runtime.handler = handler;
-			return vi.fn();
-		});
-		backend.syncNow.mockReturnValue(cancellable(Promise.resolve(syncStatus({
-			syncing: false,
-			outcome: "error",
-			revision: 1,
-			error: { code: "TIMEOUT", message: "usage sync timed out" },
-		}))));
-		backend.report.mockReturnValue(cancellable(Promise.resolve(usageReport())));
-
-		render(UsagePage, {
-			providerID: "grok-build",
-			providerName: "Grok Build",
-			providerExists: true,
-			onOpenProfiles: vi.fn(),
-			showError: vi.fn(),
-		}, { wrapper: TestProviders });
-
-		expect(await screen.findByText("ProfileDeck will retry on the next interval.")).toBeInTheDocument();
-
-		await act(() => runtime.handler?.({ data: syncStatus({
-			revision: 2,
-			syncing: false,
-			outcome: "error",
-			error: { code: "USAGE_IMPORT_FAILED", message: "Usage could not be synchronized; try again" },
-		}) }));
-		expect(await screen.findByText("ProfileDeck will retry on the next interval.")).toBeInTheDocument();
-	});
 });

@@ -97,8 +97,17 @@ func (service *Service) sync(
 	return result, nil
 }
 
+type phaseTimeoutKey struct{}
+
+func WithPhaseTimeout(ctx context.Context, timeout time.Duration) context.Context {
+	if timeout <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, phaseTimeoutKey{}, timeout)
+}
+
 func (service *Service) acquireSyncForWork(ctx context.Context) (context.Context, func(), error) {
-	budget, hasBudget := syncTimeoutBudget(ctx)
+	budget, hasBudget := syncPhaseBudget(ctx)
 	waitCtx, stopWait := syncWaitContext(ctx, budget, hasBudget)
 	defer stopWait()
 
@@ -115,11 +124,7 @@ func (service *Service) acquireSyncForWork(ctx context.Context) (context.Context
 			cancel()
 			service.syncMu.Unlock()
 		}
-		stop := context.AfterFunc(ctx, func() {
-			if errors.Is(ctx.Err(), context.Canceled) {
-				cancel()
-			}
-		})
+		stop := context.AfterFunc(ctx, cancel)
 		prev := release
 		release = func() {
 			stop()
@@ -129,7 +134,10 @@ func (service *Service) acquireSyncForWork(ctx context.Context) (context.Context
 	return workCtx, release, nil
 }
 
-func syncTimeoutBudget(ctx context.Context) (time.Duration, bool) {
+func syncPhaseBudget(ctx context.Context) (time.Duration, bool) {
+	if timeout, ok := ctx.Value(phaseTimeoutKey{}).(time.Duration); ok && timeout > 0 {
+		return timeout, true
+	}
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		return 0, false
@@ -143,11 +151,7 @@ func syncTimeoutBudget(ctx context.Context) (time.Duration, bool) {
 
 func syncWaitContext(ctx context.Context, budget time.Duration, hasBudget bool) (context.Context, context.CancelFunc) {
 	base, cancelBase := context.WithCancel(context.WithoutCancel(ctx))
-	stop := context.AfterFunc(ctx, func() {
-		if errors.Is(ctx.Err(), context.Canceled) {
-			cancelBase()
-		}
-	})
+	stop := context.AfterFunc(ctx, cancelBase)
 	cleanup := func() {
 		stop()
 		cancelBase()

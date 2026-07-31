@@ -998,6 +998,13 @@ func TestDoctorClassifiesWeakRuntimePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected runtime paths, got %v", err)
 	}
+	walPath := paths.Database + "-wal"
+	shmPath := paths.Database + "-shm"
+	for _, path := range []string{walPath, shmPath} {
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatalf("create %s: %v", path, err)
+		}
+	}
 	checks := []struct {
 		path  string
 		mode  os.FileMode
@@ -1006,6 +1013,8 @@ func TestDoctorClassifiesWeakRuntimePermissions(t *testing.T) {
 	}{
 		{path: paths.Root, mode: 0o755, id: "runtime_root_permissions_weak", level: doctor.LevelError},
 		{path: paths.Database, mode: 0o644, id: "database_permissions_weak", level: doctor.LevelError},
+		{path: walPath, mode: 0o644, id: "database_wal_permissions_weak", level: doctor.LevelError},
+		{path: shmPath, mode: 0o644, id: "database_shm_permissions_weak", level: doctor.LevelError},
 		{path: paths.Backups, mode: 0o755, id: "backups_permissions_weak", level: doctor.LevelWarning},
 		{path: paths.Recovery, mode: 0o755, id: "recovery_permissions_weak", level: doctor.LevelError},
 		{path: paths.Logs, mode: 0o755, id: "logs_permissions_weak", level: doctor.LevelWarning},
