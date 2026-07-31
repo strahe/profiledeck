@@ -20,7 +20,7 @@ Common examples are:
 
 If you pass `--config-dir <directory>`, ProfileDeck uses `<directory>/profiledeck` instead.
 
-The directory contains `profiledeck.db`, encrypted application backups, and temporary recovery material for unfinished switches. Codex, Claude Code, Antigravity, and Grok Build logins may be stored in the database or operation recovery material because ProfileDeck needs them to switch Profiles safely. Saved Grok Build Config Sets may contain the complete local `config.toml`.
+The directory contains `profiledeck.db` (and SQLite WAL sidecars `profiledeck.db-wal` / `profiledeck.db-shm` when present), encrypted application backups, and temporary recovery material for unfinished switches. Codex, Claude Code, Antigravity, and Grok Build logins may be stored in the database or operation recovery material because ProfileDeck needs them to switch Profiles safely. Saved Grok Build Config Sets may contain the complete local `config.toml`.
 
 ## Protect local data
 

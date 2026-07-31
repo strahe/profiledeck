@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +20,9 @@ const (
 	UsageAutoSyncOutcomeWarning = "warning"
 	UsageAutoSyncOutcomeError   = "error"
 
-	usageAutoSyncTimeout = 30 * time.Second
+	usageAutoSyncTimeout       = 60 * time.Second
+	usageAutoSyncStartDelayMin = 1 * time.Second
+	usageAutoSyncStartDelayMax = 3 * time.Second
 )
 
 type UsageAutoSyncError struct {
@@ -81,6 +84,8 @@ type usageAutoSyncRuntime struct {
 	intervalUpdates chan struct{}
 	now             func() time.Time
 	newTicker       func(time.Duration) usageAutoSyncTicker
+	afterFunc       func(time.Duration) <-chan time.Time
+	startDelayFunc  func() time.Duration
 	timeout         time.Duration
 	loadSettings    func(context.Context) (usage.ProviderSyncSettings, error)
 	syncProvider    func(context.Context) (usage.UsageSyncResult, error)
@@ -99,10 +104,17 @@ func newUsageAutoSyncRuntime(
 		newTicker: func(interval time.Duration) usageAutoSyncTicker {
 			return realUsageAutoSyncTicker{ticker: time.NewTicker(interval)}
 		},
-		timeout:      usageAutoSyncTimeout,
-		loadSettings: loadSettings,
-		syncProvider: syncProvider,
+		afterFunc:      time.After,
+		startDelayFunc: randomUsageAutoSyncStartDelay,
+		timeout:        usageAutoSyncTimeout,
+		loadSettings:   loadSettings,
+		syncProvider:   syncProvider,
 	}
+}
+
+func randomUsageAutoSyncStartDelay() time.Duration {
+	span := usageAutoSyncStartDelayMax - usageAutoSyncStartDelayMin
+	return usageAutoSyncStartDelayMin + time.Duration(rand.Int63n(int64(span)+1))
 }
 
 func defaultUsageAutoSyncStatus(providerID string) UsageAutoSyncStatus {
@@ -274,6 +286,20 @@ func (r *usageAutoSyncRuntime) run(ctx context.Context, pause <-chan struct{}) {
 
 	ticker := r.newTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
+
+	if delay := r.initialStartDelay(); delay > 0 {
+		after := r.afterFunc
+		if after == nil {
+			after = time.After
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-pause:
+			return
+		case <-after(delay):
+		}
+	}
 	r.startSyncIfRevision(ctx, startupSyncRevision)
 
 	for {
@@ -287,11 +313,16 @@ func (r *usageAutoSyncRuntime) run(ctx context.Context, pause <-chan struct{}) {
 			ticker.Reset(time.Duration(interval) * time.Second)
 			r.emitStatus()
 		case <-ticker.C():
-			// startSync is a non-blocking compare-and-start operation. A tick that
-			// arrives during a long scan is intentionally skipped rather than queued.
 			r.startSync(ctx)
 		}
 	}
+}
+
+func (r *usageAutoSyncRuntime) initialStartDelay() time.Duration {
+	if r == nil || r.startDelayFunc == nil {
+		return 0
+	}
+	return r.startDelayFunc()
 }
 
 func (r *usageAutoSyncRuntime) startSync(parent context.Context) bool {

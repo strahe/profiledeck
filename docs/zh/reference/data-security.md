@@ -20,7 +20,7 @@ ProfileDeck 会在你的设备上保存 Profile、登录、设置、用量报告
 
 如果传入 `--config-dir <directory>`，ProfileDeck 会改用 `<directory>/profiledeck`。
 
-该目录包含 `profiledeck.db`、加密应用备份，以及未完成切换所需的临时恢复数据。ProfileDeck 可能在数据库或操作恢复数据中保存 Codex、Claude Code、Antigravity 和 Grok Build 登录，以便安全切换 Profile。已保存的 Grok Build 配置集可能包含完整的本地 `config.toml`。
+该目录包含 `profiledeck.db`（以及存在时的 SQLite WAL 附属文件 `profiledeck.db-wal` / `profiledeck.db-shm`）、加密应用备份，以及未完成切换所需的临时恢复数据。ProfileDeck 可能在数据库或操作恢复数据中保存 Codex、Claude Code、Antigravity 和 Grok Build 登录，以便安全切换 Profile。已保存的 Grok Build 配置集可能包含完整的本地 `config.toml`。
 
 ## 保护本地数据
 

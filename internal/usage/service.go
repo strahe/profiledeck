@@ -3,6 +3,8 @@ package usage
 import (
 	"context"
 	"errors"
+	"sync"
+	"time"
 
 	"github.com/strahe/profiledeck/internal/apperror"
 	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
@@ -13,6 +15,7 @@ import (
 type Service struct {
 	stores   store.Factory
 	registry Registry
+	syncMu   sync.Mutex
 }
 
 func NewService(stores store.Factory, registry Registry) *Service {
@@ -73,7 +76,14 @@ func (service *Service) sync(
 	if appErr != nil {
 		return UsageSyncResult{}, appErr
 	}
-	result, err := integration.Sync(ctx, service.stores, mode)
+
+	workCtx, releaseWork, err := service.acquireSyncForWork(ctx)
+	if err != nil {
+		return UsageSyncResult{}, usageSyncError(providerID, err)
+	}
+	defer releaseWork()
+
+	result, err := integration.Sync(workCtx, service.stores, mode)
 	if mode == SyncExistingProvider && errors.Is(err, store.ErrUsageProviderMissing) {
 		return UsageSyncResult{
 			ProviderID: providerID,
@@ -85,6 +95,83 @@ func (service *Service) sync(
 		return UsageSyncResult{}, usageSyncError(providerID, err)
 	}
 	return result, nil
+}
+
+func (service *Service) acquireSyncForWork(ctx context.Context) (context.Context, func(), error) {
+	workBudget, hasBudget := workTimeoutBudget(ctx)
+	waitCtx, stopWait := waitContextIgnoringDeadline(ctx)
+	defer stopWait()
+
+	if err := service.acquireSync(waitCtx); err != nil {
+		return nil, func() {}, err
+	}
+
+	workCtx := ctx
+	release := func() { service.syncMu.Unlock() }
+	if hasBudget {
+		var cancel context.CancelFunc
+		workCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), workBudget)
+		release = func() {
+			cancel()
+			service.syncMu.Unlock()
+		}
+		stop := context.AfterFunc(ctx, func() {
+			if errors.Is(ctx.Err(), context.Canceled) {
+				cancel()
+			}
+		})
+		prev := release
+		release = func() {
+			stop()
+			prev()
+		}
+	}
+	return workCtx, release, nil
+}
+
+func workTimeoutBudget(ctx context.Context) (time.Duration, bool) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0, false
+	}
+	budget := time.Until(deadline)
+	if budget < 0 {
+		return 0, true
+	}
+	return budget, true
+}
+
+func waitContextIgnoringDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	waitCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	stop := context.AfterFunc(ctx, func() {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			cancel()
+		}
+	})
+	return waitCtx, func() {
+		stop()
+		cancel()
+	}
+}
+
+func (service *Service) acquireSync(ctx context.Context) error {
+	const poll = 20 * time.Millisecond
+	timer := time.NewTimer(poll)
+	defer timer.Stop()
+	for {
+		if service.syncMu.TryLock() {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		timer.Reset(poll)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func usageSyncError(providerID string, err error) error {

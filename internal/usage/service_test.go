@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -53,6 +54,130 @@ func (integration *pausedUsageIntegration) Sync(
 		return UsageSyncResult{}, err
 	}
 	return UsageSyncResult{ProviderID: ProviderCodex, Source: SourceCodexSessionJSONL}, nil
+}
+
+type serialUsageIntegration struct {
+	release   chan struct{}
+	inFlight  atomic.Int32
+	maxFlight atomic.Int32
+	entered   atomic.Int32
+}
+
+func (*serialUsageIntegration) ProviderID() string { return ProviderCodex }
+func (*serialUsageIntegration) SourceIDs() []string {
+	return []string{SourceCodexSessionJSONL}
+}
+func (*serialUsageIntegration) PricingInfo() UsagePricingInfo { return UsagePricingInfo{} }
+
+func (integration *serialUsageIntegration) Sync(
+	ctx context.Context,
+	_ store.Factory,
+	_ SyncProvisionMode,
+) (UsageSyncResult, error) {
+	n := integration.inFlight.Add(1)
+	for {
+		cur := integration.maxFlight.Load()
+		if n <= cur || integration.maxFlight.CompareAndSwap(cur, n) {
+			break
+		}
+	}
+	integration.entered.Add(1)
+	defer integration.inFlight.Add(-1)
+	select {
+	case <-integration.release:
+		return UsageSyncResult{ProviderID: ProviderCodex, Source: SourceCodexSessionJSONL}, nil
+	case <-ctx.Done():
+		return UsageSyncResult{}, ctx.Err()
+	}
+}
+
+func TestUsageSyncSerializesConcurrentImports(t *testing.T) {
+	integration := &serialUsageIntegration{release: make(chan struct{})}
+	service := NewService(store.NewFactory(filepath.Join(t.TempDir(), "usage.db")), MustRegistry(integration))
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := service.SyncCodex(context.Background())
+			errs <- err
+		}()
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for integration.entered.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if integration.entered.Load() < 1 {
+		t.Fatal("first sync never entered Integration.Sync")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := integration.entered.Load(); got != 1 {
+		t.Fatalf("concurrent Sync bodies entered=%d, want 1", got)
+	}
+	if got := integration.maxFlight.Load(); got != 1 {
+		t.Fatalf("max in-flight Sync bodies=%d, want 1", got)
+	}
+	close(integration.release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("sync: %v", err)
+		}
+	}
+	if got := integration.maxFlight.Load(); got != 1 {
+		t.Fatalf("max in-flight after both completed=%d, want 1", got)
+	}
+}
+
+func TestUsageSyncWorkTimeoutStartsAfterLock(t *testing.T) {
+	integration := &serialUsageIntegration{release: make(chan struct{})}
+	service := NewService(store.NewFactory(filepath.Join(t.TempDir(), "usage.db")), MustRegistry(integration))
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.SyncCodex(context.Background())
+		firstDone <- err
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for integration.entered.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if integration.entered.Load() < 1 {
+		t.Fatal("holder sync never entered Integration.Sync")
+	}
+
+	workBudget := 40 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), workBudget)
+	defer cancel()
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := service.SyncCodex(ctx)
+		secondDone <- err
+	}()
+
+	time.Sleep(workBudget + 40*time.Millisecond)
+	close(integration.release)
+
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("holder sync: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("holder sync did not finish")
+	}
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("queued sync should keep full work budget after lock wait, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("queued sync did not finish")
+	}
 }
 
 func TestBackgroundUsageSyncDoesNotRecreateProviderDeletedAfterDispatch(t *testing.T) {

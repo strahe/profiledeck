@@ -451,6 +451,17 @@ func Open(ctx context.Context, databasePath string, readOnly bool) (*Store, erro
 		_ = sqlDB.Close()
 		return nil, err
 	}
+	if !readOnly {
+		var journalMode string
+		if err := sqlDB.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&journalMode); err != nil {
+			_ = sqlDB.Close()
+			return nil, err
+		}
+		if !strings.EqualFold(strings.TrimSpace(journalMode), "wal") {
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("sqlite journal_mode=%q, want wal", journalMode)
+		}
+	}
 
 	return &Store{
 		db:   bun.NewDB(sqlDB, sqlitedialect.New()),
@@ -3390,6 +3401,9 @@ func sqliteDSN(databasePath string, readOnly bool) string {
 	q.Set("mode", mode)
 	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", sqliteBusyTimeout.Milliseconds()))
 	q.Add("_pragma", "foreign_keys(1)")
+	if !readOnly {
+		q.Add("_pragma", "journal_mode(WAL)")
+	}
 	u.RawQuery = q.Encode()
 
 	return u.String()
