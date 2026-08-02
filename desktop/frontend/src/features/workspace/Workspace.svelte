@@ -58,6 +58,11 @@
 	import { AntigravityQuotaReadPolicy } from "../profiles/antigravity-quota-policy.js";
 	import { AntigravityQuotaController } from "../profiles/antigravity-quota.svelte.js";
 	import { CodexStartupQuotaReadCoordinator } from "../profiles/codex-quota-policy.js";
+	import {
+		GrokBuildQuotaReadPolicy,
+		reconcileGrokBuildProfileSummaries,
+	} from "../profiles/grok-build-quota-policy.js";
+	import { GrokBuildQuotaController } from "../profiles/grok-build-quota.svelte.js";
 	import type { ProfileUseRequest } from "../profiles/types";
 	import { provideCodexRuntime } from "../settings/codex-runtime.svelte.js";
 	import WorkspaceViewStatus from "./WorkspaceViewStatus.svelte";
@@ -91,6 +96,7 @@
 
 	type DashboardUpdatePayload = {
 		event: DesktopChangeEvent;
+		events?: DesktopChangeEvent[];
 		dashboard: DashboardResult;
 		error?: DesktopError | null;
 	};
@@ -186,6 +192,8 @@
 
 	const codexRuntime = provideCodexRuntime({ showError, showNotice });
 	const codexStartupQuotaRead = new CodexStartupQuotaReadCoordinator();
+	const grokBuildQuota = new GrokBuildQuotaController({ showError });
+	const grokBuildQuotaReadPolicy = new GrokBuildQuotaReadPolicy();
 	const antigravityQuota = new AntigravityQuotaController({ showError });
 	const antigravityQuotaReadPolicy = new AntigravityQuotaReadPolicy();
 	let workspaceRoute = $derived(parseWorkspaceRoute(currentPath));
@@ -294,6 +302,12 @@
 	});
 
 	$effect(() => {
+		const profiles = grokBuildProfileSummaries;
+		const activeProfileID = grokBuildActiveProfileID;
+		untrack(() => grokBuildQuota.setProfiles(profiles, activeProfileID));
+	});
+
+	$effect(() => {
 		const profiles = antigravityProfileSummaries;
 		untrack(() => antigravityQuota.setProfiles(profiles));
 	});
@@ -361,6 +375,7 @@
 			window.removeEventListener("hashchange", syncPath);
 			for (const dispose of off) dispose();
 			stopRuntime();
+			grokBuildQuota.stop();
 			antigravityQuota.stop();
 			cancelAll();
 		};
@@ -372,7 +387,14 @@
 			const dashboardResult = await track("dashboard", AppService.Dashboard());
 			applyDashboardResult(dashboardResult);
 			codexRuntime.setProfiles(codexProfileSummaries);
+			const grokBuildCurrentProfileID = dashboardActiveProfileID(dashboardResult, grokBuildProviderID);
+			grokBuildQuota.setProfiles(grokBuildProfileSummaries, grokBuildCurrentProfileID);
 			antigravityQuota.setProfiles(antigravityProfileSummaries);
+			const grokBuildStartupProfileID = grokBuildQuotaReadPolicy.startup(
+				grokBuildCurrentProfileID,
+				agentEnabled(dashboardResult.agents ?? [], "grok-build"),
+			);
+			if (grokBuildStartupProfileID) void grokBuildQuota.readCurrentQuota(grokBuildStartupProfileID);
 			const startupProfileID = antigravityQuotaReadPolicy.startup(
 				dashboardResult.active_states?.find((state) => state.provider_id === antigravityProviderID)?.profile_id ?? "",
 			);
@@ -787,34 +809,51 @@
 	function handleDashboardUpdate(payload: DashboardUpdatePayload | null | undefined) {
 		if (!payload) return;
 		if (payload.dashboard) applyDashboardResult(payload.dashboard);
-		const switchedProfileID = antigravityQuotaReadPolicy.afterSwitch(payload.event);
-		if (switchedProfileID) {
-			antigravityQuota.setProfiles(antigravityProfileSummaries);
-			void antigravityQuota.readQuota(switchedProfileID);
+		const grokBuildCurrentProfileID = dashboardActiveProfileID(payload.dashboard, grokBuildProviderID);
+		const grokBuildEnabled = agentEnabled(payload.dashboard?.agents ?? [], "grok-build");
+		const events = payload.events?.length ? payload.events : [payload.event];
+		const changedProviders = new Set<string>();
+		let reloadCodexRuntime = false;
+		for (const event of events) {
+			const switchedGrokBuildProfileID = event?.profile_id === grokBuildCurrentProfileID
+				? grokBuildQuotaReadPolicy.afterSwitch(event, grokBuildEnabled)
+				: "";
+			if (switchedGrokBuildProfileID) {
+				grokBuildQuota.setProfiles(grokBuildProfileSummaries, grokBuildCurrentProfileID);
+				void grokBuildQuota.readCurrentQuota(switchedGrokBuildProfileID);
+			}
+			const switchedProfileID = antigravityQuotaReadPolicy.afterSwitch(event);
+			if (switchedProfileID) {
+				antigravityQuota.setProfiles(antigravityProfileSummaries);
+				void antigravityQuota.readQuota(switchedProfileID);
+			}
+			if (event.error && !isCancelError(event.error)) showError(event.error);
+			if (event.profile_changed || event.active_state_changed) changedProviders.add(event.provider_id ?? "");
+			if (event.kind === "agent-state-changed" && event.agent_id === "codex" && event.agent_enabled) {
+				reloadCodexRuntime = true;
+			}
 		}
 		if (payload.error && !isCancelError(payload.error)) showError(payload.error);
-		if (payload.event?.error && !isCancelError(payload.event.error)) showError(payload.event.error);
-		if (payload.event?.profile_changed || payload.event?.active_state_changed) {
-			if (payload.event.provider_id === antigravityProviderID && isAgentEnabled("antigravity")) void refreshAntigravityDetect();
-			else if (payload.event.provider_id === claudeCodeProviderID && isAgentEnabled("claude-code")) void refreshClaudeCodeDetect();
-			else if (payload.event.provider_id === grokBuildProviderID && isAgentEnabled("grok-build")) void refreshGrokBuildDetect();
-			else if (payload.event.provider_id === codexProviderID && isAgentEnabled("codex")) void refreshDetect();
-		}
-		if (payload.event?.kind === "agent-state-changed" && payload.event.agent_id === "codex" && payload.event.agent_enabled) {
-			void codexRuntime.load();
-		}
+		if (changedProviders.has(antigravityProviderID) && isAgentEnabled("antigravity")) void refreshAntigravityDetect();
+		if (changedProviders.has(claudeCodeProviderID) && isAgentEnabled("claude-code")) void refreshClaudeCodeDetect();
+		if (changedProviders.has(grokBuildProviderID) && isAgentEnabled("grok-build")) void refreshGrokBuildDetect();
+		if (changedProviders.has(codexProviderID) && isAgentEnabled("codex")) void refreshDetect();
+		if (reloadCodexRuntime) void codexRuntime.load();
 	}
 
 	function applyDashboardResult(next: DashboardResult) {
 		dashboard = next;
+		const grokBuildEnabled = agentEnabled(next.agents ?? [], "grok-build");
+		const grokBuildCurrentProfileID = dashboardActiveProfileID(next, grokBuildProviderID);
 		if (!agentEnabled(next.agents ?? [], "codex")) {
 			detectResult = null;
 			detectError = "";
 			codexRuntime.reset();
 		}
-		if (!agentEnabled(next.agents ?? [], "grok-build")) {
+		if (!grokBuildEnabled) {
 			grokBuildDetectResult = null;
 			grokBuildDetectError = "";
+			grokBuildQuota.reset("agent-disabled");
 		}
 		if (!agentEnabled(next.agents ?? [], "antigravity")) {
 			antigravityDetectResult = null;
@@ -830,9 +869,14 @@
 		codexProfileSummaries = next.codex_profiles?.profiles ?? [];
 		loadingProfiles = false;
 		codexConfigSets = next.codex_config_sets?.config_sets ?? [];
-		grokBuildProfileSummaries = next.grok_build_profiles?.profiles ?? [];
+		grokBuildProfileSummaries = reconcileGrokBuildProfileSummaries(
+			grokBuildProfileSummaries,
+			grokBuildEnabled ? next.grok_build_profiles?.profiles : [],
+			grokBuildCurrentProfileID,
+		) as GrokBuildProfileSummary[];
 		loadingGrokBuildProfiles = false;
-		grokBuildConfigSets = next.grok_build_config_sets?.config_sets ?? [];
+		if (next.grok_build_config_sets) grokBuildConfigSets = next.grok_build_config_sets.config_sets ?? [];
+		else if (!grokBuildEnabled) grokBuildConfigSets = [];
 		antigravityProfileSummaries = next.antigravity_profiles?.profiles ?? [];
 		loadingAntigravityProfiles = false;
 		claudeCodeProfileSummaries = next.claude_code_profiles?.profiles ?? [];
@@ -849,6 +893,10 @@
 
 	function agentEnabled(states: DashboardResult["agents"], id: AgentID): boolean {
 		return states?.some((state) => String(state.manifest.id) === id && state.enabled) ?? false;
+	}
+
+	function dashboardActiveProfileID(value: DashboardResult | null | undefined, providerID: string): string {
+		return value?.active_states?.find((state) => state.provider_id === providerID)?.profile_id ?? "";
 	}
 
 	function isNavActive(view: WorkspaceView): boolean {
@@ -1207,6 +1255,10 @@
 							useRequest={grokBuildUseRequest}
 							refreshDetect={refreshGrokBuildDetect}
 							refreshProfiles={refreshGrokBuildProfiles}
+							quotaForSummary={(summary) => grokBuildQuota.quotaForSummary(summary)}
+							quotaCheckForSummary={(summary) => grokBuildQuota.checkForSummary(summary)}
+							quotaLoading={(profileID) => grokBuildQuota.isLoading(profileID)}
+							refreshQuota={(profileID) => grokBuildQuota.readQuota(profileID)}
 							cancelDetect={cancelGrokBuildDetect}
 							onUseRequestHandled={(sequence) => {
 								if (grokBuildUseRequest?.sequence === sequence) grokBuildUseRequest = null;

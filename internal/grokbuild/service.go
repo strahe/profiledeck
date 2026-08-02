@@ -8,6 +8,7 @@ import (
 	"github.com/strahe/profiledeck/internal/agent"
 	"github.com/strahe/profiledeck/internal/apperror"
 	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
+	grokquota "github.com/strahe/profiledeck/internal/grokbuild/quota"
 	"github.com/strahe/profiledeck/internal/maintenance"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/provider"
@@ -21,19 +22,23 @@ type Service struct {
 	runtime     *runtime.Service
 	stores      store.Factory
 	maintenance maintenance.Runner
+	sharedLock  maintenance.SharedLockRunner
 	policy      agent.Policy
 	grokHome    string
+	quotaReader grokquota.Reader
 }
 
 func NewService(
 	runtimeService *runtime.Service,
 	maintenanceRunner maintenance.Runner,
+	sharedLockRunner maintenance.SharedLockRunner,
 	policy agent.Policy,
 	grokHome string,
 ) *Service {
 	return &Service{
 		runtime: runtimeService, stores: runtimeService.StoreFactory(),
-		maintenance: maintenanceRunner, policy: policy, grokHome: grokHome,
+		maintenance: maintenanceRunner, sharedLock: sharedLockRunner, policy: policy,
+		grokHome: grokHome, quotaReader: grokquota.NewACPClient(),
 	}
 }
 

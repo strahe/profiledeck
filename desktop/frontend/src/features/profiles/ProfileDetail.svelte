@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from "svelte";
 	import { _ } from "svelte-i18n";
 	import CheckIcon from "@lucide/svelte/icons/check";
 	import GitForkIcon from "@lucide/svelte/icons/git-fork";
@@ -42,6 +43,7 @@
 		onSetConfig: () => void;
 		onRefreshQuota?: () => void;
 		onDelete: () => void;
+		quotaCard?: Snippet;
 	}
 
 	let {
@@ -60,6 +62,7 @@
 		onSetConfig,
 		onRefreshQuota = () => {},
 		onDelete,
+		quotaCard,
 	}: Props = $props();
 	const runtime = useCodexRuntime();
 	let profileName = $derived(detail.summary.profile.name || detail.summary.profile.id);
@@ -161,9 +164,13 @@
 		</dl>
 	</SectionCard>
 
-	{#if mode === "codex"}
+	{#if quotaCard}
+		{@render quotaCard()}
+	{:else if mode === "codex"}
 		<ProfileQuotaCard {quota} loading={quotaLoading} disabled={!!busyAction} onRefresh={onRefreshQuota} />
+	{/if}
 
+	{#if mode === "codex"}
 		<SectionCard title={$_("profilePages.detail.automation")} description={$_("profilePages.detail.automationDescription")}>
 			{#if runtime.loading}
 				<div class="flex justify-center py-6"><Spinner /></div>

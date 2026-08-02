@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from "svelte";
+	import { onMount, type Snippet } from "svelte";
 	import { _ } from "svelte-i18n";
 	import CheckIcon from "@lucide/svelte/icons/check";
 	import EyeIcon from "@lucide/svelte/icons/eye";
@@ -43,6 +43,8 @@
 		onDelete,
 		onRefreshQuota,
 		onRetrySource,
+		quotaAction,
+		quotaSummary,
 	}: {
 		profiles: ManagedProfileListItem[];
 		loading: boolean;
@@ -58,6 +60,8 @@
 		onDelete: (profile: ManagedProfileListItem) => void;
 		onRefreshQuota?: (profile: ManagedProfileListItem) => void;
 		onRetrySource?: () => void;
+		quotaAction?: Snippet<[ManagedProfileListItem, number]>;
+		quotaSummary?: Snippet<[ManagedProfileListItem, number]>;
 	} = $props();
 
 	let nowUnixMS = $state(Date.now());
@@ -130,7 +134,9 @@
 							</div>
 
 							<div class="ml-auto flex shrink-0 items-center justify-end gap-2">
-								{#if onRefreshQuota}
+								{#if quotaAction}
+									{@render quotaAction(profile, nowUnixMS)}
+								{:else if onRefreshQuota}
 									<ProfileQuotaFreshness
 										checkedAtUnixMS={profile.quotaCheckedAtUnixMS ?? 0}
 										checkOutcome={profile.quotaCheckOutcome ?? "never"}
@@ -162,7 +168,9 @@
 							</div>
 						</div>
 
-						{#if onRefreshQuota}
+						{#if quotaSummary}
+							{@render quotaSummary(profile, nowUnixMS)}
+						{:else if onRefreshQuota}
 							<ProfileQuotaSummary
 								quota={profile.quota ?? null}
 								loading={profile.quotaLoading ?? false}

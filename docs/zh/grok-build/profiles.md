@@ -118,6 +118,14 @@ profiledeck-cli switch grok-build work --yes
 
 当前工作副本缺失或无效时，ProfileDeck 会警告它不会被保存；确认切换后，仍可恢复所选 Profile 中有效的已保存文件。如果 `config.toml` 包含认证覆盖设置，ProfileDeck 会提示 Grok Build 可能绕过所选的已保存登录，但不会打印该设置，也不会自动修改。
 
+## 查询 credits 额度
+
+ProfileDeck 桌面端启动时会查询一次当前 Grok Build Profile，成功切换后也会查询一次。要再次查询，请在当前 Profile 上选择**刷新 credits**。ProfileDeck 不会轮询；非当前 Profile 不能发起新查询。如果本次运行中已经查询过相同登录和设置组合，非当前 Profile 仍可能显示之前的快照。
+
+查询会遵循当前 Grok Build 的网络和登录设置。Grok Build 可能续期当前登录。ProfileDeck 只在内存中保留 credits 结果，不会将其写入数据库、用量报告或应用备份。工作登录如有续期，之后仍由现有的显式保存当前状态或切换捕获流程处理。
+
+查询 credits 需要受支持的 Grok Build 已保存登录，不支持通过 `GROK_AUTH` 或 `GROK_AUTH_PATH` 提供认证。
+
 ## 删除 Profile
 
 在桌面端打开 Profile 的操作菜单并选择**删除 Profile**，或运行：
@@ -128,4 +136,4 @@ profiledeck-cli grok-build profile delete work --yes
 
 这会从所有 Agent 中删除完整的全局 Profile，而不只是 Grok Build 数据。只有该 Profile 使用的已保存登录和配置集也会删除，共享数据会保留。当前 Profile 或存在未完成操作的 Profile 不能删除。删除不会修改 Grok Build 当前使用的文件。
 
-此集成可以根据本地会话记录提供 [Grok Build 用量与估算成本](./usage-cost.md)，但不支持配额、credits、实际账单或自定义认证来源。
+[Grok Build 用量与估算成本](./usage-cost.md)仍然是基于本地会话记录的离线报告，与 credits 查询相互独立。此集成不支持实际账单或发票。ProfileDeck 不会为 credits 查询配置或管理 Grok Build 自身的网络或认证提供器。

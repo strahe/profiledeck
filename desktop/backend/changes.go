@@ -43,9 +43,10 @@ type DesktopChangeEvent struct {
 }
 
 type DashboardUpdatePayload struct {
-	Event     DesktopChangeEvent `json:"event"`
-	Dashboard DashboardResult    `json:"dashboard"`
-	Error     *DesktopError      `json:"error,omitempty"`
+	Event     DesktopChangeEvent   `json:"event"`
+	Events    []DesktopChangeEvent `json:"events,omitempty"`
+	Dashboard DashboardResult      `json:"dashboard"`
+	Error     *DesktopError        `json:"error,omitempty"`
 }
 
 type ChangeNotifier struct {
