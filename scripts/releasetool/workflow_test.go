@@ -10,22 +10,7 @@ import (
 
 func TestReleaseWorkflowKeepsTagAndManualEntrypoints(t *testing.T) {
 	t.Parallel()
-	packageDirectory, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	workflow, err := os.ReadFile(filepath.Join(
-		packageDirectory,
-		"..",
-		"..",
-		".github",
-		"workflows",
-		"release.yml",
-	))
-	if err != nil {
-		t.Fatal(err)
-	}
-	content := string(workflow)
+	content := readReleaseWorkflow(t)
 	for name, required := range map[string]string{
 		"tag trigger":      "  push:\n    tags:\n      - 'v*'\n",
 		"manual input":     "  workflow_dispatch:\n    inputs:\n      version:\n",
@@ -51,6 +36,28 @@ func TestReleaseWorkflowKeepsTagAndManualEntrypoints(t *testing.T) {
 	draftSection := content[draftIndex:]
 	if !strings.Contains(draftSection, "libgtk-4-dev libwebkitgtk-6.0-dev") {
 		t.Error("draft job must install libgtk-4-dev and libwebkitgtk-6.0-dev before ci-release-finalize")
+	}
+}
+
+func TestReleaseWorkflowUsesAnExplicitNotesRangeAndTagTitle(t *testing.T) {
+	t.Parallel()
+	content := readReleaseWorkflow(t)
+	for name, required := range map[string]string{
+		"notes output":              "      notes_start_tag: ${{ steps.release_notes.outputs.tag }}\n",
+		"paginated release history": "            gh api --paginate \\\n",
+		"notes resolver":            "              go run ./scripts/releasetool notes-start-tag --version \"$VERSION\"\n",
+		"ancestor verification":     "            if ! git merge-base --is-ancestor \"$notes_start_commit\" \"$RELEASE_COMMIT\"; then\n",
+		"draft notes input":         "      NOTES_START_TAG: ${{ needs.validate.outputs.notes_start_tag }}\n",
+		"conditional notes range":   "          if [[ -n \"$NOTES_START_TAG\" ]]; then\n",
+		"notes range argument":      "            args+=(--notes-start-tag \"$NOTES_START_TAG\")\n",
+		"tag release title":         "            --generate-notes --title \"$TAG\")\n",
+	} {
+		if !strings.Contains(content, required) {
+			t.Errorf("release workflow is missing %s", name)
+		}
+	}
+	if strings.Contains(content, `--title "ProfileDeck $VERSION"`) {
+		t.Error("release workflow still prefixes the public Release title with the product name")
 	}
 }
 
@@ -94,4 +101,24 @@ func TestWorkflowRunnerVariablesStayPlatformScoped(t *testing.T) {
 			}
 		}
 	}
+}
+
+func readReleaseWorkflow(t *testing.T) string {
+	t.Helper()
+	packageDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := os.ReadFile(filepath.Join(
+		packageDirectory,
+		"..",
+		"..",
+		".github",
+		"workflows",
+		"release.yml",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(workflow)
 }

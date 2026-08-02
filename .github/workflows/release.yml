@@ -33,6 +33,7 @@ jobs:
       channel: ${{ steps.contract.outputs.channel }}
       commit: ${{ steps.contract.outputs.commit }}
       built_at: ${{ steps.contract.outputs.built_at }}
+      notes_start_tag: ${{ steps.release_notes.outputs.tag }}
     steps:
       - name: Checkout release source
         uses: actions/checkout@v7
@@ -136,6 +137,31 @@ jobs:
             echo "::error::A Draft or Release already exists for $TAG."
             exit 1
           fi
+
+      - name: Resolve release notes range
+        id: release_notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.contract.outputs.version }}
+          RELEASE_COMMIT: ${{ steps.contract.outputs.commit }}
+        run: |
+          set -euo pipefail
+          notes_start_tag="$(
+            gh api --paginate \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '.[] | {tag_name: .tag_name, draft: .draft, prerelease: .prerelease}' |
+              go run ./scripts/releasetool notes-start-tag --version "$VERSION"
+          )"
+          if [[ -n "$notes_start_tag" ]]; then
+            notes_start_commit="$(git rev-parse --verify "$notes_start_tag^{commit}")"
+            if ! git merge-base --is-ancestor "$notes_start_commit" "$RELEASE_COMMIT"; then
+              echo "::error::Release notes start tag $notes_start_tag is not an ancestor of the release commit."
+              exit 1
+            fi
+          fi
+          printf 'tag=%s\n' "$notes_start_tag" >> "$GITHUB_OUTPUT"
 
       - name: Verify release secrets
         shell: bash
@@ -362,6 +388,7 @@ jobs:
       TAG: ${{ needs.validate.outputs.tag }}
       CHANNEL: ${{ needs.validate.outputs.channel }}
       RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+      NOTES_START_TAG: ${{ needs.validate.outputs.notes_start_tag }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout
@@ -430,7 +457,10 @@ jobs:
         run: |
           set -euo pipefail
           args=(release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag
-            --generate-notes --title "ProfileDeck $VERSION")
+            --generate-notes --title "$TAG")
+          if [[ -n "$NOTES_START_TAG" ]]; then
+            args+=(--notes-start-tag "$NOTES_START_TAG")
+          fi
           if [[ "$CHANNEL" == "beta" ]]; then
             args+=(--prerelease --latest=false)
           fi
