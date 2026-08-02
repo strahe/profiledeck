@@ -90,21 +90,28 @@ func newTrayController(ctx context.Context, services backend.Services, ui trayUI
 }
 
 func (c *trayController) Refresh(event *backend.DesktopChangeEvent, emit bool) {
+	var events []backend.DesktopChangeEvent
+	if event != nil {
+		events = []backend.DesktopChangeEvent{*event}
+	}
+	c.RefreshEvents(events, emit)
+}
+
+func (c *trayController) RefreshEvents(events []backend.DesktopChangeEvent, emit bool) {
 	if c == nil {
 		return
 	}
 	menuGeneration := c.menuGeneration.Add(1)
 	var eventGeneration uint64
-	var eventCopy *backend.DesktopChangeEvent
-	if emit && event != nil {
+	var eventCopies []backend.DesktopChangeEvent
+	if emit && len(events) > 0 {
 		eventGeneration = c.eventGeneration.Add(1)
-		copied := *event
-		eventCopy = &copied
+		eventCopies = append([]backend.DesktopChangeEvent(nil), events...)
 	}
-	go c.refresh(menuGeneration, eventGeneration, eventCopy)
+	go c.refresh(menuGeneration, eventGeneration, eventCopies)
 }
 
-func (c *trayController) refresh(menuGeneration, eventGeneration uint64, event *backend.DesktopChangeEvent) {
+func (c *trayController) refresh(menuGeneration, eventGeneration uint64, events []backend.DesktopChangeEvent) {
 	dashboard, dashboardErr := c.loadDashboard(c.ctx)
 	if c.ctx.Err() != nil {
 		return
@@ -129,8 +136,10 @@ func (c *trayController) refresh(menuGeneration, eventGeneration uint64, event *
 			c.ui.SetMenu(menu)
 		}
 	}
-	if event != nil && c.ctx.Err() == nil && c.eventGeneration.Load() == eventGeneration {
-		payload := backend.DashboardUpdatePayload{Event: *event, Dashboard: dashboard}
+	if len(events) > 0 && c.ctx.Err() == nil && c.eventGeneration.Load() == eventGeneration {
+		payload := backend.DashboardUpdatePayload{
+			Event: events[len(events)-1], Events: events, Dashboard: dashboard,
+		}
 		if dashboardErr != nil {
 			payload.Error = backend.FormatDesktopErrorPtr(dashboardErr)
 		}
@@ -308,8 +317,8 @@ func runTrayAction(action func()) {
 
 func subscribeTrayRefresh(services backend.Services, controller *trayController) func() {
 	const debounce = 120 * time.Millisecond
-	debouncer := newDesktopChangeDebouncer(debounce, func(event backend.DesktopChangeEvent) {
-		controller.Refresh(&event, true)
+	debouncer := newDesktopChangeDebouncer(debounce, func(events []backend.DesktopChangeEvent) {
+		controller.RefreshEvents(events, true)
 	})
 
 	unsubscribe := services.SubscribeChanges(func(event backend.DesktopChangeEvent) {

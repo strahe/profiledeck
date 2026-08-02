@@ -768,6 +768,10 @@ func (s *GrokBuildService) ShowProfile(ctx context.Context, profileID string) (g
 	return s.application.GrokBuild().GetProfile(ctx, profileID)
 }
 
+func (s *GrokBuildService) ReadProfileQuota(ctx context.Context, profileID string) (grokbuild.GrokBuildProfileQuota, error) {
+	return s.application.GrokBuild().ReadProfileQuota(ctx, grokbuild.ReadGrokBuildProfileQuotaRequest{ProfileID: profileID})
+}
+
 func (s *GrokBuildService) GetSettings(ctx context.Context) (grokbuild.Settings, error) {
 	return s.application.GrokBuild().GetSettings(ctx)
 }

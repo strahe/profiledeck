@@ -149,7 +149,7 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 	)
 
 	codexService := codex.NewService(runtimeService, switchingService, switchingService, agentService, config.CodexDir)
-	grokBuildService := grokbuild.NewService(runtimeService, switchingService, agentService, config.GrokHome)
+	grokBuildService := grokbuild.NewService(runtimeService, switchingService, switchingService, agentService, config.GrokHome)
 	antigravityService := antigravity.NewService(
 		runtimeService, stores, switchingService, switchingService, agentService, dependencies.switching.Targets,
 	)

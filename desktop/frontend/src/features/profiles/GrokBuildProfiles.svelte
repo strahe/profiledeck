@@ -7,9 +7,11 @@
 	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import PlusIcon from "@lucide/svelte/icons/plus";
+	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
 
 	import ContentContainer from "$lib/components/app/ContentContainer.svelte";
+	import IconAction from "$lib/components/app/IconAction.svelte";
 	import PageHeader from "$lib/components/app/PageHeader.svelte";
 	import * as Alert from "$lib/components/ui/alert";
 	import * as AlertDialog from "$lib/components/ui/alert-dialog";
@@ -39,6 +41,7 @@
 	import type {
 		ConfigSet,
 		DetectResult,
+		GrokBuildProfileQuota,
 		ProfileDetail as GrokBuildProfileDetail,
 		ProfileSaveResult,
 		ProfileSummary,
@@ -48,10 +51,13 @@
 
 	import ConfigSetDialog from "./ConfigSetDialog.svelte";
 	import ConfigSetPage from "./ConfigSetPage.svelte";
+	import GrokBuildQuotaCard from "./GrokBuildQuotaCard.svelte";
+	import GrokBuildQuotaSummary from "./GrokBuildQuotaSummary.svelte";
 	import ProfileDeleteDialog, { type ProfileDeleteTarget } from "./ProfileDeleteDialog.svelte";
 	import ProfileDetail from "./ProfileDetail.svelte";
 	import ProfileEditorPage from "./ProfileEditorPage.svelte";
 	import ProfileList from "./ProfileList.svelte";
+	import ProfileQuotaFreshness from "./ProfileQuotaFreshness.svelte";
 	import UseProfileDialog from "./UseProfileDialog.svelte";
 	import type {
 		CodexForkBinding,
@@ -60,6 +66,7 @@
 		ManagedProfileListItem,
 		ProfileUseRequest,
 	} from "./types";
+	import type { GrokBuildQuotaCheck } from "./grok-build-quota.svelte.js";
 
 	interface Props {
 		route: GrokBuildProfileRoute;
@@ -73,6 +80,10 @@
 		useRequest: ProfileUseRequest | null;
 		refreshDetect: () => Promise<DetectResult | null>;
 		refreshProfiles: () => Promise<void>;
+		quotaForSummary: (summary: ProfileSummary) => GrokBuildProfileQuota | null;
+		quotaCheckForSummary: (summary: ProfileSummary) => GrokBuildQuotaCheck;
+		quotaLoading: (profileID: string) => boolean;
+		refreshQuota: (profileID: string) => Promise<GrokBuildProfileQuota | null>;
 		cancelDetect: () => void;
 		onUseRequestHandled: (sequence: number) => void;
 		showError: (value: unknown) => void;
@@ -91,6 +102,10 @@
 		useRequest,
 		refreshDetect,
 		refreshProfiles,
+		quotaForSummary,
+		quotaCheckForSummary,
+		quotaLoading,
+		refreshQuota,
 		cancelDetect,
 		onUseRequestHandled,
 		showError,
@@ -107,6 +122,7 @@
 	let detailError = $state("");
 	let routeKey = "";
 	let routeSequence = 0;
+	let nowUnixMS = $state(Date.now());
 
 	let profileID = $state("");
 	let profileName = $state("");
@@ -191,6 +207,14 @@
 	});
 
 	$effect(() => {
+		const value = detail;
+		if (!value) return;
+		const active = value.summary.profile.id === activeProfileID;
+		if (value.summary.active === active) return;
+		detail = { ...value, summary: { ...value.summary, active } };
+	});
+
+	$effect(() => {
 		if (route.kind !== "fork" || !forkProfilesLoaded) return;
 		const destinationKey = forkDestination
 			? `${forkDestination.id}:${forkDestination.updated_at_unix_ms}`
@@ -236,7 +260,11 @@
 	});
 
 	onMount(() => {
+		const timer = window.setInterval(() => {
+			nowUnixMS = Date.now();
+		}, 60_000);
 		return () => {
+			window.clearInterval(timer);
 			cancelAll();
 			cancelDetect();
 		};
@@ -713,6 +741,14 @@
 		};
 	}
 
+	function quotaForProfile(profile: ManagedProfileListItem): GrokBuildProfileQuota | null {
+		return quotaForSummary(profile.summary as ProfileSummary);
+	}
+
+	function quotaCheckForProfile(profile: ManagedProfileListItem): GrokBuildQuotaCheck {
+		return quotaCheckForSummary(profile.summary as ProfileSummary);
+	}
+
 	function formatRelativeTime(value: number | undefined): string {
 		if (!value) return "—";
 		const delta = Date.now() - value;
@@ -903,7 +939,24 @@
 			onDetails={(profile) => push(`${basePath}/${encodeURIComponent(profile.id)}`)}
 			onFork={(profile) => push(`${basePath}/${encodeURIComponent(profile.id)}/fork`)}
 			onRetrySource={() => { void Promise.all([refreshDetect(), refreshProfiles()]); }}
-		/>
+		>
+			{#snippet quotaAction(profile, currentTime)}
+				{#if profile.summary.active}
+					{@const check = quotaCheckForProfile(profile)}
+					<ProfileQuotaFreshness checkedAtUnixMS={check.checkedAtUnixMS} checkOutcome={check.outcome} nowUnixMS={currentTime} />
+					<IconAction
+						label={$_("grokBuild.quota.refreshForProfile", { values: { profile: profile.name } })}
+						disabled={!!busyAction || useBuilding || useApplying || quotaLoading(profile.id)}
+						onclick={() => { void refreshQuota(profile.id); }}
+					>
+						{#if quotaLoading(profile.id)}<Spinner />{:else}<RefreshCwIcon />{/if}
+					</IconAction>
+				{/if}
+			{/snippet}
+			{#snippet quotaSummary(profile, currentTime)}
+				<GrokBuildQuotaSummary quota={quotaForProfile(profile)} loading={quotaLoading(profile.id)} nowUnixMS={currentTime} />
+			{/snippet}
+		</ProfileList>
 	</ContentContainer>
 {:else if route.kind === "config-sets"}
 	<ConfigSetPage
@@ -979,7 +1032,21 @@
 			id: detail!.summary.profile.id,
 			name: detail!.summary.profile.name || translate("profile.unnamed"),
 		})}
-	/>
+	>
+		{#snippet quotaCard()}
+			{@const quotaCheck = quotaCheckForSummary(detail!.summary)}
+			<GrokBuildQuotaCard
+				quota={quotaForSummary(detail!.summary)}
+				loading={quotaLoading(detail!.summary.profile.id)}
+				active={detail!.summary.active}
+				checkedAtUnixMS={quotaCheck.checkedAtUnixMS}
+				checkOutcome={quotaCheck.outcome}
+				{nowUnixMS}
+				disabled={!!busyAction}
+				onRefresh={() => { void refreshQuota(detail!.summary.profile.id); }}
+			/>
+		{/snippet}
+	</ProfileDetail>
 {:else}
 	<ProfileEditorPage
 		mode="fork"

@@ -118,6 +118,14 @@ The preview never contains `auth.json` or `config.toml` content. Both files are 
 
 If the current working copy is missing or invalid, ProfileDeck warns that it will not be saved. A confirmed switch can still restore the selected Profile's valid saved files. If `config.toml` contains an authentication override, ProfileDeck warns that Grok Build may bypass the selected saved login; it does not print the setting or change it automatically.
 
+## Check credits
+
+Desktop checks the current Grok Build Profile once when ProfileDeck starts and again after a successful switch. Use **Refresh credits** on the current Profile to check again. ProfileDeck does not poll, and an inactive Profile cannot start a new check. If a matching result was already checked during this run, the inactive Profile may continue to show that earlier snapshot.
+
+The check follows the current Grok Build network and sign-in settings. Grok Build may renew its current sign-in. ProfileDeck keeps the credits result only in memory; it is not added to the database, usage reports, or application backups. A renewed working sign-in is handled later by the same explicit save-current or switch capture used for other valid Grok Build changes.
+
+Credits checks require a supported saved Grok Build sign-in. Authentication supplied through `GROK_AUTH` or `GROK_AUTH_PATH` is not supported.
+
 ## Delete a Profile
 
 Open a Profile's action menu in Desktop and choose **Delete Profile**, or run:
@@ -128,4 +136,4 @@ profiledeck-cli grok-build profile delete work --yes
 
 This deletes the complete global Profile from every Agent, not only its Grok Build data. It also deletes saved logins and Config Sets used only by that Profile, while shared saved data remains. A current Profile or one with an unfinished operation cannot be deleted. Deletion does not change Grok Build's working files.
 
-[Grok Build usage and estimated cost](./usage-cost.md) are available from local session records. Quotas, credits, actual billing, and custom authentication sources are not supported by this integration.
+[Grok Build usage and estimated cost](./usage-cost.md) remain offline reports from local session records and are separate from credits checks. Actual billing and invoices are not supported. ProfileDeck does not configure or manage Grok Build's network or authentication providers for credits checks.

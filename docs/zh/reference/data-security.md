@@ -53,6 +53,7 @@ ProfileDeck 的大部分操作只使用本地数据。
 
 - 用量同步和报告读取本地 Codex 或 Grok Build 会话文件，不会请求计费服务。
 - Codex 限额查询会使用所选的已保存登录连接 Codex 或 OpenAI。该登录绝不会发送到已保存 Codex 设置中的自定义模型服务地址。限额结果是临时数据，不会写入用量报告。
+- Grok Build credits 查询会使用当前受管 Profile，并遵循已安装 Grok Build 的网络和登录设置。查询期间，Grok 可能续期当前登录。ProfileDeck 不会查询非当前 Profile，结果只保留在内存中，不会写入数据库、用量报告或应用备份。
 - Antigravity 限额检查会把当前 Antigravity 访问令牌发送到固定但未公开的 Google Cloud Code 服务，使用该服务可能带来账号风险。检查过程中，ProfileDeck 不会刷新、保存或回写令牌。结果只保留在应用内存中，不会写入数据库、用量报告或应用备份。
 - 桌面端更新检查和下载会连接 GitHub 上公开的 ProfileDeck Release。
 

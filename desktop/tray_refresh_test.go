@@ -51,10 +51,10 @@ func buildEnglishTrayMenu(
 	return buildTrayMenu(dashboard, dashboardErr, actions, trayEnglishMessages)
 }
 
-func TestDesktopChangeDebouncerCoalescesLatestEvent(t *testing.T) {
-	events := make(chan backend.DesktopChangeEvent, 2)
-	debouncer := newDesktopChangeDebouncer(20*time.Millisecond, func(event backend.DesktopChangeEvent) {
-		events <- event
+func TestDesktopChangeDebouncerCoalescesRefreshAndPreservesEvents(t *testing.T) {
+	batches := make(chan []backend.DesktopChangeEvent, 2)
+	debouncer := newDesktopChangeDebouncer(20*time.Millisecond, func(events []backend.DesktopChangeEvent) {
+		batches <- events
 	})
 
 	debouncer.Notify(backend.DesktopChangeEvent{Kind: "first"})
@@ -62,25 +62,25 @@ func TestDesktopChangeDebouncerCoalescesLatestEvent(t *testing.T) {
 	debouncer.Notify(backend.DesktopChangeEvent{Kind: "second"})
 
 	select {
-	case event := <-events:
-		if event.Kind != "second" {
-			t.Fatalf("expected latest event to win, got %#v", event)
+	case events := <-batches:
+		if len(events) != 2 || events[0].Kind != "first" || events[1].Kind != "second" {
+			t.Fatalf("expected ordered events, got %#v", events)
 		}
 	case <-time.After(500 * time.Millisecond):
-		t.Fatalf("expected debounced event")
+		t.Fatalf("expected debounced event batch")
 	}
 
 	select {
-	case event := <-events:
-		t.Fatalf("expected stale timer callback to be ignored, got %#v", event)
+	case events := <-batches:
+		t.Fatalf("expected stale timer callback to be ignored, got %#v", events)
 	case <-time.After(80 * time.Millisecond):
 	}
 }
 
 func TestDesktopChangeDebouncerStopCancelsPendingEvent(t *testing.T) {
-	events := make(chan backend.DesktopChangeEvent, 1)
-	debouncer := newDesktopChangeDebouncer(20*time.Millisecond, func(event backend.DesktopChangeEvent) {
-		events <- event
+	batches := make(chan []backend.DesktopChangeEvent, 1)
+	debouncer := newDesktopChangeDebouncer(20*time.Millisecond, func(events []backend.DesktopChangeEvent) {
+		batches <- events
 	})
 
 	debouncer.Notify(backend.DesktopChangeEvent{Kind: "pending"})
@@ -88,8 +88,8 @@ func TestDesktopChangeDebouncerStopCancelsPendingEvent(t *testing.T) {
 	debouncer.Notify(backend.DesktopChangeEvent{Kind: "after-stop"})
 
 	select {
-	case event := <-events:
-		t.Fatalf("expected stopped debouncer not to emit events, got %#v", event)
+	case events := <-batches:
+		t.Fatalf("expected stopped debouncer not to emit events, got %#v", events)
 	case <-time.After(80 * time.Millisecond):
 	}
 }
@@ -494,6 +494,41 @@ func TestTrayControllerRefreshSetsMenuBeforeDashboardEvent(t *testing.T) {
 	}
 	if got := waitForTrayUICall(t, ui); got != "emit:profiledeck:dashboard-updated" {
 		t.Fatalf("expected dashboard update emit after SetMenu, got %q", got)
+	}
+}
+
+func TestTrayControllerRefreshEventsPreservesSwitchAndCleanup(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	services := newDesktopTestServices(t, backend.Environment{ConfigDir: t.TempDir()})
+	ui := newFakeTrayUI()
+	controller := newTrayController(ctx, services, ui, trayLocaleEnglish)
+	controller.loadDashboard = func(context.Context) (backend.DashboardResult, error) {
+		return dashboardWithCodexProfiles(codexProfileSummary("work", "Work", true)), nil
+	}
+	events := []backend.DesktopChangeEvent{
+		{
+			Kind: backend.DesktopChangeSwitchApplied, Status: backend.DesktopChangeStatusSuccess,
+			ProviderID: grokconfig.ProviderID, ProfileID: "work", OperationID: "operation-1",
+		},
+		{
+			Kind: backend.DesktopChangeRecoveryCleanupChanged, Status: backend.DesktopChangeStatusFailure,
+			ProviderID: grokconfig.ProviderID, ProfileID: "work", OperationID: "operation-1",
+		},
+	}
+
+	controller.RefreshEvents(events, true)
+	_ = waitForMenu(t, ui)
+	emitted := waitForEvent(t, ui)
+	payload, ok := emitted.data[0].(backend.DashboardUpdatePayload)
+	if !ok {
+		t.Fatalf("expected dashboard update payload, got %#v", emitted.data)
+	}
+	if len(payload.Events) != 2 ||
+		payload.Events[0].Kind != backend.DesktopChangeSwitchApplied ||
+		payload.Events[1].Kind != backend.DesktopChangeRecoveryCleanupChanged ||
+		payload.Event.Kind != backend.DesktopChangeRecoveryCleanupChanged {
+		t.Fatalf("expected switch and cleanup event batch, got %#v", payload)
 	}
 }
 

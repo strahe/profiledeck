@@ -11,6 +11,7 @@ import type {
 import type {
 	DetectResult as GrokBuildDetectResult,
 	ProfileDetail as GrokBuildProfileDetail,
+	ProfileSummary as GrokBuildProfileSummary,
 } from "../bindings/github.com/strahe/profiledeck/internal/grokbuild/models";
 import type { Profile } from "../bindings/github.com/strahe/profiledeck/internal/profile/models";
 
@@ -170,6 +171,21 @@ function cancellableResolved<T>(value: T): Promise<T> & { cancel: () => void } {
 	return promise;
 }
 
+function grokBuildQuotaProps() {
+	return {
+		quotaForSummary: (_summary: GrokBuildProfileSummary) => null,
+		quotaCheckForSummary: (summary: GrokBuildProfileSummary) => ({
+			profileID: summary.profile.id,
+			credentialID: summary.credential_id ?? "",
+			configSetID: summary.config_set_id ?? "",
+			checkedAtUnixMS: 0,
+			outcome: "never" as const,
+		}),
+		quotaLoading: (_profileID: string) => false,
+		refreshQuota: vi.fn().mockResolvedValue(null),
+	};
+}
+
 beforeEach(async () => {
 	vi.clearAllMocks();
 	locale.set("en");
@@ -186,6 +202,7 @@ describe("managed Profile mutation guards", () => {
 			.mockResolvedValueOnce(validGrokBuildDetect);
 
 		const view = render(GrokBuildProfiles, {
+			...grokBuildQuotaProps(),
 			route: { kind: "new", profileID: "" },
 			profiles: [],
 			dashboardConfigSets: [],
@@ -375,6 +392,7 @@ describe("managed Profile mutation guards", () => {
 		}));
 
 		render(GrokBuildProfiles, {
+			...grokBuildQuotaProps(),
 			route: { kind: "fork", profileID: "work" },
 			profiles: [grokBuildDetail.summary],
 			dashboardConfigSets: [grokBuildDetail.config_set!],
@@ -420,6 +438,7 @@ describe("managed Profile mutation guards", () => {
 		}));
 
 		render(GrokBuildProfiles, {
+			...grokBuildQuotaProps(),
 			route: { kind: "fork", profileID: "work" },
 			profiles: [grokBuildDetail.summary],
 			dashboardConfigSets: [grokBuildDetail.config_set!],
@@ -469,6 +488,7 @@ describe("managed Profile mutation guards", () => {
 		const refreshDetect = vi.fn().mockResolvedValue(missingConfig);
 
 		render(GrokBuildProfiles, {
+			...grokBuildQuotaProps(),
 			route: { kind: "detail", profileID: "work" },
 			profiles: [grokBuildDetail.summary],
 			dashboardConfigSets: [grokBuildDetail.config_set!],
@@ -498,5 +518,53 @@ describe("managed Profile mutation guards", () => {
 		await waitFor(() => expect(refreshDetect).toHaveBeenCalledOnce());
 		expect(within(dialog).getByText(message)).toBeInTheDocument();
 		expect(backend.saveGrokBuildProfile).not.toHaveBeenCalled();
+	});
+
+	it("keeps an open Grok Build detail page in sync with the active Profile", async () => {
+		const inactiveDetail = {
+			...grokBuildDetail,
+			summary: { ...grokBuildDetail.summary, active: false },
+		};
+		backend.showGrokBuildProfile.mockReturnValue(cancellableResolved(inactiveDetail));
+		const view = render(GrokBuildProfiles, {
+			...grokBuildQuotaProps(),
+			route: { kind: "detail", profileID: "work" },
+			profiles: [inactiveDetail.summary],
+			dashboardConfigSets: [grokBuildDetail.config_set!],
+			detectResult: validGrokBuildDetect,
+			detectError: "",
+			activeProfileID: "personal",
+			loadingProfiles: false,
+			profileError: "",
+			useRequest: null,
+			refreshDetect: vi.fn().mockResolvedValue(validGrokBuildDetect),
+			refreshProfiles: vi.fn().mockResolvedValue(undefined),
+			cancelDetect: vi.fn(),
+			onUseRequestHandled: vi.fn(),
+			showError: vi.fn(),
+			showNotice: vi.fn(),
+		}, { wrapper: ProfileTestProviders });
+
+		await screen.findByRole("heading", { name: "Work" });
+		expect(screen.getByRole("button", { name: "Use Profile" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Refresh credits" })).not.toBeInTheDocument();
+
+		await view.rerender({
+			profiles: [grokBuildDetail.summary],
+			activeProfileID: "work",
+		});
+		await waitFor(() => {
+			expect(screen.queryByRole("button", { name: "Use Profile" })).not.toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Refresh credits" })).toBeInTheDocument();
+		});
+
+		await view.rerender({
+			profiles: [inactiveDetail.summary],
+			activeProfileID: "personal",
+		});
+		await waitFor(() => {
+			expect(screen.getByRole("button", { name: "Use Profile" })).toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Refresh credits" })).not.toBeInTheDocument();
+		});
 	});
 });

@@ -43,6 +43,45 @@ export interface DetectResult {
     "warnings"?: string[] | null;
 }
 
+export interface GrokBuildProfileQuota {
+    "profile_id": string;
+    "credential_id": string;
+    "config_set_id": string;
+    "status": GrokBuildProfileQuotaStatus;
+    "snapshot"?: GrokBuildQuotaSnapshot | null;
+}
+
+export enum GrokBuildProfileQuotaStatus {
+    /**
+     * The Go zero value for the underlying type of the enum.
+     */
+    $zero = "",
+
+    GrokBuildProfileQuotaAvailable = "available",
+    GrokBuildProfileQuotaInactive = "inactive",
+    GrokBuildProfileQuotaAuthRequired = "auth_required",
+    GrokBuildProfileQuotaUnsupported = "unsupported",
+    GrokBuildProfileQuotaUnavailable = "unavailable",
+};
+
+export interface GrokBuildQuotaSnapshot {
+    "fetched_at_unix_ms": number;
+    "credit_usage_percent"?: number | null;
+    "remaining_percent"?: number | null;
+    "period_type"?: string;
+    "period_start_unix_seconds"?: number | null;
+    "reset_at_unix_seconds"?: number | null;
+    "period_duration_seconds"?: number | null;
+    "included_limit_cents"?: number | null;
+    "included_used_cents"?: number | null;
+    "prepaid_balance_cents"?: number | null;
+    "on_demand_cap_cents"?: number | null;
+    "on_demand_used_cents"?: number | null;
+    "on_demand_enabled"?: boolean | null;
+    "unified_billing_user"?: boolean | null;
+    "subscription_tier"?: string;
+}
+
 export interface LoginSummary {
     "credential_id": string;
     "reference_count": number;

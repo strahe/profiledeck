@@ -10,14 +10,14 @@ import (
 type desktopChangeDebouncer struct {
 	mu         sync.Mutex
 	delay      time.Duration
-	callback   func(backend.DesktopChangeEvent)
+	callback   func([]backend.DesktopChangeEvent)
 	timer      *time.Timer
 	generation uint64
-	last       backend.DesktopChangeEvent
+	events     []backend.DesktopChangeEvent
 	stopped    bool
 }
 
-func newDesktopChangeDebouncer(delay time.Duration, callback func(backend.DesktopChangeEvent)) *desktopChangeDebouncer {
+func newDesktopChangeDebouncer(delay time.Duration, callback func([]backend.DesktopChangeEvent)) *desktopChangeDebouncer {
 	return &desktopChangeDebouncer{delay: delay, callback: callback}
 }
 
@@ -33,7 +33,7 @@ func (d *desktopChangeDebouncer) Notify(event backend.DesktopChangeEvent) {
 	}
 	d.generation++
 	generation := d.generation
-	d.last = event
+	d.events = append(d.events, event)
 	if d.timer != nil {
 		d.timer.Stop()
 	}
@@ -45,11 +45,12 @@ func (d *desktopChangeDebouncer) Notify(event backend.DesktopChangeEvent) {
 			d.mu.Unlock()
 			return
 		}
-		event := d.last
+		events := append([]backend.DesktopChangeEvent(nil), d.events...)
+		d.events = nil
 		d.timer = nil
 		d.mu.Unlock()
 
-		d.callback(event)
+		d.callback(events)
 	})
 	d.mu.Unlock()
 }
@@ -66,5 +67,6 @@ func (d *desktopChangeDebouncer) Stop() {
 		d.timer.Stop()
 		d.timer = nil
 	}
+	d.events = nil
 	d.mu.Unlock()
 }
