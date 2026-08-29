@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/switching"
 )
@@ -41,6 +42,53 @@ func TestCodexSwitchSharedConfigWritesOnlyAuthAndCapturesRefresh(t *testing.T) {
 		t.Fatalf("expected switch back to second, got %v", err)
 	}
 	assertJSONFile(t, authPath, "second-refreshed")
+}
+
+func TestCodexSwitchPreservesOpaqueFileAuthPayloads(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{name: "agent identity", raw: "{\n  \"auth_mode\": \"agentIdentity\",\n  \"agent_identity\": {\"agent_runtime_id\": \"runtime\", \"agent_private_key\": \"synthetic\", \"account_id\": \"account\", \"chatgpt_user_id\": \"user\", \"plan_type\": \"enterprise\", \"chatgpt_account_is_fedramp\": false, \"opaque\": {\"future\": true}}\n}\n"},
+		{name: "personal access token", raw: "{\n  \"auth_mode\": \"personalAccessToken\",\n  \"personal_access_token\": \"pat-synthetic\"\n}\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			configDir := t.TempDir()
+			codexDir := t.TempDir()
+			if _, err := initCodexTestRuntime(ctx, configDir); err != nil {
+				t.Fatalf("expected init, got %v", err)
+			}
+			writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", tc.raw)
+			if _, err := newCodexTestEnvironment(t, configDir, codexDir).codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
+				t.Fatalf("expected supported file auth Profile, got %v", err)
+			}
+
+			authPath := filepath.Join(codexDir, codexconfig.AuthFileName)
+			if err := os.WriteFile(authPath, []byte(`{"unknown_auth_shape":"invalid"}`), 0o600); err != nil {
+				t.Fatalf("expected invalid auth setup, got %v", err)
+			}
+			plan, err := newCodexTestEnvironment(t, configDir, "").switching.BuildPlan(ctx, switching.BuildPlanRequest{
+				ProviderID: codexconfig.ProviderID, ProfileID: "work",
+			})
+			if err != nil {
+				t.Fatalf("expected switch plan, got %v", err)
+			}
+			assertCodexPlanAction(t, plan, codexconfig.AuthTargetID, planActionUpdate)
+			if !hasOperationPreview(plan.Operations, codexconfig.AuthTargetID, codexpreset.AuthPreviewContent) {
+				t.Fatalf("expected auth preview to be fully redacted, got %#v", plan.Operations)
+			}
+			if _, err := newCodexTestEnvironment(t, configDir, "").switching.Apply(ctx, switching.ApplySwitchRequest{
+				ProviderID: codexconfig.ProviderID, ProfileID: "work", Confirm: true,
+			}); err != nil {
+				t.Fatalf("expected switch, got %v", err)
+			}
+			if got := readFileString(t, authPath); got != tc.raw {
+				t.Fatalf("expected opaque auth payload to be preserved verbatim, got %q", got)
+			}
+		})
+	}
 }
 
 func TestCodexSwitchSharedCredentialWritesOnlyConfig(t *testing.T) {

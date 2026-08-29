@@ -495,8 +495,11 @@ func unsupportedBinding(message, profileID, slotID string) *apperror.Error {
 
 func authPayloadError(err error) *apperror.Error {
 	message := "Codex auth payload is invalid"
+	if errors.Is(err, codexauth.ErrUnsupportedStoredAuthMode) {
+		message = "Codex auth sign-in method is unsupported"
+	}
 	var fieldErr codexauth.FieldError
-	if errors.As(err, &fieldErr) {
+	if errors.As(err, &fieldErr) && fieldErr.Field == "tokens.account_id" {
 		message = "Codex auth account metadata is invalid"
 	}
 	var sizeErr codexauth.SizeError

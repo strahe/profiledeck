@@ -17,7 +17,7 @@ import (
 
 const maxAccountIDLength = 512
 
-const maxAccessTokenLength = 64 * 1024
+const maxCredentialLength = 64 * 1024
 
 const (
 	ManagedRefreshLeadTime = 5 * time.Minute
@@ -25,8 +25,10 @@ const (
 )
 
 var (
-	ErrMissingAccessToken  = errors.New("Codex auth payload is missing tokens.access_token")
-	ErrUnsupportedAuthMode = errors.New("Codex auth mode does not support ChatGPT quota lookup")
+	ErrMissingAccessToken        = errors.New("Codex auth payload is missing tokens.access_token")
+	ErrMissingQuotaAccountID     = errors.New("Codex auth payload is missing account metadata required for direct quota lookup")
+	ErrUnsupportedAuthMode       = errors.New("Codex auth mode does not support ChatGPT quota lookup")
+	ErrUnsupportedStoredAuthMode = errors.New("Codex auth file uses an unsupported sign-in method")
 )
 
 type Snapshot struct {
@@ -42,10 +44,46 @@ type BackendCredentials struct {
 type Mode string
 
 const (
-	ModeChatGPT           Mode = "chatgpt"
-	ModeChatGPTAuthTokens Mode = "chatgptAuthTokens"
-	ModeUnsupported       Mode = "unsupported"
+	ModeChatGPT             Mode = "chatgpt"
+	ModeChatGPTAuthTokens   Mode = "chatgptAuthTokens"
+	ModeAPIKey              Mode = "apikey"
+	ModeAgentIdentity       Mode = "agentIdentity"
+	ModePersonalAccessToken Mode = "personalAccessToken"
+	ModeUnsupported         Mode = "unsupported"
 )
+
+type parsedPayload struct {
+	Payload      string
+	Object       map[string]any
+	Tokens       map[string]any
+	Mode         Mode
+	AccessToken  string
+	RefreshToken string
+	AccountID    string
+}
+
+type agentIdentityRecord struct {
+	AgentRuntimeID          string  `json:"agent_runtime_id"`
+	AgentPrivateKey         string  `json:"agent_private_key"`
+	AccountID               string  `json:"account_id"`
+	ChatGPTUserID           string  `json:"chatgpt_user_id"`
+	Email                   *string `json:"email"`
+	PlanType                string  `json:"plan_type"`
+	ChatGPTAccountIsFedRAMP *bool   `json:"chatgpt_account_is_fedramp"`
+	TaskID                  *string `json:"task_id"`
+}
+
+type agentIdentityJWTClaims struct {
+	Issuer    string  `json:"iss"`
+	Audience  string  `json:"aud"`
+	IssuedAt  *uint64 `json:"iat"`
+	ExpiresAt *uint64 `json:"exp"`
+}
+
+type agentIdentityJWTHeader struct {
+	Algorithm string `json:"alg"`
+	KeyID     string `json:"kid"`
+}
 
 type Info struct {
 	Mode                 Mode
@@ -97,88 +135,61 @@ func ReadSnapshot(path string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	payload, object, err := decodePayload(raw)
+	parsed, err := parsePayload(raw)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if _, err := accountIDFromObject(object); err != nil {
-		return Snapshot{}, err
-	}
-	return Snapshot{Payload: payload}, nil
+	return Snapshot{Payload: parsed.Payload}, nil
 }
 
 func NormalizePayload(raw []byte) (string, error) {
-	payload, object, err := decodePayload(raw)
+	parsed, err := parsePayload(raw)
 	if err != nil {
 		return "", err
 	}
-	if _, err := accountIDFromObject(object); err != nil {
-		return "", err
-	}
-	return payload, nil
+	return parsed.Payload, nil
 }
 
 func ExtractAccountID(raw []byte) (string, error) {
-	_, object, err := decodePayload(raw)
+	parsed, err := parsePayload(raw)
 	if err != nil {
 		return "", err
 	}
-	return accountIDFromObject(object)
+	return parsed.AccountID, nil
 }
 
 func ExtractBackendCredentials(raw []byte) (BackendCredentials, error) {
-	_, object, err := decodePayload(raw)
+	parsed, err := parsePayload(raw)
 	if err != nil {
 		return BackendCredentials{}, err
 	}
-	mode := resolvedMode(object)
-	if mode != ModeChatGPT && mode != ModeChatGPTAuthTokens {
+	if parsed.Mode != ModeChatGPT && parsed.Mode != ModeChatGPTAuthTokens {
 		return BackendCredentials{}, ErrUnsupportedAuthMode
 	}
-	accountID, err := accountIDFromObject(object)
-	if err != nil {
-		return BackendCredentials{}, err
-	}
-	tokens, _ := object["tokens"].(map[string]any)
-	accessToken, _ := tokens["access_token"].(string)
-	accessToken = strings.TrimSpace(accessToken)
-	if accessToken == "" {
-		return BackendCredentials{}, ErrMissingAccessToken
-	}
-	if len(accessToken) > maxAccessTokenLength {
-		return BackendCredentials{}, errors.New("Codex auth access token is too long")
-	}
-	for _, r := range accessToken {
-		if unicode.IsControl(r) {
-			return BackendCredentials{}, errors.New("Codex auth access token cannot contain control characters")
-		}
+	if parsed.AccountID == "" {
+		return BackendCredentials{}, ErrMissingQuotaAccountID
 	}
 	return BackendCredentials{
-		AccessToken: accessToken,
-		AccountID:   accountID,
-		FedRAMP:     fedRAMPFromIDToken(tokens),
+		AccessToken: parsed.AccessToken,
+		AccountID:   parsed.AccountID,
+		FedRAMP:     fedRAMPFromIDToken(parsed.Tokens),
 	}, nil
 }
 
 func Inspect(raw []byte) (Info, error) {
-	_, object, err := decodePayload(raw)
+	parsed, err := parsePayload(raw)
 	if err != nil {
 		return Info{}, err
 	}
-	info := Info{Mode: resolvedMode(object)}
-	tokens, _ := object["tokens"].(map[string]any)
-	accessToken, _ := tokens["access_token"].(string)
-	accessToken = strings.TrimSpace(accessToken)
-	info.HasAccessToken = accessToken != ""
-	refreshToken, _ := tokens["refresh_token"].(string)
-	info.HasRefreshToken = strings.TrimSpace(refreshToken) != ""
-	_, accountErr := accountIDFromObject(object)
-	info.QuotaSupported = (info.Mode == ModeChatGPT || info.Mode == ModeChatGPTAuthTokens) && info.HasAccessToken && accountErr == nil
+	info := Info{Mode: parsed.Mode}
+	info.HasAccessToken = parsed.AccessToken != ""
+	info.HasRefreshToken = parsed.RefreshToken != ""
+	info.QuotaSupported = (info.Mode == ModeChatGPT || info.Mode == ModeChatGPTAuthTokens) && info.HasAccessToken
 	info.RefreshSupported = info.Mode == ModeChatGPT && info.HasRefreshToken
-	if expiresAt, ok := accessTokenExpiry(accessToken); ok {
+	if expiresAt, ok := accessTokenExpiry(parsed.AccessToken); ok {
 		info.AccessTokenExpiresAt = &expiresAt
 	}
-	if rawLastRefresh, ok := object["last_refresh"].(string); ok {
+	if rawLastRefresh, ok := parsed.Object["last_refresh"].(string); ok {
 		if parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(rawLastRefresh)); err == nil {
 			parsed = parsed.UTC()
 			info.LastRefreshAt = &parsed
@@ -187,29 +198,205 @@ func Inspect(raw []byte) (Info, error) {
 	return info, nil
 }
 
-func resolvedMode(object map[string]any) Mode {
-	if rawMode, exists := object["auth_mode"]; exists && rawMode != nil {
+func parsePayload(raw []byte) (parsedPayload, error) {
+	payload, object, err := decodePayload(raw)
+	if err != nil {
+		return parsedPayload{}, err
+	}
+	mode, err := resolvedMode(object)
+	if err != nil {
+		return parsedPayload{}, err
+	}
+	parsed := parsedPayload{Payload: payload, Object: object, Mode: mode}
+	switch mode {
+	case ModeChatGPT, ModeChatGPTAuthTokens:
+		tokens, ok := object["tokens"].(map[string]any)
+		if !ok {
+			return parsedPayload{}, FieldError{Field: "tokens.access_token", Err: ErrMissingAccessToken}
+		}
+		parsed.Tokens = tokens
+		parsed.AccessToken, err = requiredSafeString(tokens, "access_token", "tokens.access_token", ErrMissingAccessToken)
+		if err != nil {
+			return parsedPayload{}, err
+		}
+		parsed.RefreshToken, err = optionalSafeString(tokens, "refresh_token", "tokens.refresh_token")
+		if err != nil {
+			return parsedPayload{}, err
+		}
+		parsed.AccountID, err = optionalAccountID(tokens)
+		if err != nil {
+			return parsedPayload{}, err
+		}
+	case ModeAPIKey:
+		if _, err := requiredSafeString(object, "OPENAI_API_KEY", "OPENAI_API_KEY", errors.New("Codex auth payload is missing OPENAI_API_KEY")); err != nil {
+			return parsedPayload{}, err
+		}
+	case ModeAgentIdentity:
+		if err := validateAgentIdentity(object); err != nil {
+			return parsedPayload{}, err
+		}
+	case ModePersonalAccessToken:
+		if _, err := requiredSafeString(object, "personal_access_token", "personal_access_token", errors.New("Codex auth payload is missing personal_access_token")); err != nil {
+			return parsedPayload{}, err
+		}
+	default:
+		return parsedPayload{}, ErrUnsupportedStoredAuthMode
+	}
+	return parsed, nil
+}
+
+func resolvedMode(object map[string]any) (Mode, error) {
+	if rawMode, exists := object["auth_mode"]; exists {
 		mode, ok := rawMode.(string)
 		if !ok {
-			return ModeUnsupported
+			return ModeUnsupported, ErrUnsupportedStoredAuthMode
 		}
 		switch mode {
 		case string(ModeChatGPT):
-			return ModeChatGPT
+			return ModeChatGPT, nil
 		case string(ModeChatGPTAuthTokens):
-			return ModeChatGPTAuthTokens
+			return ModeChatGPTAuthTokens, nil
+		case string(ModeAPIKey):
+			return ModeAPIKey, nil
+		case string(ModeAgentIdentity):
+			return ModeAgentIdentity, nil
+		case string(ModePersonalAccessToken):
+			return ModePersonalAccessToken, nil
 		default:
-			return ModeUnsupported
+			return ModeUnsupported, ErrUnsupportedStoredAuthMode
 		}
 	}
 	// Match Codex's implicit auth-mode precedence so stale ChatGPT tokens are
 	// never used when another login mechanism owns auth.json.
-	for _, field := range []string{"OPENAI_API_KEY", "agent_identity", "personal_access_token", "bedrock_api_key"} {
-		if value, exists := object[field]; exists && value != nil {
-			return ModeUnsupported
+	for _, candidate := range []struct {
+		field string
+		mode  Mode
+	}{
+		{field: "OPENAI_API_KEY", mode: ModeAPIKey},
+		{field: "agent_identity", mode: ModeAgentIdentity},
+		{field: "personal_access_token", mode: ModePersonalAccessToken},
+		{field: "bedrock_api_key", mode: ModeUnsupported},
+	} {
+		field := candidate.field
+		if _, exists := object[field]; exists {
+			if candidate.mode == ModeUnsupported {
+				return ModeUnsupported, ErrUnsupportedStoredAuthMode
+			}
+			return candidate.mode, nil
 		}
 	}
-	return ModeChatGPT
+	return ModeChatGPT, nil
+}
+
+func requiredSafeString(object map[string]any, key, field string, missing error) (string, error) {
+	raw, ok := object[key].(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return "", FieldError{Field: field, Err: missing}
+	}
+	value := strings.TrimSpace(raw)
+	if len(value) > maxCredentialLength {
+		return "", FieldError{Field: field, Err: errors.New("Codex auth credential is too long")}
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return "", FieldError{Field: field, Err: errors.New("Codex auth credential cannot contain control characters")}
+		}
+	}
+	return value, nil
+}
+
+func optionalSafeString(object map[string]any, key, field string) (string, error) {
+	value, exists := object[key]
+	if !exists || value == nil {
+		return "", nil
+	}
+	return requiredSafeString(object, key, field, errors.New("Codex auth credential is empty"))
+}
+
+func validateAgentIdentity(object map[string]any) error {
+	value, exists := object["agent_identity"]
+	if !exists || value == nil {
+		return FieldError{Field: "agent_identity", Err: errors.New("Codex auth payload is missing agent_identity")}
+	}
+	switch value := value.(type) {
+	case string:
+		jwt, err := requiredSafeString(object, "agent_identity", "agent_identity", errors.New("Codex auth payload is missing agent_identity"))
+		if err != nil {
+			return err
+		}
+		if jwt != value {
+			return invalidAgentIdentityError()
+		}
+		return validateAgentIdentityJWT(jwt)
+	case map[string]any:
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return invalidAgentIdentityError()
+		}
+		return validateAgentIdentityRecord(raw)
+	default:
+		return invalidAgentIdentityError()
+	}
+}
+
+func validateAgentIdentityJWT(jwt string) error {
+	parts := strings.Split(jwt, ".")
+	if len(parts) != 3 {
+		return invalidAgentIdentityError()
+	}
+	decoded := make([][]byte, len(parts))
+	for index, part := range parts {
+		if part == "" {
+			return invalidAgentIdentityError()
+		}
+		value, err := base64.RawURLEncoding.DecodeString(part)
+		if err != nil {
+			return invalidAgentIdentityError()
+		}
+		decoded[index] = value
+	}
+	var header agentIdentityJWTHeader
+	if err := json.Unmarshal(decoded[0], &header); err != nil || header.Algorithm != "RS256" ||
+		strings.TrimSpace(header.KeyID) == "" || header.KeyID != strings.TrimSpace(header.KeyID) {
+		return invalidAgentIdentityError()
+	}
+	var claims agentIdentityJWTClaims
+	if err := json.Unmarshal(decoded[1], &claims); err != nil ||
+		strings.TrimSpace(claims.Issuer) == "" || claims.Issuer != strings.TrimSpace(claims.Issuer) ||
+		strings.TrimSpace(claims.Audience) == "" || claims.Audience != strings.TrimSpace(claims.Audience) ||
+		claims.IssuedAt == nil || claims.ExpiresAt == nil {
+		return invalidAgentIdentityError()
+	}
+	return validateAgentIdentityRecord(decoded[1])
+}
+
+func validateAgentIdentityRecord(raw []byte) error {
+	var record agentIdentityRecord
+	if err := json.Unmarshal(raw, &record); err != nil || record.ChatGPTAccountIsFedRAMP == nil {
+		return invalidAgentIdentityError()
+	}
+	for _, value := range []string{
+		record.AgentRuntimeID,
+		record.AgentPrivateKey,
+		record.AccountID,
+		record.ChatGPTUserID,
+		record.PlanType,
+	} {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" || value != trimmed || len(value) > maxCredentialLength {
+			return invalidAgentIdentityError()
+		}
+		for _, r := range value {
+			if unicode.IsControl(r) {
+				return invalidAgentIdentityError()
+			}
+		}
+	}
+	return nil
+}
+
+func invalidAgentIdentityError() error {
+	return FieldError{Field: "agent_identity", Err: errors.New("Codex auth payload has invalid agent_identity")}
 }
 
 func accessTokenExpiry(token string) (time.Time, bool) {
@@ -300,18 +487,21 @@ func decodePayload(raw []byte) (string, map[string]any, error) {
 	return string(raw), object, nil
 }
 
-func accountIDFromObject(object map[string]any) (string, error) {
-	tokens, ok := object["tokens"].(map[string]any)
-	if !ok {
-		return "", errors.New("Codex auth payload is missing tokens.account_id")
+func optionalAccountID(tokens map[string]any) (string, error) {
+	value, exists := tokens["account_id"]
+	if !exists || value == nil {
+		return "", nil
 	}
-	raw, ok := tokens["account_id"].(string)
-	if !ok || strings.TrimSpace(raw) == "" {
-		return "", errors.New("Codex auth payload is missing tokens.account_id")
+	raw, ok := value.(string)
+	if !ok {
+		return "", FieldError{Field: "tokens.account_id", Err: errors.New("Codex auth account id is invalid")}
+	}
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
 	}
 	accountID, err := NormalizeExternalAccountID(raw)
 	if err != nil {
-		return "", FieldError{Field: "tokens.account_id", Err: err}
+		return "", nil
 	}
 	return accountID, nil
 }

@@ -52,9 +52,17 @@
 	}
 
 	function authModeLabel(value: string): string {
-		return value === "chatgptAuthTokens"
-			? translate("codexSettings.authMode.external")
-			: translate("codexSettings.authMode.unsupported");
+		switch (value) {
+			case "apikey": return translate("codexSettings.authMode.apiKey");
+			case "agentIdentity":
+			case "personalAccessToken": return translate("codexSettings.authMode.accessToken");
+			case "chatgptAuthTokens": return translate("codexSettings.authMode.external");
+			default: return translate("codexSettings.authMode.unsupported");
+		}
+	}
+
+	function authModeTone(value: string): "neutral" | "warning" {
+		return ["apikey", "agentIdentity", "personalAccessToken", "chatgptAuthTokens"].includes(value) ? "neutral" : "warning";
 	}
 </script>
 
@@ -65,7 +73,7 @@
 				<span class="truncate font-medium">{profile.profile_name || $_("profile.unnamed")}</span>
 				{#if identifierHint}<span class="font-mono text-xs text-muted-foreground">{identifierHint}</span>{/if}
 				{#if profile.auth_mode && profile.auth_mode !== "chatgpt"}
-					<StatusBadge tone="warning">{authModeLabel(profile.auth_mode)}</StatusBadge>
+					<StatusBadge tone={authModeTone(profile.auth_mode)}>{authModeLabel(profile.auth_mode)}</StatusBadge>
 				{/if}
 			</div>
 		{/if}
@@ -113,7 +121,7 @@
 		<SettingsRow
 			label={$_("codexSettings.keepalive.label")}
 			description={$_("codexSettings.keepalive.description")}
-			message={profile.auth_keepalive_supported ? "" : $_("codexSettings.keepalive.unsupported")}
+			message={profile.auth_keepalive_supported ? "" : profile.quota_supported ? $_("codexSettings.keepalive.unsupported") : $_("codexSettings.keepalive.unavailable")}
 			forID={`keepalive-${profile.profile_id}`}
 			disabled={!profile.auth_keepalive_supported}
 		>

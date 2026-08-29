@@ -209,9 +209,13 @@ func TestSensitivePathListerFailureDoesNotExposeCause(t *testing.T) {
 func (application *doctorTestApplication) Runtime() *profilesruntime.Service {
 	return application.runtime
 }
-func (application *doctorTestApplication) Doctor() *doctor.Service      { return application.doctor }
+
+func (application *doctorTestApplication) Doctor() *doctor.Service { return application.doctor }
+
 func (application *doctorTestApplication) Providers() *provider.Service { return application.providers }
-func (application *doctorTestApplication) Profiles() *profile.Service   { return application.profiles }
+
+func (application *doctorTestApplication) Profiles() *profile.Service { return application.profiles }
+
 func (application *doctorTestApplication) Targets() *profiletarget.Service {
 	return application.targets
 }

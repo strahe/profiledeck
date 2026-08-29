@@ -837,10 +837,11 @@ func TestCodexDetectAndProfileCreatePlanSwitchJSON(t *testing.T) {
 		`api_key = "raw-secret"`,
 		``,
 	}, "\n")
+	desiredAuth := `{"auth_mode":"apikey","OPENAI_API_KEY":"auth-secret"}`
 	if err := os.WriteFile(configPath, []byte(desiredConfig), 0o600); err != nil {
 		t.Fatalf("expected Codex config setup to succeed, got %v", err)
 	}
-	if err := os.WriteFile(authPath, []byte(`{"tokens":{"account_id":"remote-work","access_token":"auth-secret"}}`), 0o600); err != nil {
+	if err := os.WriteFile(authPath, []byte(desiredAuth), 0o600); err != nil {
 		t.Fatalf("expected Codex auth setup to succeed, got %v", err)
 	}
 
@@ -850,7 +851,7 @@ func TestCodexDetectAndProfileCreatePlanSwitchJSON(t *testing.T) {
 	}
 	var detect codex.CodexDetectResult
 	decodeCLIJSON(t, []byte(out), &detect)
-	if detect.ProfileDeckInitialized || detect.ConfigStatus != "valid" {
+	if detect.ProfileDeckInitialized || detect.ConfigStatus != "valid" || detect.AuthStatus != "valid" {
 		t.Fatalf("unexpected detect result before init: %#v", detect)
 	}
 
@@ -868,13 +869,20 @@ func TestCodexDetectAndProfileCreatePlanSwitchJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected codex profile create to succeed, got %v", err)
 	}
+	if strings.Contains(out, "auth-secret") {
+		t.Fatalf("expected API key auth to stay redacted, got %q", out)
+	}
 	var createResult codex.CodexProfileSaveResult
 	decodeCLIJSON(t, []byte(out), &createResult)
-	if createResult.Provider.ID != codexconfig.ProviderID || createResult.Profile.ID != "work" || createResult.ConfigSet.ID != "shared" {
+	if createResult.Provider.ID != codexconfig.ProviderID || createResult.Profile.ID != "work" || createResult.ConfigSet.ID != "shared" || createResult.Summary.CodexAccountID != "" || len(createResult.Summary.Warnings) != 0 {
 		t.Fatalf("unexpected codex profile create result: %#v", createResult)
 	}
 	if err := os.WriteFile(configPath, []byte(`model = "old-model"`+"\n"+`api_key = "live-secret"`+"\n"), 0o600); err != nil {
 		t.Fatalf("expected live config mutation to succeed, got %v", err)
+	}
+	liveAuth := `{"auth_mode":"apikey","OPENAI_API_KEY":"live-auth-secret"}`
+	if err := os.WriteFile(authPath, []byte(liveAuth), 0o600); err != nil {
+		t.Fatalf("expected live auth mutation to succeed, got %v", err)
 	}
 
 	out, err = runCLI(t, "--config-dir", configDir, "switch", codexconfig.ProviderID, "work", "--dry-run", "--json")
@@ -883,10 +891,10 @@ func TestCodexDetectAndProfileCreatePlanSwitchJSON(t *testing.T) {
 	}
 	var plan switching.SwitchPlan
 	decodeCLIJSON(t, []byte(out), &plan)
-	if len(plan.Operations) != 2 || len(plan.StateCaptures) != 1 || !hasCLIPlanOperation(plan.Operations, codexconfig.TargetID, "noop") {
+	if len(plan.Operations) != 2 || len(plan.StateCaptures) != 2 || !hasCLIPlanOperation(plan.Operations, codexconfig.TargetID, "noop") || !hasCLIPlanOperation(plan.Operations, codexconfig.AuthTargetID, "noop") {
 		t.Fatalf("unexpected codex plan: %#v", plan)
 	}
-	if strings.Contains(out, "raw-secret") || strings.Contains(out, "live-secret") {
+	if strings.Contains(out, "raw-secret") || strings.Contains(out, "live-secret") || strings.Contains(out, "auth-secret") || strings.Contains(out, "live-auth-secret") {
 		t.Fatalf("expected codex plan JSON to redact existing secret-looking values, got %q", out)
 	}
 
@@ -905,6 +913,18 @@ func TestCodexDetectAndProfileCreatePlanSwitchJSON(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `model = "old-model"`) {
 		t.Fatalf("expected active working copy to be checked in and retained, got %q", string(raw))
+	}
+	if got := string(mustReadFile(t, authPath)); got != liveAuth {
+		t.Fatalf("expected API key working copy to be preserved, got %q", got)
+	}
+	if err := os.WriteFile(authPath, []byte(`{"unknown_auth_shape":"invalid"}`), 0o600); err != nil {
+		t.Fatalf("expected invalid auth setup to succeed, got %v", err)
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "switch", codexconfig.ProviderID, "work", "--yes", "--json"); err != nil {
+		t.Fatalf("expected captured API key auth to restore, got %v", err)
+	}
+	if got := string(mustReadFile(t, authPath)); got != liveAuth {
+		t.Fatalf("expected captured API key auth to restore verbatim, got %q", got)
 	}
 }
 
