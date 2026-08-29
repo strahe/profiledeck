@@ -89,3 +89,43 @@ func TestRunRejectsUnsupportedKeepaliveWithoutCallingRunner(t *testing.T) {
 		t.Fatalf("unexpected unsupported keepalive result: %#v", result)
 	}
 }
+
+func TestRunRejectsNonChatGPTQuotaWithoutCallingBackends(t *testing.T) {
+	for _, mode := range []codexauth.Mode{codexauth.ModeAPIKey, codexauth.ModeAgentIdentity, codexauth.ModePersonalAccessToken} {
+		t.Run(string(mode), func(t *testing.T) {
+			runner := &testRunner{read: func(int) (codexquota.Snapshot, error) {
+				return codexquota.Snapshot{}, errors.New("unexpected native read")
+			}}
+			reader := &testReader{read: func(codexquota.Credentials) (codexquota.Snapshot, error) {
+				return codexquota.Snapshot{}, errors.New("unexpected direct read")
+			}}
+			result, err := Run(context.Background(), JobQuota, "/private/home", "{}", codexauth.Info{Mode: mode}, runner, reader, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Status != StatusUnsupported || result.NativeAttempted || result.UsedDirectFallback || runner.readCalls != 0 || reader.calls != 0 {
+				t.Fatalf("unexpected unsupported quota result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestRunDoesNotCallDirectFallbackWithoutAccountMetadata(t *testing.T) {
+	runner := &testRunner{read: func(int) (codexquota.Snapshot, error) {
+		return codexquota.Snapshot{}, &codexappserver.Error{Kind: codexappserver.ErrorUnavailable}
+	}}
+	reader := &testReader{read: func(codexquota.Credentials) (codexquota.Snapshot, error) {
+		return codexquota.Snapshot{}, errors.New("unexpected direct read")
+	}}
+	result, err := Run(
+		context.Background(), JobQuota, "/private/home",
+		`{"auth_mode":"chatgpt","tokens":{"access_token":"token"}}`,
+		codexauth.Info{Mode: codexauth.ModeChatGPT, QuotaSupported: true}, runner, reader, true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusUnavailable || result.UsedDirectFallback || reader.calls != 0 {
+		t.Fatalf("unexpected missing-account fallback result: %#v", result)
+	}
+}

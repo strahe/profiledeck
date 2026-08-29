@@ -12,9 +12,20 @@ Codex must store its login in `auth.json`. If that file is missing, add this set
 cli_auth_credentials_store = "file"
 ```
 
+Use the Codex login command for the sign-in method you want to save:
+
 ```bash
+# ChatGPT
 codex login
+
+# OpenAI API key
+printenv OPENAI_API_KEY | codex login --with-api-key
+
+# Codex access token
+printf '%s' "$CODEX_ACCESS_TOKEN" | codex login --with-access-token
 ```
+
+ProfileDeck can save and switch these file-backed sign-ins. Supplying `OPENAI_API_KEY` or `CODEX_ACCESS_TOKEN` to a Codex process without running the matching login command does not create `auth.json`, so there is no login for ProfileDeck to save.
 
 ProfileDeck also requires a valid `config.toml`. CLI commands resolve the Codex home in this order:
 
@@ -29,7 +40,7 @@ ProfileDeck also requires a valid `config.toml`. CLI commands resolve the Codex 
 3. Enter a permanent Profile ID and a display name.
 4. For the first Profile, save the current Codex settings in the default `shared` Config Set.
 
-The first Profile becomes current. To save another login, run `codex login` for that account, return to ProfileDeck, and save another Profile. Reuse the current Config Set when both accounts should use the same settings, or save a new Config Set when the settings must change independently.
+The first Profile becomes current. To save another login, run the appropriate Codex login command, return to ProfileDeck, and save another Profile. Reuse the current Config Set when both logins should use the same settings, or save a new Config Set when the settings must change independently.
 
 ## Save a Profile with the CLI
 
@@ -42,7 +53,7 @@ profiledeck-cli codex profile create work
 The first Profile saves the current login and settings, creates the `shared` Config Set, and becomes current. Later Profiles reuse the current Config Set by default:
 
 ```bash
-codex login
+# Run the appropriate Codex login command first.
 profiledeck-cli codex profile create personal
 ```
 
@@ -136,3 +147,5 @@ Desktop can check the current ChatGPT Codex limits for one saved Profile. Profil
 Set automatic limit refresh to Off, 5, 10, 30, or 60 minutes on the Profile detail page or under **Codex → Settings**. Managed ChatGPT logins can also enable **Renew sign-in automatically**. Both options are off by default and run only while ProfileDeck is open or hidden in the menu bar.
 
 Limit information is temporary and is not saved to disk. It is not a billing balance and does not connect local sessions to a Profile or account. Some external sign-in methods can show limits but cannot be renewed automatically.
+
+API key and Codex access-token Profiles can be saved and switched, but ProfileDeck does not check ChatGPT Codex limits or renew these sign-ins automatically.

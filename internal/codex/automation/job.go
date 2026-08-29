@@ -58,11 +58,7 @@ func NormalizeJobKind(value string) (JobKind, *apperror.Error) {
 func Run(ctx context.Context, kind JobKind, homeDir, payload string, info codexauth.Info, runner NativeRunner, directReader codexquota.Reader, allowDirectFallback bool) (JobResult, error) {
 	result := JobResult{Status: StatusUnavailable}
 	if kind == JobQuota && !info.QuotaSupported {
-		if info.Mode == codexauth.ModeUnsupported {
-			result.Status = StatusUnsupported
-		} else {
-			result.Status = StatusAuthRequired
-		}
+		result.Status = StatusUnsupported
 		return result, nil
 	}
 	if kind == JobKeepalive && !info.RefreshSupported {
@@ -100,7 +96,6 @@ func Run(ctx context.Context, kind JobKind, homeDir, payload string, info codexa
 	result.NativeErrorKind = codexappserver.KindOf(err)
 	if kind == JobQuota && allowDirectFallback &&
 		(result.NativeErrorKind == codexappserver.ErrorUnavailable || result.NativeErrorKind == codexappserver.ErrorIncompatible) {
-		result.UsedDirectFallback = true
 		return readDirect(ctx, payload, directReader, result), nil
 	}
 	switch result.NativeErrorKind {
@@ -119,11 +114,15 @@ func readDirect(ctx context.Context, payload string, reader codexquota.Reader, r
 	credentials, err := codexauth.ExtractBackendCredentials([]byte(payload))
 	if err != nil {
 		result.Status = StatusAuthRequired
-		if errors.Is(err, codexauth.ErrUnsupportedAuthMode) {
+		switch {
+		case errors.Is(err, codexauth.ErrUnsupportedAuthMode):
 			result.Status = StatusUnsupported
+		case errors.Is(err, codexauth.ErrMissingQuotaAccountID):
+			result.Status = StatusUnavailable
 		}
 		return result
 	}
+	result.UsedDirectFallback = true
 	snapshot, err := reader.Read(ctx, codexquota.Credentials{
 		AccessToken: credentials.AccessToken, AccountID: credentials.AccountID, FedRAMP: credentials.FedRAMP,
 	})

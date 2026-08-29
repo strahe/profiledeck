@@ -12,9 +12,20 @@ Codex 必须把登录保存在 `auth.json` 中。如果缺少该文件，请在 
 cli_auth_credentials_store = "file"
 ```
 
+请根据要保存的登录方式运行对应的 Codex 命令：
+
 ```bash
+# ChatGPT
 codex login
+
+# OpenAI API Key
+printenv OPENAI_API_KEY | codex login --with-api-key
+
+# Codex 访问令牌
+printf '%s' "$CODEX_ACCESS_TOKEN" | codex login --with-access-token
 ```
+
+ProfileDeck 可以保存和切换这些基于文件的登录。仅向 Codex 进程提供 `OPENAI_API_KEY` 或 `CODEX_ACCESS_TOKEN` 不会创建 `auth.json`；需要先运行对应的登录命令，ProfileDeck 才能保存该登录。
 
 ProfileDeck 还需要有效的 `config.toml`。CLI 命令按以下顺序查找 Codex 目录：
 
@@ -29,7 +40,7 @@ ProfileDeck 还需要有效的 `config.toml`。CLI 命令按以下顺序查找 C
 3. 输入创建后不会改变的 Profile ID，以及用于显示的名称。
 4. 保存第一个 Profile 时，把当前 Codex 设置保存到默认的 `shared` 配置集。
 
-第一个 Profile 会成为当前 Profile。要保存另一个登录，请为该账号运行 `codex login`，返回 ProfileDeck，再保存一个 Profile。如果两个账号应使用相同设置，请复用当前配置集；如果设置需要独立变化，请保存新配置集。
+第一个 Profile 会成为当前 Profile。要保存另一个登录，请运行对应的 Codex 登录命令，返回 ProfileDeck，再保存一个 Profile。如果两个登录应使用相同设置，请复用当前配置集；如果设置需要独立变化，请保存新配置集。
 
 ## 使用 CLI 保存 Profile
 
@@ -42,7 +53,7 @@ profiledeck-cli codex profile create work
 第一个 Profile 会保存当前登录和设置、创建 `shared` 配置集，并成为当前 Profile。后续 Profile 默认复用当前配置集：
 
 ```bash
-codex login
+# 请先运行对应的 Codex 登录命令。
 profiledeck-cli codex profile create personal
 ```
 
@@ -136,3 +147,5 @@ profiledeck-cli codex profile delete work --yes
 可以在 Profile 详情页或 **Codex → 设置**中，把自动刷新限额设为关闭、5、10、30 或 60 分钟。受支持的 ChatGPT 登录还可以启用**自动续期登录**。两项设置默认关闭，并且只在 ProfileDeck 打开或隐藏到菜单栏时运行。
 
 限额信息只会临时保留，不会保存到磁盘。它不是账单余额，也不会把本地会话关联到某个 Profile 或账号。部分外部登录方式可以显示限额，但无法自动续期。
+
+API Key 和 Codex 访问令牌 Profile 可以保存和切换，但 ProfileDeck 不会检查其 ChatGPT Codex 限额，也不会自动续期这些登录。

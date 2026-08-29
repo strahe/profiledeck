@@ -934,6 +934,8 @@ const messages = {
 				emptyDescription: "Create a Codex Profile before turning on automatic updates.",
 			},
 			authMode: {
+				apiKey: "API Key",
+				accessToken: "Access token",
 				external: "External sign-in",
 				unsupported: "Unsupported sign-in",
 			},
@@ -948,6 +950,7 @@ const messages = {
 				label: "Renew sign-in automatically",
 				description: "Keep this Profile signed in. This is needed only when automatic limit refresh is off.",
 				unsupported: "This sign-in method can check limits but cannot be renewed automatically.",
+				unavailable: "This sign-in method cannot be renewed automatically.",
 			},
 			appServer: {
 				title: "Automatic Codex updates are unavailable",
@@ -2028,6 +2031,8 @@ const messages = {
 				emptyDescription: "请先创建 Codex Profile，再开启自动更新。",
 			},
 			authMode: {
+				apiKey: "API Key",
+				accessToken: "访问令牌",
 				external: "外部登录",
 				unsupported: "不支持的登录方式",
 			},
@@ -2042,6 +2047,7 @@ const messages = {
 				label: "自动续期登录",
 				description: "保持此 Profile 已登录。仅在关闭自动刷新限额时需要开启。",
 				unsupported: "此登录方式可以检查限额，但无法自动续期。",
+				unavailable: "此登录方式无法自动续期。",
 			},
 			appServer: {
 				title: "Codex 自动更新不可用",

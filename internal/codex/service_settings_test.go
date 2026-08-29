@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/strahe/profiledeck/internal/apperror"
+	codexauth "github.com/strahe/profiledeck/internal/codex/auth"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -95,6 +96,71 @@ func TestCodexSettingsRejectsUnsupportedKeepaliveMode(t *testing.T) {
 	quotaInterval := 300
 	if _, err := newCodexTestEnvironment(t, configDir, "").codex.UpdateSettings(ctx, UpdateCodexSettingsRequest{ProfileID: "external", QuotaRefreshIntervalSeconds: &quotaInterval}); err != nil {
 		t.Fatalf("expected external auth quota automation to remain supported, got %v", err)
+	}
+}
+
+func TestCodexProfileAcceptsChatGPTAuthWithoutAccountMetadata(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if _, err := initCodexTestRuntime(ctx, configDir); err != nil {
+		t.Fatalf("expected init, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"auth_mode":"chatgpt","tokens":{"access_token":"token"}}`)
+	created, err := newCodexTestEnvironment(t, configDir, codexDir).codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"})
+	if err != nil {
+		t.Fatalf("expected ChatGPT auth without account metadata, got %v", err)
+	}
+	if created.Summary.CodexAccountID != "" || len(created.Summary.Warnings) != 0 {
+		t.Fatalf("expected valid Profile without account metadata, got %#v", created.Summary)
+	}
+
+	settings, err := newCodexTestEnvironment(t, configDir, "").codex.GetSettings(ctx)
+	if err != nil || len(settings.Profiles) != 1 || !settings.Profiles[0].QuotaSupported {
+		t.Fatalf("expected native ChatGPT quota capability without account metadata, got %#v, %v", settings, err)
+	}
+}
+
+func TestCodexSettingsExposeSupportedNonChatGPTAuthModes(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		mode codexauth.Mode
+	}{
+		{name: "API key", raw: `{"auth_mode":"apikey","OPENAI_API_KEY":"sk-synthetic"}`, mode: codexauth.ModeAPIKey},
+		{name: "agent identity", raw: `{"auth_mode":"agentIdentity","agent_identity":{"agent_runtime_id":"runtime"}}`, mode: codexauth.ModeAgentIdentity},
+		{name: "personal access token", raw: `{"auth_mode":"personalAccessToken","personal_access_token":"pat-synthetic"}`, mode: codexauth.ModePersonalAccessToken},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			configDir := t.TempDir()
+			codexDir := t.TempDir()
+			if _, err := initCodexTestRuntime(ctx, configDir); err != nil {
+				t.Fatalf("expected init, got %v", err)
+			}
+			writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", tc.raw)
+			if _, err := newCodexTestEnvironment(t, configDir, codexDir).codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
+				t.Fatalf("expected supported file auth Profile, got %v", err)
+			}
+
+			settings, err := newCodexTestEnvironment(t, configDir, "").codex.GetSettings(ctx)
+			if err != nil || len(settings.Profiles) != 1 {
+				t.Fatalf("unexpected settings: %#v, %v", settings, err)
+			}
+			profileSettings := settings.Profiles[0]
+			if profileSettings.AuthMode != string(tc.mode) || profileSettings.QuotaSupported || profileSettings.AuthKeepaliveSupported {
+				t.Fatalf("unexpected auth capabilities: %#v", profileSettings)
+			}
+
+			profiles, err := newCodexTestEnvironment(t, configDir, "").codex.ListProfiles(ctx)
+			if err != nil || len(profiles.Profiles) != 1 {
+				t.Fatalf("unexpected Profile list: %#v, %v", profiles, err)
+			}
+			if profiles.Profiles[0].CodexAccountID != "" || len(profiles.Profiles[0].Warnings) != 0 {
+				t.Fatalf("expected valid Profile without account metadata, got %#v", profiles.Profiles[0])
+			}
+		})
 	}
 }
 
