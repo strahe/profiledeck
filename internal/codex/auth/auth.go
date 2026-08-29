@@ -62,6 +62,29 @@ type parsedPayload struct {
 	AccountID    string
 }
 
+type agentIdentityRecord struct {
+	AgentRuntimeID          string  `json:"agent_runtime_id"`
+	AgentPrivateKey         string  `json:"agent_private_key"`
+	AccountID               string  `json:"account_id"`
+	ChatGPTUserID           string  `json:"chatgpt_user_id"`
+	Email                   *string `json:"email"`
+	PlanType                string  `json:"plan_type"`
+	ChatGPTAccountIsFedRAMP *bool   `json:"chatgpt_account_is_fedramp"`
+	TaskID                  *string `json:"task_id"`
+}
+
+type agentIdentityJWTClaims struct {
+	Issuer    string  `json:"iss"`
+	Audience  string  `json:"aud"`
+	IssuedAt  *uint64 `json:"iat"`
+	ExpiresAt *uint64 `json:"exp"`
+}
+
+type agentIdentityJWTHeader struct {
+	Algorithm string `json:"alg"`
+	KeyID     string `json:"kid"`
+}
+
 type Info struct {
 	Mode                 Mode
 	QuotaSupported       bool
@@ -209,9 +232,8 @@ func parsePayload(raw []byte) (parsedPayload, error) {
 			return parsedPayload{}, err
 		}
 	case ModeAgentIdentity:
-		record, ok := object["agent_identity"].(map[string]any)
-		if !ok || len(record) == 0 {
-			return parsedPayload{}, FieldError{Field: "agent_identity", Err: errors.New("Codex auth payload is missing agent_identity")}
+		if err := validateAgentIdentity(object); err != nil {
+			return parsedPayload{}, err
 		}
 	case ModePersonalAccessToken:
 		if _, err := requiredSafeString(object, "personal_access_token", "personal_access_token", errors.New("Codex auth payload is missing personal_access_token")); err != nil {
@@ -289,6 +311,92 @@ func optionalSafeString(object map[string]any, key, field string) (string, error
 		return "", nil
 	}
 	return requiredSafeString(object, key, field, errors.New("Codex auth credential is empty"))
+}
+
+func validateAgentIdentity(object map[string]any) error {
+	value, exists := object["agent_identity"]
+	if !exists || value == nil {
+		return FieldError{Field: "agent_identity", Err: errors.New("Codex auth payload is missing agent_identity")}
+	}
+	switch value := value.(type) {
+	case string:
+		jwt, err := requiredSafeString(object, "agent_identity", "agent_identity", errors.New("Codex auth payload is missing agent_identity"))
+		if err != nil {
+			return err
+		}
+		if jwt != value {
+			return invalidAgentIdentityError()
+		}
+		return validateAgentIdentityJWT(jwt)
+	case map[string]any:
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return invalidAgentIdentityError()
+		}
+		return validateAgentIdentityRecord(raw)
+	default:
+		return invalidAgentIdentityError()
+	}
+}
+
+func validateAgentIdentityJWT(jwt string) error {
+	parts := strings.Split(jwt, ".")
+	if len(parts) != 3 {
+		return invalidAgentIdentityError()
+	}
+	decoded := make([][]byte, len(parts))
+	for index, part := range parts {
+		if part == "" {
+			return invalidAgentIdentityError()
+		}
+		value, err := base64.RawURLEncoding.DecodeString(part)
+		if err != nil {
+			return invalidAgentIdentityError()
+		}
+		decoded[index] = value
+	}
+	var header agentIdentityJWTHeader
+	if err := json.Unmarshal(decoded[0], &header); err != nil || header.Algorithm != "RS256" ||
+		strings.TrimSpace(header.KeyID) == "" || header.KeyID != strings.TrimSpace(header.KeyID) {
+		return invalidAgentIdentityError()
+	}
+	var claims agentIdentityJWTClaims
+	if err := json.Unmarshal(decoded[1], &claims); err != nil ||
+		strings.TrimSpace(claims.Issuer) == "" || claims.Issuer != strings.TrimSpace(claims.Issuer) ||
+		strings.TrimSpace(claims.Audience) == "" || claims.Audience != strings.TrimSpace(claims.Audience) ||
+		claims.IssuedAt == nil || claims.ExpiresAt == nil {
+		return invalidAgentIdentityError()
+	}
+	return validateAgentIdentityRecord(decoded[1])
+}
+
+func validateAgentIdentityRecord(raw []byte) error {
+	var record agentIdentityRecord
+	if err := json.Unmarshal(raw, &record); err != nil || record.ChatGPTAccountIsFedRAMP == nil {
+		return invalidAgentIdentityError()
+	}
+	for _, value := range []string{
+		record.AgentRuntimeID,
+		record.AgentPrivateKey,
+		record.AccountID,
+		record.ChatGPTUserID,
+		record.PlanType,
+	} {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" || value != trimmed || len(value) > maxCredentialLength {
+			return invalidAgentIdentityError()
+		}
+		for _, r := range value {
+			if unicode.IsControl(r) {
+				return invalidAgentIdentityError()
+			}
+		}
+	}
+	return nil
+}
+
+func invalidAgentIdentityError() error {
+	return FieldError{Field: "agent_identity", Err: errors.New("Codex auth payload has invalid agent_identity")}
 }
 
 func accessTokenExpiry(token string) (time.Time, bool) {
@@ -381,16 +489,19 @@ func decodePayload(raw []byte) (string, map[string]any, error) {
 
 func optionalAccountID(tokens map[string]any) (string, error) {
 	value, exists := tokens["account_id"]
-	if !exists {
+	if !exists || value == nil {
 		return "", nil
 	}
 	raw, ok := value.(string)
 	if !ok {
 		return "", FieldError{Field: "tokens.account_id", Err: errors.New("Codex auth account id is invalid")}
 	}
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
 	accountID, err := NormalizeExternalAccountID(raw)
 	if err != nil {
-		return "", FieldError{Field: "tokens.account_id", Err: err}
+		return "", nil
 	}
 	return accountID, nil
 }

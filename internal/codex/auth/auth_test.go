@@ -14,6 +14,8 @@ import (
 )
 
 func TestNormalizePayloadAcceptsSupportedFileAuthModes(t *testing.T) {
+	agentIdentityRecord := `{"agent_runtime_id":"runtime","agent_private_key":"synthetic","account_id":"account","chatgpt_user_id":"user","plan_type":"enterprise","chatgpt_account_is_fedramp":false}`
+	agentIdentityJWT := syntheticAgentIdentityJWT()
 	cases := []struct {
 		name      string
 		raw       string
@@ -25,8 +27,8 @@ func TestNormalizePayloadAcceptsSupportedFileAuthModes(t *testing.T) {
 		{name: "external ChatGPT", raw: `{"auth_mode":"chatgptAuthTokens","tokens":{"access_token":"secret"}}`, wantMode: ModeChatGPTAuthTokens},
 		{name: "API key", raw: `{"auth_mode":"apikey","OPENAI_API_KEY":"sk-synthetic"}`, wantMode: ModeAPIKey},
 		{name: "implicit API key", raw: `{"OPENAI_API_KEY":"sk-synthetic"}`, wantMode: ModeAPIKey},
-		{name: "agent identity", raw: `{"auth_mode":"agentIdentity","agent_identity":{"agent_runtime_id":"runtime","agent_private_key":"synthetic"}}`, wantMode: ModeAgentIdentity},
-		{name: "implicit agent identity", raw: `{"agent_identity":{"agent_runtime_id":"runtime"}}`, wantMode: ModeAgentIdentity},
+		{name: "agent identity record", raw: `{"auth_mode":"agentIdentity","agent_identity":` + agentIdentityRecord + `}`, wantMode: ModeAgentIdentity},
+		{name: "agent identity JWT", raw: `{"auth_mode":"agentIdentity","agent_identity":"` + agentIdentityJWT + `"}`, wantMode: ModeAgentIdentity},
 		{name: "personal access token", raw: `{"auth_mode":"personalAccessToken","personal_access_token":"pat-synthetic"}`, wantMode: ModePersonalAccessToken},
 		{name: "implicit personal access token", raw: `{"personal_access_token":"pat-synthetic"}`, wantMode: ModePersonalAccessToken},
 	}
@@ -52,6 +54,34 @@ func TestNormalizePayloadAcceptsSupportedFileAuthModes(t *testing.T) {
 	}
 }
 
+func TestInspectTreatsUnusableAccountMetadataAsAbsent(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		accountID string
+	}{
+		{name: "null", accountID: "null"},
+		{name: "blank", accountID: `" "`},
+		{name: "unsafe", accountID: `"bad\nid"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := `{"auth_mode":"chatgpt","tokens":{"account_id":` + tc.accountID + `,"access_token":"token","refresh_token":"refresh"}}`
+			if _, err := NormalizePayload([]byte(raw)); err != nil {
+				t.Fatalf("expected optional account metadata not to invalidate auth, got %v", err)
+			}
+			if accountID, err := ExtractAccountID([]byte(raw)); err != nil || accountID != "" {
+				t.Fatalf("expected unusable account metadata to be omitted, got %q, %v", accountID, err)
+			}
+			info, err := Inspect([]byte(raw))
+			if err != nil || !info.QuotaSupported || !info.RefreshSupported {
+				t.Fatalf("expected native capabilities to ignore optional account metadata, got %#v, %v", info, err)
+			}
+			if _, err := ExtractBackendCredentials([]byte(raw)); !errors.Is(err, ErrMissingQuotaAccountID) {
+				t.Fatalf("expected direct quota fallback to require account metadata, got %v", err)
+			}
+		})
+	}
+}
+
 func TestNormalizePayloadRejectsInvalidShapes(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -64,9 +94,6 @@ func TestNormalizePayloadRejectsInvalidShapes(t *testing.T) {
 		{name: "missing access token", raw: `{"tokens":{"account_id":"a"}}`},
 		{name: "empty access token", raw: `{"tokens":{"access_token":" "}}`},
 		{name: "invalid account type", raw: `{"tokens":{"account_id":42,"access_token":"secret"}}`},
-		{name: "null account", raw: `{"tokens":{"account_id":null,"access_token":"secret"}}`},
-		{name: "empty account", raw: `{"tokens":{"account_id":" ","access_token":"secret"}}`},
-		{name: "control character account", raw: "{\"tokens\":{\"account_id\":\"bad\\nid\",\"access_token\":\"secret\"}}"},
 		{name: "invalid auth mode type", raw: `{"auth_mode":42,"tokens":{"access_token":"secret"}}`},
 		{name: "unknown auth mode", raw: `{"auth_mode":"future","tokens":{"access_token":"secret"}}`},
 		{name: "headers auth mode", raw: `{"auth_mode":"headers"}`},
@@ -82,7 +109,10 @@ func TestNormalizePayloadRejectsInvalidShapes(t *testing.T) {
 		{name: "control character API key", raw: "{\"auth_mode\":\"apikey\",\"OPENAI_API_KEY\":\"api-secret\\nvalue\"}", secretText: "api-secret"},
 		{name: "missing agent identity", raw: `{"auth_mode":"agentIdentity"}`},
 		{name: "empty agent identity", raw: `{"auth_mode":"agentIdentity","agent_identity":{}}`},
-		{name: "invalid agent identity type", raw: `{"auth_mode":"agentIdentity","agent_identity":"agent-secret"}`, secretText: "agent-secret"},
+		{name: "empty agent identity JWT", raw: `{"auth_mode":"agentIdentity","agent_identity":" "}`},
+		{name: "agent identity JWT missing claims", raw: `{"auth_mode":"agentIdentity","agent_identity":"` + syntheticAgentIdentityJWTWithClaims(`{}`) + `"}`},
+		{name: "invalid agent identity type", raw: `{"auth_mode":"agentIdentity","agent_identity":42}`},
+		{name: "incomplete agent identity record", raw: `{"auth_mode":"agentIdentity","agent_identity":{"agent_runtime_id":"runtime","agent_private_key":"agent-secret"}}`, secretText: "agent-secret"},
 		{name: "missing personal access token", raw: `{"auth_mode":"personalAccessToken"}`},
 		{name: "empty personal access token", raw: `{"auth_mode":"personalAccessToken","personal_access_token":" "}`},
 		{name: "invalid personal access token type", raw: `{"auth_mode":"personalAccessToken","personal_access_token":42}`},
@@ -244,13 +274,14 @@ func TestInspectFallsBackToLastRefreshAndRejectsExternalKeepalive(t *testing.T) 
 }
 
 func TestInspectDisablesChatGPTCapabilitiesForOtherSupportedModes(t *testing.T) {
+	agentIdentityRecord := `{"agent_runtime_id":"runtime","agent_private_key":"synthetic","account_id":"account","chatgpt_user_id":"user","plan_type":"enterprise","chatgpt_account_is_fedramp":false}`
 	cases := []struct {
 		name string
 		raw  string
 		mode Mode
 	}{
 		{name: "API key", raw: `{"auth_mode":"apikey","OPENAI_API_KEY":"sk-synthetic"}`, mode: ModeAPIKey},
-		{name: "agent identity", raw: `{"auth_mode":"agentIdentity","agent_identity":{"agent_runtime_id":"runtime"}}`, mode: ModeAgentIdentity},
+		{name: "agent identity", raw: `{"auth_mode":"agentIdentity","agent_identity":` + agentIdentityRecord + `}`, mode: ModeAgentIdentity},
 		{name: "personal access token", raw: `{"auth_mode":"personalAccessToken","personal_access_token":"pat-synthetic"}`, mode: ModePersonalAccessToken},
 	}
 	for _, tc := range cases {
@@ -264,4 +295,15 @@ func TestInspectDisablesChatGPTCapabilitiesForOtherSupportedModes(t *testing.T) 
 			}
 		})
 	}
+}
+
+func syntheticAgentIdentityJWT() string {
+	return syntheticAgentIdentityJWTWithClaims(`{"iss":"https://chatgpt.com/codex-backend/agent-identity","aud":"codex-app-server","iat":1700000000,"exp":4000000000,"agent_runtime_id":"runtime","agent_private_key":"synthetic","account_id":"account","chatgpt_user_id":"user","plan_type":"enterprise","chatgpt_account_is_fedramp":false}`)
+}
+
+func syntheticAgentIdentityJWTWithClaims(rawClaims string) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","kid":"test-key"}`))
+	claims := base64.RawURLEncoding.EncodeToString([]byte(rawClaims))
+	signature := base64.RawURLEncoding.EncodeToString([]byte("signature"))
+	return header + "." + claims + "." + signature
 }

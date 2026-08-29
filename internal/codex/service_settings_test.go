@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"testing"
 
@@ -99,36 +100,50 @@ func TestCodexSettingsRejectsUnsupportedKeepaliveMode(t *testing.T) {
 	}
 }
 
-func TestCodexProfileAcceptsChatGPTAuthWithoutAccountMetadata(t *testing.T) {
-	ctx := context.Background()
-	configDir := t.TempDir()
-	codexDir := t.TempDir()
-	if _, err := initCodexTestRuntime(ctx, configDir); err != nil {
-		t.Fatalf("expected init, got %v", err)
-	}
-	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"auth_mode":"chatgpt","tokens":{"access_token":"token"}}`)
-	created, err := newCodexTestEnvironment(t, configDir, codexDir).codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"})
-	if err != nil {
-		t.Fatalf("expected ChatGPT auth without account metadata, got %v", err)
-	}
-	if created.Summary.CodexAccountID != "" || len(created.Summary.Warnings) != 0 {
-		t.Fatalf("expected valid Profile without account metadata, got %#v", created.Summary)
-	}
+func TestCodexProfileAcceptsChatGPTAuthWithoutUsableAccountMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		accountID string
+	}{
+		{name: "missing"},
+		{name: "null", accountID: `,"account_id":null`},
+		{name: "blank", accountID: `,"account_id":" "`},
+		{name: "unsafe", accountID: `,"account_id":"bad\nid"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			configDir := t.TempDir()
+			codexDir := t.TempDir()
+			if _, err := initCodexTestRuntime(ctx, configDir); err != nil {
+				t.Fatalf("expected init, got %v", err)
+			}
+			writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\n", `{"auth_mode":"chatgpt","tokens":{"access_token":"token","refresh_token":"refresh"`+tc.accountID+`}}`)
+			created, err := newCodexTestEnvironment(t, configDir, codexDir).codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"})
+			if err != nil {
+				t.Fatalf("expected ChatGPT auth without usable account metadata, got %v", err)
+			}
+			if created.Summary.CodexAccountID != "" || len(created.Summary.Warnings) != 0 {
+				t.Fatalf("expected valid Profile without account metadata, got %#v", created.Summary)
+			}
 
-	settings, err := newCodexTestEnvironment(t, configDir, "").codex.GetSettings(ctx)
-	if err != nil || len(settings.Profiles) != 1 || !settings.Profiles[0].QuotaSupported {
-		t.Fatalf("expected native ChatGPT quota capability without account metadata, got %#v, %v", settings, err)
+			settings, err := newCodexTestEnvironment(t, configDir, "").codex.GetSettings(ctx)
+			if err != nil || len(settings.Profiles) != 1 || !settings.Profiles[0].QuotaSupported || !settings.Profiles[0].AuthKeepaliveSupported {
+				t.Fatalf("expected native ChatGPT capabilities without account metadata, got %#v, %v", settings, err)
+			}
+		})
 	}
 }
 
 func TestCodexSettingsExposeSupportedNonChatGPTAuthModes(t *testing.T) {
+	agentIdentityRecord := `{"agent_runtime_id":"runtime","agent_private_key":"synthetic","account_id":"account","chatgpt_user_id":"user","plan_type":"enterprise","chatgpt_account_is_fedramp":false}`
 	cases := []struct {
 		name string
 		raw  string
 		mode codexauth.Mode
 	}{
 		{name: "API key", raw: `{"auth_mode":"apikey","OPENAI_API_KEY":"sk-synthetic"}`, mode: codexauth.ModeAPIKey},
-		{name: "agent identity", raw: `{"auth_mode":"agentIdentity","agent_identity":{"agent_runtime_id":"runtime"}}`, mode: codexauth.ModeAgentIdentity},
+		{name: "agent identity record", raw: `{"auth_mode":"agentIdentity","agent_identity":` + agentIdentityRecord + `}`, mode: codexauth.ModeAgentIdentity},
+		{name: "agent identity JWT", raw: `{"auth_mode":"agentIdentity","agent_identity":"` + syntheticCodexAgentIdentityJWT() + `"}`, mode: codexauth.ModeAgentIdentity},
 		{name: "personal access token", raw: `{"auth_mode":"personalAccessToken","personal_access_token":"pat-synthetic"}`, mode: codexauth.ModePersonalAccessToken},
 	}
 	for _, tc := range cases {
@@ -162,6 +177,13 @@ func TestCodexSettingsExposeSupportedNonChatGPTAuthModes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func syntheticCodexAgentIdentityJWT() string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","kid":"test-key"}`))
+	claims := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"https://chatgpt.com/codex-backend/agent-identity","aud":"codex-app-server","iat":1700000000,"exp":4000000000,"agent_runtime_id":"runtime","agent_private_key":"synthetic","account_id":"account","chatgpt_user_id":"user","plan_type":"enterprise","chatgpt_account_is_fedramp":false}`))
+	signature := base64.RawURLEncoding.EncodeToString([]byte("signature"))
+	return header + "." + claims + "." + signature
 }
 
 func TestCodexProviderSettingsFailClosedForUnknownVersionAndFields(t *testing.T) {

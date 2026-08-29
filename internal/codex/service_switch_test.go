@@ -49,7 +49,7 @@ func TestCodexSwitchPreservesOpaqueFileAuthPayloads(t *testing.T) {
 		name string
 		raw  string
 	}{
-		{name: "agent identity", raw: "{\n  \"auth_mode\": \"agentIdentity\",\n  \"agent_identity\": {\"agent_runtime_id\": \"runtime\", \"opaque\": {\"future\": true}}\n}\n"},
+		{name: "agent identity", raw: "{\n  \"auth_mode\": \"agentIdentity\",\n  \"agent_identity\": {\"agent_runtime_id\": \"runtime\", \"agent_private_key\": \"synthetic\", \"account_id\": \"account\", \"chatgpt_user_id\": \"user\", \"plan_type\": \"enterprise\", \"chatgpt_account_is_fedramp\": false, \"opaque\": {\"future\": true}}\n}\n"},
 		{name: "personal access token", raw: "{\n  \"auth_mode\": \"personalAccessToken\",\n  \"personal_access_token\": \"pat-synthetic\"\n}\n"},
 	}
 	for _, tc := range cases {
