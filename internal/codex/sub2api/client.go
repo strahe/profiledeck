@@ -394,7 +394,17 @@ func subscriptionWindow(id string, limit, used *float64) (Window, bool, error) {
 	if limit == nil {
 		return Window{}, false, nil
 	}
-	if validateNonNegative(*limit) != nil || used == nil || validateNonNegative(*used) != nil {
+	if validateNonNegative(*limit) != nil {
+		return Window{}, false, errors.New("subscription limit values are invalid")
+	}
+	// Sub2API reports zero for subscription periods that have no configured limit.
+	if *limit == 0 {
+		if used != nil && validateNonNegative(*used) != nil {
+			return Window{}, false, errors.New("subscription limit values are invalid")
+		}
+		return Window{}, false, nil
+	}
+	if used == nil || validateNonNegative(*used) != nil {
 		return Window{}, false, errors.New("subscription limit values are invalid")
 	}
 	remaining := math.Max(0, *limit-*used)

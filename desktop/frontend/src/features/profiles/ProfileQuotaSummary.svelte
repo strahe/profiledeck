@@ -114,13 +114,17 @@
 {:else if quota?.status === "available" && quota.source === "sub2api" && quota.sub2api_snapshot}
 	{@const snapshot = quota.sub2api_snapshot}
 	<div class="flex min-w-0 flex-col gap-2">
-		<div class="flex min-w-0 flex-wrap items-center justify-between gap-2">
-			<span class="truncate text-sm font-medium">
-				{$_("quota.apiServiceRemaining")}: {snapshot.unlimited ? $_("quota.unlimited") : formatQuotaValue(snapshot.remaining ?? snapshot.balance, snapshot.unit)}
-			</span>
-			<Badge variant={apiKeyStateDestructive(snapshot.key_state) ? "destructive" : "secondary"}>{apiKeyStateLabel(snapshot.key_state)}</Badge>
-		</div>
-		{#if snapshot.windows?.length}
+		{#if !snapshot.windows?.length}
+			<div class="flex min-w-0 flex-wrap items-center justify-between gap-2">
+				<span class="truncate text-sm font-medium">
+					{$_("quota.apiServiceRemaining")}: {snapshot.unlimited ? $_("quota.unlimited") : formatQuotaValue(snapshot.remaining ?? snapshot.balance, snapshot.unit)}
+				</span>
+				<Badge variant={apiKeyStateDestructive(snapshot.key_state) ? "destructive" : "secondary"}>{apiKeyStateLabel(snapshot.key_state)}</Badge>
+			</div>
+		{:else}
+			{#if snapshot.key_state !== "active"}
+				<div><Badge variant={apiKeyStateDestructive(snapshot.key_state) ? "destructive" : "secondary"}>{apiKeyStateLabel(snapshot.key_state)}</Badge></div>
+			{/if}
 			<div class="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-x-4 gap-y-2">
 				{#each snapshot.windows as window (window.id)}
 					{@render Sub2APIWindowSummary(window, snapshot)}

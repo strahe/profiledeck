@@ -101,11 +101,13 @@ func TestSnapshotFromUnrestrictedSubscription(t *testing.T) {
 	unlimited := -1.0
 	dailyLimit, dailyUsed := 20.0, 5.0
 	weeklyLimit, weeklyUsed := 100.0, 125.0
+	monthlyLimit, monthlyUsed := 0.0, 173.42
 	payload := usageResponse{
 		Mode: "unrestricted", IsValid: &valid, PlanName: "  Team\nPlan  ", Unit: " USD ", Remaining: &unlimited,
 		Subscription: &subscriptionResponse{
 			DailyLimitUSD: &dailyLimit, DailyUsageUSD: &dailyUsed,
 			WeeklyLimitUSD: &weeklyLimit, WeeklyUsageUSD: &weeklyUsed,
+			MonthlyLimitUSD: &monthlyLimit, MonthlyUsageUSD: &monthlyUsed,
 		},
 	}
 	snapshot, err := snapshotFromResponse(payload, time.Unix(100, 0))
@@ -115,7 +117,7 @@ func TestSnapshotFromUnrestrictedSubscription(t *testing.T) {
 	if !snapshot.Unlimited || snapshot.Remaining != nil || snapshot.PlanName != "TeamPlan" || snapshot.KeyState != KeyStateActive {
 		t.Fatalf("unexpected subscription snapshot: %#v", snapshot)
 	}
-	if len(snapshot.Windows) != 2 || snapshot.Windows[0].ID != "daily" || snapshot.Windows[0].RemainingPercent != 75 || snapshot.Windows[1].Remaining != 0 {
+	if len(snapshot.Windows) != 2 || snapshot.Windows[0].ID != "daily" || snapshot.Windows[0].RemainingPercent != 75 || snapshot.Windows[1].ID != "weekly" || snapshot.Windows[1].Remaining != 0 {
 		t.Fatalf("unexpected subscription windows: %#v", snapshot.Windows)
 	}
 }

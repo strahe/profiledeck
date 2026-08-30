@@ -133,7 +133,7 @@ describe("Codex API service quota components", () => {
 		expect(screen.queryByText("$75.00")).not.toBeInTheDocument();
 	});
 
-	it("renders compact unlimited and window summaries", () => {
+	it("omits the aggregate remaining value when compact windows are present", () => {
 		render(ProfileQuotaSummary, {
 			quota: quota({
 				sub2api_snapshot: { ...quota().sub2api_snapshot!, unlimited: true },
@@ -142,8 +142,31 @@ describe("Codex API service quota components", () => {
 			nowUnixMS: Date.UTC(2026, 7, 2, 1, 1, 0),
 		}, { wrapper: TestProviders });
 
-		expect(screen.getByText("Remaining: Unlimited")).toBeInTheDocument();
+		expect(screen.queryByText("Remaining: Unlimited")).not.toBeInTheDocument();
+		expect(screen.queryByText("Active")).not.toBeInTheDocument();
 		expect(screen.getByText("5 hours")).toBeInTheDocument();
+	});
+
+	it("keeps aggregate remaining and unhealthy states when they are needed", async () => {
+		const view = render(ProfileQuotaSummary, {
+			quota: quota({
+				sub2api_snapshot: { ...quota().sub2api_snapshot!, unlimited: true, windows: [] },
+			}),
+			loading: false,
+			nowUnixMS: Date.UTC(2026, 7, 2, 1, 1, 0),
+		}, { wrapper: TestProviders });
+
+		expect(screen.getByText("Remaining: Unlimited")).toBeInTheDocument();
+
+		await view.rerender({
+			quota: quota({
+				sub2api_snapshot: { ...quota().sub2api_snapshot!, key_state: "expired" },
+			}),
+			loading: false,
+			nowUnixMS: Date.UTC(2026, 7, 2, 1, 1, 0),
+		});
+		expect(screen.getByText("Expired")).toHaveClass("text-destructive");
+		expect(screen.queryByText(/^Remaining:/)).not.toBeInTheDocument();
 	});
 
 	it("uses API service failure labels in compact summaries", () => {
