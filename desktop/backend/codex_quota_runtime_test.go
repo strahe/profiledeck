@@ -144,13 +144,202 @@ func TestCodexQuotaRuntimeUsesJitterAndBoundedBackoff(t *testing.T) {
 			t.Fatalf("expected +/-10%% jitter, got %s", got)
 		}
 	}
-	schedule := &codexCredentialSchedule{nextKind: codex.CodexCredentialJobQuota}
+	schedule := &codexCredentialSchedule{nextKind: codex.CodexCredentialJobQuota, quotaSource: codex.CodexQuotaSourceChatGPT}
 	now := time.Unix(1780000000, 0)
 	for i, expected := range []time.Duration{5 * time.Minute, 15 * time.Minute, time.Hour, 6 * time.Hour, 6 * time.Hour} {
 		runtime.scheduleRetryLocked(schedule, now)
 		if got := schedule.nextRunAt.Sub(now); got != expected {
 			t.Fatalf("retry %d: expected %s, got %s", i, expected, got)
 		}
+	}
+}
+
+func TestCodexQuotaRuntimeRetriesKeepaliveWithoutQuotaCapability(t *testing.T) {
+	runtime := newCodexQuotaRuntime(nil, nil)
+	now := time.Unix(1780000000, 0)
+	schedule := &codexCredentialSchedule{
+		key: "credential", credentialID: "credential", credentialHash: "hash",
+		quotaSource: codex.CodexQuotaSourceChatGPT, profileIDs: []string{"work"},
+		nextKind: codex.CodexCredentialJobKeepalive, keepalive: true, keepaliveSupport: true,
+	}
+	runtime.schedules[schedule.key] = schedule
+	runtime.profileStatus["work"] = CodexProfileQuotaRuntimeStatus{ProfileID: "work"}
+
+	runtime.completeJob(
+		&codexQuotaRuntimeJob{
+			key: schedule.key, profileID: "work", kind: codex.CodexCredentialJobKeepalive,
+			credentialID: schedule.credentialID, credentialHash: schedule.credentialHash,
+			quotaSource: schedule.quotaSource,
+		},
+		codex.CodexCredentialJobResult{},
+		errors.New("transient failure"),
+		now,
+	)
+
+	if schedule.nextKind != codex.CodexCredentialJobKeepalive || schedule.nextRunAt.Sub(now) != 5*time.Minute {
+		t.Fatalf("expected keepalive backoff without quota capability, got %#v", schedule)
+	}
+}
+
+func TestCodexQuotaRuntimeSeparatesSub2APIConfigSets(t *testing.T) {
+	runtime := newCodexQuotaRuntime(nil, nil)
+	runtime.applyTargets([]codex.CodexAutomationTarget{
+		{
+			ProfileID: "one", CredentialID: "shared", CredentialSHA256: "credential-hash",
+			ConfigSetID: "config-one", ConfigSetSHA256: "config-hash-one",
+			QuotaSource: codex.CodexQuotaSourceSub2API, QuotaReadSupported: true,
+		},
+		{
+			ProfileID: "two", CredentialID: "shared", CredentialSHA256: "credential-hash",
+			ConfigSetID: "config-two", ConfigSetSHA256: "config-hash-two",
+			QuotaSource: codex.CodexQuotaSourceSub2API, QuotaReadSupported: true,
+		},
+	})
+
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	if len(runtime.schedules) != 2 || runtime.profileToKey["one"] == runtime.profileToKey["two"] {
+		t.Fatalf("expected separate API key jobs per Config Set, schedules=%#v profiles=%#v", runtime.schedules, runtime.profileToKey)
+	}
+}
+
+func TestCodexQuotaRuntimeKeepsChatGPTSnapshotAcrossConfigSetChanges(t *testing.T) {
+	runtime := newCodexQuotaRuntime(nil, nil)
+	target := codex.CodexAutomationTarget{
+		ProfileID: "work", CredentialID: "credential", CredentialSHA256: "credential-hash",
+		ConfigSetID: "config", ConfigSetSHA256: "config-old", QuotaSource: codex.CodexQuotaSourceChatGPT,
+		QuotaReadSupported: true, QuotaSupported: true,
+	}
+	runtime.applyTargets([]codex.CodexAutomationTarget{target})
+	runtime.mu.Lock()
+	runtime.profileStatus[target.ProfileID] = CodexProfileQuotaRuntimeStatus{
+		ProfileID: target.ProfileID, Status: codex.CodexProfileQuotaAvailable,
+		Snapshot: &codex.CodexQuotaSnapshot{FetchedAtUnixMS: 1780000000000},
+	}
+	runtime.rebuildStatusLocked()
+	runtime.mu.Unlock()
+
+	target.ConfigSetSHA256 = "config-new"
+	runtime.applyTargets([]codex.CodexAutomationTarget{target})
+	status := runtime.Status().Profiles[0]
+	if status.Snapshot == nil || status.Snapshot.FetchedAtUnixMS != 1780000000000 {
+		t.Fatalf("expected ChatGPT quota to remain credential-scoped, got %#v", status)
+	}
+}
+
+func TestCodexQuotaRuntimeNeverSchedulesSub2APIResidualInterval(t *testing.T) {
+	runtime := newCodexQuotaRuntime(nil, nil)
+	target := codex.CodexAutomationTarget{
+		ProfileID: "work", CredentialID: "credential", CredentialSHA256: "credential-hash",
+		ConfigSetID: "config", ConfigSetSHA256: "config-hash",
+		QuotaSource: codex.CodexQuotaSourceSub2API, QuotaReadSupported: true,
+		QuotaRefreshIntervalSeconds: 300,
+	}
+	runtime.applyTargets([]codex.CodexAutomationTarget{target})
+	key := runtime.profileToKey[target.ProfileID]
+	runtime.mu.RLock()
+	schedule := runtime.schedules[key]
+	runtime.mu.RUnlock()
+	if schedule.interval != 0 || schedule.nextKind != "" || !schedule.nextRunAt.IsZero() {
+		t.Fatalf("expected residual interval to stay unscheduled, got %#v", schedule)
+	}
+
+	runtime.completeJob(
+		&codexQuotaRuntimeJob{
+			key: key, profileID: target.ProfileID, kind: codex.CodexCredentialJobQuota, manual: true,
+			credentialHash: target.CredentialSHA256, configSetHash: target.ConfigSetSHA256, quotaSource: target.QuotaSource,
+		},
+		codex.CodexCredentialJobResult{Quota: codex.CodexProfileQuota{Status: codex.CodexProfileQuotaUnavailable}},
+		nil,
+		time.Unix(1780000000, 0),
+	)
+	runtime.mu.RLock()
+	schedule = runtime.schedules[key]
+	runtime.mu.RUnlock()
+	if schedule.nextKind != "" || !schedule.nextRunAt.IsZero() {
+		t.Fatalf("expected manual completion not to schedule API key refresh, got %#v", schedule)
+	}
+
+	runtime.mu.Lock()
+	schedule.nextKind = codex.CodexCredentialJobQuota
+	runtime.scheduleRetryLocked(schedule, time.Unix(1780000300, 0))
+	runtime.mu.Unlock()
+	if schedule.nextKind != "" || !schedule.nextRunAt.IsZero() {
+		t.Fatalf("expected API key failure callback not to schedule a retry, got %#v", schedule)
+	}
+}
+
+func TestCodexQuotaRuntimeDiscardsStaleBindingRevision(t *testing.T) {
+	runtime := newCodexQuotaRuntime(nil, nil)
+	target := codex.CodexAutomationTarget{
+		ProfileID: "work", CredentialID: "credential", CredentialSHA256: "credential-hash",
+		ConfigSetID: "config", ConfigSetSHA256: "config-hash-new",
+		QuotaSource: codex.CodexQuotaSourceSub2API, QuotaReadSupported: true,
+	}
+	runtime.applyTargets([]codex.CodexAutomationTarget{target})
+	key := runtime.profileToKey[target.ProfileID]
+	waiter := codexQuotaWaiter{profileID: target.ProfileID, result: make(chan codexQuotaManualResult, 1)}
+	runtime.completeJob(
+		&codexQuotaRuntimeJob{
+			key: key, profileID: target.ProfileID, kind: codex.CodexCredentialJobQuota, manual: true,
+			waiters: []codexQuotaWaiter{waiter}, credentialHash: target.CredentialSHA256,
+			configSetHash: "config-hash-old", quotaSource: target.QuotaSource,
+		},
+		codex.CodexCredentialJobResult{Quota: codex.CodexProfileQuota{
+			ProfileID: target.ProfileID, CredentialID: target.CredentialID, ConfigSetID: target.ConfigSetID,
+			Source: target.QuotaSource, Status: codex.CodexProfileQuotaAvailable,
+			Sub2APISnapshot: &codex.CodexSub2APIQuotaSnapshot{FetchedAtUnixMS: 1780000000000},
+		}},
+		nil,
+		time.Unix(1780000000, 0),
+	)
+
+	result := <-waiter.result
+	if result.err == nil || result.quota.Status != codex.CodexProfileQuotaUnavailable || result.quota.Sub2APISnapshot != nil {
+		t.Fatalf("expected stale job result to be rejected, got %#v", result)
+	}
+	status := runtime.Status().Profiles[0]
+	if status.Sub2APISnapshot != nil || status.Status != "" || status.LastCompletedAtUnixMS != 0 {
+		t.Fatalf("expected stale completion not to change the current binding cache, got %#v", status)
+	}
+}
+
+func TestCodexQuotaRuntimeDoesNotMergeManualRequestIntoStaleRevision(t *testing.T) {
+	oldTarget := codex.CodexAutomationTarget{
+		ProfileID: "work", CredentialID: "credential", CredentialSHA256: "credential-old",
+		ConfigSetID: "config", ConfigSetSHA256: "config-old", QuotaSource: codex.CodexQuotaSourceSub2API,
+		QuotaReadSupported: true,
+	}
+	newTarget := oldTarget
+	newTarget.CredentialSHA256 = "credential-new"
+	newTarget.ConfigSetSHA256 = "config-new"
+	runtime := newCodexQuotaRuntime(func(context.Context) ([]codex.CodexAutomationTarget, error) {
+		return []codex.CodexAutomationTarget{newTarget}, nil
+	}, nil)
+	runtime.applyTargets([]codex.CodexAutomationTarget{oldTarget})
+	key := runtime.profileToKey[oldTarget.ProfileID]
+	runtime.mu.Lock()
+	oldJob := &codexQuotaRuntimeJob{
+		key: key, profileID: oldTarget.ProfileID, kind: codex.CodexCredentialJobQuota,
+		manual: true, startedAt: time.Unix(1780000000, 0),
+	}
+	runtime.startJobLocked(oldJob, runtime.schedules[key])
+	runtime.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := runtime.ReadProfileQuota(ctx, oldTarget.ProfileID)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled observer, got %v", err)
+	}
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	if len(oldJob.waiters) != 0 {
+		t.Fatalf("expected new revision request not to join stale inflight job, got %#v", oldJob.waiters)
+	}
+	group := runtime.manualByKey[key]
+	if group == nil || len(group.waiters) != 1 {
+		t.Fatalf("expected new revision request to remain queued for a fresh job, got %#v", group)
 	}
 }
 

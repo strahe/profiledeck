@@ -13,6 +13,7 @@ import (
 	codexauth "github.com/strahe/profiledeck/internal/codex/auth"
 	codexautomation "github.com/strahe/profiledeck/internal/codex/automation"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
+	codexsub2api "github.com/strahe/profiledeck/internal/codex/sub2api"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/usage"
 )
@@ -45,6 +46,8 @@ type CodexProfileSettings struct {
 	QuotaRefreshIntervalSeconds int    `json:"quota_refresh_interval_seconds"`
 	AuthKeepaliveEnabled        bool   `json:"auth_keepalive_enabled"`
 	AuthMode                    string `json:"auth_mode"`
+	QuotaSource                 string `json:"quota_source,omitempty"`
+	QuotaReadSupported          bool   `json:"quota_read_supported"`
 	QuotaSupported              bool   `json:"quota_supported"`
 	AuthKeepaliveSupported      bool   `json:"auth_keepalive_supported"`
 	UpdatedAtUnixMS             int64  `json:"updated_at_unix_ms"`
@@ -54,10 +57,15 @@ type CodexAutomationTarget struct {
 	ProfileID                   string
 	CredentialID                string
 	CredentialSHA256            string
+	ConfigSetID                 string
+	ConfigSetSHA256             string
 	QuotaRefreshIntervalSeconds int
 	AuthKeepaliveEnabled        bool
 	AuthMode                    codexauth.Mode
+	QuotaSource                 CodexQuotaSource
+	QuotaReadSupported          bool
 	QuotaSupported              bool
+	InsecureTransport           bool
 	AuthKeepaliveSupported      bool
 	AuthRefreshDueAtUnixMS      int64
 }
@@ -192,6 +200,7 @@ func (service *Service) ListAutomationTargets(ctx context.Context) ([]CodexAutom
 		setting := byProfile[summary.Profile.ID]
 		target := CodexAutomationTarget{
 			ProfileID: summary.Profile.ID, CredentialID: summary.CredentialID,
+			ConfigSetID:                 summary.ConfigSetID,
 			QuotaRefreshIntervalSeconds: setting.QuotaRefreshIntervalSeconds,
 			AuthKeepaliveEnabled:        setting.AuthKeepaliveEnabled,
 		}
@@ -201,12 +210,20 @@ func (service *Service) ListAutomationTargets(ctx context.Context) ([]CodexAutom
 				target.CredentialSHA256 = credential.PayloadSHA256
 				if info, inspectErr := codexauth.Inspect([]byte(credential.PayloadJSON)); inspectErr == nil {
 					target.AuthMode = info.Mode
-					target.QuotaSupported = info.QuotaSupported
+					target.QuotaSource, target.QuotaReadSupported, target.QuotaSupported = codexQuotaCapabilities(info, summary.OpenAIBaseURL)
+					if target.QuotaSource == CodexQuotaSourceSub2API {
+						_, target.InsecureTransport, _ = codexsub2api.ResolveEndpoint(summary.OpenAIBaseURL)
+					}
 					target.AuthKeepaliveSupported = info.RefreshSupported
 					if dueAt, ok := info.RefreshDueAt(now); ok {
 						target.AuthRefreshDueAtUnixMS = dueAt.UnixMilli()
 					}
 				}
+			}
+		}
+		if target.QuotaSource == CodexQuotaSourceSub2API && summary.ConfigSetID != "" {
+			if configSet, err := requireCodexConfigSet(ctx, db, summary.ConfigSetID); err == nil {
+				target.ConfigSetSHA256 = configSet.PayloadSHA256
 			}
 		}
 		result = append(result, target)
@@ -265,7 +282,10 @@ func getCodexSettings(ctx context.Context, db *store.Store) (CodexSettings, erro
 			if credentialErr == nil {
 				if info, inspectErr := codexauth.Inspect([]byte(credential.PayloadJSON)); inspectErr == nil {
 					value.AuthMode = string(info.Mode)
-					value.QuotaSupported = info.QuotaSupported
+					source, readSupported, automaticSupported := codexQuotaCapabilities(info, summary.OpenAIBaseURL)
+					value.QuotaSource = string(source)
+					value.QuotaReadSupported = readSupported
+					value.QuotaSupported = automaticSupported
 					value.AuthKeepaliveSupported = info.RefreshSupported
 				}
 			}
@@ -277,6 +297,18 @@ func getCodexSettings(ctx context.Context, db *store.Store) (CodexSettings, erro
 	}
 	sort.Slice(result.Profiles, func(i, j int) bool { return result.Profiles[i].ProfileID < result.Profiles[j].ProfileID })
 	return result, nil
+}
+
+func codexQuotaCapabilities(info codexauth.Info, baseURL string) (CodexQuotaSource, bool, bool) {
+	if info.QuotaSupported {
+		return CodexQuotaSourceChatGPT, true, true
+	}
+	if info.Mode == codexauth.ModeAPIKey {
+		if _, _, err := codexsub2api.ResolveEndpoint(baseURL); err == nil {
+			return CodexQuotaSourceSub2API, true, false
+		}
+	}
+	return "", false, false
 }
 
 func getCodexUsageSyncInterval(ctx context.Context, db *store.Store) (int, error) {

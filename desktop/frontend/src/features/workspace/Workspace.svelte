@@ -815,6 +815,11 @@
 		const changedProviders = new Set<string>();
 		let reloadCodexRuntime = false;
 		for (const event of events) {
+			const switchedCodexProfileID = codexStartupQuotaRead.afterSwitch(event);
+			if (switchedCodexProfileID && isAgentEnabled("codex")) {
+				codexRuntime.setProfiles(codexProfileSummaries);
+				void codexRuntime.readQuota(switchedCodexProfileID);
+			}
 			const switchedGrokBuildProfileID = event?.profile_id === grokBuildCurrentProfileID
 				? grokBuildQuotaReadPolicy.afterSwitch(event, grokBuildEnabled)
 				: "";

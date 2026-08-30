@@ -11,6 +11,7 @@ import (
 	codexautomation "github.com/strahe/profiledeck/internal/codex/automation"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	codexquota "github.com/strahe/profiledeck/internal/codex/quota"
+	codexsub2api "github.com/strahe/profiledeck/internal/codex/sub2api"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -34,6 +35,7 @@ type RunCodexCredentialJobRequest struct {
 type CodexCredentialJobResult struct {
 	Quota              CodexProfileQuota
 	CredentialSHA256   string
+	ConfigSetSHA256    string
 	CredentialUpdated  bool
 	CredentialConflict bool
 	NativeAttempted    bool
@@ -58,10 +60,16 @@ func (service *Service) RunCredentialJob(ctx context.Context, req RunCodexCreden
 	if err := service.requireAccess(ctx); err != nil {
 		return CodexCredentialJobResult{}, err
 	}
-	return service.runCredentialJob(ctx, req, codexappserver.NewRunner(), codexquota.NewClient())
+	return service.runCredentialJob(ctx, req, codexappserver.NewRunner(), codexquota.NewClient(), codexsub2api.NewClient())
 }
 
-func (service *Service) runCredentialJob(ctx context.Context, req RunCodexCredentialJobRequest, runner codexNativeRunner, directReader codexquota.Reader) (CodexCredentialJobResult, error) {
+func (service *Service) runCredentialJob(
+	ctx context.Context,
+	req RunCodexCredentialJobRequest,
+	runner codexNativeRunner,
+	directReader codexquota.Reader,
+	sub2APIReaders ...codexsub2api.Reader,
+) (CodexCredentialJobResult, error) {
 	profileID, appErr := validateID(req.ProfileID, apperror.ProfileInvalid)
 	if appErr != nil {
 		return CodexCredentialJobResult{}, appErr
@@ -72,6 +80,7 @@ func (service *Service) runCredentialJob(ctx context.Context, req RunCodexCreden
 	}
 
 	var result CodexCredentialJobResult
+	var sub2APICapture *codexSub2APIQuotaCapture
 	err := service.sharedLock.RunWithSharedLock(ctx, "codex-auth-runtime", func(ctx context.Context) error {
 		if err := service.requireAccess(ctx); err != nil {
 			return err
@@ -85,10 +94,29 @@ func (service *Service) runCredentialJob(ctx context.Context, req RunCodexCreden
 			return err
 		}
 		var runErr error
-		result, runErr = runCodexCredentialJobLocked(ctx, db, profileID, kind, req.AllowDirectFallback, runner, directReader)
+		result, sub2APICapture, runErr = runCodexCredentialJobLocked(ctx, db, profileID, kind, req.AllowDirectFallback, runner, directReader)
 		return runErr
 	})
-	return result, err
+	if err != nil || sub2APICapture == nil {
+		return result, err
+	}
+	var sub2APIReader codexsub2api.Reader
+	if len(sub2APIReaders) > 0 {
+		sub2APIReader = sub2APIReaders[0]
+	}
+	return service.readSub2APIQuota(ctx, result, *sub2APICapture, sub2APIReader)
+}
+
+type codexSub2APIQuotaCapture struct {
+	ProfileID         string
+	CredentialID      string
+	ConfigSetID       string
+	CredentialSHA256  string
+	ConfigSetSHA256   string
+	BaseURL           string
+	Endpoint          string
+	APIKey            string
+	InsecureTransport bool
 }
 
 func runCodexCredentialJobLocked(
@@ -99,42 +127,79 @@ func runCodexCredentialJobLocked(
 	allowDirectFallback bool,
 	runner codexNativeRunner,
 	directReader codexquota.Reader,
-) (CodexCredentialJobResult, error) {
+) (CodexCredentialJobResult, *codexSub2APIQuotaCapture, error) {
 	summaries, err := listCodexProfileSummaries(ctx, db)
 	if err != nil {
-		return CodexCredentialJobResult{}, err
+		return CodexCredentialJobResult{}, nil, err
 	}
 	selected, err := selectCodexQuotaProfiles(summaries, []string{profileID})
 	if err != nil {
-		return CodexCredentialJobResult{}, err
+		return CodexCredentialJobResult{}, nil, err
 	}
 	summary := selected[0]
 	result := CodexCredentialJobResult{Quota: CodexProfileQuota{
-		ProfileID: profileID, CredentialID: summary.CredentialID, Status: CodexProfileQuotaUnavailable,
+		ProfileID: profileID, CredentialID: summary.CredentialID, ConfigSetID: summary.ConfigSetID,
+		Status: CodexProfileQuotaUnavailable,
 	}}
 	if summary.CredentialID == "" {
 		result.Quota.Status = CodexProfileQuotaAuthRequired
-		return result, nil
+		return result, nil, nil
 	}
 	credential, err := requireCodexAuthCredential(ctx, db, summary.CredentialID)
 	if err != nil {
-		return CodexCredentialJobResult{}, err
+		return CodexCredentialJobResult{}, nil, err
 	}
 	result.CredentialSHA256 = credential.PayloadSHA256
+	storedInfo, err := codexauth.Inspect([]byte(credential.PayloadJSON))
+	if err != nil {
+		result.Quota.Status = CodexProfileQuotaAuthRequired
+		return result, nil, nil
+	}
+	if storedInfo.Mode == codexauth.ModeAPIKey {
+		result.Quota.Source = CodexQuotaSourceSub2API
+		if kind != codexautomation.JobQuota {
+			result.Quota.Status = CodexProfileQuotaUnsupported
+			return result, nil, nil
+		}
+		endpoint, insecure, endpointErr := codexsub2api.ResolveEndpoint(summary.OpenAIBaseURL)
+		if endpointErr != nil || summary.ConfigSetID == "" {
+			result.Quota.Status = CodexProfileQuotaUnsupported
+			return result, nil, nil
+		}
+		configSet, configErr := requireCodexConfigSet(ctx, db, summary.ConfigSetID)
+		if configErr != nil {
+			return CodexCredentialJobResult{}, nil, configErr
+		}
+		apiKey, keyErr := codexauth.ExtractAPIKey([]byte(credential.PayloadJSON))
+		if keyErr != nil {
+			result.Quota.Status = CodexProfileQuotaAuthRequired
+			return result, nil, nil
+		}
+		result.ConfigSetSHA256 = configSet.PayloadSHA256
+		result.Quota.InsecureTransport = insecure
+		return result, &codexSub2APIQuotaCapture{
+			ProfileID: profileID, CredentialID: summary.CredentialID, ConfigSetID: summary.ConfigSetID,
+			CredentialSHA256: credential.PayloadSHA256, ConfigSetSHA256: configSet.PayloadSHA256,
+			BaseURL: summary.OpenAIBaseURL, Endpoint: endpoint, APIKey: apiKey, InsecureTransport: insecure,
+		}, nil
+	}
+	if storedInfo.Mode == codexauth.ModeChatGPT || storedInfo.Mode == codexauth.ModeChatGPTAuthTokens {
+		result.Quota.Source = CodexQuotaSourceChatGPT
+	}
 
 	home, sourcePayload, active, cleanup, err := prepareCodexCredentialHome(ctx, db, summaries, summary.CredentialID, credential.PayloadJSON)
 	if err != nil {
-		return CodexCredentialJobResult{}, err
+		return CodexCredentialJobResult{}, nil, err
 	}
 	defer cleanup()
 	info, err := codexauth.Inspect([]byte(sourcePayload))
 	if err != nil {
 		result.Quota.Status = CodexProfileQuotaAuthRequired
-		return result, nil
+		return result, nil, nil
 	}
 	job, err := codexautomation.Run(ctx, kind, home.Dir, sourcePayload, info, runner, directReader, allowDirectFallback)
 	if err != nil {
-		return CodexCredentialJobResult{}, err
+		return CodexCredentialJobResult{}, nil, err
 	}
 	result.NativeAttempted = job.NativeAttempted
 	result.NativeErrorKind = job.NativeErrorKind
@@ -146,20 +211,102 @@ func runCodexCredentialJobLocked(
 	}
 	if job.UsedDirectFallback {
 		if ctx.Err() != nil {
-			return CodexCredentialJobResult{}, ctx.Err()
+			return CodexCredentialJobResult{}, nil, ctx.Err()
 		}
-		return result, nil
+		return result, nil, nil
 	}
 	if !job.NativeAttempted {
-		return result, nil
+		return result, nil, nil
 	}
 	if captureErr := captureCodexCredentialAfterNativeJob(ctx, db, home.AuthPath, credential, sourcePayload, info, active, &result); captureErr != nil {
-		return CodexCredentialJobResult{}, captureErr
+		return CodexCredentialJobResult{}, nil, captureErr
 	}
 	if ctx.Err() != nil {
-		return CodexCredentialJobResult{}, ctx.Err()
+		return CodexCredentialJobResult{}, nil, ctx.Err()
+	}
+	return result, nil, nil
+}
+
+func (service *Service) readSub2APIQuota(
+	ctx context.Context,
+	result CodexCredentialJobResult,
+	capture codexSub2APIQuotaCapture,
+	reader codexsub2api.Reader,
+) (CodexCredentialJobResult, error) {
+	if reader != nil {
+		snapshot, err := reader.Read(ctx, codexsub2api.Request{BaseURL: capture.BaseURL, APIKey: capture.APIKey})
+		if ctx.Err() != nil {
+			return CodexCredentialJobResult{}, ctx.Err()
+		}
+		if err == nil {
+			mapped := mapCodexSub2APIQuotaSnapshot(snapshot)
+			result.Quota.Status = CodexProfileQuotaAvailable
+			result.Quota.Sub2APISnapshot = &mapped
+		} else {
+			switch codexsub2api.KindOf(err) {
+			case codexsub2api.ErrorAuthenticationRequired:
+				result.Quota.Status = CodexProfileQuotaAuthRequired
+			case codexsub2api.ErrorUnsupported:
+				result.Quota.Status = CodexProfileQuotaUnsupported
+			default:
+				result.Quota.Status = CodexProfileQuotaUnavailable
+			}
+		}
+	}
+
+	current, err := service.sub2APIQuotaBindingCurrent(ctx, capture)
+	if err != nil {
+		return CodexCredentialJobResult{}, err
+	}
+	if !current {
+		result.Quota.Status = CodexProfileQuotaUnavailable
+		result.Quota.Sub2APISnapshot = nil
 	}
 	return result, nil
+}
+
+func (service *Service) sub2APIQuotaBindingCurrent(ctx context.Context, capture codexSub2APIQuotaCapture) (bool, error) {
+	current := false
+	err := service.sharedLock.RunWithSharedLock(ctx, "codex-auth-runtime", func(ctx context.Context) error {
+		if err := service.requireAccess(ctx); err != nil {
+			return err
+		}
+		db, err := service.openStore(ctx, true)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		summaries, err := listCodexProfileSummaries(ctx, db)
+		if err != nil {
+			return err
+		}
+		var summary *CodexProfileSummary
+		for index := range summaries {
+			if summaries[index].Profile.ID == capture.ProfileID {
+				summary = &summaries[index]
+				break
+			}
+		}
+		if summary == nil || summary.CredentialID != capture.CredentialID || summary.ConfigSetID != capture.ConfigSetID {
+			return nil
+		}
+		credential, err := requireCodexAuthCredential(ctx, db, capture.CredentialID)
+		if err != nil || credential.PayloadSHA256 != capture.CredentialSHA256 {
+			return nil
+		}
+		configSet, err := requireCodexConfigSet(ctx, db, capture.ConfigSetID)
+		if err != nil || configSet.PayloadSHA256 != capture.ConfigSetSHA256 {
+			return nil
+		}
+		info, err := codexauth.Inspect([]byte(credential.PayloadJSON))
+		if err != nil || info.Mode != codexauth.ModeAPIKey {
+			return nil
+		}
+		endpoint, _, err := codexsub2api.ResolveEndpoint(summary.OpenAIBaseURL)
+		current = err == nil && endpoint == capture.Endpoint
+		return nil
+	})
+	return current, err
 }
 
 func prepareCodexCredentialHome(ctx context.Context, db *store.Store, summaries []CodexProfileSummary, credentialID, storedPayload string) (codexconfig.Home, string, bool, func(), error) {

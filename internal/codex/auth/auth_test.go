@@ -297,6 +297,16 @@ func TestInspectDisablesChatGPTCapabilitiesForOtherSupportedModes(t *testing.T) 
 	}
 }
 
+func TestExtractAPIKeyOnlyReturnsAPIKeyMode(t *testing.T) {
+	key, err := ExtractAPIKey([]byte(`{"auth_mode":"apikey","OPENAI_API_KEY":" synthetic-key "}`))
+	if err != nil || key != "synthetic-key" {
+		t.Fatalf("ExtractAPIKey = %q, %v", key, err)
+	}
+	if _, err := ExtractAPIKey([]byte(`{"tokens":{"access_token":"token"}}`)); !errors.Is(err, ErrUnsupportedAuthMode) {
+		t.Fatalf("expected unsupported mode, got %v", err)
+	}
+}
+
 func syntheticAgentIdentityJWT() string {
 	return syntheticAgentIdentityJWTWithClaims(`{"iss":"https://chatgpt.com/codex-backend/agent-identity","aud":"codex-app-server","iat":1700000000,"exp":4000000000,"agent_runtime_id":"runtime","agent_private_key":"synthetic","account_id":"account","chatgpt_user_id":"user","plan_type":"enterprise","chatgpt_account_is_fedramp":false}`)
 }

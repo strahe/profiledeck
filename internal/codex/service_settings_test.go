@@ -31,7 +31,7 @@ func TestCodexSettingsDefaultsAndProfileUpdate(t *testing.T) {
 	if initial.Profiles[0].QuotaRefreshIntervalSeconds != 0 || initial.Profiles[0].AuthKeepaliveEnabled {
 		t.Fatalf("expected profile automation off by default, got %#v", initial.Profiles[0])
 	}
-	if !initial.Profiles[0].QuotaSupported || !initial.Profiles[0].AuthKeepaliveSupported {
+	if !initial.Profiles[0].QuotaSupported || !initial.Profiles[0].QuotaReadSupported || initial.Profiles[0].QuotaSource != string(CodexQuotaSourceChatGPT) || !initial.Profiles[0].AuthKeepaliveSupported {
 		t.Fatalf("expected managed ChatGPT auth support, got %#v", initial.Profiles[0])
 	}
 
@@ -164,7 +164,7 @@ func TestCodexSettingsExposeSupportedNonChatGPTAuthModes(t *testing.T) {
 				t.Fatalf("unexpected settings: %#v, %v", settings, err)
 			}
 			profileSettings := settings.Profiles[0]
-			if profileSettings.AuthMode != string(tc.mode) || profileSettings.QuotaSupported || profileSettings.AuthKeepaliveSupported {
+			if profileSettings.AuthMode != string(tc.mode) || profileSettings.QuotaReadSupported || profileSettings.QuotaSupported || profileSettings.AuthKeepaliveSupported {
 				t.Fatalf("unexpected auth capabilities: %#v", profileSettings)
 			}
 
@@ -176,6 +176,40 @@ func TestCodexSettingsExposeSupportedNonChatGPTAuthModes(t *testing.T) {
 				t.Fatalf("expected valid Profile without account metadata, got %#v", profiles.Profiles[0])
 			}
 		})
+	}
+}
+
+func TestCodexSettingsExposeSub2APIReadsWithoutAutomation(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if _, err := initCodexTestRuntime(ctx, configDir); err != nil {
+		t.Fatalf("expected init, got %v", err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"gpt-5\"\nopenai_base_url = \"http://api.example.test/openai/v1\"\n", `{"auth_mode":"apikey","OPENAI_API_KEY":"synthetic-key"}`)
+	if _, err := newCodexTestEnvironment(t, configDir, codexDir).codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"}); err != nil {
+		t.Fatalf("expected API key Profile, got %v", err)
+	}
+
+	service := newCodexTestEnvironment(t, configDir, "").codex
+	settings, err := service.GetSettings(ctx)
+	if err != nil || len(settings.Profiles) != 1 {
+		t.Fatalf("unexpected settings: %#v, %v", settings, err)
+	}
+	profile := settings.Profiles[0]
+	if profile.AuthMode != string(codexauth.ModeAPIKey) || profile.QuotaSource != string(CodexQuotaSourceSub2API) || !profile.QuotaReadSupported || profile.QuotaSupported || profile.AuthKeepaliveSupported {
+		t.Fatalf("unexpected Sub2API capabilities: %#v", profile)
+	}
+	targets, err := service.ListAutomationTargets(ctx)
+	if err != nil || len(targets) != 1 {
+		t.Fatalf("unexpected automation targets: %#v, %v", targets, err)
+	}
+	if targets[0].QuotaSource != CodexQuotaSourceSub2API || !targets[0].QuotaReadSupported || targets[0].QuotaSupported || targets[0].ConfigSetID == "" || targets[0].ConfigSetSHA256 == "" {
+		t.Fatalf("unexpected Sub2API target: %#v", targets[0])
+	}
+	interval := 300
+	if _, err := service.UpdateSettings(ctx, UpdateCodexSettingsRequest{ProfileID: "work", QuotaRefreshIntervalSeconds: &interval}); err == nil {
+		t.Fatal("expected Sub2API periodic refresh to remain unsupported")
 	}
 }
 

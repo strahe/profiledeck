@@ -15,6 +15,8 @@ function profile(authMode: string): CodexProfileSettings {
 		quota_refresh_interval_seconds: 0,
 		auth_keepalive_enabled: false,
 		auth_mode: authMode,
+		quota_source: "",
+		quota_read_supported: false,
 		quota_supported: false,
 		auth_keepalive_supported: false,
 		updated_at_unix_ms: 1,
@@ -43,6 +45,15 @@ describe("Codex settings auth modes", () => {
 	it("keeps unknown sign-ins visibly unsupported", () => {
 		render(ProfileAutomationSettings, { profile: profile("future") }, { wrapper: ProfileTestProviders });
 		expect(screen.getByText("Unsupported sign-in")).toHaveClass("text-destructive");
+	});
+
+	it("explains lifecycle-only reads for compatible API key Profiles", () => {
+		const apiKeyProfile = profile("apikey");
+		apiKeyProfile.quota_source = "sub2api";
+		apiKeyProfile.quota_read_supported = true;
+		render(ProfileAutomationSettings, { profile: apiKeyProfile }, { wrapper: ProfileTestProviders });
+		expect(screen.getByRole("button", { name: "Refresh limits automatically" })).toBeDisabled();
+		expect(screen.getByText("API service limits are checked at startup, after switching, and when you refresh manually.")).toBeInTheDocument();
 	});
 
 	it("provides Simplified Chinese labels and disabled reasons", async () => {

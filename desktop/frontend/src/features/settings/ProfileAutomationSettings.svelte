@@ -64,6 +64,11 @@
 	function authModeTone(value: string): "neutral" | "warning" {
 		return ["apikey", "agentIdentity", "personalAccessToken", "chatgptAuthTokens"].includes(value) ? "neutral" : "warning";
 	}
+
+	function quotaMessage(): string {
+		if (profile.quota_supported) return "";
+		return profile.quota_read_supported ? translate("codexSettings.quota.lifecycleOnly") : translate("codexSettings.quota.unsupported");
+	}
 </script>
 
 <div class="flex flex-col gap-2.5">
@@ -91,7 +96,7 @@
 		<SettingsRow
 			label={$_("codexSettings.quota.label")}
 			description={$_("codexSettings.quota.description")}
-			message={profile.quota_supported ? "" : $_("codexSettings.quota.unsupported")}
+			message={quotaMessage()}
 			forID={`quota-interval-${profile.profile_id}`}
 			disabled={!profile.quota_supported}
 		>
