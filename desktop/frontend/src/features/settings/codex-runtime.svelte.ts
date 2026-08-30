@@ -16,6 +16,7 @@ import { isCancelError } from "$lib/desktop-errors";
 import { translate } from "$lib/i18n";
 
 import { usageIntervals } from "./usage-sync-settings";
+import { codexQuotaMatchesSummary } from "../profiles/codex-quota-policy.js";
 
 export const quotaIntervals = [0, 300, 600, 1800, 3600] as const;
 
@@ -83,7 +84,7 @@ export class CodexRuntimeController {
 		this.#profiles = profiles;
 		this.applyRuntimeStatus(this.runtime);
 		const signature = profiles
-			.map((profile) => `${profile.profile.id}:${profile.credential_id ?? ""}:${profile.updated_at_unix_ms}`)
+			.map((profile) => `${profile.profile.id}:${profile.credential_id ?? ""}:${profile.config_set_id ?? ""}:${profile.updated_at_unix_ms}`)
 			.join("|");
 		if (signature === this.#profileSignature) return;
 		this.#profileSignature = signature;
@@ -129,8 +130,7 @@ export class CodexRuntimeController {
 
 	quotaForSummary(summary: CodexProfileSummary): CodexProfileQuota | null {
 		const quota = this.quotaByProfileID[summary.profile.id];
-		if (!quota) return null;
-		return (quota.credential_id ?? "") === (summary.credential_id ?? "") ? quota : null;
+		return codexQuotaMatchesSummary(summary, quota) ? quota : null;
 	}
 
 	isQuotaLoading(profileID: string): boolean {
@@ -187,18 +187,22 @@ export class CodexRuntimeController {
 			if (!runtimeProfileIDs.has(profileID)) delete next[profileID];
 		}
 		for (const profileStatus of status.profiles ?? []) {
-			if (!profileStatus.last_task && !profileStatus.last_completed_at_unix_ms && !profileStatus.snapshot) {
+			if (!profileStatus.last_task && !profileStatus.last_completed_at_unix_ms && !profileStatus.snapshot && !profileStatus.sub2api_snapshot) {
 				delete next[profileStatus.profile_id];
 				continue;
 			}
 			// Keepalive changes auth freshness without reading rate limits, so it must not replace a quota result.
-			if (profileStatus.last_task !== "quota" || (!profileStatus.last_completed_at_unix_ms && !profileStatus.snapshot)) continue;
+			if (profileStatus.last_task !== "quota" || (!profileStatus.last_completed_at_unix_ms && !profileStatus.snapshot && !profileStatus.sub2api_snapshot)) continue;
 			const summary = this.#profiles.find((profile) => profile.profile.id === profileStatus.profile_id);
 			next[profileStatus.profile_id] = {
 				profile_id: profileStatus.profile_id,
 				credential_id: summary?.credential_id,
+				config_set_id: profileStatus.config_set_id ?? summary?.config_set_id,
+				source: profileStatus.source,
+				insecure_transport: profileStatus.insecure_transport,
 				status: profileStatus.status,
 				snapshot: profileStatus.snapshot,
+				sub2api_snapshot: profileStatus.sub2api_snapshot,
 			};
 		}
 		this.quotaByProfileID = next;

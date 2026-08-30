@@ -3,6 +3,14 @@ package codex
 import (
 	"github.com/strahe/profiledeck/internal/apperror"
 	codexquota "github.com/strahe/profiledeck/internal/codex/quota"
+	codexsub2api "github.com/strahe/profiledeck/internal/codex/sub2api"
+)
+
+type CodexQuotaSource string
+
+const (
+	CodexQuotaSourceChatGPT CodexQuotaSource = "chatgpt"
+	CodexQuotaSourceSub2API CodexQuotaSource = "sub2api"
 )
 
 type CodexProfileQuotaStatus string
@@ -15,10 +23,38 @@ const (
 )
 
 type CodexProfileQuota struct {
-	ProfileID    string                  `json:"profile_id"`
-	CredentialID string                  `json:"credential_id,omitempty"`
-	Status       CodexProfileQuotaStatus `json:"status"`
-	Snapshot     *CodexQuotaSnapshot     `json:"snapshot,omitempty"`
+	ProfileID         string                     `json:"profile_id"`
+	CredentialID      string                     `json:"credential_id,omitempty"`
+	ConfigSetID       string                     `json:"config_set_id,omitempty"`
+	Source            CodexQuotaSource           `json:"source,omitempty"`
+	InsecureTransport bool                       `json:"insecure_transport,omitempty"`
+	Status            CodexProfileQuotaStatus    `json:"status"`
+	Snapshot          *CodexQuotaSnapshot        `json:"snapshot,omitempty"`
+	Sub2APISnapshot   *CodexSub2APIQuotaSnapshot `json:"sub2api_snapshot,omitempty"`
+}
+
+type CodexSub2APIQuotaSnapshot struct {
+	FetchedAtUnixMS      int64                     `json:"fetched_at_unix_ms"`
+	Mode                 string                    `json:"mode"`
+	PlanName             string                    `json:"plan_name,omitempty"`
+	KeyState             string                    `json:"key_state"`
+	Unit                 string                    `json:"unit,omitempty"`
+	Unlimited            bool                      `json:"unlimited"`
+	Limit                *float64                  `json:"limit,omitempty"`
+	Used                 *float64                  `json:"used,omitempty"`
+	Remaining            *float64                  `json:"remaining,omitempty"`
+	Balance              *float64                  `json:"balance,omitempty"`
+	ExpiresAtUnixSeconds *int64                    `json:"expires_at_unix_seconds,omitempty"`
+	Windows              []CodexSub2APIQuotaWindow `json:"windows"`
+}
+
+type CodexSub2APIQuotaWindow struct {
+	ID                 string  `json:"id"`
+	Limit              float64 `json:"limit"`
+	Used               float64 `json:"used"`
+	Remaining          float64 `json:"remaining"`
+	RemainingPercent   float64 `json:"remaining_percent"`
+	ResetAtUnixSeconds *int64  `json:"reset_at_unix_seconds,omitempty"`
 }
 
 type CodexQuotaSnapshot struct {
@@ -128,6 +164,32 @@ func mapCodexQuotaSnapshot(snapshot codexquota.Snapshot) CodexQuotaSnapshot {
 	if snapshot.ResetCreditsAvailable != nil {
 		count := *snapshot.ResetCreditsAvailable
 		result.ResetCreditsAvailableCount = &count
+	}
+	return result
+}
+
+func mapCodexSub2APIQuotaSnapshot(snapshot codexsub2api.Snapshot) CodexSub2APIQuotaSnapshot {
+	result := CodexSub2APIQuotaSnapshot{
+		FetchedAtUnixMS: snapshot.FetchedAt.UnixMilli(), Mode: snapshot.Mode,
+		PlanName: snapshot.PlanName, KeyState: string(snapshot.KeyState), Unit: snapshot.Unit,
+		Unlimited: snapshot.Unlimited, Limit: snapshot.Limit, Used: snapshot.Used,
+		Remaining: snapshot.Remaining, Balance: snapshot.Balance,
+		Windows: make([]CodexSub2APIQuotaWindow, 0, len(snapshot.Windows)),
+	}
+	if snapshot.ExpiresAt != nil {
+		value := snapshot.ExpiresAt.Unix()
+		result.ExpiresAtUnixSeconds = &value
+	}
+	for _, window := range snapshot.Windows {
+		mapped := CodexSub2APIQuotaWindow{
+			ID: window.ID, Limit: window.Limit, Used: window.Used,
+			Remaining: window.Remaining, RemainingPercent: window.RemainingPercent,
+		}
+		if window.ResetAt != nil {
+			value := window.ResetAt.Unix()
+			mapped.ResetAtUnixSeconds = &value
+		}
+		result.Windows = append(result.Windows, mapped)
 	}
 	return result
 }

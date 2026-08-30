@@ -142,10 +142,10 @@ profiledeck-cli codex profile delete work --yes
 
 ## 检查限额并保持登录
 
-桌面端可以检查某个已保存 Profile 当前的 ChatGPT Codex 限额。ProfileDeck 会在启动时检查一次当前 Profile；之后需要更新时，请使用**刷新限额**。检查可能会续期受支持的 Codex 登录，并保存刷新后的登录。除非为非当前 Profile 启用了自动间隔，否则不会自动检查它们。
+桌面端可以检查 ChatGPT Codex 登录和兼容 API Key 服务的限额。ProfileDeck 会在启动时和成功切换后检查一次当前 Profile；之后需要更新时，请使用**刷新限额**。ChatGPT 检查可能会续期受支持的 Codex 登录，并保存刷新后的登录。
 
 可以在 Profile 详情页或 **Codex → 设置**中，把自动刷新限额设为关闭、5、10、30 或 60 分钟。受支持的 ChatGPT 登录还可以启用**自动续期登录**。两项设置默认关闭，并且只在 ProfileDeck 打开或隐藏到菜单栏时运行。
 
-限额信息只会临时保留，不会保存到磁盘。它不是账单余额，也不会把本地会话关联到某个 Profile 或账号。部分外部登录方式可以显示限额，但无法自动续期。
+对于配置了绝对 HTTP 或 HTTPS 自定义 Base URL 的 API Key Profile，ProfileDeck 会使用已保存的 API Key 向 `/v1/usage` 发送一次兼容性请求。兼容响应可以显示剩余额度或钱包余额、套餐、到期时间和限流窗口。API Key 限额只在启动、切换后或手动刷新时检查，绝不会使用自动刷新间隔。使用 HTTP Base URL 时，API Key 和响应不会受到传输加密保护。
 
-API Key 和 Codex 访问令牌 Profile 可以保存和切换，但 ProfileDeck 不会检查其 ChatGPT Codex 限额，也不会自动续期这些登录。
+限额信息只会临时保留，不会保存到磁盘或写入用量报告。ProfileDeck 只使用 API 服务响应中的当前快照，不会导入其中的历史用量。Codex 访问令牌 Profile 可以保存和切换，但不会自动刷新其限额或登录。

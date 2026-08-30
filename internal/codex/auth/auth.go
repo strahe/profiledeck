@@ -60,6 +60,7 @@ type parsedPayload struct {
 	AccessToken  string
 	RefreshToken string
 	AccountID    string
+	APIKey       string
 }
 
 type agentIdentityRecord struct {
@@ -176,6 +177,17 @@ func ExtractBackendCredentials(raw []byte) (BackendCredentials, error) {
 	}, nil
 }
 
+func ExtractAPIKey(raw []byte) (string, error) {
+	parsed, err := parsePayload(raw)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Mode != ModeAPIKey {
+		return "", ErrUnsupportedAuthMode
+	}
+	return parsed.APIKey, nil
+}
+
 func Inspect(raw []byte) (Info, error) {
 	parsed, err := parsePayload(raw)
 	if err != nil {
@@ -228,7 +240,8 @@ func parsePayload(raw []byte) (parsedPayload, error) {
 			return parsedPayload{}, err
 		}
 	case ModeAPIKey:
-		if _, err := requiredSafeString(object, "OPENAI_API_KEY", "OPENAI_API_KEY", errors.New("Codex auth payload is missing OPENAI_API_KEY")); err != nil {
+		parsed.APIKey, err = requiredSafeString(object, "OPENAI_API_KEY", "OPENAI_API_KEY", errors.New("Codex auth payload is missing OPENAI_API_KEY"))
+		if err != nil {
 			return parsedPayload{}, err
 		}
 	case ModeAgentIdentity:

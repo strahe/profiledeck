@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	codexappserver "github.com/strahe/profiledeck/internal/codex/appserver"
 	codexauth "github.com/strahe/profiledeck/internal/codex/auth"
 	codexquota "github.com/strahe/profiledeck/internal/codex/quota"
+	codexsub2api "github.com/strahe/profiledeck/internal/codex/sub2api"
 	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 )
@@ -40,6 +42,16 @@ func (policy *failSecondCodexPolicy) RequireProvider(context.Context, string) er
 type immediateSharedLockRunner struct{}
 
 func (immediateSharedLockRunner) RunWithSharedLock(ctx context.Context, _ string, run func(context.Context) error) error {
+	return run(ctx)
+}
+
+type trackingSharedLockRunner struct {
+	active atomic.Int32
+}
+
+func (runner *trackingSharedLockRunner) RunWithSharedLock(ctx context.Context, _ string, run func(context.Context) error) error {
+	runner.active.Add(1)
+	defer runner.active.Add(-1)
 	return run(ctx)
 }
 
@@ -70,6 +82,14 @@ type fakeCodexQuotaReader struct {
 	credentials []codexquota.Credentials
 	snapshot    codexquota.Snapshot
 	err         error
+}
+
+type fakeCodexSub2APIReader struct {
+	read func(context.Context, codexsub2api.Request) (codexsub2api.Snapshot, error)
+}
+
+func (reader fakeCodexSub2APIReader) Read(ctx context.Context, request codexsub2api.Request) (codexsub2api.Snapshot, error) {
+	return reader.read(ctx, request)
 }
 
 func (f *fakeCodexQuotaReader) Read(_ context.Context, credentials codexquota.Credentials) (codexquota.Snapshot, error) {
@@ -323,6 +343,106 @@ func TestManualQuotaFallsBackReadOnlyWhenAppServerUnavailable(t *testing.T) {
 	}
 }
 
+func TestSub2APIQuotaReadsOutsideSwitchLock(t *testing.T) {
+	ctx := context.Background()
+	configDir, _, created := createSub2APICodexQuotaFixture(t, ctx)
+	environment := newCodexTestEnvironment(t, configDir, "")
+	lock := &trackingSharedLockRunner{}
+	environment.codex.sharedLock = lock
+	remaining := 75.0
+	result, err := environment.codex.runCredentialJob(ctx, RunCodexCredentialJobRequest{
+		ProfileID: "work", Kind: CodexCredentialJobQuota,
+	}, &fakeCodexNativeRunner{}, &fakeCodexQuotaReader{}, fakeCodexSub2APIReader{read: func(_ context.Context, request codexsub2api.Request) (codexsub2api.Snapshot, error) {
+		if lock.active.Load() != 0 {
+			t.Fatal("expected API service request outside the shared switch lock")
+		}
+		if request.BaseURL != "http://api.example.test/openai/v1" || request.APIKey != "synthetic-key" {
+			t.Fatalf("unexpected API service request: %#v", request)
+		}
+		return codexsub2api.Snapshot{
+			FetchedAt: time.Unix(1780000000, 0), Mode: "quota_limited", PlanName: "Team",
+			KeyState: codexsub2api.KeyStateActive, Unit: "USD", Remaining: &remaining, Windows: []codexsub2api.Window{},
+		}, nil
+	}})
+	if err != nil || result.Quota.Status != CodexProfileQuotaAvailable || result.Quota.Source != CodexQuotaSourceSub2API {
+		t.Fatalf("unexpected API service quota result: %#v, %v", result, err)
+	}
+	if result.Quota.CredentialID != created.Summary.CredentialID || result.Quota.ConfigSetID != created.Summary.ConfigSetID || !result.Quota.InsecureTransport {
+		t.Fatalf("unexpected API service binding metadata: %#v", result.Quota)
+	}
+	if result.Quota.Sub2APISnapshot == nil || result.Quota.Sub2APISnapshot.Remaining == nil || *result.Quota.Sub2APISnapshot.Remaining != remaining {
+		t.Fatalf("expected normalized API service snapshot, got %#v", result.Quota.Sub2APISnapshot)
+	}
+}
+
+func TestSub2APIQuotaDiscardsChangedBinding(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(context.Context, *store.Store, CodexProfileSaveResult) error
+	}{
+		{
+			name: "credential",
+			mutate: func(ctx context.Context, db *store.Store, created CodexProfileSaveResult) error {
+				_, err := upsertCodexAuthCredential(ctx, db, created.Summary.CredentialID, `{"auth_mode":"apikey","OPENAI_API_KEY":"replacement-key"}`)
+				return err
+			},
+		},
+		{
+			name: "config set",
+			mutate: func(ctx context.Context, db *store.Store, created CodexProfileSaveResult) error {
+				_, err := upsertCodexConfigSet(ctx, db, created.Summary.ConfigSetID, "changed", "", "model = \"gpt-5\"\nopenai_base_url = \"https://changed.example.test/v1\"\n")
+				return err
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			configDir, _, created := createSub2APICodexQuotaFixture(t, ctx)
+			environment := newCodexTestEnvironment(t, configDir, "")
+			remaining := 25.0
+			result, err := environment.codex.runCredentialJob(ctx, RunCodexCredentialJobRequest{
+				ProfileID: "work", Kind: CodexCredentialJobQuota,
+			}, &fakeCodexNativeRunner{}, &fakeCodexQuotaReader{}, fakeCodexSub2APIReader{read: func(context.Context, codexsub2api.Request) (codexsub2api.Snapshot, error) {
+				db, err := openHealthyStore(ctx, configDir, false)
+				if err != nil {
+					t.Fatalf("expected concurrent store open, got %v", err)
+				}
+				defer db.Close()
+				if err := test.mutate(ctx, db, created); err != nil {
+					t.Fatalf("expected concurrent binding update, got %v", err)
+				}
+				return codexsub2api.Snapshot{
+					FetchedAt: time.Unix(1780000000, 0), Mode: "quota_limited",
+					KeyState: codexsub2api.KeyStateActive, Remaining: &remaining, Windows: []codexsub2api.Window{},
+				}, nil
+			}})
+			if err != nil || result.Quota.Status != CodexProfileQuotaUnavailable || result.Quota.Sub2APISnapshot != nil {
+				t.Fatalf("expected changed binding result to be discarded, result=%#v err=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestSub2APIQuotaDoesNotExposeAPIKeyInFailure(t *testing.T) {
+	ctx := context.Background()
+	configDir, _, _ := createSub2APICodexQuotaFixture(t, ctx)
+	result, err := newCodexTestEnvironment(t, configDir, "").codex.runCredentialJob(ctx, RunCodexCredentialJobRequest{
+		ProfileID: "work", Kind: CodexCredentialJobQuota,
+	}, &fakeCodexNativeRunner{}, &fakeCodexQuotaReader{}, fakeCodexSub2APIReader{read: func(context.Context, codexsub2api.Request) (codexsub2api.Snapshot, error) {
+		return codexsub2api.Snapshot{}, errors.New("synthetic-key must stay private")
+	}})
+	encoded, marshalErr := json.Marshal(struct {
+		Result CodexCredentialJobResult `json:"result"`
+		Error  string                   `json:"error"`
+	}{Result: result, Error: errorString(err)})
+	if marshalErr != nil {
+		t.Fatalf("expected result encoding, got %v", marshalErr)
+	}
+	if strings.Contains(string(encoded), "synthetic-key") || result.Quota.Status != CodexProfileQuotaUnavailable {
+		t.Fatalf("API key escaped failure boundary: %s", encoded)
+	}
+}
+
 func TestNativeKeepaliveClassifiesPermanentAndExternalAuthFailures(t *testing.T) {
 	t.Run("quota auth failure probes managed refresh", func(t *testing.T) {
 		ctx := context.Background()
@@ -395,6 +515,33 @@ func createManagedCodexQuotaFixture(t *testing.T, ctx context.Context) (string, 
 		t.Fatalf("expected profile create, got %v", err)
 	}
 	return configDir, codexDir, created
+}
+
+func createSub2APICodexQuotaFixture(t *testing.T, ctx context.Context) (string, string, CodexProfileSaveResult) {
+	t.Helper()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if _, err := initCodexTestRuntime(ctx, configDir); err != nil {
+		t.Fatalf("expected init, got %v", err)
+	}
+	writeCodexProfileFixture(
+		t,
+		codexDir,
+		"model = \"gpt-5\"\nopenai_base_url = \"http://api.example.test/openai/v1\"\n",
+		`{"auth_mode":"apikey","OPENAI_API_KEY":"synthetic-key"}`,
+	)
+	created, err := newCodexTestEnvironment(t, configDir, codexDir).codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"})
+	if err != nil {
+		t.Fatalf("expected API key profile create, got %v", err)
+	}
+	return configDir, codexDir, created
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func nativeQuotaFixture() codexquota.Snapshot {

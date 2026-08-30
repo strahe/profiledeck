@@ -142,10 +142,10 @@ This deletes the complete global Profile from every Agent, not only its Codex da
 
 ## Check limits and keep a login active
 
-Desktop can check the current ChatGPT Codex limits for one saved Profile. ProfileDeck checks the current Profile once at startup; use **Refresh limits** when you need a later result. A check can renew a supported Codex sign-in and save the refreshed login. Inactive Profiles are not checked automatically unless you enable an interval for them.
+Desktop can check limits for ChatGPT Codex logins and compatible API Key services. ProfileDeck checks the current Profile once at startup and after a successful switch; use **Refresh limits** when you need a later result. A ChatGPT check can renew a supported Codex sign-in and save the refreshed login.
 
 Set automatic limit refresh to Off, 5, 10, 30, or 60 minutes on the Profile detail page or under **Codex → Settings**. Managed ChatGPT logins can also enable **Renew sign-in automatically**. Both options are off by default and run only while ProfileDeck is open or hidden in the menu bar.
 
-Limit information is temporary and is not saved to disk. It is not a billing balance and does not connect local sessions to a Profile or account. Some external sign-in methods can show limits but cannot be renewed automatically.
+For an API Key Profile with an absolute custom HTTP or HTTPS Base URL, ProfileDeck makes one compatibility request to `/v1/usage` using the saved API Key. A compatible response can show the remaining quota or wallet balance, plan, expiry, and limit windows. API Key limits are checked only at startup, after switching, or when you refresh manually; they never use the automatic interval. An HTTP Base URL sends the API Key and response without transport encryption.
 
-API key and Codex access-token Profiles can be saved and switched, but ProfileDeck does not check ChatGPT Codex limits or renew these sign-ins automatically.
+Limit information is temporary and is not saved to disk or added to usage reports. API service responses are used only for the current snapshot; ProfileDeck does not import their historical usage. Codex access-token Profiles can be saved and switched, but their limits and sign-ins are not refreshed automatically.

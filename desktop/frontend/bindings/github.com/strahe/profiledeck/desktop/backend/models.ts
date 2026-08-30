@@ -34,6 +34,9 @@ import * as usage$0 from "../../internal/usage/models.js";
 
 export interface CodexProfileQuotaRuntimeStatus {
     "profile_id": string;
+    "config_set_id"?: string;
+    "source"?: codex$0.CodexQuotaSource;
+    "insecure_transport"?: boolean;
     "running": boolean;
     "last_task"?: string;
     "last_started_at_unix_ms": number;
@@ -42,6 +45,7 @@ export interface CodexProfileQuotaRuntimeStatus {
     "next_run_at_unix_ms": number;
     "status": codex$0.CodexProfileQuotaStatus;
     "snapshot"?: codex$0.CodexQuotaSnapshot | null;
+    "sub2api_snapshot"?: codex$0.CodexSub2APIQuotaSnapshot | null;
     "error_code"?: string;
 }
 

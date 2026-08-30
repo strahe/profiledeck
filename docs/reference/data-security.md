@@ -52,7 +52,8 @@ Backup lists and previews show only safe metadata. Keep encrypted backup files p
 Most ProfileDeck actions use local data only.
 
 - Usage sync and reports read local Codex or Grok Build session files and do not contact a billing service.
-- Codex limit checks contact Codex or OpenAI with the selected saved login. That login is never sent to a custom model-service URL from the saved Codex settings. Limit results are temporary and are not added to usage reports.
+- ChatGPT Codex limit checks contact Codex or OpenAI with the selected saved login. That login is never sent to a custom model-service URL from the saved Codex settings.
+- API Key limit checks send the saved API Key to `/v1/usage` on the custom Base URL configured by that Profile. ProfileDeck makes one request without redirects. An HTTP Base URL does not encrypt the API Key or response in transit. Limit results stay in memory and are not added to usage reports or application backups.
 - Grok Build credits checks use the current managed Profile and follow the installed Grok Build app's network and sign-in settings. Grok may renew its current sign-in during the check. ProfileDeck does not query inactive Profiles, and the result remains in memory instead of being added to the database, usage reports, or application backups.
 - Antigravity limit checks send the current Antigravity access token to a fixed, unpublished Google Cloud Code service. Using this service may carry account risk. ProfileDeck does not refresh, save, or write back the token during a check. The result stays in app memory and is not added to the database, usage reports, or application backups.
 - Desktop update checks and downloads contact the public ProfileDeck release on GitHub.

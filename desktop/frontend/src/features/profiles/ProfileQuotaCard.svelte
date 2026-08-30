@@ -19,7 +19,10 @@
 		CodexProfileQuota,
 		CodexQuotaRateLimit,
 		CodexQuotaWindow,
+		CodexSub2APIQuotaSnapshot,
+		CodexSub2APIQuotaWindow,
 	} from "../../../bindings/github.com/strahe/profiledeck/internal/codex/models";
+	import { formatQuotaValue as formatQuotaAmount } from "./quota-format";
 
 	let {
 		quota,
@@ -80,6 +83,54 @@
 		const formattedPercent = `${formatPercent(percent)}%`;
 		return value ? `${value} · ${formattedPercent}` : formattedPercent;
 	}
+
+	function formatQuotaValue(value: number | null | undefined, unit = ""): string {
+		return formatQuotaAmount(value, unit, currentDesktopLocale());
+	}
+
+	function apiKeyStateLabel(value: string): string {
+		switch (value) {
+			case "active": return $_("quota.apiServiceActive");
+			case "quota_exhausted": return $_("quota.apiServiceExhausted");
+			case "expired": return $_("quota.apiServiceExpired");
+			default: return $_("quota.apiServiceUnknown");
+		}
+	}
+
+	function apiKeyStateDestructive(value: string): boolean {
+		return value === "quota_exhausted" || value === "expired";
+	}
+
+	function apiWindowLabel(value: string): string {
+		const key = `quota.apiWindow${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+		return $_(key);
+	}
+
+	function progressValue(value: number): number {
+		return Math.min(100, Math.max(0, value));
+	}
+
+	function quotaFailureTitle(value: CodexProfileQuota): string {
+		if (value.source === "sub2api") {
+			if (value.status === "auth_required") return $_("quota.apiServiceAuthRequired");
+			if (value.status === "unsupported") return $_("quota.apiServiceUnsupported");
+			return $_("quota.apiServiceUnavailable");
+		}
+		if (value.status === "auth_required") return $_("quota.authRequired");
+		if (value.status === "unsupported") return $_("quota.unsupported");
+		return $_("quota.unavailable");
+	}
+
+	function quotaFailureDescription(value: CodexProfileQuota): string {
+		if (value.source === "sub2api") {
+			if (value.status === "auth_required") return $_("quota.apiServiceAuthRequiredDescription");
+			if (value.status === "unsupported") return $_("quota.apiServiceUnsupportedDescription");
+			return $_("quota.apiServiceUnavailableDescription");
+		}
+		if (value.status === "auth_required") return $_("quota.authRequiredDescription");
+		if (value.status === "unsupported") return $_("quota.unsupportedDescription");
+		return $_("quota.unavailableDescription");
+	}
 </script>
 
 <Card.Root class="lg:col-span-2">
@@ -110,17 +161,44 @@
 					<Empty.Description>{$_("quota.notLoadedDescription")}</Empty.Description>
 				</Empty.Header>
 			</Empty.Root>
-		{:else if quota.status !== "available" || !quota.snapshot}
-			<Alert.Root variant={quota.status === "auth_required" ? "destructive" : "default"}>
-				<AlertTriangleIcon data-icon="inline-start" />
-				<Alert.Title>
-					{quota.status === "auth_required" ? $_("quota.authRequired") : quota.status === "unsupported" ? $_("quota.unsupported") : $_("quota.unavailable")}
-				</Alert.Title>
-				<Alert.Description>
-					{quota.status === "auth_required" ? $_("quota.authRequiredDescription") : quota.status === "unsupported" ? $_("quota.unsupportedDescription") : $_("quota.unavailableDescription")}
-				</Alert.Description>
-			</Alert.Root>
-		{:else}
+			{:else if quota.status !== "available" || (!quota.snapshot && !quota.sub2api_snapshot)}
+				<div class="flex flex-col gap-3">
+					{#if quota.source === "sub2api" && quota.insecure_transport}{@render InsecureTransportAlert()}{/if}
+					<Alert.Root variant={quota.status === "auth_required" ? "destructive" : "default"}>
+						<AlertTriangleIcon data-icon="inline-start" />
+						<Alert.Title>{quotaFailureTitle(quota)}</Alert.Title>
+						<Alert.Description>{quotaFailureDescription(quota)}</Alert.Description>
+					</Alert.Root>
+				</div>
+		{:else if quota.source === "sub2api" && quota.sub2api_snapshot}
+			{@const snapshot = quota.sub2api_snapshot}
+				<div class="flex flex-col gap-5">
+					{#if quota.insecure_transport}{@render InsecureTransportAlert()}{/if}
+
+				<div class="flex flex-wrap items-center gap-2">
+					{#if snapshot.plan_name}<Badge variant="outline">{snapshot.plan_name}</Badge>{/if}
+					<Badge variant={apiKeyStateDestructive(snapshot.key_state) ? "destructive" : "secondary"}>{apiKeyStateLabel(snapshot.key_state)}</Badge>
+					<span class="text-xs text-muted-foreground">{$_("quota.fetchedAt", { values: { value: formatFetchedAt(snapshot.fetched_at_unix_ms) } })}</span>
+				</div>
+
+				<dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+					{@render Detail($_("quota.remainingValue"), snapshot.unlimited ? $_("quota.unlimited") : formatQuotaValue(snapshot.remaining, snapshot.unit))}
+					{#if snapshot.limit != null}{@render Detail($_("quota.limit"), formatQuotaValue(snapshot.limit, snapshot.unit))}{/if}
+					{#if snapshot.used != null}{@render Detail($_("quota.usedValue"), formatQuotaValue(snapshot.used, snapshot.unit))}{/if}
+					{#if snapshot.balance != null}{@render Detail($_("quota.balance"), formatQuotaValue(snapshot.balance, snapshot.unit))}{/if}
+					{#if snapshot.expires_at_unix_seconds != null}{@render Detail($_("quota.expires"), formatTimestamp(snapshot.expires_at_unix_seconds))}{/if}
+				</dl>
+
+				{#if snapshot.windows?.length}
+					<Separator />
+					<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+						{#each snapshot.windows as window (window.id)}
+							{@render Sub2APIWindowPanel(window, snapshot)}
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{:else if quota.snapshot}
 			{@const snapshot = quota.snapshot}
 			<div class="flex flex-col gap-5">
 				<div class="flex flex-wrap items-center gap-2">
@@ -195,6 +273,12 @@
 					</div>
 				{/if}
 			</div>
+		{:else}
+			<Alert.Root>
+				<AlertTriangleIcon data-icon="inline-start" />
+				<Alert.Title>{$_("quota.unavailable")}</Alert.Title>
+				<Alert.Description>{$_("quota.unavailableDescription")}</Alert.Description>
+			</Alert.Root>
 		{/if}
 	</Card.Content>
 </Card.Root>
@@ -220,6 +304,34 @@
 		<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
 			<span>{$_("quota.used", { values: { value: formatPercent(window.used_percent) } })}</span>
 			<span>{$_("quota.resetsAt", { values: { value: formatTimestamp(window.reset_at_unix_seconds) } })}</span>
+		</div>
+	</div>
+{/snippet}
+
+{#snippet InsecureTransportAlert()}
+	<Alert.Root variant="destructive">
+		<AlertTriangleIcon data-icon="inline-start" />
+		<Alert.Title>{$_("quota.insecureTransportTitle")}</Alert.Title>
+		<Alert.Description>{$_("quota.insecureTransportDescription")}</Alert.Description>
+	</Alert.Root>
+{/snippet}
+
+{#snippet Sub2APIWindowPanel(window: CodexSub2APIQuotaWindow, snapshot: CodexSub2APIQuotaSnapshot)}
+	<div class="flex min-w-0 flex-col gap-3 rounded-lg border p-3">
+		<div class="flex items-center justify-between gap-2">
+			<span class="truncate text-xs font-medium text-muted-foreground">{apiWindowLabel(window.id)}</span>
+			<span class="shrink-0 text-sm font-medium">{formatPercent(window.remaining_percent)}%</span>
+		</div>
+		<Progress
+			value={progressValue(window.remaining_percent)}
+			aria-label={$_("quota.remaining", { values: { value: formatPercent(window.remaining_percent) } })}
+		/>
+		<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+			<span>{$_("quota.apiWindowRemaining", { values: { value: formatQuotaValue(window.remaining, snapshot.unit) } })}</span>
+			<span>{$_("quota.apiWindowUsed", { values: { value: formatQuotaValue(window.used, snapshot.unit), limit: formatQuotaValue(window.limit, snapshot.unit) } })}</span>
+			{#if window.reset_at_unix_seconds != null}
+				<span>{$_("quota.resetsAt", { values: { value: formatTimestamp(window.reset_at_unix_seconds) } })}</span>
+			{/if}
 		</div>
 	</div>
 {/snippet}

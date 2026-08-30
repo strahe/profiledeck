@@ -62,8 +62,12 @@ export interface CodexProfileListResult {
 export interface CodexProfileQuota {
     "profile_id": string;
     "credential_id"?: string;
+    "config_set_id"?: string;
+    "source"?: CodexQuotaSource;
+    "insecure_transport"?: boolean;
     "status": CodexProfileQuotaStatus;
     "snapshot"?: CodexQuotaSnapshot | null;
+    "sub2api_snapshot"?: CodexSub2APIQuotaSnapshot | null;
 }
 
 export enum CodexProfileQuotaStatus {
@@ -97,6 +101,8 @@ export interface CodexProfileSettings {
     "quota_refresh_interval_seconds": number;
     "auth_keepalive_enabled": boolean;
     "auth_mode": string;
+    "quota_source"?: string;
+    "quota_read_supported": boolean;
     "quota_supported": boolean;
     "auth_keepalive_supported": boolean;
     "updated_at_unix_ms": number;
@@ -154,6 +160,16 @@ export interface CodexQuotaSnapshot {
     "reset_credits_available_count"?: number | null;
 }
 
+export enum CodexQuotaSource {
+    /**
+     * The Go zero value for the underlying type of the enum.
+     */
+    $zero = "",
+
+    CodexQuotaSourceChatGPT = "chatgpt",
+    CodexQuotaSourceSub2API = "sub2api",
+};
+
 export interface CodexQuotaSpendControl {
     "reached": boolean;
     "individual_limit"?: CodexQuotaSpendControlLimit | null;
@@ -181,6 +197,30 @@ export interface CodexQuotaWindow {
 export interface CodexSettings {
     "usage_sync_interval_seconds": number;
     "profiles": CodexProfileSettings[] | null;
+}
+
+export interface CodexSub2APIQuotaSnapshot {
+    "fetched_at_unix_ms": number;
+    "mode": string;
+    "plan_name"?: string;
+    "key_state": string;
+    "unit"?: string;
+    "unlimited": boolean;
+    "limit"?: number | null;
+    "used"?: number | null;
+    "remaining"?: number | null;
+    "balance"?: number | null;
+    "expires_at_unix_seconds"?: number | null;
+    "windows": CodexSub2APIQuotaWindow[] | null;
+}
+
+export interface CodexSub2APIQuotaWindow {
+    "id": string;
+    "limit": number;
+    "used": number;
+    "remaining": number;
+    "remaining_percent": number;
+    "reset_at_unix_seconds"?: number | null;
 }
 
 export interface UpdateCodexSettingsRequest {
