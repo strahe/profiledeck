@@ -144,13 +144,40 @@ func TestCodexQuotaRuntimeUsesJitterAndBoundedBackoff(t *testing.T) {
 			t.Fatalf("expected +/-10%% jitter, got %s", got)
 		}
 	}
-	schedule := &codexCredentialSchedule{nextKind: codex.CodexCredentialJobQuota, quotaSupported: true}
+	schedule := &codexCredentialSchedule{nextKind: codex.CodexCredentialJobQuota, quotaSource: codex.CodexQuotaSourceChatGPT}
 	now := time.Unix(1780000000, 0)
 	for i, expected := range []time.Duration{5 * time.Minute, 15 * time.Minute, time.Hour, 6 * time.Hour, 6 * time.Hour} {
 		runtime.scheduleRetryLocked(schedule, now)
 		if got := schedule.nextRunAt.Sub(now); got != expected {
 			t.Fatalf("retry %d: expected %s, got %s", i, expected, got)
 		}
+	}
+}
+
+func TestCodexQuotaRuntimeRetriesKeepaliveWithoutQuotaCapability(t *testing.T) {
+	runtime := newCodexQuotaRuntime(nil, nil)
+	now := time.Unix(1780000000, 0)
+	schedule := &codexCredentialSchedule{
+		key: "credential", credentialID: "credential", credentialHash: "hash",
+		quotaSource: codex.CodexQuotaSourceChatGPT, profileIDs: []string{"work"},
+		nextKind: codex.CodexCredentialJobKeepalive, keepalive: true, keepaliveSupport: true,
+	}
+	runtime.schedules[schedule.key] = schedule
+	runtime.profileStatus["work"] = CodexProfileQuotaRuntimeStatus{ProfileID: "work"}
+
+	runtime.completeJob(
+		&codexQuotaRuntimeJob{
+			key: schedule.key, profileID: "work", kind: codex.CodexCredentialJobKeepalive,
+			credentialID: schedule.credentialID, credentialHash: schedule.credentialHash,
+			quotaSource: schedule.quotaSource,
+		},
+		codex.CodexCredentialJobResult{},
+		errors.New("transient failure"),
+		now,
+	)
+
+	if schedule.nextKind != codex.CodexCredentialJobKeepalive || schedule.nextRunAt.Sub(now) != 5*time.Minute {
+		t.Fatalf("expected keepalive backoff without quota capability, got %#v", schedule)
 	}
 }
 
@@ -231,6 +258,14 @@ func TestCodexQuotaRuntimeNeverSchedulesSub2APIResidualInterval(t *testing.T) {
 	runtime.mu.RUnlock()
 	if schedule.nextKind != "" || !schedule.nextRunAt.IsZero() {
 		t.Fatalf("expected manual completion not to schedule API key refresh, got %#v", schedule)
+	}
+
+	runtime.mu.Lock()
+	schedule.nextKind = codex.CodexCredentialJobQuota
+	runtime.scheduleRetryLocked(schedule, time.Unix(1780000300, 0))
+	runtime.mu.Unlock()
+	if schedule.nextKind != "" || !schedule.nextRunAt.IsZero() {
+		t.Fatalf("expected API key failure callback not to schedule a retry, got %#v", schedule)
 	}
 }
 

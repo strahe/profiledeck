@@ -648,7 +648,7 @@ func (r *codexQuotaRuntime) completeJob(job *codexQuotaRuntimeJob, result codex.
 			schedule.nextKind = codex.CodexCredentialJobQuota
 			schedule.nextRunAt = completedAt.Add(r.randomJitterLocked(schedule.interval))
 		}
-	} else if jobErr != nil && !job.manual && schedule.quotaSupported && !errors.Is(jobErr, context.Canceled) {
+	} else if jobErr != nil && !job.manual && !errors.Is(jobErr, context.Canceled) {
 		r.scheduleRetryLocked(schedule, completedAt)
 	}
 	if scheduleExists {
@@ -724,7 +724,7 @@ func (r *codexQuotaRuntime) scheduleNextSuccessLocked(schedule *codexCredentialS
 }
 
 func (r *codexQuotaRuntime) scheduleRetryLocked(schedule *codexCredentialSchedule, now time.Time) {
-	if !schedule.quotaSupported {
+	if schedule.quotaSource == codex.CodexQuotaSourceSub2API {
 		schedule.nextKind = ""
 		schedule.nextRunAt = time.Time{}
 		return

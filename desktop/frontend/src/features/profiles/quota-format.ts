@@ -1,4 +1,14 @@
-const supportedCurrencyUnits = new Set(Intl.supportedValuesOf("currency"));
+function loadSupportedCurrencyUnits(): Set<string> {
+	try {
+		return typeof Intl.supportedValuesOf === "function"
+			? new Set(Intl.supportedValuesOf("currency"))
+			: new Set<string>();
+	} catch {
+		return new Set<string>();
+	}
+}
+
+const supportedCurrencyUnits = loadSupportedCurrencyUnits();
 
 export function formatQuotaValue(value: number | null | undefined, unit: string, locale: string): string {
 	if (value == null) return "—";

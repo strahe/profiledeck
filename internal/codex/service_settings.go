@@ -221,7 +221,7 @@ func (service *Service) ListAutomationTargets(ctx context.Context) ([]CodexAutom
 				}
 			}
 		}
-		if summary.ConfigSetID != "" {
+		if target.QuotaSource == CodexQuotaSourceSub2API && summary.ConfigSetID != "" {
 			if configSet, err := requireCodexConfigSet(ctx, db, summary.ConfigSetID); err == nil {
 				target.ConfigSetSHA256 = configSet.PayloadSHA256
 			}
