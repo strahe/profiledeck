@@ -6,7 +6,7 @@ Use the Desktop app for a visual workflow, or use the CLI for terminal work. Bot
 
 - The Universal Desktop app requires macOS 14 or later and supports Apple silicon and Intel Macs.
 - Linux releases support amd64. The Desktop requires GTK 4 and WebKitGTK 6.0.
-- Building the CLI requires Git, Go 1.26, Make, and a POSIX shell.
+- Building the CLI requires Git, Go 1.27, Make, and a POSIX shell.
 - Install the AI Agent you want to manage and sign in before saving its first Profile.
 
 ## Install the Desktop app on macOS
