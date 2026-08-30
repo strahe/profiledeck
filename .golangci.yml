@@ -50,4 +50,5 @@ formatters:
       custom-order: true
     gofumpt:
       module-path: github.com/strahe/profiledeck
-      extra-rules: true
+      extra:
+        group-params: true

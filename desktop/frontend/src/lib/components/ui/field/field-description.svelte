@@ -4,7 +4,7 @@
 	import type { HTMLAttributes } from "svelte/elements";
 
 	const fieldDescriptionVariants = tv({
-		base: "text-muted-foreground text-left [[data-variant=legend]+&]:-mt-1.5 font-normal group-has-[[data-orientation=horizontal]]/field:text-balance",
+		base: "text-left text-muted-foreground [[data-variant=legend]+&]:-mt-1.5 font-normal group-has-[[data-orientation=horizontal]]/field:text-balance",
 		variants: {
 			size: {
 				default: "text-sm leading-normal",
@@ -33,7 +33,7 @@
 	class={cn(
 		fieldDescriptionVariants({ size }),
 		"last:mt-0 nth-last-2:-mt-1",
-		"[&>a:hover]:text-primary [&>a]:underline [&>a]:underline-offset-4",
+		"[&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
 		className
 	)}
 	{...restProps}

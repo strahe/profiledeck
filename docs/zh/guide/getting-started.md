@@ -6,7 +6,7 @@
 
 - Universal 桌面端要求 macOS 14 或更高版本，支持 Apple 芯片和 Intel Mac。
 - Linux 发布支持 amd64；桌面端需要 GTK 4 和 WebKitGTK 6.0。
-- 构建 CLI 需要 Git、Go 1.26、Make 和 POSIX shell。
+- 构建 CLI 需要 Git、Go 1.27、Make 和 POSIX shell。
 - 先安装要管理的 AI Agent，并在保存第一个 Profile 前完成登录。
 
 ## 在 macOS 上安装桌面端
