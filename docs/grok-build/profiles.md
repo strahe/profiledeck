@@ -128,6 +128,8 @@ Credits checks require a supported saved Grok Build sign-in. Authentication supp
 
 Credits checks also require a working Grok Build installation. If ProfileDeck cannot start Grok Build, update or reinstall it before retrying.
 
+If Grok Build was installed with `GROK_BIN_DIR`, make the same absolute directory available in ProfileDeck's environment.
+
 ## Delete a Profile
 
 Open a Profile's action menu in Desktop and choose **Delete Profile**, or run:

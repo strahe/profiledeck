@@ -97,7 +97,7 @@ func (c *ACPClient) Read(ctx context.Context, grokHome string) (Snapshot, error)
 	if err := requestCtx.Err(); err != nil {
 		return Snapshot{}, &Error{Kind: ErrorUnavailable, Err: err}
 	}
-	command, err := c.resolveExecutable(grokHome)
+	command, err := c.resolveExecutable(grokHome, currentEnvironment)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -180,12 +180,16 @@ func (c *ACPClient) startCommand(ctx context.Context, spec commandSpec) (*runnin
 	}, nil
 }
 
-func (c *ACPClient) resolveExecutable(grokHome string) (string, error) {
+func (c *ACPClient) resolveExecutable(grokHome string, currentEnvironment []string) (string, error) {
 	lookPath := exec.LookPath
 	if c.lookPath != nil {
 		lookPath = c.lookPath
 	}
-	candidates := []string{filepath.Join(grokHome, "bin", grokExecutableName()), "grok"}
+	candidates := []string{filepath.Join(grokHome, "bin", grokExecutableName())}
+	if binDir := environmentValue(currentEnvironment, "GROK_BIN_DIR"); filepath.IsAbs(binDir) {
+		candidates = append(candidates, filepath.Join(binDir, grokExecutableName()))
+	}
+	candidates = append(candidates, "grok")
 	if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
 		userHomeDir := os.UserHomeDir
 		if c.userHomeDir != nil {
@@ -246,6 +250,17 @@ func hasAuthEnvironmentOverride(current []string) bool {
 func environmentName(entry string) string {
 	name, _, _ := strings.Cut(entry, "=")
 	return name
+}
+
+func environmentValue(current []string, expected string) string {
+	result := ""
+	for _, entry := range current {
+		name, value, found := strings.Cut(entry, "=")
+		if found && environmentNameMatches(name, expected) {
+			result = strings.TrimSpace(value)
+		}
+	}
+	return result
 }
 
 func environmentNameMatches(name, expected string) bool {

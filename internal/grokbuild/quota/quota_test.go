@@ -67,8 +67,9 @@ func TestExchangeInitializesWithoutFileOrTerminalCapabilitiesThenReadsBilling(t 
 func TestACPClientUsesManagedHomeExecutableAndExactCommand(t *testing.T) {
 	client := NewACPClient()
 	client.now = func() time.Time { return time.Unix(1_780_000_000, 0) }
+	customBin := t.TempDir()
 	client.environ = func() []string {
-		return []string{"PATH=/bin", "GROK_HOME=/other", "LANG=en_US.UTF-8"}
+		return []string{"PATH=/bin", "GROK_HOME=/other", "GROK_BIN_DIR=" + customBin, "LANG=en_US.UTF-8"}
 	}
 	managedHome := t.TempDir()
 	managedCommand := filepath.Join(managedHome, "bin", grokExecutableName())
@@ -103,7 +104,7 @@ func TestACPClientUsesManagedHomeExecutableAndExactCommand(t *testing.T) {
 	if captured.Command != managedCommand || !reflect.DeepEqual(captured.Args, []string{"--no-auto-update", "agent", "--no-leader", "stdio"}) {
 		t.Fatalf("command = %q %v", captured.Command, captured.Args)
 	}
-	if captured.Dir != managedHome || !reflect.DeepEqual(captured.Env, []string{"PATH=/bin", "LANG=en_US.UTF-8", "GROK_HOME=" + managedHome}) {
+	if captured.Dir != managedHome || !reflect.DeepEqual(captured.Env, []string{"PATH=/bin", "GROK_BIN_DIR=" + customBin, "LANG=en_US.UTF-8", "GROK_HOME=" + managedHome}) {
 		t.Fatalf("process environment = dir %q env %v", captured.Dir, captured.Env)
 	}
 	if snapshot.RemainingPercent == nil || *snapshot.RemainingPercent != 87.5 || !stdinClosed.Load() || !waited.Load() {
@@ -113,8 +114,70 @@ func TestACPClientUsesManagedHomeExecutableAndExactCommand(t *testing.T) {
 
 func TestACPClientUsesPATHWhenManagedExecutableIsMissing(t *testing.T) {
 	client := NewACPClient()
+	client.environ = func() []string { return []string{"PATH=/bin"} }
 	managedHome := t.TempDir()
 	pathCommand := filepath.Join(t.TempDir(), grokExecutableName())
+	var candidates []string
+	client.lookPath = func(candidate string) (string, error) {
+		candidates = append(candidates, candidate)
+		if candidate == "grok" {
+			return pathCommand, nil
+		}
+		return "", errors.New("missing")
+	}
+	var captured commandSpec
+	client.start = func(_ context.Context, spec commandSpec) (*runningProcess, error) {
+		captured = spec
+		return successfulACPProcess(), nil
+	}
+
+	if _, err := client.Read(context.Background(), managedHome); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	wantCandidates := []string{filepath.Join(managedHome, "bin", grokExecutableName()), "grok"}
+	if !reflect.DeepEqual(candidates, wantCandidates) || captured.Command != pathCommand {
+		t.Fatalf("candidates = %v, command = %q", candidates, captured.Command)
+	}
+}
+
+func TestACPClientUsesAbsoluteGrokBinDirBeforePATH(t *testing.T) {
+	client := NewACPClient()
+	managedHome := t.TempDir()
+	customBin := t.TempDir()
+	customCommand := filepath.Join(customBin, grokExecutableName())
+	client.environ = func() []string {
+		return []string{"PATH=/bin", "GROK_BIN_DIR=" + customBin}
+	}
+	var candidates []string
+	client.lookPath = func(candidate string) (string, error) {
+		candidates = append(candidates, candidate)
+		if candidate == customCommand {
+			return candidate, nil
+		}
+		return "", errors.New("missing")
+	}
+	var captured commandSpec
+	client.start = func(_ context.Context, spec commandSpec) (*runningProcess, error) {
+		captured = spec
+		return successfulACPProcess(), nil
+	}
+
+	if _, err := client.Read(context.Background(), managedHome); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	wantCandidates := []string{filepath.Join(managedHome, "bin", grokExecutableName()), customCommand}
+	if !reflect.DeepEqual(candidates, wantCandidates) || captured.Command != customCommand {
+		t.Fatalf("candidates = %v, command = %q", candidates, captured.Command)
+	}
+}
+
+func TestACPClientIgnoresRelativeGrokBinDir(t *testing.T) {
+	client := NewACPClient()
+	managedHome := t.TempDir()
+	pathCommand := filepath.Join(t.TempDir(), grokExecutableName())
+	client.environ = func() []string {
+		return []string{"PATH=/bin", "GROK_BIN_DIR=relative-bin"}
+	}
 	var candidates []string
 	client.lookPath = func(candidate string) (string, error) {
 		candidates = append(candidates, candidate)
@@ -143,6 +206,7 @@ func TestACPClientUsesStableUserLauncherWithCustomManagedHome(t *testing.T) {
 		t.Skip("stable user launcher is supported on macOS and Linux")
 	}
 	client := NewACPClient()
+	client.environ = func() []string { return []string{"PATH=/bin"} }
 	managedHome := t.TempDir()
 	userHome := t.TempDir()
 	userCommand := filepath.Join(userHome, ".local", "bin", "grok")
@@ -172,7 +236,9 @@ func TestACPClientUsesStableUserLauncherWithCustomManagedHome(t *testing.T) {
 
 func TestACPClientReportsRuntimeUnavailableWhenAllCandidatesAreMissing(t *testing.T) {
 	managedHome := filepath.Join(t.TempDir(), "managed-secret-home")
+	customBin := filepath.Join(t.TempDir(), "private-bin")
 	client := NewACPClient()
+	client.environ = func() []string { return []string{"PATH=/bin", "GROK_BIN_DIR=" + customBin} }
 	client.lookPath = func(string) (string, error) { return "", errors.New("missing") }
 	var started atomic.Bool
 	client.start = func(context.Context, commandSpec) (*runningProcess, error) {
@@ -184,7 +250,7 @@ func TestACPClientReportsRuntimeUnavailableWhenAllCandidatesAreMissing(t *testin
 	if err == nil || KindOf(err) != ErrorRuntimeUnavailable {
 		t.Fatalf("runtime error = %v", err)
 	}
-	if started.Load() || strings.Contains(err.Error(), managedHome) {
+	if started.Load() || strings.Contains(err.Error(), managedHome) || strings.Contains(err.Error(), customBin) {
 		t.Fatalf("runtime error exposed a candidate or started Grok: %v", err)
 	}
 }
@@ -202,6 +268,7 @@ func TestACPClientRejectsNonExecutableCandidate(t *testing.T) {
 		t.Fatalf("write non-executable Grok: %v", err)
 	}
 	client := NewACPClient()
+	client.environ = func() []string { return []string{"PATH="} }
 	client.userHomeDir = func() (string, error) { return t.TempDir(), nil }
 	var started atomic.Bool
 	client.start = func(context.Context, commandSpec) (*runningProcess, error) {
