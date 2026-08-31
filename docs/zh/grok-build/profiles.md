@@ -126,6 +126,10 @@ ProfileDeck 桌面端启动时会查询一次当前 Grok Build Profile，成功�
 
 查询 credits 需要受支持的 Grok Build 已保存登录，不支持通过 `GROK_AUTH` 或 `GROK_AUTH_PATH` 提供认证。
 
+查询 credits 还需要可正常启动的 Grok Build。如果 ProfileDeck 无法启动 Grok Build，请更新或重新安装后再试。
+
+如果通过 `GROK_BIN_DIR` 安装 Grok Build，请在 ProfileDeck 的环境中提供相同的绝对目录。
+
 ## 删除 Profile
 
 在桌面端打开 Profile 的操作菜单并选择**删除 Profile**，或运行：

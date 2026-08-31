@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -22,11 +25,12 @@ const (
 )
 
 type ACPClient struct {
-	command string
-	timeout time.Duration
-	now     func() time.Time
-	start   processStarter
-	environ func() []string
+	timeout     time.Duration
+	now         func() time.Time
+	start       processStarter
+	environ     func() []string
+	lookPath    func(string) (string, error)
+	userHomeDir func() (string, error)
 }
 
 type commandSpec struct {
@@ -37,6 +41,18 @@ type commandSpec struct {
 }
 
 type processStarter func(context.Context, commandSpec) (*runningProcess, error)
+
+type commandStartError struct {
+	err error
+}
+
+func (e *commandStartError) Error() string {
+	return "Grok Build could not be started"
+}
+
+func (e *commandStartError) Unwrap() error {
+	return e.err
+}
 
 type runningProcess struct {
 	stdin      io.WriteCloser
@@ -50,10 +66,11 @@ type runningProcess struct {
 
 func NewACPClient() *ACPClient {
 	client := &ACPClient{
-		command: "grok",
-		timeout: defaultTimeout,
-		now:     time.Now,
-		environ: os.Environ,
+		timeout:     defaultTimeout,
+		now:         time.Now,
+		environ:     os.Environ,
+		lookPath:    exec.LookPath,
+		userHomeDir: os.UserHomeDir,
 	}
 	client.start = client.startCommand
 	return client
@@ -69,10 +86,6 @@ func (c *ACPClient) Read(ctx context.Context, grokHome string) (Snapshot, error)
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	command := strings.TrimSpace(c.command)
-	if command == "" {
-		command = "grok"
-	}
 	environ := os.Environ
 	if c.environ != nil {
 		environ = c.environ
@@ -80,6 +93,13 @@ func (c *ACPClient) Read(ctx context.Context, grokHome string) (Snapshot, error)
 	currentEnvironment := environ()
 	if hasAuthEnvironmentOverride(currentEnvironment) {
 		return Snapshot{}, &Error{Kind: ErrorUnsupported}
+	}
+	if err := requestCtx.Err(); err != nil {
+		return Snapshot{}, &Error{Kind: ErrorUnavailable, Err: err}
+	}
+	command, err := c.resolveExecutable(grokHome, currentEnvironment)
+	if err != nil {
+		return Snapshot{}, err
 	}
 	spec := commandSpec{
 		Command: command,
@@ -93,7 +113,14 @@ func (c *ACPClient) Read(ctx context.Context, grokHome string) (Snapshot, error)
 	}
 	process, err := starter(requestCtx, spec)
 	if err != nil {
-		return Snapshot{}, &Error{Kind: ErrorUnavailable, Err: requestError(requestCtx, err)}
+		if requestErr := requestCtx.Err(); requestErr != nil {
+			return Snapshot{}, &Error{Kind: ErrorUnavailable, Err: requestErr}
+		}
+		var startErr *commandStartError
+		if errors.As(err, &startErr) {
+			return Snapshot{}, &Error{Kind: ErrorRuntimeUnavailable, Err: startErr}
+		}
+		return Snapshot{}, &Error{Kind: ErrorUnavailable, Err: err}
 	}
 	defer process.stop()
 	exchangeDone := make(chan struct{})
@@ -138,7 +165,7 @@ func (c *ACPClient) startCommand(ctx context.Context, spec commandSpec) (*runnin
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
 		_ = stdout.Close()
-		return nil, err
+		return nil, &commandStartError{err: err}
 	}
 	return &runningProcess{
 		stdin:  stdin,
@@ -151,6 +178,45 @@ func (c *ACPClient) startCommand(ctx context.Context, spec commandSpec) (*runnin
 			return cmd.Process.Kill()
 		},
 	}, nil
+}
+
+func (c *ACPClient) resolveExecutable(grokHome string, currentEnvironment []string) (string, error) {
+	lookPath := exec.LookPath
+	if c.lookPath != nil {
+		lookPath = c.lookPath
+	}
+	candidates := []string{filepath.Join(grokHome, "bin", grokExecutableName())}
+	if binDir := environmentValue(currentEnvironment, "GROK_BIN_DIR"); filepath.IsAbs(binDir) {
+		candidates = append(candidates, filepath.Join(binDir, grokExecutableName()))
+	}
+	candidates = append(candidates, "grok")
+	if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
+		userHomeDir := os.UserHomeDir
+		if c.userHomeDir != nil {
+			userHomeDir = c.userHomeDir
+		}
+		if userHome, err := userHomeDir(); err == nil && strings.TrimSpace(userHome) != "" {
+			candidates = append(candidates, filepath.Join(userHome, ".local", "bin", "grok"))
+		}
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if _, duplicate := seen[candidate]; duplicate {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		if resolved, err := lookPath(candidate); err == nil {
+			return resolved, nil
+		}
+	}
+	return "", &Error{Kind: ErrorRuntimeUnavailable}
+}
+
+func grokExecutableName() string {
+	if runtime.GOOS == "windows" {
+		return "grok.exe"
+	}
+	return "grok"
 }
 
 func commandArgs() []string {
@@ -184,6 +250,17 @@ func hasAuthEnvironmentOverride(current []string) bool {
 func environmentName(entry string) string {
 	name, _, _ := strings.Cut(entry, "=")
 	return name
+}
+
+func environmentValue(current []string, expected string) string {
+	result := ""
+	for _, entry := range current {
+		name, value, found := strings.Cut(entry, "=")
+		if found && environmentNameMatches(name, expected) {
+			result = strings.TrimSpace(value)
+		}
+	}
+	return result
 }
 
 func environmentNameMatches(name, expected string) bool {
@@ -367,11 +444,4 @@ func billingAuthFailure(value *protocolError) bool {
 
 func normalizedID(raw json.RawMessage) string {
 	return strings.Trim(strings.TrimSpace(string(raw)), `"`)
-}
-
-func requestError(ctx context.Context, fallback error) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return fallback
 }

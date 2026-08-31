@@ -91,6 +91,48 @@
 			|| hasMoney(value)
 		);
 	}
+
+	function statusTitle(status: GrokBuildProfileQuota["status"]): string {
+		switch (status) {
+			case "auth_required":
+				return $_("grokBuild.quota.authRequired");
+			case "unsupported":
+				return $_("grokBuild.quota.unsupported");
+			case "runtime_unavailable":
+				return $_("grokBuild.quota.runtimeUnavailable");
+			case "inactive":
+				return $_("grokBuild.quota.inactive");
+			default:
+				return $_("grokBuild.quota.unavailable");
+		}
+	}
+
+	function statusDescription(status: GrokBuildProfileQuota["status"], stale: boolean): string {
+		if (stale) {
+			switch (status) {
+				case "auth_required":
+					return $_("grokBuild.quota.staleAuthDescription");
+				case "unsupported":
+					return $_("grokBuild.quota.staleUnsupportedDescription");
+				case "runtime_unavailable":
+					return $_("grokBuild.quota.staleRuntimeUnavailableDescription");
+				default:
+					return $_("grokBuild.quota.staleUnavailableDescription");
+			}
+		}
+		switch (status) {
+			case "auth_required":
+				return $_("grokBuild.quota.authRequiredDescription");
+			case "unsupported":
+				return $_("grokBuild.quota.unsupportedDescription");
+			case "runtime_unavailable":
+				return $_("grokBuild.quota.runtimeUnavailableDescription");
+			case "inactive":
+				return $_("grokBuild.quota.inactiveDescription");
+			default:
+				return $_("grokBuild.quota.unavailableDescription");
+		}
+	}
 </script>
 
 <Card.Root>
@@ -130,12 +172,8 @@
 		{:else if !quota.snapshot}
 			<Alert.Root variant={quota.status === "auth_required" ? "destructive" : "default"}>
 				<TriangleAlertIcon data-icon="inline-start" />
-				<Alert.Title>
-					{quota.status === "auth_required" ? $_("grokBuild.quota.authRequired") : quota.status === "unsupported" ? $_("grokBuild.quota.unsupported") : quota.status === "inactive" ? $_("grokBuild.quota.inactive") : $_("grokBuild.quota.unavailable")}
-				</Alert.Title>
-				<Alert.Description>
-					{quota.status === "auth_required" ? $_("grokBuild.quota.authRequiredDescription") : quota.status === "unsupported" ? $_("grokBuild.quota.unsupportedDescription") : quota.status === "inactive" ? $_("grokBuild.quota.inactiveDescription") : $_("grokBuild.quota.unavailableDescription")}
-				</Alert.Description>
+				<Alert.Title>{statusTitle(quota.status)}</Alert.Title>
+				<Alert.Description>{statusDescription(quota.status, false)}</Alert.Description>
 			</Alert.Root>
 		{:else}
 			<div class="flex flex-col gap-4">
@@ -148,8 +186,8 @@
 				{:else if quota.status !== "available"}
 					<Alert.Root variant={quota.status === "auth_required" ? "destructive" : "default"}>
 						<TriangleAlertIcon data-icon="inline-start" />
-						<Alert.Title>{quota.status === "auth_required" ? $_("grokBuild.quota.authRequired") : quota.status === "unsupported" ? $_("grokBuild.quota.unsupported") : $_("grokBuild.quota.unavailable")}</Alert.Title>
-						<Alert.Description>{quota.status === "auth_required" ? $_("grokBuild.quota.staleAuthDescription") : quota.status === "unsupported" ? $_("grokBuild.quota.staleUnsupportedDescription") : $_("grokBuild.quota.staleUnavailableDescription")}</Alert.Description>
+						<Alert.Title>{statusTitle(quota.status)}</Alert.Title>
+						<Alert.Description>{statusDescription(quota.status, true)}</Alert.Description>
 					</Alert.Root>
 				{/if}
 

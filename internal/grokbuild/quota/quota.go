@@ -12,9 +12,10 @@ import (
 type ErrorKind string
 
 const (
-	ErrorUnavailable  ErrorKind = "unavailable"
-	ErrorUnsupported  ErrorKind = "unsupported"
-	ErrorAuthRequired ErrorKind = "auth_required"
+	ErrorUnavailable        ErrorKind = "unavailable"
+	ErrorRuntimeUnavailable ErrorKind = "runtime_unavailable"
+	ErrorUnsupported        ErrorKind = "unsupported"
+	ErrorAuthRequired       ErrorKind = "auth_required"
 )
 
 type Error struct {
@@ -27,6 +28,8 @@ func (e *Error) Error() string {
 		return "<nil>"
 	}
 	switch e.Kind {
+	case ErrorRuntimeUnavailable:
+		return "Grok Build could not be started"
 	case ErrorUnsupported:
 		return "Grok Build credits are not supported"
 	case ErrorAuthRequired:

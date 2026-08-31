@@ -13,11 +13,12 @@ import (
 type GrokBuildProfileQuotaStatus string
 
 const (
-	GrokBuildProfileQuotaAvailable    GrokBuildProfileQuotaStatus = "available"
-	GrokBuildProfileQuotaInactive     GrokBuildProfileQuotaStatus = "inactive"
-	GrokBuildProfileQuotaAuthRequired GrokBuildProfileQuotaStatus = "auth_required"
-	GrokBuildProfileQuotaUnsupported  GrokBuildProfileQuotaStatus = "unsupported"
-	GrokBuildProfileQuotaUnavailable  GrokBuildProfileQuotaStatus = "unavailable"
+	GrokBuildProfileQuotaAvailable          GrokBuildProfileQuotaStatus = "available"
+	GrokBuildProfileQuotaInactive           GrokBuildProfileQuotaStatus = "inactive"
+	GrokBuildProfileQuotaAuthRequired       GrokBuildProfileQuotaStatus = "auth_required"
+	GrokBuildProfileQuotaUnsupported        GrokBuildProfileQuotaStatus = "unsupported"
+	GrokBuildProfileQuotaRuntimeUnavailable GrokBuildProfileQuotaStatus = "runtime_unavailable"
+	GrokBuildProfileQuotaUnavailable        GrokBuildProfileQuotaStatus = "unavailable"
 )
 
 type ReadGrokBuildProfileQuotaRequest struct {
@@ -104,6 +105,8 @@ func (service *Service) ReadProfileQuota(
 			switch grokquota.KindOf(err) {
 			case grokquota.ErrorAuthRequired:
 				result.Status = GrokBuildProfileQuotaAuthRequired
+			case grokquota.ErrorRuntimeUnavailable:
+				result.Status = GrokBuildProfileQuotaRuntimeUnavailable
 			case grokquota.ErrorUnsupported:
 				result.Status = GrokBuildProfileQuotaUnsupported
 			default:
