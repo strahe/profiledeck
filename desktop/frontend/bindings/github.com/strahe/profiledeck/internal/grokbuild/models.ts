@@ -61,6 +61,7 @@ export enum GrokBuildProfileQuotaStatus {
     GrokBuildProfileQuotaInactive = "inactive",
     GrokBuildProfileQuotaAuthRequired = "auth_required",
     GrokBuildProfileQuotaUnsupported = "unsupported",
+    GrokBuildProfileQuotaRuntimeUnavailable = "runtime_unavailable",
     GrokBuildProfileQuotaUnavailable = "unavailable",
 };
 

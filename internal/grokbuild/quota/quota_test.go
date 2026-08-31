@@ -7,7 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -61,11 +64,19 @@ func TestExchangeInitializesWithoutFileOrTerminalCapabilitiesThenReadsBilling(t 
 	}
 }
 
-func TestACPClientUsesManagedHomeAndExactCommand(t *testing.T) {
+func TestACPClientUsesManagedHomeExecutableAndExactCommand(t *testing.T) {
 	client := NewACPClient()
 	client.now = func() time.Time { return time.Unix(1_780_000_000, 0) }
 	client.environ = func() []string {
 		return []string{"PATH=/bin", "GROK_HOME=/other", "LANG=en_US.UTF-8"}
+	}
+	managedHome := t.TempDir()
+	managedCommand := filepath.Join(managedHome, "bin", grokExecutableName())
+	client.lookPath = func(candidate string) (string, error) {
+		if candidate == managedCommand {
+			return candidate, nil
+		}
+		return "", errors.New("unexpected candidate")
 	}
 	var captured commandSpec
 	var stdinClosed atomic.Bool
@@ -85,18 +96,143 @@ func TestACPClientUsesManagedHomeAndExactCommand(t *testing.T) {
 		}, nil
 	}
 
-	snapshot, err := client.Read(context.Background(), "/managed/grok")
+	snapshot, err := client.Read(context.Background(), managedHome)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if captured.Command != "grok" || !reflect.DeepEqual(captured.Args, []string{"--no-auto-update", "agent", "--no-leader", "stdio"}) {
+	if captured.Command != managedCommand || !reflect.DeepEqual(captured.Args, []string{"--no-auto-update", "agent", "--no-leader", "stdio"}) {
 		t.Fatalf("command = %q %v", captured.Command, captured.Args)
 	}
-	if captured.Dir != "/managed/grok" || !reflect.DeepEqual(captured.Env, []string{"PATH=/bin", "LANG=en_US.UTF-8", "GROK_HOME=/managed/grok"}) {
+	if captured.Dir != managedHome || !reflect.DeepEqual(captured.Env, []string{"PATH=/bin", "LANG=en_US.UTF-8", "GROK_HOME=" + managedHome}) {
 		t.Fatalf("process environment = dir %q env %v", captured.Dir, captured.Env)
 	}
 	if snapshot.RemainingPercent == nil || *snapshot.RemainingPercent != 87.5 || !stdinClosed.Load() || !waited.Load() {
 		t.Fatalf("snapshot or cleanup = %#v, stdin closed %t, waited %t", snapshot, stdinClosed.Load(), waited.Load())
+	}
+}
+
+func TestACPClientUsesPATHWhenManagedExecutableIsMissing(t *testing.T) {
+	client := NewACPClient()
+	managedHome := t.TempDir()
+	pathCommand := filepath.Join(t.TempDir(), grokExecutableName())
+	var candidates []string
+	client.lookPath = func(candidate string) (string, error) {
+		candidates = append(candidates, candidate)
+		if candidate == "grok" {
+			return pathCommand, nil
+		}
+		return "", errors.New("missing")
+	}
+	var captured commandSpec
+	client.start = func(_ context.Context, spec commandSpec) (*runningProcess, error) {
+		captured = spec
+		return successfulACPProcess(), nil
+	}
+
+	if _, err := client.Read(context.Background(), managedHome); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	wantCandidates := []string{filepath.Join(managedHome, "bin", grokExecutableName()), "grok"}
+	if !reflect.DeepEqual(candidates, wantCandidates) || captured.Command != pathCommand {
+		t.Fatalf("candidates = %v, command = %q", candidates, captured.Command)
+	}
+}
+
+func TestACPClientUsesStableUserLauncherWithCustomManagedHome(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("stable user launcher is supported on macOS and Linux")
+	}
+	client := NewACPClient()
+	managedHome := t.TempDir()
+	userHome := t.TempDir()
+	userCommand := filepath.Join(userHome, ".local", "bin", "grok")
+	client.userHomeDir = func() (string, error) { return userHome, nil }
+	var candidates []string
+	client.lookPath = func(candidate string) (string, error) {
+		candidates = append(candidates, candidate)
+		if candidate == userCommand {
+			return candidate, nil
+		}
+		return "", errors.New("missing")
+	}
+	var captured commandSpec
+	client.start = func(_ context.Context, spec commandSpec) (*runningProcess, error) {
+		captured = spec
+		return successfulACPProcess(), nil
+	}
+
+	if _, err := client.Read(context.Background(), managedHome); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	wantCandidates := []string{filepath.Join(managedHome, "bin", grokExecutableName()), "grok", userCommand}
+	if !reflect.DeepEqual(candidates, wantCandidates) || captured.Command != userCommand || captured.Dir != managedHome {
+		t.Fatalf("candidates = %v, command = %q, dir = %q", candidates, captured.Command, captured.Dir)
+	}
+}
+
+func TestACPClientReportsRuntimeUnavailableWhenAllCandidatesAreMissing(t *testing.T) {
+	managedHome := filepath.Join(t.TempDir(), "managed-secret-home")
+	client := NewACPClient()
+	client.lookPath = func(string) (string, error) { return "", errors.New("missing") }
+	var started atomic.Bool
+	client.start = func(context.Context, commandSpec) (*runningProcess, error) {
+		started.Store(true)
+		return nil, errors.New("must not start")
+	}
+
+	_, err := client.Read(context.Background(), managedHome)
+	if err == nil || KindOf(err) != ErrorRuntimeUnavailable {
+		t.Fatalf("runtime error = %v", err)
+	}
+	if started.Load() || strings.Contains(err.Error(), managedHome) {
+		t.Fatalf("runtime error exposed a candidate or started Grok: %v", err)
+	}
+}
+
+func TestACPClientRejectsNonExecutableCandidate(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("Unix executable permissions are required for this test")
+	}
+	t.Setenv("PATH", "")
+	managedHome := t.TempDir()
+	if err := os.Mkdir(filepath.Join(managedHome, "bin"), 0o700); err != nil {
+		t.Fatalf("create managed bin: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(managedHome, "bin", grokExecutableName()), []byte("not executable"), 0o600); err != nil {
+		t.Fatalf("write non-executable Grok: %v", err)
+	}
+	client := NewACPClient()
+	client.userHomeDir = func() (string, error) { return t.TempDir(), nil }
+	var started atomic.Bool
+	client.start = func(context.Context, commandSpec) (*runningProcess, error) {
+		started.Store(true)
+		return nil, errors.New("must not start")
+	}
+
+	_, err := client.Read(context.Background(), managedHome)
+	if err == nil || KindOf(err) != ErrorRuntimeUnavailable || started.Load() {
+		t.Fatalf("non-executable candidate error = %v, started = %t", err, started.Load())
+	}
+}
+
+func TestACPClientClassifiesOnlyProcessStartFailuresAsRuntimeUnavailable(t *testing.T) {
+	managedHome := t.TempDir()
+	secretCommand := filepath.Join(t.TempDir(), "private-command")
+	client := NewACPClient()
+	client.lookPath = func(string) (string, error) { return secretCommand, nil }
+
+	_, err := client.Read(context.Background(), managedHome)
+	if err == nil || KindOf(err) != ErrorRuntimeUnavailable || strings.Contains(err.Error(), secretCommand) {
+		t.Fatalf("start error = %v", err)
+	}
+
+	secretDetail := "private-pipe-detail"
+	client.start = func(context.Context, commandSpec) (*runningProcess, error) {
+		return nil, errors.New(secretDetail)
+	}
+	_, err = client.Read(context.Background(), managedHome)
+	if err == nil || KindOf(err) != ErrorUnavailable || strings.Contains(err.Error(), secretDetail) {
+		t.Fatalf("pipe setup error = %v", err)
 	}
 }
 
@@ -105,6 +241,11 @@ func TestACPClientRejectsAuthEnvironmentBeforeStarting(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			client := NewACPClient()
 			client.environ = func() []string { return []string{"PATH=/bin", name + "="} }
+			var resolved atomic.Bool
+			client.lookPath = func(string) (string, error) {
+				resolved.Store(true)
+				return "", errors.New("must not resolve")
+			}
 			var started atomic.Bool
 			client.start = func(context.Context, commandSpec) (*runningProcess, error) {
 				started.Store(true)
@@ -115,8 +256,8 @@ func TestACPClientRejectsAuthEnvironmentBeforeStarting(t *testing.T) {
 			if err == nil || KindOf(err) != ErrorUnsupported {
 				t.Fatalf("auth override error = %v", err)
 			}
-			if started.Load() {
-				t.Fatal("auth override started Grok")
+			if resolved.Load() || started.Load() {
+				t.Fatal("auth override resolved or started Grok")
 			}
 		})
 	}
@@ -125,6 +266,7 @@ func TestACPClientRejectsAuthEnvironmentBeforeStarting(t *testing.T) {
 func TestACPClientTimeoutClosesAndReapsProcess(t *testing.T) {
 	client := NewACPClient()
 	client.timeout = 20 * time.Millisecond
+	client.lookPath = func(candidate string) (string, error) { return candidate, nil }
 	var stdinClosed atomic.Bool
 	var reaped atomic.Bool
 	var reading atomic.Bool
@@ -302,6 +444,17 @@ func TestProtocolFailuresAreBoundedAndRedacted(t *testing.T) {
 type trackingWriteCloser struct {
 	bytes.Buffer
 	closed *atomic.Bool
+}
+
+func successfulACPProcess() *runningProcess {
+	return &runningProcess{
+		stdin: &trackingWriteCloser{closed: &atomic.Bool{}},
+		stdout: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}`,
+			`{"jsonrpc":"2.0","id":2,"result":{"config":{"creditUsagePercent":12.5}}}`,
+		}, "\n") + "\n")),
+		wait: func() error { return nil },
+	}
 }
 
 type trackingReadCloser struct {

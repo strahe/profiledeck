@@ -70,6 +70,16 @@ describe("Grok Build credits components", () => {
 		expect(screen.queryByText("No credits to display")).not.toBeInTheDocument();
 	});
 
+	it("shows a runtime-unavailable Badge in the Profile list summary", () => {
+		render(GrokBuildQuotaSummary, {
+			quota: { ...availableQuota, status: "runtime_unavailable", snapshot: null },
+			loading: false,
+			nowUnixMS: Date.UTC(2026, 7, 2, 1, 1, 0),
+		}, { wrapper: TestProviders });
+
+		expect(screen.getByText("Cannot start Grok Build")).toBeInTheDocument();
+	});
+
 	it("shows loading and a complete current-Profile credits summary", async () => {
 		const view = renderCard({ loading: true });
 		expect(document.querySelectorAll("[data-slot=skeleton]")).toHaveLength(2);
@@ -112,6 +122,33 @@ describe("Grok Build credits components", () => {
 		expect(screen.getByText("Sign in to Grok Build again, then retry.")).toBeInTheDocument();
 
 		await view.rerender({
+			quota: { ...availableQuota, status: "runtime_unavailable", snapshot: null },
+			loading: false,
+			active: true,
+			checkedAtUnixMS: Date.UTC(2026, 7, 2, 1, 2, 0),
+			checkOutcome: "failed",
+			nowUnixMS: Date.UTC(2026, 7, 2, 1, 3, 0),
+			disabled: false,
+			onRefresh: vi.fn(),
+		});
+		expect(screen.getByText("Cannot start Grok Build")).toBeInTheDocument();
+		expect(screen.getByText("Update or reinstall Grok Build, then retry.")).toBeInTheDocument();
+
+		await view.rerender({
+			quota: { ...availableQuota, status: "runtime_unavailable" },
+			loading: false,
+			active: true,
+			checkedAtUnixMS: Date.UTC(2026, 7, 2, 1, 3, 0),
+			checkOutcome: "failed",
+			nowUnixMS: Date.UTC(2026, 7, 2, 1, 4, 0),
+			disabled: false,
+			onRefresh: vi.fn(),
+		});
+		expect(screen.getByText("Cannot start Grok Build")).toBeInTheDocument();
+		expect(screen.getByText("The latest check could not start Grok Build. The previous result from this session is still shown.")).toBeInTheDocument();
+		expect(screen.getByText("62.5% left")).toBeInTheDocument();
+
+		await view.rerender({
 			quota: { ...availableQuota, status: "unavailable" },
 			loading: false,
 			active: true,
@@ -143,12 +180,38 @@ describe("Grok Build credits components", () => {
 	it("provides Simplified Chinese status and recovery copy", async () => {
 		locale.set("zh-CN");
 		await tick();
-		renderCard({
+		const view = renderCard({
 			quota: { ...availableQuota, status: "auth_required", snapshot: null },
 		});
 
 		expect(screen.getByText("重新登录后才能检查 credits")).toBeInTheDocument();
 		expect(screen.getByText("请重新登录 Grok Build，然后重试。")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "刷新 credits" })).toBeInTheDocument();
+
+		await view.rerender({
+			quota: { ...availableQuota, status: "runtime_unavailable", snapshot: null },
+			loading: false,
+			active: true,
+			checkedAtUnixMS: Date.UTC(2026, 7, 2, 1, 2, 0),
+			checkOutcome: "failed",
+			nowUnixMS: Date.UTC(2026, 7, 2, 1, 3, 0),
+			disabled: false,
+			onRefresh: vi.fn(),
+		});
+		expect(screen.getByText("无法启动 Grok Build")).toBeInTheDocument();
+		expect(screen.getByText("请更新或重新安装 Grok Build，然后重试。")).toBeInTheDocument();
+
+		await view.rerender({
+			quota: { ...availableQuota, status: "runtime_unavailable" },
+			loading: false,
+			active: true,
+			checkedAtUnixMS: Date.UTC(2026, 7, 2, 1, 3, 0),
+			checkOutcome: "failed",
+			nowUnixMS: Date.UTC(2026, 7, 2, 1, 4, 0),
+			disabled: false,
+			onRefresh: vi.fn(),
+		});
+		expect(screen.getByText("最新检查无法启动 Grok Build；当前仍显示本次运行中上一次成功的结果。")).toBeInTheDocument();
+		expect(screen.getByText("剩余 62.5%")).toBeInTheDocument();
 	});
 });

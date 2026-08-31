@@ -92,6 +92,7 @@ func TestReadProfileQuotaMapsACPFailuresWithoutDetails(t *testing.T) {
 		want GrokBuildProfileQuotaStatus
 	}{
 		{kind: grokquota.ErrorAuthRequired, want: GrokBuildProfileQuotaAuthRequired},
+		{kind: grokquota.ErrorRuntimeUnavailable, want: GrokBuildProfileQuotaRuntimeUnavailable},
 		{kind: grokquota.ErrorUnsupported, want: GrokBuildProfileQuotaUnsupported},
 		{kind: grokquota.ErrorUnavailable, want: GrokBuildProfileQuotaUnavailable},
 	}

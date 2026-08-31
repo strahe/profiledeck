@@ -70,6 +70,21 @@
 			|| present(snapshot.included_limit_cents)
 		);
 	}
+
+	function statusLabel(status: GrokBuildProfileQuota["status"]): string {
+		switch (status) {
+			case "inactive":
+				return $_("grokBuild.quota.sessionSnapshot");
+			case "auth_required":
+				return $_("grokBuild.quota.authRequired");
+			case "unsupported":
+				return $_("grokBuild.quota.unsupported");
+			case "runtime_unavailable":
+				return $_("grokBuild.quota.runtimeUnavailable");
+			default:
+				return $_("grokBuild.quota.unavailable");
+		}
+	}
 </script>
 
 {#if loading && !quota?.snapshot}
@@ -77,10 +92,7 @@
 {:else if quota?.snapshot}
 	<div class="flex min-w-0 flex-col gap-2">
 		<div class="flex flex-wrap items-center gap-2">
-			{#if quota.status === "inactive"}<Badge variant="secondary">{$_("grokBuild.quota.sessionSnapshot")}</Badge>{/if}
-			{#if quota.status === "auth_required"}<Badge variant="destructive">{$_("grokBuild.quota.authRequired")}</Badge>{/if}
-			{#if quota.status === "unsupported"}<Badge variant="secondary">{$_("grokBuild.quota.unsupported")}</Badge>{/if}
-			{#if quota.status === "unavailable"}<Badge variant="secondary">{$_("grokBuild.quota.unavailable")}</Badge>{/if}
+			{#if quota.status !== "available"}<Badge variant={quota.status === "auth_required" ? "destructive" : "secondary"}>{statusLabel(quota.status)}</Badge>{/if}
 			{#if quota.snapshot.subscription_tier}<Badge variant="outline">{quota.snapshot.subscription_tier}</Badge>{/if}
 		</div>
 		{#if present(quota.snapshot.remaining_percent)}
@@ -108,10 +120,6 @@
 			<div><Badge variant="secondary">{$_("grokBuild.quota.noDisplayableTitle")}</Badge></div>
 		{/if}
 	</div>
-{:else if quota?.status === "auth_required"}
-	<div><Badge variant="destructive">{$_("grokBuild.quota.authRequired")}</Badge></div>
-{:else if quota?.status === "unsupported"}
-	<div><Badge variant="secondary">{$_("grokBuild.quota.unsupported")}</Badge></div>
-{:else if quota?.status === "unavailable"}
-	<div><Badge variant="secondary">{$_("grokBuild.quota.unavailable")}</Badge></div>
+{:else if quota && quota.status !== "available" && quota.status !== "inactive"}
+	<div><Badge variant={quota.status === "auth_required" ? "destructive" : "secondary"}>{statusLabel(quota.status)}</Badge></div>
 {/if}
