@@ -8,6 +8,8 @@ The Desktop app syncs after startup and continues while ProfileDeck is open or i
 
 To change the interval, open **Codex → Settings → Usage reports → Update frequency** and choose 5, 15, 30, or 60 seconds. The default is 15 seconds. The Usage page shows the latest sync result and reports files it could not read.
 
+When session files have not changed, background sync checks their metadata without reading their contents. Normal appends read only a small integrity boundary and the new part of each file. If an existing file is truncated or ProfileDeck detects a change to earlier usage, it keeps the previously imported history and skips that file version. It checks the file again after it changes or when you run a CLI sync.
+
 ## Sync from the CLI
 
 Run:

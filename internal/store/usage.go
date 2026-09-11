@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-const usageKeySize = 32
+const (
+	usageKeySize            = 32
+	maxUsageParserStateSize = 1024 * 1024
+)
 
 // UsageUnknownModelKey is the persisted label for absent or unsafe models.
 const UsageUnknownModelKey = "unknown"
@@ -97,6 +100,7 @@ type UsageSource struct {
 	SourceKey             string
 	IdentityRevision      int64
 	SyncGeneration        int64
+	CompletedGeneration   int64
 	LastCompletedAtUnixMS int64
 	TrackedUnits          int64
 	InvalidRecords        int64
@@ -133,6 +137,23 @@ type CompleteUsageSyncParams struct {
 	Generation        int64
 	CompletedAtUnixMS int64
 	Finalization      UsageSyncFinalization
+	Observations      []UsageImportObservation
+}
+
+type UsageImportObservationStatus string
+
+const (
+	UsageImportObservationHistoryChanged UsageImportObservationStatus = "history_changed"
+	UsageImportObservationUnavailable    UsageImportObservationStatus = "unavailable"
+	UsageImportObservationFactConflict   UsageImportObservationStatus = "fact_conflict"
+)
+
+type UsageImportObservation struct {
+	SourceID        int64
+	FileKey         UsageKey
+	MetadataDigest  UsageKey
+	Status          UsageImportObservationStatus
+	UpdatedAtUnixMS int64
 }
 
 // UsageSyncFinalization is sealed so provider-specific checkpoints remain
@@ -302,7 +323,8 @@ func (s *Store) GetUsageSource(ctx context.Context, providerID, sourceKey string
 func (s *Store) getUsageSource(ctx context.Context, providerID, sourceKey string) (UsageSource, error) {
 	row := s.executor().QueryRowContext(ctx, `
 		SELECT id, provider_id, source_key, identity_revision, sync_generation,
-			last_completed_at_unix_ms, tracked_units, invalid_records, unsupported_records
+			completed_generation, last_completed_at_unix_ms, tracked_units,
+			invalid_records, unsupported_records
 		FROM usage_sources
 		WHERE provider_id = ? AND source_key = ?
 	`, providerID, sourceKey)
@@ -312,7 +334,8 @@ func (s *Store) getUsageSource(ctx context.Context, providerID, sourceKey string
 func (s *Store) getUsageSourceByID(ctx context.Context, sourceID int64) (UsageSource, error) {
 	row := s.executor().QueryRowContext(ctx, `
 		SELECT id, provider_id, source_key, identity_revision, sync_generation,
-			last_completed_at_unix_ms, tracked_units, invalid_records, unsupported_records
+			completed_generation, last_completed_at_unix_ms, tracked_units,
+			invalid_records, unsupported_records
 		FROM usage_sources
 		WHERE id = ?
 	`, sourceID)
@@ -327,6 +350,7 @@ func scanUsageSource(row rowScanner) (UsageSource, error) {
 		&source.SourceKey,
 		&source.IdentityRevision,
 		&source.SyncGeneration,
+		&source.CompletedGeneration,
 		&source.LastCompletedAtUnixMS,
 		&source.TrackedUnits,
 		&source.InvalidRecords,
@@ -713,6 +737,9 @@ func (s *Store) completeUsageSync(ctx context.Context, params CompleteUsageSyncP
 	if result.trackedUnits < 0 || result.invalidRecords < 0 || result.unsupportedRecords < 0 {
 		return errors.New("usage sync finalization is invalid")
 	}
+	if err := s.upsertUsageImportObservations(ctx, source, params.Observations); err != nil {
+		return err
+	}
 	return s.updateUsageSyncCompletion(ctx, params, result)
 }
 
@@ -743,6 +770,13 @@ func validateUsageSyncCompletion(params CompleteUsageSyncParams) error {
 	if err := params.Finalization.validateUsageSyncFinalization(); err != nil {
 		return err
 	}
+	for _, observation := range params.Observations {
+		if observation.SourceID != params.SourceID || observation.FileKey.IsZero() ||
+			observation.MetadataDigest.IsZero() || !observation.Status.valid() ||
+			observation.UpdatedAtUnixMS < 0 {
+			return errors.New("usage import observation is invalid")
+		}
+	}
 	return nil
 }
 
@@ -757,10 +791,10 @@ func (s *Store) updateUsageSyncCompletion(
 	}
 	update, err := s.executor().ExecContext(ctx, `
 		UPDATE usage_sources
-		SET last_completed_at_unix_ms = ?, tracked_units = ?,
+		SET completed_generation = ?, last_completed_at_unix_ms = ?, tracked_units = ?,
 			invalid_records = ?, unsupported_records = ?
 		WHERE id = ? AND sync_generation = ?
-	`, completedAt, result.trackedUnits, result.invalidRecords, result.unsupportedRecords, params.SourceID, params.Generation)
+	`, params.Generation, completedAt, result.trackedUnits, result.invalidRecords, result.unsupportedRecords, params.SourceID, params.Generation)
 	if err != nil {
 		return err
 	}
@@ -770,6 +804,134 @@ func (s *Store) updateUsageSyncCompletion(
 	}
 	if affected != 1 {
 		return ErrUsageSyncSuperseded
+	}
+	return nil
+}
+
+func (s *Store) ListUsageImportObservations(ctx context.Context, sourceID int64) ([]UsageImportObservation, error) {
+	if sourceID <= 0 {
+		return nil, errors.New("usage import observation query is invalid")
+	}
+	rows, err := s.executor().QueryContext(ctx, `
+		SELECT source_id, file_key, metadata_digest, status, updated_at_unix_ms
+		FROM usage_import_observations
+		WHERE source_id = ?
+		ORDER BY file_key
+	`, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	observations := make([]UsageImportObservation, 0)
+	for rows.Next() {
+		var observation UsageImportObservation
+		if err := rows.Scan(
+			&observation.SourceID,
+			&observation.FileKey,
+			&observation.MetadataDigest,
+			&observation.Status,
+			&observation.UpdatedAtUnixMS,
+		); err != nil {
+			return nil, err
+		}
+		observations = append(observations, observation)
+	}
+	return observations, rows.Err()
+}
+
+func (s *Store) upsertUsageImportObservations(
+	ctx context.Context,
+	source UsageSource,
+	observations []UsageImportObservation,
+) error {
+	if len(observations) == 0 {
+		return nil
+	}
+	stmt, err := s.executor().PrepareContext(ctx, `
+		INSERT INTO usage_import_observations (
+			source_id, file_key, metadata_digest, status, updated_at_unix_ms
+		) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(source_id, file_key) DO UPDATE SET
+			metadata_digest = excluded.metadata_digest,
+			status = excluded.status,
+			updated_at_unix_ms = excluded.updated_at_unix_ms
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	now := time.Now().UnixMilli()
+	for _, observation := range observations {
+		if observation.SourceID != source.ID || observation.FileKey.IsZero() ||
+			observation.MetadataDigest.IsZero() || !observation.Status.valid() ||
+			observation.UpdatedAtUnixMS < 0 {
+			return errors.New("usage import observation is invalid")
+		}
+		updatedAt := observation.UpdatedAtUnixMS
+		if updatedAt == 0 {
+			updatedAt = now
+		}
+		if _, err := stmt.ExecContext(
+			ctx,
+			observation.SourceID,
+			observation.FileKey,
+			observation.MetadataDigest,
+			observation.Status,
+			updatedAt,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (status UsageImportObservationStatus) valid() bool {
+	switch status {
+	case UsageImportObservationHistoryChanged,
+		UsageImportObservationUnavailable,
+		UsageImportObservationFactConflict:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Store) deleteUsageImportObservation(ctx context.Context, sourceID int64, fileKey UsageKey) error {
+	_, err := s.executor().ExecContext(ctx, `
+		DELETE FROM usage_import_observations WHERE source_id = ? AND file_key = ?
+	`, sourceID, fileKey)
+	return err
+}
+
+func (s *Store) deleteMissingUsageImportObservations(
+	ctx context.Context,
+	sourceID int64,
+	discovered map[UsageKey]struct{},
+) error {
+	rows, err := s.executor().QueryContext(ctx, `
+		SELECT file_key FROM usage_import_observations WHERE source_id = ?
+	`, sourceID)
+	if err != nil {
+		return err
+	}
+	var stale []UsageKey
+	for rows.Next() {
+		var fileKey UsageKey
+		if err := rows.Scan(&fileKey); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if _, ok := discovered[fileKey]; !ok {
+			stale = append(stale, fileKey)
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, fileKey := range stale {
+		if err := s.deleteUsageImportObservation(ctx, sourceID, fileKey); err != nil {
+			return err
+		}
 	}
 	return nil
 }

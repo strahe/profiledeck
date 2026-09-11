@@ -186,7 +186,8 @@ func TestInitializeBacksUpValidatedMarkerGapBeforeReapplyingMarker(t *testing.T)
 			}
 			snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
 			if len(snapshot.markers) != 0 ||
-				!snapshot.usageTable || snapshot.grokUsageTable || !snapshot.pathKeyIndex {
+				!snapshot.usageTable || snapshot.grokUsageTable ||
+				snapshot.usageObservationTable || !snapshot.pathKeyIndex {
 				t.Fatalf("database changed before backup: %#v", snapshot)
 			}
 		},
@@ -202,7 +203,8 @@ func TestInitializeBacksUpValidatedMarkerGapBeforeReapplyingMarker(t *testing.T)
 	}
 	snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
 	if len(snapshot.markers) != migrationCount ||
-		!snapshot.usageTable || !snapshot.grokUsageTable || !snapshot.pathKeyIndex ||
+		!snapshot.usageTable || !snapshot.grokUsageTable ||
+		!snapshot.usageObservationTable || !snapshot.pathKeyIndex ||
 		snapshot.setting != `{"kept":true}` {
 		t.Fatalf("database after upgrade = %#v", snapshot)
 	}
@@ -289,10 +291,10 @@ func TestInitializeRejectsMarkerGapSchemaDriftBeforeBackup(t *testing.T) {
 	}
 }
 
-func TestInitializeBacksUpStableBaselineBeforeGrokBuildUsageMigration(t *testing.T) {
+func TestInitializeBacksUpPreviousBaselineBeforeIncrementalUsageMigration(t *testing.T) {
 	ctx := context.Background()
 	runtimeService := newRuntimeService(t)
-	createPreviousStableBaseline(t, ctx, runtimeService)
+	createPreviousBaseline(t, ctx, runtimeService)
 	insertSetting(t, ctx, runtimeService.Paths().Database, "upgrade-data", `{"kept":true}`)
 	backups := &recordingBackupCreator{
 		inspect: func(req appbackup.CreateRequest) {
@@ -301,7 +303,8 @@ func TestInitializeBacksUpStableBaselineBeforeGrokBuildUsageMigration(t *testing
 			}
 			snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
 			if len(snapshot.markers) != len(storemigrations.Migrations.Sorted())-1 ||
-				!snapshot.usageTable || snapshot.grokUsageTable || !snapshot.pathKeyIndex ||
+				!snapshot.usageTable || !snapshot.grokUsageTable ||
+				snapshot.usageObservationTable || !snapshot.pathKeyIndex ||
 				snapshot.setting != `{"kept":true}` {
 				t.Fatalf("stable baseline changed before backup: %#v", snapshot)
 			}
@@ -310,14 +313,15 @@ func TestInitializeBacksUpStableBaselineBeforeGrokBuildUsageMigration(t *testing
 
 	result, err := NewService(runtimeService, backups, nil).Initialize(ctx)
 	if err != nil {
-		t.Fatalf("apply Grok Build usage migration: %v", err)
+		t.Fatalf("apply incremental usage migration: %v", err)
 	}
 	if result.MigrationsApplied != 1 || backups.calls != 1 {
 		t.Fatalf("upgrade result = %#v, backups = %d", result, backups.calls)
 	}
 	snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
 	if len(snapshot.markers) != len(storemigrations.Migrations.Sorted()) ||
-		!snapshot.usageTable || !snapshot.grokUsageTable || !snapshot.pathKeyIndex ||
+		!snapshot.usageTable || !snapshot.grokUsageTable ||
+		!snapshot.usageObservationTable || !snapshot.pathKeyIndex ||
 		snapshot.setting != `{"kept":true}` {
 		t.Fatalf("database after upgrade = %#v", snapshot)
 	}
@@ -377,12 +381,13 @@ func (creator *recordingBackupCreator) Create(
 }
 
 type databaseSnapshot struct {
-	schemaVersion  int
-	markers        []string
-	usageTable     bool
-	grokUsageTable bool
-	pathKeyIndex   bool
-	setting        string
+	schemaVersion         int
+	markers               []string
+	usageTable            bool
+	grokUsageTable        bool
+	usageObservationTable bool
+	pathKeyIndex          bool
+	setting               string
 }
 
 func newRuntimeService(t *testing.T) *runtime.Service {
@@ -408,22 +413,45 @@ func createStableMarkerGap(t *testing.T, ctx context.Context, runtimeService *ru
 	if len(registered) < 2 {
 		t.Fatalf("registered migrations = %d, want at least 2", len(registered))
 	}
+	dropIncrementalUsageSchema(t, runtimeService.Paths().Database)
 	execDatabaseStatements(t, runtimeService.Paths().Database,
 		`DROP TABLE grok_build_usage_import_files`,
 		`DELETE FROM bun_migrations`,
 	)
 }
 
-func createPreviousStableBaseline(t *testing.T, ctx context.Context, runtimeService *runtime.Service) {
+func createPreviousBaseline(t *testing.T, ctx context.Context, runtimeService *runtime.Service) {
 	t.Helper()
 	createCurrentBaseline(t, ctx, runtimeService)
 	registered := storemigrations.Migrations.Sorted()
 	if len(registered) < 2 {
 		t.Fatalf("registered migrations = %d, want at least 2", len(registered))
 	}
+	dropIncrementalUsageSchema(t, runtimeService.Paths().Database)
 	execDatabaseStatements(t, runtimeService.Paths().Database,
-		`DROP TABLE grok_build_usage_import_files`,
 		`DELETE FROM bun_migrations WHERE name = '`+registered[len(registered)-1].Name+`'`,
+	)
+}
+
+func dropIncrementalUsageSchema(t *testing.T, path string) {
+	t.Helper()
+	execDatabaseStatements(t, path,
+		`DROP TABLE usage_import_observations`,
+		`ALTER TABLE codex_usage_import_files DROP COLUMN parser_state_json`,
+		`ALTER TABLE codex_usage_import_files DROP COLUMN checkpoint_event_digest`,
+		`ALTER TABLE codex_usage_import_files DROP COLUMN boundary_digest`,
+		`ALTER TABLE codex_usage_import_files DROP COLUMN file_identity_digest`,
+		`ALTER TABLE codex_usage_import_files DROP COLUMN metadata_digest`,
+		`ALTER TABLE codex_usage_import_files DROP COLUMN processed_bytes`,
+		`ALTER TABLE codex_usage_import_files DROP COLUMN checkpoint_revision`,
+		`ALTER TABLE grok_build_usage_import_files DROP COLUMN parser_state_json`,
+		`ALTER TABLE grok_build_usage_import_files DROP COLUMN checkpoint_event_digest`,
+		`ALTER TABLE grok_build_usage_import_files DROP COLUMN boundary_digest`,
+		`ALTER TABLE grok_build_usage_import_files DROP COLUMN file_identity_digest`,
+		`ALTER TABLE grok_build_usage_import_files DROP COLUMN metadata_digest`,
+		`ALTER TABLE grok_build_usage_import_files DROP COLUMN processed_bytes`,
+		`ALTER TABLE grok_build_usage_import_files DROP COLUMN checkpoint_revision`,
+		`ALTER TABLE usage_sources DROP COLUMN completed_generation`,
 	)
 }
 
@@ -479,6 +507,14 @@ func inspectDatabaseSnapshot(t *testing.T, path string) databaseSnapshot {
 		t.Fatal(err)
 	}
 	snapshot.grokUsageTable = grokUsageCount > 0
+	var usageObservationCount int
+	if err := db.QueryRow(`
+		SELECT COUNT(1) FROM sqlite_master
+		WHERE type = 'table' AND name = 'usage_import_observations'
+	`).Scan(&usageObservationCount); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.usageObservationTable = usageObservationCount > 0
 	var pathKeyIndexCount int
 	if err := db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_profile_targets_path_key'`).Scan(&pathKeyIndexCount); err != nil {
 		t.Fatal(err)

@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	grokBuildFileUnavailableMessage = "A Grok Build session file could not be imported and will be retried."
-	grokBuildHistoryChangedMessage  = "A Grok Build session file changed before the saved import point and will be retried."
-	grokBuildFactConflictMessage    = "A Grok Build session file conflicts with previously imported usage and will be retried."
+	grokBuildFileUnavailableMessage = "A Grok Build session file could not be imported. It will be checked again after the file changes or when you sync manually."
+	grokBuildHistoryChangedMessage  = "A Grok Build session file changed before the saved import point. It will be checked again after the file changes or when you sync manually."
+	grokBuildFactConflictMessage    = "A Grok Build session file conflicts with previously imported usage. It will be checked again after the file changes or when you sync manually."
 )
 
 type grokBuildIntegration struct {
@@ -57,34 +57,50 @@ func (grokBuildIntegration) PricingInfo() UsagePricingInfo {
 func (integration grokBuildIntegration) Sync(
 	ctx context.Context,
 	stores store.Factory,
-	mode SyncProvisionMode,
-) (UsageSyncResult, error) {
+	options SyncOptions,
+) (SyncOutcome, error) {
+	files, cursors, observed, priceBackfill, noWorkResult, work, err := integration.preflight(ctx, stores, options)
+	if err != nil {
+		return SyncOutcome{}, err
+	}
+	if !work {
+		return SyncOutcome{Result: noWorkResult}, nil
+	}
+	if options.OnWorkDetected != nil {
+		options.OnWorkDetected()
+	}
 	db, err := stores.OpenHealthy(ctx, false)
 	if err != nil {
-		return UsageSyncResult{}, err
+		return SyncOutcome{}, err
 	}
 	defer db.Close()
-
-	source, err := beginGrokBuildUsageSync(ctx, db, integration.provisioner, mode)
+	source, err := beginGrokBuildUsageSync(ctx, db, integration.provisioner, options.ProvisionMode)
 	if err != nil {
-		return UsageSyncResult{}, err
+		return SyncOutcome{}, err
 	}
-	files, err := ListGrokBuildSessionFilesContext(ctx, integration.grokHome)
-	if err != nil {
-		return UsageSyncResult{}, apperror.Wrap(
-			apperror.UsageImportFailed,
-			"failed to list Grok Build session files",
-			err,
-		)
+	if cursors == nil {
+		cursorRows, err := db.ListGrokBuildUsageImportFiles(ctx, source.ID)
+		if err != nil {
+			return SyncOutcome{}, err
+		}
+		cursors = grokBuildCursorMap(cursorRows)
+	}
+	if observed == nil {
+		observationRows, err := db.ListUsageImportObservations(ctx, source.ID)
+		if err != nil {
+			return SyncOutcome{}, err
+		}
+		observed = observationMap(observationRows)
 	}
 	result := UsageSyncResult{
 		ProviderID: grokconfig.ProviderID,
 		Source:     SourceGrokBuildSessionJSONL,
 	}
 	discoveredFileKeys := make([]store.UsageKey, 0, len(files))
+	observations := make([]store.UsageImportObservation, 0)
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
-			return UsageSyncResult{}, apperror.Wrap(
+			return SyncOutcome{}, apperror.Wrap(
 				apperror.UsageImportFailed,
 				"usage import canceled",
 				err,
@@ -93,57 +109,75 @@ func (integration grokBuildIntegration) Sync(
 		discoveredFileKeys = append(discoveredFileKeys, file.SourceKey)
 		result.ScannedFiles++
 
-		cursor, hasCursor, err := grokBuildUsageCursor(ctx, db, source.ID, file.SourceKey)
-		if err != nil {
-			return UsageSyncResult{}, apperror.Wrap(
-				apperror.UsageImportFailed,
-				"failed to inspect usage import progress",
-				err,
-			)
-		}
-		if hasCursor &&
-			cursor.ModifiedUnixMS == file.ModifiedUnixMS &&
-			cursor.SizeBytes == file.SizeBytes &&
-			cursor.ParserRevision == GrokBuildUsageParserRevision &&
-			cursor.IdentityRevision == GrokBuildUsageIdentityRevision {
+		cursor, hasCursor := cursors[file.SourceKey]
+		if hasCursor && grokBuildCursorMatchesFile(cursor, file) {
 			result.SkippedUnchangedFiles++
 			continue
 		}
+		if observation, ok := observed[file.SourceKey]; ok &&
+			observation.MetadataDigest == file.MetadataDigest && !options.ForceObservedRetry {
+			result.SkippedUnchangedFiles++
+			result.Errors = append(result.Errors, grokBuildObservationError(observation.Status))
+			continue
+		}
+		if hasCursor && grokBuildFileIsShorterThanCheckpoint(cursor, file) {
+			result.Errors = append(result.Errors, grokBuildObservationError(store.UsageImportObservationHistoryChanged))
+			observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationHistoryChanged))
+			continue
+		}
 
-		parsed, err := ParseGrokBuildSessionFileContext(ctx, file)
+		parsed, fullParse, err := parseGrokBuildUsageChange(ctx, file, cursor, hasCursor, options)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return UsageSyncResult{}, apperror.Wrap(
+				return SyncOutcome{}, apperror.Wrap(
 					apperror.UsageImportFailed,
 					"usage import canceled",
 					ctxErr,
 				)
 			}
 			result.InvalidLines++
-			result.Errors = append(result.Errors, UsageImportError{
-				Message: grokBuildFileUnavailableMessage,
-			})
+			result.Errors = append(result.Errors, grokBuildObservationError(store.UsageImportObservationUnavailable))
+			observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationUnavailable))
 			continue
 		}
-		eventsToStore, safe := grokBuildEventsAfterCursor(parsed.Events, cursor, hasCursor, file)
-		if !safe {
-			result.Errors = append(result.Errors, UsageImportError{
-				Message: grokBuildHistoryChangedMessage,
-			})
-			continue
+		eventsToStore := parsed.Events
+		importedFacts := int64(len(parsed.Events))
+		invalidLines := parsed.InvalidLines
+		unsupportedLines := parsed.UnsupportedLines
+		if hasCursor {
+			if fullParse && !grokBuildCheckpointPrefixMatches(parsed.Events, cursor) {
+				result.Errors = append(result.Errors, grokBuildObservationError(store.UsageImportObservationHistoryChanged))
+				observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationHistoryChanged))
+				continue
+			}
+			if fullParse {
+				eventsToStore = parsed.Events[cursor.ImportedFacts:]
+				importedFacts = int64(len(parsed.Events))
+			} else {
+				importedFacts = cursor.ImportedFacts + int64(len(parsed.Events))
+				invalidLines += cursor.InvalidLines
+				unsupportedLines += cursor.UnsupportedLines
+			}
 		}
 
 		desired := store.GrokBuildUsageImportFile{
-			SourceID:         source.ID,
-			FileKey:          file.SourceKey,
-			ModifiedUnixMS:   file.ModifiedUnixMS,
-			SizeBytes:        file.SizeBytes,
-			ImportedFacts:    int64(len(parsed.Events)),
-			InvalidLines:     parsed.InvalidLines,
-			UnsupportedLines: parsed.UnsupportedLines,
-			ParserRevision:   GrokBuildUsageParserRevision,
-			IdentityRevision: GrokBuildUsageIdentityRevision,
-			EventDigest:      GrokBuildEventDigest(parsed.Events, int64(len(parsed.Events))),
+			SourceID:              source.ID,
+			FileKey:               file.SourceKey,
+			ModifiedUnixMS:        file.ModifiedUnixMS,
+			SizeBytes:             file.SizeBytes,
+			ImportedFacts:         importedFacts,
+			InvalidLines:          invalidLines,
+			UnsupportedLines:      unsupportedLines,
+			ParserRevision:        GrokBuildUsageParserRevision,
+			IdentityRevision:      GrokBuildUsageIdentityRevision,
+			EventDigest:           parsed.CheckpointEventDigest,
+			CheckpointRevision:    usageCheckpointRevision,
+			ProcessedBytes:        parsed.ProcessedBytes,
+			MetadataDigest:        file.MetadataDigest,
+			FileIdentityDigest:    file.FileIdentityDigest,
+			BoundaryDigest:        parsed.BoundaryDigest,
+			CheckpointEventDigest: parsed.CheckpointEventDigest,
+			ParserStateJSON:       "{}",
 		}
 		var expected *store.GrokBuildUsageImportFile
 		if hasCursor {
@@ -163,32 +197,31 @@ func (integration grokBuildIntegration) Sync(
 			current, readErr := db.GetGrokBuildUsageImportFile(ctx, source.ID, file.SourceKey)
 			if readErr == nil && sameGrokBuildUsageImportProgress(current, desired) {
 				result.SkippedDuplicateEvents += int64(len(eventsToStore))
-				result.UnsupportedLines += parsed.UnsupportedLines
+				result.UnsupportedLines += unsupportedLines
 				continue
 			}
 			if readErr != nil && !errors.Is(readErr, store.ErrNotFound) {
-				return UsageSyncResult{}, apperror.Wrap(
+				return SyncOutcome{}, apperror.Wrap(
 					apperror.UsageImportFailed,
 					"failed to inspect concurrent usage sync",
 					readErr,
 				)
 			}
-			return UsageSyncResult{}, err
+			return SyncOutcome{}, err
 		}
 		if errors.Is(err, store.ErrUsageFactConflict) {
 			result.InvalidLines++
-			result.Errors = append(result.Errors, UsageImportError{
-				Message: grokBuildFactConflictMessage,
-			})
+			result.Errors = append(result.Errors, grokBuildObservationError(store.UsageImportObservationFactConflict))
+			observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationFactConflict))
 			continue
 		}
 		if err != nil {
-			return UsageSyncResult{}, err
+			return SyncOutcome{}, err
 		}
 		result.ImportedEvents += int64(insertResult.Inserted)
 		result.SkippedDuplicateEvents += int64(insertResult.Duplicates)
-		result.InvalidLines += parsed.InvalidLines
-		result.UnsupportedLines += parsed.UnsupportedLines
+		result.InvalidLines += invalidLines
+		result.UnsupportedLines += unsupportedLines
 	}
 
 	if err := db.CompleteUsageSync(ctx, store.CompleteUsageSyncParams{
@@ -199,23 +232,243 @@ func (integration grokBuildIntegration) Sync(
 			ProviderID:         grokconfig.ProviderID,
 			DiscoveredFileKeys: discoveredFileKeys,
 		},
+		Observations: observations,
 	}); err != nil {
-		return UsageSyncResult{}, err
+		return SyncOutcome{}, err
 	}
-	if err := backfillUnknownUsageCosts(
-		ctx,
-		db,
-		grokconfig.ProviderID,
-		grokBuildPriceCatalog.Supports,
-		EstimateGrokBuildCostMicros,
-	); err != nil {
-		return UsageSyncResult{}, apperror.Wrap(
+	if options.ProvisionMode == SyncProvisionProvider || priceBackfill {
+		if err := backfillUnknownUsageCosts(
+			ctx,
+			db,
+			grokconfig.ProviderID,
+			grokBuildPriceCatalog.Supports,
+			EstimateGrokBuildCostMicros,
+		); err != nil {
+			return SyncOutcome{}, apperror.Wrap(
+				apperror.UsageImportFailed,
+				"failed to update usage pricing",
+				err,
+			)
+		}
+	}
+	return SyncOutcome{Result: result, Performed: true}, nil
+}
+
+func (integration grokBuildIntegration) preflight(
+	ctx context.Context,
+	stores store.Factory,
+	options SyncOptions,
+) (
+	[]SourceFile,
+	map[store.UsageKey]store.GrokBuildUsageImportFile,
+	map[store.UsageKey]store.UsageImportObservation,
+	bool,
+	UsageSyncResult,
+	bool,
+	error,
+) {
+	if options.ProvisionMode == SyncProvisionProvider {
+		files, err := ListGrokBuildSessionFilesContext(ctx, integration.grokHome)
+		if err != nil {
+			return nil, nil, nil, false, UsageSyncResult{}, false, apperror.Wrap(
+				apperror.UsageImportFailed,
+				"failed to list Grok Build session files",
+				err,
+			)
+		}
+		result := UsageSyncResult{
+			ProviderID:   grokconfig.ProviderID,
+			Source:       SourceGrokBuildSessionJSONL,
+			ScannedFiles: int64(len(files)),
+		}
+		return files, nil, nil, true, result, true, nil
+	}
+	db, err := stores.OpenHealthy(ctx, true)
+	if err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, err
+	}
+	defer db.Close()
+	if integration.provisioner == nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false,
+			errors.New("usage Provider provisioner for Grok Build is required")
+	}
+	if err := integration.provisioner.Ensure(ctx, db, SyncExistingProvider); err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, err
+	}
+	source, err := db.GetUsageSource(ctx, grokconfig.ProviderID, SourceGrokBuildSessionJSONL)
+	if errors.Is(err, store.ErrNotFound) {
+		files, listErr := ListGrokBuildSessionFilesContext(ctx, integration.grokHome)
+		if listErr != nil {
+			return nil, nil, nil, false, UsageSyncResult{}, false, apperror.Wrap(
+				apperror.UsageImportFailed,
+				"failed to list Grok Build session files",
+				listErr,
+			)
+		}
+		result := UsageSyncResult{
+			ProviderID:   grokconfig.ProviderID,
+			Source:       SourceGrokBuildSessionJSONL,
+			ScannedFiles: int64(len(files)),
+		}
+		return files, nil, nil, false, result, true, nil
+	}
+	if err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, err
+	}
+	if source.IdentityRevision != GrokBuildUsageIdentityRevision {
+		return nil, nil, nil, false, UsageSyncResult{}, false, store.ErrUsageIdentityRevision
+	}
+	cursorRows, err := db.ListGrokBuildUsageImportFiles(ctx, source.ID)
+	if err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, err
+	}
+	observationRows, err := db.ListUsageImportObservations(ctx, source.ID)
+	if err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, err
+	}
+	unknownModels, err := db.ListUnknownUsageCostModels(ctx, grokconfig.ProviderID)
+	if err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, err
+	}
+	files, err := ListGrokBuildSessionFilesContext(ctx, integration.grokHome)
+	if err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, apperror.Wrap(
 			apperror.UsageImportFailed,
-			"failed to update usage pricing",
+			"failed to list Grok Build session files",
 			err,
 		)
 	}
-	return result, nil
+	result := UsageSyncResult{
+		ProviderID:   grokconfig.ProviderID,
+		Source:       SourceGrokBuildSessionJSONL,
+		ScannedFiles: int64(len(files)),
+	}
+	cursors := grokBuildCursorMap(cursorRows)
+	observations := observationMap(observationRows)
+	priceBackfill := hasSupportedUnknownUsageModel(unknownModels, grokBuildPriceCatalog.Supports)
+	work := source.SyncGeneration != source.CompletedGeneration || priceBackfill
+	discovered := make(map[store.UsageKey]struct{}, len(files))
+	for _, file := range files {
+		discovered[file.SourceKey] = struct{}{}
+		if cursor, ok := cursors[file.SourceKey]; ok {
+			if cursor.IdentityRevision != GrokBuildUsageIdentityRevision {
+				return nil, nil, nil, false, UsageSyncResult{}, false, store.ErrUsageIdentityRevision
+			}
+			if grokBuildCursorMatchesFile(cursor, file) {
+				result.SkippedUnchangedFiles++
+				continue
+			}
+		}
+		if observation, ok := observations[file.SourceKey]; ok &&
+			observation.MetadataDigest == file.MetadataDigest && !options.ForceObservedRetry {
+			result.SkippedUnchangedFiles++
+			result.Errors = append(result.Errors, grokBuildObservationError(observation.Status))
+			continue
+		}
+		work = true
+	}
+	for key := range cursors {
+		if _, ok := discovered[key]; !ok {
+			work = true
+		}
+	}
+	for key := range observations {
+		if _, ok := discovered[key]; !ok {
+			work = true
+		}
+	}
+	return files, cursors, observations, priceBackfill, result, work, nil
+}
+
+func parseGrokBuildUsageChange(
+	ctx context.Context,
+	file SourceFile,
+	cursor store.GrokBuildUsageImportFile,
+	hasCursor bool,
+	options SyncOptions,
+) (checkpointParseResult, bool, error) {
+	if hasCursor && cursor.CheckpointRevision == usageCheckpointRevision &&
+		cursor.ParserRevision == GrokBuildUsageParserRevision &&
+		cursor.IdentityRevision == GrokBuildUsageIdentityRevision &&
+		!cursor.FileIdentityDigest.IsZero() &&
+		cursor.FileIdentityDigest == file.FileIdentityDigest &&
+		cursor.ParserStateJSON == "{}" && file.SizeBytes > cursor.SizeBytes {
+		parsed, parseErr := parseGrokBuildCheckpointFile(
+			ctx,
+			file,
+			cursor.ProcessedBytes,
+			cursor.CheckpointEventDigest,
+			cursor.BoundaryDigest,
+			options.fileSystem,
+			options.Observer,
+		)
+		if parseErr == nil {
+			return parsed, false, nil
+		}
+		if !errors.Is(parseErr, errUsageBoundaryChanged) {
+			return checkpointParseResult{}, false, parseErr
+		}
+	}
+	parsed, err := parseGrokBuildCheckpointFile(
+		ctx,
+		file,
+		0,
+		store.UsageKey{},
+		store.UsageKey{},
+		options.fileSystem,
+		options.Observer,
+	)
+	return parsed, true, err
+}
+
+func grokBuildCheckpointPrefixMatches(events []Event, cursor store.GrokBuildUsageImportFile) bool {
+	if cursor.ImportedFacts < 0 || cursor.ImportedFacts > int64(len(events)) ||
+		cursor.IdentityRevision != GrokBuildUsageIdentityRevision {
+		return false
+	}
+	if cursor.CheckpointRevision == usageCheckpointRevision {
+		return checkpointEventDigest(grokconfig.ProviderID, events, cursor.ImportedFacts) == cursor.CheckpointEventDigest
+	}
+	return cursor.CheckpointRevision == 0 &&
+		GrokBuildEventDigest(events, cursor.ImportedFacts) == cursor.EventDigest
+}
+
+func grokBuildCursorMatchesFile(cursor store.GrokBuildUsageImportFile, file SourceFile) bool {
+	if cursor.ParserRevision != GrokBuildUsageParserRevision ||
+		cursor.IdentityRevision != GrokBuildUsageIdentityRevision {
+		return false
+	}
+	if cursor.CheckpointRevision == usageCheckpointRevision {
+		return cursor.MetadataDigest == file.MetadataDigest
+	}
+	return cursor.CheckpointRevision == 0 &&
+		cursor.ModifiedUnixMS == file.ModifiedUnixMS && cursor.SizeBytes == file.SizeBytes
+}
+
+func grokBuildFileIsShorterThanCheckpoint(cursor store.GrokBuildUsageImportFile, file SourceFile) bool {
+	if cursor.CheckpointRevision == usageCheckpointRevision {
+		return file.SizeBytes < cursor.ProcessedBytes
+	}
+	return file.SizeBytes < cursor.SizeBytes
+}
+
+func grokBuildCursorMap(rows []store.GrokBuildUsageImportFile) map[store.UsageKey]store.GrokBuildUsageImportFile {
+	result := make(map[store.UsageKey]store.GrokBuildUsageImportFile, len(rows))
+	for _, row := range rows {
+		result[row.FileKey] = row
+	}
+	return result
+}
+
+func grokBuildObservationError(status store.UsageImportObservationStatus) UsageImportError {
+	message := grokBuildFileUnavailableMessage
+	switch status {
+	case store.UsageImportObservationHistoryChanged:
+		message = grokBuildHistoryChangedMessage
+	case store.UsageImportObservationFactConflict:
+		message = grokBuildFactConflictMessage
+	}
+	return UsageImportError{Message: message}
 }
 
 func beginGrokBuildUsageSync(
@@ -304,40 +557,6 @@ func (provisioner grokBuildProviderProvisioner) Ensure(
 	return nil
 }
 
-func grokBuildUsageCursor(
-	ctx context.Context,
-	db *store.Store,
-	sourceID int64,
-	fileKey store.UsageKey,
-) (store.GrokBuildUsageImportFile, bool, error) {
-	cursor, err := db.GetGrokBuildUsageImportFile(ctx, sourceID, fileKey)
-	if errors.Is(err, store.ErrNotFound) {
-		return store.GrokBuildUsageImportFile{}, false, nil
-	}
-	return cursor, err == nil, err
-}
-
-func grokBuildEventsAfterCursor(
-	events []Event,
-	cursor store.GrokBuildUsageImportFile,
-	hasCursor bool,
-	file SourceFile,
-) ([]Event, bool) {
-	if !hasCursor {
-		return events, true
-	}
-	if cursor.IdentityRevision != GrokBuildUsageIdentityRevision ||
-		cursor.ImportedFacts < 0 ||
-		cursor.ImportedFacts > int64(len(events)) ||
-		file.SizeBytes < cursor.SizeBytes {
-		return nil, false
-	}
-	if GrokBuildEventDigest(events, cursor.ImportedFacts) != cursor.EventDigest {
-		return nil, false
-	}
-	return events[cursor.ImportedFacts:], true
-}
-
 func sameGrokBuildUsageImportProgress(
 	left store.GrokBuildUsageImportFile,
 	right store.GrokBuildUsageImportFile,
@@ -351,5 +570,12 @@ func sameGrokBuildUsageImportProgress(
 		left.UnsupportedLines == right.UnsupportedLines &&
 		left.ParserRevision == right.ParserRevision &&
 		left.IdentityRevision == right.IdentityRevision &&
-		left.EventDigest == right.EventDigest
+		left.EventDigest == right.EventDigest &&
+		left.CheckpointRevision == right.CheckpointRevision &&
+		left.ProcessedBytes == right.ProcessedBytes &&
+		left.MetadataDigest == right.MetadataDigest &&
+		left.FileIdentityDigest == right.FileIdentityDigest &&
+		left.BoundaryDigest == right.BoundaryDigest &&
+		left.CheckpointEventDigest == right.CheckpointEventDigest &&
+		left.ParserStateJSON == right.ParserStateJSON
 }

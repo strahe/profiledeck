@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -486,6 +487,62 @@ func (executor *usageQueryCountingExecutor) QueryContext(ctx context.Context, qu
 func (executor *usageQueryCountingExecutor) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	executor.queries++
 	return executor.dbExecutor.QueryRowContext(ctx, query, args...)
+}
+
+func TestUsageSyncPreflightQueryCountDoesNotScaleWithFiles(t *testing.T) {
+	ctx := context.Background()
+	var expectedQueries int
+	for _, fileCount := range []int{1, 1_500} {
+		t.Run(fmt.Sprintf("files-%d", fileCount), func(t *testing.T) {
+			db := migratedTestStore(t, ctx)
+			defer closeTestStore(t, db)
+			createUsageProviderFixture(t, ctx, db, "codex")
+			source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
+			if err != nil {
+				t.Fatalf("begin usage sync: %v", err)
+			}
+			insert, err := db.executor().PrepareContext(ctx, `
+				INSERT INTO codex_usage_import_files (
+					source_id, file_key, parser_revision, identity_revision,
+					event_digest, updated_at_unix_ms
+				) VALUES (?, ?, 1, 1, ?, 1)
+			`)
+			if err != nil {
+				t.Fatalf("prepare cursor fixtures: %v", err)
+			}
+			for index := range fileCount {
+				key := testUsageKey(fmt.Sprintf("file-%d", index))
+				if _, err := insert.ExecContext(ctx, source.ID, key, testUsageKey("digest")); err != nil {
+					_ = insert.Close()
+					t.Fatalf("insert cursor fixture %d: %v", index, err)
+				}
+			}
+			if err := insert.Close(); err != nil {
+				t.Fatalf("close cursor fixture statement: %v", err)
+			}
+
+			counter := &usageQueryCountingExecutor{dbExecutor: db.executor()}
+			db.exec = counter
+			if _, err := db.GetUsageSource(ctx, "codex", "codex-session-jsonl"); err != nil {
+				t.Fatalf("read usage source: %v", err)
+			}
+			if _, err := db.ListCodexUsageImportFiles(ctx, source.ID); err != nil {
+				t.Fatalf("list cursors: %v", err)
+			}
+			if _, err := db.ListUsageImportObservations(ctx, source.ID); err != nil {
+				t.Fatalf("list observations: %v", err)
+			}
+			if _, err := db.ListUnknownUsageCostModels(ctx, "codex"); err != nil {
+				t.Fatalf("list unknown-cost models: %v", err)
+			}
+			if expectedQueries == 0 {
+				expectedQueries = counter.queries
+			}
+			if counter.queries != expectedQueries {
+				t.Fatalf("preflight queries = %d, want %d", counter.queries, expectedQueries)
+			}
+		})
+	}
 }
 
 func TestUsageReportQueryCountDoesNotScaleWithBuckets(t *testing.T) {

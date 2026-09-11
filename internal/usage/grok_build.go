@@ -121,12 +121,7 @@ func ListGrokBuildSessionFilesContext(ctx context.Context, grokHome string) ([]S
 			if err != nil {
 				return nil, err
 			}
-			files = append(files, SourceFile{
-				Path:           updatePath,
-				SourceKey:      sourceKey,
-				ModifiedUnixMS: updateInfo.ModTime().UnixMilli(),
-				SizeBytes:      updateInfo.Size(),
-			})
+			files = append(files, sourceFileFromInfo(updatePath, sourceKey, updateInfo))
 		}
 	}
 	sort.Slice(files, func(i, j int) bool {

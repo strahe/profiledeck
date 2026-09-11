@@ -293,8 +293,8 @@ func NewServices(application *app.Application, info app.Info, env Environment, s
 				UsageSyncIntervalSeconds: value.UsageSyncIntervalSeconds,
 			}, err
 		},
-		func(ctx context.Context) (usage.UsageSyncResult, error) {
-			return application.Usage().SyncProviderBackground(ctx, codexconfig.ProviderID)
+		func(ctx context.Context, onWorkDetected func()) (usage.BackgroundSyncOutcome, error) {
+			return application.Usage().SyncProviderBackground(ctx, codexconfig.ProviderID, onWorkDetected)
 		},
 	)
 	grokBuildUsageSync := newUsageAutoSyncRuntime(
@@ -305,8 +305,8 @@ func NewServices(application *app.Application, info app.Info, env Environment, s
 				UsageSyncIntervalSeconds: value.UsageSyncIntervalSeconds,
 			}, err
 		},
-		func(ctx context.Context) (usage.UsageSyncResult, error) {
-			return application.Usage().SyncProviderBackground(ctx, grokconfig.ProviderID)
+		func(ctx context.Context, onWorkDetected func()) (usage.BackgroundSyncOutcome, error) {
+			return application.Usage().SyncProviderBackground(ctx, grokconfig.ProviderID, onWorkDetected)
 		},
 	)
 	quota := newCodexQuotaRuntime(application.Codex().ListAutomationTargets, application.Codex().RunCredentialJob)

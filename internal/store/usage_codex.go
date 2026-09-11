@@ -4,23 +4,31 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
 const codexUsageProviderID = "codex"
 
 type CodexUsageImportFile struct {
-	SourceID         int64
-	FileKey          UsageKey
-	ModifiedUnixMS   int64
-	SizeBytes        int64
-	ImportedFacts    int64
-	InvalidLines     int64
-	UnsupportedLines int64
-	ParserRevision   int64
-	IdentityRevision int64
-	EventDigest      UsageKey
-	UpdatedAtUnixMS  int64
+	SourceID              int64
+	FileKey               UsageKey
+	ModifiedUnixMS        int64
+	SizeBytes             int64
+	ImportedFacts         int64
+	InvalidLines          int64
+	UnsupportedLines      int64
+	ParserRevision        int64
+	IdentityRevision      int64
+	EventDigest           UsageKey
+	CheckpointRevision    int64
+	ProcessedBytes        int64
+	MetadataDigest        UsageKey
+	FileIdentityDigest    UsageKey
+	BoundaryDigest        UsageKey
+	CheckpointEventDigest UsageKey
+	ParserStateJSON       string
+	UpdatedAtUnixMS       int64
 }
 
 type CommitCodexUsageImportParams struct {
@@ -80,7 +88,9 @@ func (s *Store) GetCodexUsageImportFile(ctx context.Context, sourceID int64, fil
 	row := s.executor().QueryRowContext(ctx, `
 		SELECT source_id, file_key, modified_unix_ms, size_bytes, imported_facts,
 			invalid_lines, unsupported_lines, parser_revision, identity_revision,
-			event_digest, updated_at_unix_ms
+			event_digest, checkpoint_revision, processed_bytes, metadata_digest,
+			file_identity_digest, boundary_digest, checkpoint_event_digest,
+			parser_state_json, updated_at_unix_ms
 		FROM codex_usage_import_files
 		WHERE source_id = ? AND file_key = ?
 	`, sourceID, fileKey)
@@ -89,6 +99,35 @@ func (s *Store) GetCodexUsageImportFile(ctx context.Context, sourceID int64, fil
 		return CodexUsageImportFile{}, ErrNotFound
 	}
 	return cursor, err
+}
+
+func (s *Store) ListCodexUsageImportFiles(ctx context.Context, sourceID int64) ([]CodexUsageImportFile, error) {
+	if sourceID <= 0 {
+		return nil, errors.New("Codex usage import query is invalid")
+	}
+	rows, err := s.executor().QueryContext(ctx, `
+		SELECT source_id, file_key, modified_unix_ms, size_bytes, imported_facts,
+			invalid_lines, unsupported_lines, parser_revision, identity_revision,
+			event_digest, checkpoint_revision, processed_bytes, metadata_digest,
+			file_identity_digest, boundary_digest, checkpoint_event_digest,
+			parser_state_json, updated_at_unix_ms
+		FROM codex_usage_import_files
+		WHERE source_id = ?
+		ORDER BY file_key
+	`, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	files := make([]CodexUsageImportFile, 0)
+	for rows.Next() {
+		file, err := scanCodexUsageImportFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, file)
+	}
+	return files, rows.Err()
 }
 
 func scanCodexUsageImportFile(row rowScanner) (CodexUsageImportFile, error) {
@@ -104,6 +143,13 @@ func scanCodexUsageImportFile(row rowScanner) (CodexUsageImportFile, error) {
 		&cursor.ParserRevision,
 		&cursor.IdentityRevision,
 		&cursor.EventDigest,
+		&cursor.CheckpointRevision,
+		&cursor.ProcessedBytes,
+		&cursor.MetadataDigest,
+		&cursor.FileIdentityDigest,
+		&cursor.BoundaryDigest,
+		&cursor.CheckpointEventDigest,
+		&cursor.ParserStateJSON,
 		&cursor.UpdatedAtUnixMS,
 	); err != nil {
 		return CodexUsageImportFile{}, err
@@ -137,6 +183,9 @@ func (s *Store) commitCodexUsageImport(ctx context.Context, params CommitCodexUs
 		return UsageInsertResult{}, err
 	}
 	if err := s.upsertCodexUsageImportFileCAS(ctx, params.File, params.Expected); err != nil {
+		return UsageInsertResult{}, err
+	}
+	if err := s.deleteUsageImportObservation(ctx, params.File.SourceID, params.File.FileKey); err != nil {
 		return UsageInsertResult{}, err
 	}
 	return result, nil
@@ -176,6 +225,9 @@ func (s *Store) upsertCodexUsageImportFileCAS(ctx context.Context, file CodexUsa
 	if err := validateCodexUsageImportFile(file); err != nil {
 		return err
 	}
+	if file.CheckpointRevision == 0 && strings.TrimSpace(file.ParserStateJSON) == "" {
+		file.ParserStateJSON = "{}"
+	}
 	source, err := s.getUsageSourceByID(ctx, file.SourceID)
 	if err != nil {
 		return err
@@ -190,8 +242,10 @@ func (s *Store) upsertCodexUsageImportFileCAS(ctx context.Context, file CodexUsa
 			INSERT INTO codex_usage_import_files (
 				source_id, file_key, modified_unix_ms, size_bytes, imported_facts,
 				invalid_lines, unsupported_lines, parser_revision, identity_revision,
-				event_digest, updated_at_unix_ms
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				event_digest, checkpoint_revision, processed_bytes, metadata_digest,
+				file_identity_digest, boundary_digest, checkpoint_event_digest,
+				parser_state_json, updated_at_unix_ms
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
 			file.SourceID,
 			file.FileKey,
@@ -203,6 +257,13 @@ func (s *Store) upsertCodexUsageImportFileCAS(ctx context.Context, file CodexUsa
 			file.ParserRevision,
 			file.IdentityRevision,
 			file.EventDigest,
+			file.CheckpointRevision,
+			file.ProcessedBytes,
+			file.MetadataDigest,
+			file.FileIdentityDigest,
+			file.BoundaryDigest,
+			file.CheckpointEventDigest,
+			file.ParserStateJSON,
 			updatedAt,
 		)
 		if isSQLiteConstraintError(err) {
@@ -220,11 +281,17 @@ func (s *Store) upsertCodexUsageImportFileCAS(ctx context.Context, file CodexUsa
 		UPDATE codex_usage_import_files
 		SET modified_unix_ms = ?, size_bytes = ?, imported_facts = ?,
 			invalid_lines = ?, unsupported_lines = ?, parser_revision = ?,
-			identity_revision = ?, event_digest = ?, updated_at_unix_ms = ?
+			identity_revision = ?, event_digest = ?, checkpoint_revision = ?,
+			processed_bytes = ?, metadata_digest = ?, file_identity_digest = ?,
+			boundary_digest = ?, checkpoint_event_digest = ?, parser_state_json = ?,
+			updated_at_unix_ms = ?
 		WHERE source_id = ? AND file_key = ?
 			AND modified_unix_ms = ? AND size_bytes = ? AND imported_facts = ?
 			AND invalid_lines = ? AND unsupported_lines = ? AND parser_revision = ?
-			AND identity_revision = ? AND event_digest = ? AND updated_at_unix_ms = ?
+			AND identity_revision = ? AND event_digest = ? AND checkpoint_revision = ?
+			AND processed_bytes = ? AND metadata_digest = ? AND file_identity_digest = ?
+			AND boundary_digest = ? AND checkpoint_event_digest = ? AND parser_state_json = ?
+			AND updated_at_unix_ms = ?
 	`,
 		file.ModifiedUnixMS,
 		file.SizeBytes,
@@ -234,6 +301,13 @@ func (s *Store) upsertCodexUsageImportFileCAS(ctx context.Context, file CodexUsa
 		file.ParserRevision,
 		file.IdentityRevision,
 		file.EventDigest,
+		file.CheckpointRevision,
+		file.ProcessedBytes,
+		file.MetadataDigest,
+		file.FileIdentityDigest,
+		file.BoundaryDigest,
+		file.CheckpointEventDigest,
+		file.ParserStateJSON,
 		updatedAt,
 		file.SourceID,
 		file.FileKey,
@@ -245,6 +319,13 @@ func (s *Store) upsertCodexUsageImportFileCAS(ctx context.Context, file CodexUsa
 		expected.ParserRevision,
 		expected.IdentityRevision,
 		expected.EventDigest,
+		expected.CheckpointRevision,
+		expected.ProcessedBytes,
+		expected.MetadataDigest,
+		expected.FileIdentityDigest,
+		expected.BoundaryDigest,
+		expected.CheckpointEventDigest,
+		expected.ParserStateJSON,
 		expected.UpdatedAtUnixMS,
 	)
 	if err != nil {
@@ -264,8 +345,23 @@ func validateCodexUsageImportFile(file CodexUsageImportFile) error {
 	if file.SourceID <= 0 || file.FileKey.IsZero() || file.EventDigest.IsZero() ||
 		file.ModifiedUnixMS < 0 || file.SizeBytes < 0 || file.ImportedFacts < 0 ||
 		file.InvalidLines < 0 || file.UnsupportedLines < 0 || file.ParserRevision <= 0 || file.IdentityRevision <= 0 ||
-		file.UpdatedAtUnixMS < 0 {
+		file.UpdatedAtUnixMS < 0 || file.CheckpointRevision < 0 ||
+		file.ProcessedBytes < 0 || file.ProcessedBytes > file.SizeBytes {
 		return errors.New("Codex usage import file is invalid")
+	}
+	if file.CheckpointRevision == 0 {
+		if file.ProcessedBytes != 0 || !file.MetadataDigest.IsZero() ||
+			!file.FileIdentityDigest.IsZero() || !file.BoundaryDigest.IsZero() ||
+			!file.CheckpointEventDigest.IsZero() || file.ParserStateJSON != "" && file.ParserStateJSON != "{}" {
+			return errors.New("Codex usage import legacy checkpoint is invalid")
+		}
+		return nil
+	}
+	if file.CheckpointRevision != 1 || file.MetadataDigest.IsZero() ||
+		file.BoundaryDigest.IsZero() || file.CheckpointEventDigest.IsZero() ||
+		strings.TrimSpace(file.ParserStateJSON) == "" ||
+		len(file.ParserStateJSON) > maxUsageParserStateSize {
+		return errors.New("Codex usage import checkpoint is invalid")
 	}
 	return nil
 }
@@ -314,6 +410,9 @@ func (finalization *CodexUsageSyncFinalization) applyUsageSyncFinalization(
 		`, source.ID, fileKey); err != nil {
 			return usageSyncFinalizationResult{}, err
 		}
+	}
+	if err := store.deleteMissingUsageImportObservations(ctx, source.ID, discovered); err != nil {
+		return usageSyncFinalizationResult{}, err
 	}
 
 	var result usageSyncFinalizationResult

@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -19,14 +20,14 @@ func TestUsageAutoSyncStartsImmediatelyAndSkipsOverlappingTicks(t *testing.T) {
 	started := make(chan int32, 3)
 	releaseFirst := make(chan struct{})
 	var calls atomic.Int32
-	runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+	runtime.syncProvider = performedUsageSync(func(context.Context) (usage.UsageSyncResult, error) {
 		call := calls.Add(1)
 		started <- call
 		if call == 1 {
 			<-releaseFirst
 		}
 		return usage.UsageSyncResult{}, nil
-	}
+	})
 	statuses := make(chan UsageAutoSyncStatus, 16)
 	runtime.Start(context.Background(), func(status UsageAutoSyncStatus) { statuses <- status })
 	t.Cleanup(runtime.Stop)
@@ -51,13 +52,80 @@ func TestUsageAutoSyncStartsImmediatelyAndSkipsOverlappingTicks(t *testing.T) {
 	}
 }
 
+func TestUsageAutoSyncNoopDoesNotPublishOrAdvanceStatus(t *testing.T) {
+	runtime, ticker := newTestUsageAutoSyncRuntime()
+	called := make(chan struct{}, 2)
+	runtime.syncProvider = func(context.Context, func()) (usage.BackgroundSyncOutcome, error) {
+		called <- struct{}{}
+		return usage.BackgroundSyncOutcome{
+			Result: usage.UsageSyncResult{ProviderID: codexconfig.ProviderID},
+		}, nil
+	}
+	statuses := make(chan UsageAutoSyncStatus, 4)
+	runtime.Start(context.Background(), func(status UsageAutoSyncStatus) { statuses <- status })
+	t.Cleanup(runtime.Stop)
+	waitUsageSyncSignal(t, called)
+
+	initial := runtime.Status()
+	if initial.Revision != 0 || initial.Syncing || initial.Outcome != UsageAutoSyncOutcomeIdle ||
+		initial.LastStartedAtUnixMS != 0 || initial.LastCompletedAtUnixMS != 0 {
+		t.Fatalf("no-op startup changed status: %#v", initial)
+	}
+	select {
+	case status := <-statuses:
+		t.Fatalf("no-op startup published status: %#v", status)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	ticker.tick()
+	waitUsageSyncSignal(t, called)
+	if status := runtime.Status(); status != initial {
+		t.Fatalf("repeated no-op advanced status: before=%#v after=%#v", initial, status)
+	}
+	select {
+	case status := <-statuses:
+		t.Fatalf("repeated no-op published status: %#v", status)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestUsageAutoSyncNoopClearsRecoveredError(t *testing.T) {
+	runtime, ticker := newTestUsageAutoSyncRuntime()
+	called := make(chan struct{}, 2)
+	var calls atomic.Int32
+	runtime.syncProvider = func(context.Context, func()) (usage.BackgroundSyncOutcome, error) {
+		called <- struct{}{}
+		if calls.Add(1) == 1 {
+			return usage.BackgroundSyncOutcome{}, errors.New("temporary failure")
+		}
+		return usage.BackgroundSyncOutcome{}, nil
+	}
+	statuses := make(chan UsageAutoSyncStatus, 4)
+	runtime.Start(context.Background(), func(status UsageAutoSyncStatus) { statuses <- status })
+	t.Cleanup(runtime.Stop)
+	waitUsageSyncSignal(t, called)
+	waitUsageAutoSyncStatus(t, statuses, func(status UsageAutoSyncStatus) bool {
+		return status.Outcome == UsageAutoSyncOutcomeError
+	})
+
+	ticker.tick()
+	waitUsageSyncSignal(t, called)
+	recovered := waitUsageAutoSyncStatus(t, statuses, func(status UsageAutoSyncStatus) bool {
+		return status.Outcome == UsageAutoSyncOutcomeIdle
+	})
+	if recovered.Error != nil || recovered.ImportErrorCount != 0 ||
+		recovered.LastSuccessAtUnixMS != 0 {
+		t.Fatalf("no-op recovery status = %#v", recovered)
+	}
+}
+
 func TestUsageAutoSyncResetsIntervalWithoutImmediateSync(t *testing.T) {
 	runtime, ticker := newTestUsageAutoSyncRuntime()
 	started := make(chan struct{}, 2)
-	runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+	runtime.syncProvider = performedUsageSync(func(context.Context) (usage.UsageSyncResult, error) {
 		started <- struct{}{}
 		return usage.UsageSyncResult{}, nil
-	}
+	})
 	runtime.Start(context.Background(), nil)
 	t.Cleanup(runtime.Stop)
 
@@ -92,10 +160,10 @@ func TestUsageAutoSyncStartDelayDefersFirstSync(t *testing.T) {
 		return ch
 	}
 	syncStarted := make(chan struct{}, 1)
-	runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+	runtime.syncProvider = performedUsageSync(func(context.Context) (usage.UsageSyncResult, error) {
 		syncStarted <- struct{}{}
 		return usage.UsageSyncResult{ProviderID: "codex"}, nil
-	}
+	})
 	runtime.Start(context.Background(), nil)
 	t.Cleanup(runtime.Stop)
 
@@ -127,10 +195,10 @@ func TestUsageAutoSyncSyncNowDoesNotWaitForStartDelay(t *testing.T) {
 		return ch
 	}
 	syncStarted := make(chan struct{}, 1)
-	runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+	runtime.syncProvider = performedUsageSync(func(context.Context) (usage.UsageSyncResult, error) {
 		syncStarted <- struct{}{}
 		return usage.UsageSyncResult{ProviderID: "codex"}, nil
-	}
+	})
 	runtime.Start(context.Background(), nil)
 	t.Cleanup(runtime.Stop)
 	t.Cleanup(func() { close(releaseDelay) })
@@ -161,18 +229,18 @@ func TestUsageAutoSyncStatusIsProviderScoped(t *testing.T) {
 		func(context.Context) (usage.ProviderSyncSettings, error) {
 			return usage.ProviderSyncSettings{UsageSyncIntervalSeconds: 5}, nil
 		},
-		func(context.Context) (usage.UsageSyncResult, error) {
+		performedUsageSync(func(context.Context) (usage.UsageSyncResult, error) {
 			return usage.UsageSyncResult{ProviderID: "codex"}, nil
-		},
+		}),
 	)
 	grok := newUsageAutoSyncRuntime(
 		"grok-build",
 		func(context.Context) (usage.ProviderSyncSettings, error) {
 			return usage.ProviderSyncSettings{UsageSyncIntervalSeconds: 60}, nil
 		},
-		func(context.Context) (usage.UsageSyncResult, error) {
+		performedUsageSync(func(context.Context) (usage.UsageSyncResult, error) {
 			return usage.UsageSyncResult{ProviderID: "grok-build"}, nil
-		},
+		}),
 	)
 	codex.SetInterval(15)
 	grok.SetInterval(30)
@@ -200,9 +268,9 @@ func TestUsageAutoSyncStartupLoadDoesNotOverwriteNewerInterval(t *testing.T) {
 		createdIntervals <- interval
 		return ticker
 	}
-	runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+	runtime.syncProvider = performedUsageSync(func(context.Context) (usage.UsageSyncResult, error) {
 		return usage.UsageSyncResult{}, nil
-	}
+	})
 	runtime.Start(context.Background(), nil)
 	t.Cleanup(runtime.Stop)
 	select {
@@ -243,11 +311,11 @@ func TestUsageAutoSyncStartupLoadFailureDoesNotSupersedeSyncNow(t *testing.T) {
 	syncStarted := make(chan int32, 2)
 	releaseSync := make(chan struct{})
 	var calls atomic.Int32
-	runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+	runtime.syncProvider = performedUsageSync(func(context.Context) (usage.UsageSyncResult, error) {
 		syncStarted <- calls.Add(1)
 		<-releaseSync
 		return usage.UsageSyncResult{}, nil
-	}
+	})
 	runtime.Start(context.Background(), nil)
 	t.Cleanup(runtime.Stop)
 	t.Cleanup(func() {
@@ -311,10 +379,10 @@ func TestUsageAutoSyncStartupLoadFailureDoesNotOverwriteCompletedSyncNow(t *test
 		return ticker
 	}
 	var calls atomic.Int32
-	runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+	runtime.syncProvider = performedUsageSync(func(context.Context) (usage.UsageSyncResult, error) {
 		calls.Add(1)
 		return usage.UsageSyncResult{}, nil
-	}
+	})
 	runtime.Start(context.Background(), nil)
 	t.Cleanup(runtime.Stop)
 	t.Cleanup(func() {
@@ -346,14 +414,14 @@ func TestUsageAutoSyncRetriesAfterTimeout(t *testing.T) {
 	runtime.timeout = 20 * time.Millisecond
 	releaseRetry := make(chan struct{})
 	var calls atomic.Int32
-	runtime.syncProvider = func(ctx context.Context) (usage.UsageSyncResult, error) {
+	runtime.syncProvider = performedUsageSync(func(ctx context.Context) (usage.UsageSyncResult, error) {
 		if calls.Add(1) == 1 {
 			<-ctx.Done()
 			return usage.UsageSyncResult{}, ctx.Err()
 		}
 		<-releaseRetry
 		return usage.UsageSyncResult{}, nil
-	}
+	})
 	statuses := make(chan UsageAutoSyncStatus, 16)
 	runtime.Start(context.Background(), func(status UsageAutoSyncStatus) { statuses <- status })
 	t.Cleanup(runtime.Stop)
@@ -392,14 +460,14 @@ func TestUsageAutoSyncSyncNowStartsAndWaitsForProviderResult(t *testing.T) {
 	started := make(chan int32, 2)
 	releaseRequested := make(chan struct{})
 	var calls atomic.Int32
-	runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+	runtime.syncProvider = performedUsageSync(func(context.Context) (usage.UsageSyncResult, error) {
 		call := calls.Add(1)
 		started <- call
 		if call == 2 {
 			<-releaseRequested
 		}
 		return usage.UsageSyncResult{}, nil
-	}
+	})
 	statuses := make(chan UsageAutoSyncStatus, 16)
 	runtime.Start(context.Background(), func(status UsageAutoSyncStatus) { statuses <- status })
 	t.Cleanup(runtime.Stop)
@@ -450,12 +518,12 @@ func TestUsageAutoSyncSyncNowJoinsActiveProviderSync(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 	var calls atomic.Int32
-	runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+	runtime.syncProvider = performedUsageSync(func(context.Context) (usage.UsageSyncResult, error) {
 		calls.Add(1)
 		started <- struct{}{}
 		<-release
 		return usage.UsageSyncResult{}, nil
-	}
+	})
 	runtime.Start(context.Background(), nil)
 	t.Cleanup(runtime.Stop)
 	t.Cleanup(func() {
@@ -494,9 +562,9 @@ func TestUsageAutoSyncSyncNowJoinsActiveProviderSync(t *testing.T) {
 func TestUsageAutoSyncReportsWarningsAndRedactsFatalErrors(t *testing.T) {
 	t.Run("warning", func(t *testing.T) {
 		runtime, _ := newTestUsageAutoSyncRuntime()
-		runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+		runtime.syncProvider = performedUsageSync(func(context.Context) (usage.UsageSyncResult, error) {
 			return usage.UsageSyncResult{Errors: []usage.UsageImportError{{SourceKey: "/private/session.jsonl", Message: "raw session error"}}}, nil
-		}
+		})
 		statuses := make(chan UsageAutoSyncStatus, 8)
 		runtime.Start(context.Background(), func(status UsageAutoSyncStatus) { statuses <- status })
 		t.Cleanup(runtime.Stop)
@@ -512,9 +580,9 @@ func TestUsageAutoSyncReportsWarningsAndRedactsFatalErrors(t *testing.T) {
 	t.Run("fatal", func(t *testing.T) {
 		runtime, _ := newTestUsageAutoSyncRuntime()
 		raw := "/Users/alice/.codex/sessions/private.jsonl"
-		runtime.syncProvider = func(context.Context) (usage.UsageSyncResult, error) {
+		runtime.syncProvider = performedUsageSync(func(context.Context) (usage.UsageSyncResult, error) {
 			return usage.UsageSyncResult{}, fmt.Errorf("failed to read %s", raw)
-		}
+		})
 		statuses := make(chan UsageAutoSyncStatus, 8)
 		runtime.Start(context.Background(), func(status UsageAutoSyncStatus) { statuses <- status })
 		t.Cleanup(runtime.Stop)
@@ -535,12 +603,12 @@ func TestUsageAutoSyncStopCancelsRunningSync(t *testing.T) {
 	runtime, _ := newTestUsageAutoSyncRuntime()
 	started := make(chan struct{})
 	stopped := make(chan struct{})
-	runtime.syncProvider = func(ctx context.Context) (usage.UsageSyncResult, error) {
+	runtime.syncProvider = performedUsageSync(func(ctx context.Context) (usage.UsageSyncResult, error) {
 		close(started)
 		<-ctx.Done()
 		close(stopped)
 		return usage.UsageSyncResult{}, ctx.Err()
-	}
+	})
 	runtime.Start(context.Background(), nil)
 	waitUsageSyncSignal(t, started)
 	runtime.Stop()
@@ -586,6 +654,18 @@ func newTestUsageAutoSyncRuntime() (*usageAutoSyncRuntime, *fakeUsageAutoSyncTic
 	runtime.newTicker = func(time.Duration) usageAutoSyncTicker { return ticker }
 	runtime.startDelayFunc = func() time.Duration { return 0 }
 	return runtime, ticker
+}
+
+func performedUsageSync(
+	sync func(context.Context) (usage.UsageSyncResult, error),
+) backgroundUsageSync {
+	return func(ctx context.Context, onWorkDetected func()) (usage.BackgroundSyncOutcome, error) {
+		if onWorkDetected != nil {
+			onWorkDetected()
+		}
+		result, err := sync(ctx)
+		return usage.BackgroundSyncOutcome{Result: result, Performed: true}, err
+	}
 }
 
 func waitUsageSyncCall(t *testing.T, calls <-chan int32) int32 {

@@ -233,6 +233,27 @@ func TestAppliedSchemaUsesItsVersionedContract(t *testing.T) {
 	if _, err := db.db.DB.ExecContext(ctx, `DELETE FROM bun_migrations`); err != nil {
 		t.Fatalf("remove Stable marker: %v", err)
 	}
+	if _, err := db.db.DB.ExecContext(ctx, `DROP TABLE usage_import_observations`); err != nil {
+		t.Fatalf("remove incremental usage observation table: %v", err)
+	}
+	for _, table := range []string{"codex_usage_import_files", "grok_build_usage_import_files"} {
+		for _, column := range []string{
+			"parser_state_json",
+			"checkpoint_event_digest",
+			"boundary_digest",
+			"file_identity_digest",
+			"metadata_digest",
+			"processed_bytes",
+			"checkpoint_revision",
+		} {
+			if _, err := db.db.DB.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s", table, column)); err != nil {
+				t.Fatalf("remove incremental usage column %s.%s: %v", table, column, err)
+			}
+		}
+	}
+	if _, err := db.db.DB.ExecContext(ctx, `ALTER TABLE usage_sources DROP COLUMN completed_generation`); err != nil {
+		t.Fatalf("remove usage completion generation: %v", err)
+	}
 	if _, err := db.db.DB.ExecContext(ctx, `DROP TABLE grok_build_usage_import_files`); err != nil {
 		t.Fatalf("restore unmarked Stable schema: %v", err)
 	}

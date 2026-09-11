@@ -2,8 +2,10 @@ package usage
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"math"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -51,10 +53,14 @@ type Event struct {
 }
 
 type SourceFile struct {
-	Path           string
-	SourceKey      store.UsageKey
-	ModifiedUnixMS int64
-	SizeBytes      int64
+	Path               string
+	SourceKey          store.UsageKey
+	ModifiedUnixMS     int64
+	ModifiedUnixNano   int64
+	SizeBytes          int64
+	Mode               uint32
+	FileIdentityDigest store.UsageKey
+	MetadataDigest     store.UsageKey
 }
 
 type FileParseResult struct {
@@ -215,6 +221,34 @@ func SourceKey(path string) (store.UsageKey, error) {
 	}
 	sum := sha256.Sum256([]byte(normalized))
 	return store.UsageKey(sum), nil
+}
+
+func sourceFileFromInfo(path string, sourceKey store.UsageKey, info os.FileInfo) SourceFile {
+	file := SourceFile{
+		Path:               path,
+		SourceKey:          sourceKey,
+		ModifiedUnixMS:     info.ModTime().UnixMilli(),
+		ModifiedUnixNano:   info.ModTime().UnixNano(),
+		SizeBytes:          info.Size(),
+		Mode:               uint32(info.Mode()),
+		FileIdentityDigest: sourceFileIdentityDigest(path, info),
+	}
+	file.MetadataDigest = sourceFileMetadataDigest(file)
+	return file
+}
+
+func sourceFileMetadataDigest(file SourceFile) store.UsageKey {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("profiledeck-usage-file-metadata-v1\x00"))
+	var encoded [8]byte
+	for _, value := range []int64{file.SizeBytes, file.ModifiedUnixNano, int64(file.Mode)} {
+		binary.BigEndian.PutUint64(encoded[:], uint64(value))
+		_, _ = hash.Write(encoded[:])
+	}
+	_, _ = hash.Write(file.FileIdentityDigest[:])
+	var digest store.UsageKey
+	copy(digest[:], hash.Sum(nil))
+	return digest
 }
 
 func EventID(providerID, source string, usageOrdinal int64, sessionID, model string, tokens TokenCounts) store.UsageKey {

@@ -53,6 +53,8 @@ type realUsageAutoSyncTicker struct {
 	ticker *time.Ticker
 }
 
+type backgroundUsageSync func(context.Context, func()) (usage.BackgroundSyncOutcome, error)
+
 func (t realUsageAutoSyncTicker) C() <-chan time.Time {
 	return t.ticker.C
 }
@@ -71,6 +73,7 @@ type usageAutoSyncRuntime struct {
 	emitter          func(UsageAutoSyncStatus)
 	intervalRevision uint64
 	syncRevision     uint64
+	syncRunning      bool
 
 	lifecycleMu sync.Mutex
 	started     bool
@@ -88,13 +91,13 @@ type usageAutoSyncRuntime struct {
 	startDelayFunc  func() time.Duration
 	timeout         time.Duration
 	loadSettings    func(context.Context) (usage.ProviderSyncSettings, error)
-	syncProvider    func(context.Context) (usage.UsageSyncResult, error)
+	syncProvider    backgroundUsageSync
 }
 
 func newUsageAutoSyncRuntime(
 	providerID string,
 	loadSettings func(context.Context) (usage.ProviderSyncSettings, error),
-	syncProvider func(context.Context) (usage.UsageSyncResult, error),
+	syncProvider backgroundUsageSync,
 ) *usageAutoSyncRuntime {
 	providerID = strings.TrimSpace(providerID)
 	return &usageAutoSyncRuntime{
@@ -245,11 +248,12 @@ func (r *usageAutoSyncRuntime) SyncNow(ctx context.Context) UsageAutoSyncStatus 
 	r.startSync(r.runCtx)
 	r.mu.RLock()
 	done := r.syncDone
+	running := r.syncRunning
 	status := cloneUsageAutoSyncStatus(r.status)
 	r.mu.RUnlock()
 	r.lifecycleMu.Unlock()
 
-	if done == nil || !status.Syncing {
+	if done == nil || !running {
 		return status
 	}
 	select {
@@ -342,20 +346,15 @@ func (r *usageAutoSyncRuntime) startSyncWithRevision(
 	requireRevision bool,
 ) bool {
 	r.mu.Lock()
-	if r.status.Syncing || parent.Err() != nil ||
+	if r.syncRunning || parent.Err() != nil ||
 		(requireRevision && r.syncRevision != expectedRevision) {
 		r.mu.Unlock()
 		return false
 	}
 	r.syncRevision++
-	r.status.Syncing = true
-	r.status.Outcome = UsageAutoSyncOutcomeSyncing
-	r.status.Error = nil
-	r.status.LastStartedAtUnixMS = r.now().UnixMilli()
-	r.status.Revision++
+	r.syncRunning = true
 	r.syncDone = make(chan struct{})
 	r.mu.Unlock()
-	r.emitStatus()
 
 	r.workerWG.Add(1)
 	go func() {
@@ -366,13 +365,15 @@ func (r *usageAutoSyncRuntime) startSyncWithRevision(
 		}
 		ctx, cancel := context.WithTimeout(usage.WithPhaseTimeout(parent, timeout), 2*timeout)
 		defer cancel()
-		result, err := r.syncProvider(ctx)
+		outcome, err := r.runProviderSync(ctx)
 		if parent.Err() != nil {
 			r.mu.Lock()
-			r.status.Syncing = false
-			r.status.Outcome = UsageAutoSyncOutcomeIdle
-			r.status.Error = nil
-			r.status.Revision++
+			if r.status.Syncing {
+				r.status.Syncing = false
+				r.status.Outcome = UsageAutoSyncOutcomeIdle
+				r.status.Error = nil
+				r.status.Revision++
+			}
 			r.finishSyncLocked()
 			r.mu.Unlock()
 			return
@@ -381,9 +382,73 @@ func (r *usageAutoSyncRuntime) startSyncWithRevision(
 			r.completeWithError(err)
 			return
 		}
-		r.completeWithResult(result)
+		if !outcome.Performed {
+			r.completeWithoutWork(outcome.Result)
+			return
+		}
+		r.markWorkDetected()
+		r.completeWithResult(outcome.Result)
 	}()
 	return true
+}
+
+func (r *usageAutoSyncRuntime) runProviderSync(ctx context.Context) (usage.BackgroundSyncOutcome, error) {
+	if r.syncProvider == nil {
+		return usage.BackgroundSyncOutcome{}, errors.New("usage sync provider is unavailable")
+	}
+	return r.syncProvider(ctx, r.markWorkDetected)
+}
+
+func (r *usageAutoSyncRuntime) markWorkDetected() {
+	r.mu.Lock()
+	if !r.syncRunning || r.status.Syncing {
+		r.mu.Unlock()
+		return
+	}
+	r.status.Syncing = true
+	r.status.Outcome = UsageAutoSyncOutcomeSyncing
+	r.status.Error = nil
+	r.status.LastStartedAtUnixMS = r.now().UnixMilli()
+	r.status.Revision++
+	r.mu.Unlock()
+	r.emitStatus()
+}
+
+func (r *usageAutoSyncRuntime) completeWithoutWork(result usage.UsageSyncResult) {
+	r.mu.Lock()
+	if len(result.Errors) == 0 {
+		if r.status.Outcome == UsageAutoSyncOutcomeError ||
+			r.status.Outcome == UsageAutoSyncOutcomeWarning ||
+			r.status.Error != nil || r.status.ImportErrorCount != 0 {
+			r.status.Syncing = false
+			r.status.Outcome = UsageAutoSyncOutcomeIdle
+			r.status.ImportErrorCount = 0
+			r.status.Error = nil
+			r.status.Revision++
+			r.finishSyncLocked()
+			r.mu.Unlock()
+			r.emitStatus()
+			return
+		}
+		r.finishSyncLocked()
+		r.mu.Unlock()
+		return
+	}
+	count := int64(len(result.Errors))
+	if r.status.Outcome == UsageAutoSyncOutcomeWarning &&
+		r.status.ImportErrorCount == count && r.status.Error == nil {
+		r.finishSyncLocked()
+		r.mu.Unlock()
+		return
+	}
+	r.status.Syncing = false
+	r.status.Outcome = UsageAutoSyncOutcomeWarning
+	r.status.ImportErrorCount = count
+	r.status.Error = nil
+	r.status.Revision++
+	r.finishSyncLocked()
+	r.mu.Unlock()
+	r.emitStatus()
 }
 
 func (r *usageAutoSyncRuntime) completeWithResult(result usage.UsageSyncResult) {
@@ -393,6 +458,7 @@ func (r *usageAutoSyncRuntime) completeWithResult(result usage.UsageSyncResult) 
 		outcome = UsageAutoSyncOutcomeWarning
 	}
 	r.mu.Lock()
+	r.syncRunning = false
 	r.status.Syncing = false
 	r.status.Outcome = outcome
 	r.status.LastCompletedAtUnixMS = completedAt
@@ -408,6 +474,7 @@ func (r *usageAutoSyncRuntime) completeWithResult(result usage.UsageSyncResult) 
 func (r *usageAutoSyncRuntime) completeWithError(err error) {
 	completedAt := r.now().UnixMilli()
 	r.mu.Lock()
+	r.syncRunning = false
 	r.status.Syncing = false
 	r.status.Outcome = UsageAutoSyncOutcomeError
 	r.status.LastCompletedAtUnixMS = completedAt
@@ -424,7 +491,7 @@ func (r *usageAutoSyncRuntime) reportStartupError(err error, expectedSyncRevisio
 	r.mu.Lock()
 	// SyncNow can join the runtime while its startup settings read is still in
 	// flight. That read must not complete or supersede the active Provider sync.
-	if r.status.Syncing || r.syncRevision != expectedSyncRevision {
+	if r.syncRunning || r.syncRevision != expectedSyncRevision {
 		r.mu.Unlock()
 		return
 	}
@@ -438,6 +505,7 @@ func (r *usageAutoSyncRuntime) reportStartupError(err error, expectedSyncRevisio
 }
 
 func (r *usageAutoSyncRuntime) finishSyncLocked() {
+	r.syncRunning = false
 	if r.syncDone == nil {
 		return
 	}
