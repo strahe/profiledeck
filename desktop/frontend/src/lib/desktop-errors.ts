@@ -1,5 +1,3 @@
-import { CancelError } from "@wailsio/runtime";
-
 import { translate } from "$lib/i18n";
 
 type DesktopErrorShape = {
@@ -131,7 +129,6 @@ export function isDesktopErrorCode(value: unknown, code: string): boolean {
 
 export function isCancelError(value: unknown): boolean {
 	if (!value) return false;
-	if (value instanceof CancelError) return true;
 	if (Array.isArray(value)) return value.some(isCancelError);
 	const typed = value as DesktopErrorShape;
 	if (typed.name === "CancelError" || typed.code === "CANCELED" || typed.Code === "CANCELED") return true;
