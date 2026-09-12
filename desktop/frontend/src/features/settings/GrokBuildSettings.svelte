@@ -13,7 +13,7 @@
 	import { translate } from "$lib/i18n";
 
 	import UsageSyncSettings from "./UsageSyncSettings.svelte";
-	import { usageIntervals } from "./usage-sync-settings";
+	import { usageIntervals, usageSyncIntervalDefault } from "./usage-sync-settings";
 
 	let {
 		providerExists,
@@ -115,7 +115,7 @@
 	{:else}
 		<UsageSyncSettings
 			id="grok-build-usage-sync"
-			interval={settings?.usage_sync_interval_seconds ?? 15}
+			interval={settings?.usage_sync_interval_seconds ?? usageSyncIntervalDefault}
 			{loading}
 			{busy}
 			onChange={changeInterval}

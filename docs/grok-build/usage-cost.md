@@ -6,7 +6,7 @@ ProfileDeck reads local Grok Build session records to show token usage, activity
 
 The Desktop app syncs after startup and continues while ProfileDeck is open or in the menu bar.
 
-To change the interval, open **Grok Build → Settings → Usage reports → Update frequency** and choose 5, 15, 30, or 60 seconds. The default is 15 seconds. Codex and Grok Build use separate intervals and sync status.
+To change the interval, open **Grok Build → Settings → Usage reports → Update frequency** and choose 15 seconds, 30 seconds, 1 minute, 2 minutes, or 5 minutes. The default is 1 minute. Codex and Grok Build use separate intervals and sync status.
 
 When session files have not changed, background sync checks their metadata without reading their contents. Normal appends read only a small integrity boundary and the new part of each file.
 

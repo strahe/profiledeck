@@ -797,6 +797,7 @@ const messages = {
 			label: "Update frequency",
 			description: "Keep Usage reports up to date from this Agent's local activity.",
 			seconds: "{count} seconds",
+			minutes: "{count, plural, one {# minute} other {# minutes}}",
 		},
 		settings: {
 			title: "Settings",
@@ -1921,6 +1922,7 @@ const messages = {
 			label: "更新频率",
 			description: "根据此 Agent 的本地活动更新用量报告。",
 			seconds: "{count} 秒",
+			minutes: "{count} 分钟",
 		},
 		settings: {
 			title: "设置",

@@ -12,6 +12,7 @@
 
 	import ProfileAutomationSettings from "./ProfileAutomationSettings.svelte";
 	import UsageSyncSettings from "./UsageSyncSettings.svelte";
+	import { usageSyncIntervalDefault } from "./usage-sync-settings";
 	import { useCodexRuntime } from "./codex-runtime.svelte.js";
 
 	const controller = useCodexRuntime();
@@ -36,7 +37,7 @@
 
 	<UsageSyncSettings
 		id="codex-usage-sync"
-		interval={controller.settings?.usage_sync_interval_seconds ?? 15}
+		interval={controller.settings?.usage_sync_interval_seconds ?? usageSyncIntervalDefault}
 		description={$_("codexSettings.usageSync.description")}
 		loading={controller.loading}
 		busy={controller.isBusy("usage")}

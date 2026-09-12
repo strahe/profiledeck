@@ -227,7 +227,7 @@ func TestUsageAutoSyncStatusIsProviderScoped(t *testing.T) {
 	codex := newUsageAutoSyncRuntime(
 		"codex",
 		func(context.Context) (usage.ProviderSyncSettings, error) {
-			return usage.ProviderSyncSettings{UsageSyncIntervalSeconds: 5}, nil
+			return usage.ProviderSyncSettings{UsageSyncIntervalSeconds: 15}, nil
 		},
 		performedUsageSync(func(context.Context) (usage.UsageSyncResult, error) {
 			return usage.UsageSyncResult{ProviderID: "codex"}, nil

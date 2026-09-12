@@ -6,7 +6,7 @@
 	import * as Select from "$lib/components/ui/select";
 	import { Spinner } from "$lib/components/ui/spinner";
 
-	import { usageIntervals } from "./usage-sync-settings";
+	import { usageIntervalLabel, usageIntervals } from "./usage-sync-settings";
 
 	let {
 		id,
@@ -23,6 +23,8 @@
 		busy?: boolean;
 		onChange: (value: string) => void;
 	} = $props();
+
+	const selected = $derived(usageIntervalLabel(interval));
 </script>
 
 <SectionCard title={$_("usageSettings.title")} description={description ?? $_("usageSettings.description")}>
@@ -30,15 +32,16 @@
 		{#snippet control()}
 			{#if busy}<Spinner />{/if}
 			<Select.Root type="single" value={String(interval)} onValueChange={onChange}>
-				<Select.Trigger {id} class="min-w-32" disabled={loading || busy}>
-					{$_("usageSettings.seconds", { values: { count: interval } })}
+				<Select.Trigger {id} class="min-w-36" disabled={loading || busy}>
+					{$_(selected.key, { values: { count: selected.count } })}
 				</Select.Trigger>
 				<Select.Content>
 					<Select.Group>
 						{#each usageIntervals as seconds (seconds)}
+							{@const option = usageIntervalLabel(seconds)}
 							<Select.Item
 								value={String(seconds)}
-								label={$_("usageSettings.seconds", { values: { count: seconds } })}
+								label={$_(option.key, { values: { count: option.count } })}
 							/>
 						{/each}
 					</Select.Group>
