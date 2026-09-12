@@ -38,6 +38,8 @@ It does not follow symbolic links. Nested `subagents` records are excluded becau
 
 You can repeat a sync safely; previously imported usage is not counted again. Records with missing, empty, or incomplete usage are skipped. If a file changes while it is being read, contains an oversized or malformed terminal record, or has an unrecognized terminal format, ProfileDeck leaves all new data from that file uncommitted. Background sync checks that file again after it changes; a CLI sync checks it immediately. The source file is never moved or changed.
 
+New additive fields in Grok Build session records are ignored safely. Known fields still need their expected types and consistent token totals.
+
 Copied fork history is counted once. When the same completed turn appears in multiple sessions with identical usage, ProfileDeck assigns it to one stable derived session without storing the original session identifier. Conflicting usage for that same turn leaves the affected file uncommitted until it changes or you run another CLI sync.
 
 Deleting the Grok Build Provider also deletes its saved usage reports, import progress, and sync setting. Desktop background sync will not recreate a deleted Provider. Running this CLI sync is an explicit request: it can set up the Provider again and reimport usage still present in local session files.
@@ -71,9 +73,13 @@ ProfileDeck uses the short-context xAI Standard API-equivalent prices included w
 | `grok-4.5` | $2.00 / 1M tokens | $0.30 / 1M tokens | $6.00 / 1M tokens |
 | `grok-4.5-build` | $2.00 / 1M tokens | $0.30 / 1M tokens | $6.00 / 1M tokens |
 | `grok-4.5-latest` | $2.00 / 1M tokens | $0.30 / 1M tokens | $6.00 / 1M tokens |
+| `grok-4.6` | $2.00 / 1M tokens | $0.50 / 1M tokens | $6.00 / 1M tokens |
+| `grok-4.6-build` | $2.00 / 1M tokens | $0.50 / 1M tokens | $6.00 / 1M tokens |
 | `grok-build-latest` | $2.00 / 1M tokens | $0.30 / 1M tokens | $6.00 / 1M tokens |
 
-The prices come from [Grok 4.5](https://docs.x.ai/developers/models/grok-4.5) and [xAI pricing](https://docs.x.ai/developers/pricing). ProfileDeck treats the `grok-4.5-build` identifier found in Grok Build session records as pricing-equivalent to Grok 4.5. Aggregated session records do not show whether an individual request entered a long-context pricing tier, so ProfileDeck does not apply the 2× long-context multiplier.
+The prices come from [xAI pricing](https://docs.x.ai/developers/pricing). [Grok Build uses Grok 4.6](https://docs.x.ai/build/overview), so ProfileDeck treats the `grok-4.6-build` identifier found in current session records as pricing-equivalent to Grok 4.6. Aggregated session records do not show whether an individual request entered a long-context pricing tier, so ProfileDeck does not apply the 2× long-context multiplier.
+
+When a session record includes cache-creation tokens, ProfileDeck keeps the event and reports a partial estimate because usage facts currently price only input, cached input, and output tokens.
 
 Amounts recorded by Grok Build are not imported as billing data. An unrecognized model keeps its token totals but has unknown cost. Existing estimates are not recalculated when a later ProfileDeck version changes its built-in prices; facts with unknown cost can receive an estimate when their model becomes recognized.
 

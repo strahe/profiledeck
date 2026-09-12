@@ -90,14 +90,16 @@ func (integration codexIntegration) Sync(
 			continue
 		}
 		if observation, ok := observed[file.SourceKey]; ok &&
-			observation.MetadataDigest == file.MetadataDigest && !options.ForceObservedRetry {
+			observation.MetadataDigest == file.MetadataDigest &&
+			observation.ParserRevision == CodexUsageParserRevision &&
+			!options.ForceObservedRetry {
 			result.SkippedUnchangedFiles++
 			result.Errors = append(result.Errors, codexObservationError(file, observation.Status))
 			continue
 		}
 		if hasCursor && codexFileIsShorterThanCheckpoint(cursor, file) {
 			result.Errors = append(result.Errors, codexObservationError(file, store.UsageImportObservationHistoryChanged))
-			observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationHistoryChanged))
+			observations = append(observations, newUsageObservation(source.ID, file, CodexUsageParserRevision, store.UsageImportObservationHistoryChanged))
 			continue
 		}
 
@@ -107,7 +109,7 @@ func (integration codexIntegration) Sync(
 				return SyncOutcome{}, apperror.Wrap(apperror.UsageImportFailed, "usage import canceled", ctxErr)
 			}
 			result.Errors = append(result.Errors, codexObservationError(file, store.UsageImportObservationUnavailable))
-			observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationUnavailable))
+			observations = append(observations, newUsageObservation(source.ID, file, CodexUsageParserRevision, store.UsageImportObservationUnavailable))
 			continue
 		}
 		eventsToStore := parsed.Events
@@ -122,7 +124,7 @@ func (integration codexIntegration) Sync(
 				}
 				if !prefixMatches {
 					result.Errors = append(result.Errors, codexObservationError(file, store.UsageImportObservationHistoryChanged))
-					observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationHistoryChanged))
+					observations = append(observations, newUsageObservation(source.ID, file, CodexUsageParserRevision, store.UsageImportObservationHistoryChanged))
 					continue
 				}
 				eventsToStore = parsed.Events[cursor.ImportedFacts:]
@@ -177,7 +179,7 @@ func (integration codexIntegration) Sync(
 		}
 		if errors.Is(err, store.ErrUsageFactConflict) {
 			result.Errors = append(result.Errors, codexObservationError(file, store.UsageImportObservationFactConflict))
-			observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationFactConflict))
+			observations = append(observations, newUsageObservation(source.ID, file, CodexUsageParserRevision, store.UsageImportObservationFactConflict))
 			continue
 		}
 		if err != nil {
@@ -325,7 +327,9 @@ func (integration codexIntegration) preflight(
 			}
 		}
 		if observation, ok := observations[file.SourceKey]; ok &&
-			observation.MetadataDigest == file.MetadataDigest && !options.ForceObservedRetry {
+			observation.MetadataDigest == file.MetadataDigest &&
+			observation.ParserRevision == CodexUsageParserRevision &&
+			!options.ForceObservedRetry {
 			result.SkippedUnchangedFiles++
 			result.Errors = append(result.Errors, codexObservationError(file, observation.Status))
 			continue
@@ -464,12 +468,14 @@ func hasSupportedUnknownUsageModel(
 func newUsageObservation(
 	sourceID int64,
 	file SourceFile,
+	parserRevision int64,
 	status store.UsageImportObservationStatus,
 ) store.UsageImportObservation {
 	return store.UsageImportObservation{
 		SourceID:       sourceID,
 		FileKey:        file.SourceKey,
 		MetadataDigest: file.MetadataDigest,
+		ParserRevision: parserRevision,
 		Status:         status,
 	}
 }

@@ -105,14 +105,16 @@ func (integration grokBuildIntegration) Sync(
 			continue
 		}
 		if observation, ok := observed[file.SourceKey]; ok &&
-			observation.MetadataDigest == file.MetadataDigest && !options.ForceObservedRetry {
+			observation.MetadataDigest == file.MetadataDigest &&
+			observation.ParserRevision == GrokBuildUsageParserRevision &&
+			!options.ForceObservedRetry {
 			result.SkippedUnchangedFiles++
 			result.Errors = append(result.Errors, grokBuildObservationError(observation.Status))
 			continue
 		}
 		if hasCursor && grokBuildFileIsShorterThanCheckpoint(cursor, file) {
 			result.Errors = append(result.Errors, grokBuildObservationError(store.UsageImportObservationHistoryChanged))
-			observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationHistoryChanged))
+			observations = append(observations, newUsageObservation(source.ID, file, GrokBuildUsageParserRevision, store.UsageImportObservationHistoryChanged))
 			continue
 		}
 
@@ -127,7 +129,7 @@ func (integration grokBuildIntegration) Sync(
 			}
 			result.InvalidLines++
 			result.Errors = append(result.Errors, grokBuildObservationError(store.UsageImportObservationUnavailable))
-			observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationUnavailable))
+			observations = append(observations, newUsageObservation(source.ID, file, GrokBuildUsageParserRevision, store.UsageImportObservationUnavailable))
 			continue
 		}
 		eventsToStore := parsed.Events
@@ -137,7 +139,7 @@ func (integration grokBuildIntegration) Sync(
 		if hasCursor {
 			if fullParse && !grokBuildCheckpointPrefixMatches(parsed.Events, cursor) {
 				result.Errors = append(result.Errors, grokBuildObservationError(store.UsageImportObservationHistoryChanged))
-				observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationHistoryChanged))
+				observations = append(observations, newUsageObservation(source.ID, file, GrokBuildUsageParserRevision, store.UsageImportObservationHistoryChanged))
 				continue
 			}
 			if fullParse {
@@ -202,7 +204,7 @@ func (integration grokBuildIntegration) Sync(
 		if errors.Is(err, store.ErrUsageFactConflict) {
 			result.InvalidLines++
 			result.Errors = append(result.Errors, grokBuildObservationError(store.UsageImportObservationFactConflict))
-			observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationFactConflict))
+			observations = append(observations, newUsageObservation(source.ID, file, GrokBuildUsageParserRevision, store.UsageImportObservationFactConflict))
 			continue
 		}
 		if err != nil {
@@ -370,7 +372,9 @@ func (integration grokBuildIntegration) preflight(
 			}
 		}
 		if observation, ok := observations[file.SourceKey]; ok &&
-			observation.MetadataDigest == file.MetadataDigest && !options.ForceObservedRetry {
+			observation.MetadataDigest == file.MetadataDigest &&
+			observation.ParserRevision == GrokBuildUsageParserRevision &&
+			!options.ForceObservedRetry {
 			result.SkippedUnchangedFiles++
 			result.Errors = append(result.Errors, grokBuildObservationError(observation.Status))
 			continue

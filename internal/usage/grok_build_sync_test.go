@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -103,6 +104,107 @@ func TestUsageSyncGrokBuildImportsIncrementallyAcrossRestart(t *testing.T) {
 	metadata, err := grokpreset.DecodeProviderMetadata(provider.MetadataJSON)
 	if err != nil || metadata.GrokHome != grokHome {
 		t.Fatalf("Provider metadata = %#v, err = %v", metadata, err)
+	}
+}
+
+func TestUsageSyncGrokBuildImportsCurrentSessionFormat(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	grokHome := t.TempDir()
+	fixture, err := os.ReadFile(filepath.Join("testdata", "grok-build-v1.0.25", "valid.jsonl"))
+	if err != nil {
+		t.Fatalf("read current Grok Build fixture: %v", err)
+	}
+	writeGrokBuildUsageFixture(t, grokHome, "workspace-current", "session-current", string(fixture))
+	environment := newGrokBuildUsageTestEnvironment(t, configDir, grokHome)
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+
+	result, err := environment.service.SyncGrokBuild(ctx)
+	if err != nil || result.ImportedEvents != 1 || result.InvalidLines != 0 || len(result.Errors) != 0 {
+		t.Fatalf("current Grok Build sync = %#v, err = %v", result, err)
+	}
+	report, err := environment.service.Report(ctx, UsageReportRequest{
+		ProviderID: grokconfig.ProviderID,
+		Range:      UsageRangeAll,
+	})
+	if err != nil || report.Summary.EventCount != 1 || report.Summary.TotalTokens != 1_100 ||
+		report.Summary.CostStatus != CostStatusPartial.String() ||
+		report.Summary.KnownEstimatedCostUSD != "0.002300" || report.Summary.PartialCostEventCount != 1 {
+		t.Fatalf("current Grok Build report = %#v, err = %v", report, err)
+	}
+}
+
+func TestBackgroundGrokBuildSyncRetriesObservationAfterParserUpgrade(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	grokHome := t.TempDir()
+	fixture, err := os.ReadFile(filepath.Join("testdata", "grok-build-v1.0.25", "valid.jsonl"))
+	if err != nil {
+		t.Fatalf("read current Grok Build fixture: %v", err)
+	}
+	broken := strings.Replace(string(fixture), `"cacheCreationTokens":50`, `"cacheCreationTokens":"50"`, 1)
+	path := writeGrokBuildUsageFixture(t, grokHome, "workspace-broken", "session-broken", broken)
+	environment := newGrokBuildUsageTestEnvironment(t, configDir, grokHome)
+	initialized, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx)
+	if err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+	first, err := environment.service.SyncGrokBuild(ctx)
+	if err != nil || len(first.Errors) != 1 {
+		t.Fatalf("initial broken Grok Build sync = %#v, err = %v", first, err)
+	}
+	additive, err := os.ReadFile(filepath.Join("testdata", "grok-build-v0.2.114", "format-drift.jsonl"))
+	if err != nil {
+		t.Fatalf("read additive Grok Build fixture: %v", err)
+	}
+	writeAppUsageFile(t, path, string(additive))
+	files, err := ListGrokBuildSessionFilesContext(ctx, grokHome)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("list rewritten Grok Build fixture: files=%#v, err=%v", files, err)
+	}
+
+	rawDB, err := sql.Open("sqlite", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open usage database: %v", err)
+	}
+	if _, err := rawDB.ExecContext(ctx, `
+		UPDATE usage_import_observations
+		SET parser_revision = 0, metadata_digest = ?
+	`, files[0].MetadataDigest); err != nil {
+		_ = rawDB.Close()
+		t.Fatalf("downgrade observation fixture: %v", err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close usage database: %v", err)
+	}
+
+	observer := &usageSyncReadObserver{}
+	retried, err := environment.service.sync(ctx, UsageSyncRequest{ProviderID: grokconfig.ProviderID}, SyncOptions{
+		ProvisionMode: SyncExistingProvider,
+		Observer:      observer,
+	})
+	if err != nil || !retried.Performed || retried.Result.ImportedEvents != 1 ||
+		len(retried.Result.Errors) != 0 || observer.opened.Load() != 1 {
+		t.Fatalf("parser-upgrade retry = %#v, err = %v, opens = %d", retried, err, observer.opened.Load())
+	}
+
+	rawDB, err = sql.Open("sqlite", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("reopen usage database: %v", err)
+	}
+	defer rawDB.Close()
+	var observations int64
+	if err := rawDB.QueryRowContext(ctx, `SELECT COUNT(1) FROM usage_import_observations`).Scan(&observations); err != nil {
+		t.Fatalf("read retried observations: %v", err)
+	}
+	if observations != 0 {
+		t.Fatalf("retried observations = %d, want 0", observations)
+	}
+	summary, err := environment.service.Summary(ctx, UsageSummaryRequest{ProviderID: grokconfig.ProviderID})
+	if err != nil || summary.EventCount != 1 || summary.TotalTokens != 2 {
+		t.Fatalf("parser-upgrade summary = %#v, err = %v", summary, err)
 	}
 }
 
@@ -272,9 +374,9 @@ func TestUsageSyncGrokBuildBackfillsNewlyRecognizedUnknownModels(t *testing.T) {
 		SourceID:   source.ID,
 		Generation: source.SyncGeneration,
 		Facts: []store.CreateUsageFactParams{{
-			EventKey:     usageTestEventKey("grok-4.5-build-historical"),
+			EventKey:     usageTestEventKey("grok-4.6-build-historical"),
 			SourceID:     source.ID,
-			ModelKey:     "grok-4.5-build",
+			ModelKey:     "grok-4.6-build",
 			InputTokens:  1_000_000,
 			OutputTokens: 1_000_000,
 			TotalTokens:  2_000_000,
@@ -668,14 +770,15 @@ func syntheticGrokBuildUsageLine(
 	tokens TokenCounts,
 ) string {
 	row := map[string]any{
-		"inputTokens":      tokens.InputTokens,
-		"outputTokens":     tokens.OutputTokens,
-		"totalTokens":      tokens.TotalTokens,
-		"cachedReadTokens": tokens.CachedInputTokens,
-		"reasoningTokens":  int64(0),
-		"modelCalls":       int64(1),
-		"apiDurationMs":    int64(1),
-		"costIsPartial":    false,
+		"inputTokens":         tokens.InputTokens,
+		"outputTokens":        tokens.OutputTokens,
+		"totalTokens":         tokens.TotalTokens,
+		"cachedReadTokens":    tokens.CachedInputTokens,
+		"cacheCreationTokens": int64(0),
+		"reasoningTokens":     int64(0),
+		"modelCalls":          int64(1),
+		"apiDurationMs":       int64(1),
+		"costIsPartial":       false,
 	}
 	raw, err := json.Marshal(map[string]any{
 		"timestamp": timestamp,
@@ -687,16 +790,17 @@ func syntheticGrokBuildUsageLine(
 				"prompt_id":     promptID,
 				"stop_reason":   "end_turn",
 				"usage": map[string]any{
-					"inputTokens":      tokens.InputTokens,
-					"outputTokens":     tokens.OutputTokens,
-					"totalTokens":      tokens.TotalTokens,
-					"cachedReadTokens": tokens.CachedInputTokens,
-					"reasoningTokens":  int64(0),
-					"modelCalls":       int64(1),
-					"apiDurationMs":    int64(1),
-					"costIsPartial":    false,
-					"modelUsage":       map[string]any{model: row},
-					"numTurns":         int64(1),
+					"inputTokens":         tokens.InputTokens,
+					"outputTokens":        tokens.OutputTokens,
+					"totalTokens":         tokens.TotalTokens,
+					"cachedReadTokens":    tokens.CachedInputTokens,
+					"cacheCreationTokens": int64(0),
+					"reasoningTokens":     int64(0),
+					"modelCalls":          int64(1),
+					"apiDurationMs":       int64(1),
+					"costIsPartial":       false,
+					"modelUsage":          map[string]any{model: row},
+					"numTurns":            int64(1),
 				},
 			},
 		},

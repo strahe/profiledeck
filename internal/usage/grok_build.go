@@ -23,7 +23,7 @@ import (
 
 const (
 	SourceGrokBuildSessionJSONL    = "grok-build-session-jsonl"
-	GrokBuildUsageParserRevision   = int64(1)
+	GrokBuildUsageParserRevision   = int64(2)
 	GrokBuildUsageIdentityRevision = int64(1)
 	maxGrokBuildSessionLineBytes   = 16 * 1024 * 1024
 
@@ -267,7 +267,7 @@ func parseGrokBuildSessionLine(line []byte) ([]Event, bool, error) {
 	}
 
 	var envelope grokBuildTerminalEnvelope
-	if err := decodeJSON(line, &envelope, true); err != nil {
+	if err := decodeJSON(line, &envelope, false); err != nil {
 		return nil, false, errors.New("terminal update has an unsupported structure")
 	}
 	return grokBuildEventsFromTerminal(envelope)
@@ -314,6 +314,22 @@ type optionalBool struct {
 	set   bool
 }
 
+type optionalUint64 struct {
+	value uint64
+	set   bool
+}
+
+func (value *optionalUint64) UnmarshalJSON(raw []byte) error {
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return errors.New("integer must not be null")
+	}
+	if err := json.Unmarshal(raw, &value.value); err != nil {
+		return err
+	}
+	value.set = true
+	return nil
+}
+
 func (value *optionalBool) UnmarshalJSON(raw []byte) error {
 	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return errors.New("boolean must not be null")
@@ -341,7 +357,7 @@ func (value *grokBuildModelUsage) UnmarshalJSON(raw []byte) error {
 	value.values = make(map[string]grokBuildUsageModel, len(encoded))
 	for model, encodedRow := range encoded {
 		var row grokBuildUsageModel
-		if err := decodeJSON(encodedRow, &row, true); err != nil {
+		if err := decodeJSON(encodedRow, &row, false); err != nil {
 			return err
 		}
 		value.values[model] = row
@@ -358,15 +374,16 @@ type grokBuildUsage struct {
 }
 
 type grokBuildUsageModel struct {
-	InputTokens      requiredUint64 `json:"inputTokens"`
-	OutputTokens     requiredUint64 `json:"outputTokens"`
-	TotalTokens      requiredUint64 `json:"totalTokens"`
-	CachedReadTokens requiredUint64 `json:"cachedReadTokens"`
-	ReasoningTokens  requiredUint64 `json:"reasoningTokens"`
-	ModelCalls       requiredUint64 `json:"modelCalls"`
-	APIDurationMS    requiredUint64 `json:"apiDurationMs"`
-	CostUSDTicks     *int64         `json:"costUsdTicks,omitempty"`
-	CostIsPartial    optionalBool   `json:"costIsPartial"`
+	InputTokens         requiredUint64 `json:"inputTokens"`
+	OutputTokens        requiredUint64 `json:"outputTokens"`
+	TotalTokens         requiredUint64 `json:"totalTokens"`
+	CachedReadTokens    requiredUint64 `json:"cachedReadTokens"`
+	CacheCreationTokens optionalUint64 `json:"cacheCreationTokens"`
+	ReasoningTokens     requiredUint64 `json:"reasoningTokens"`
+	ModelCalls          requiredUint64 `json:"modelCalls"`
+	APIDurationMS       requiredUint64 `json:"apiDurationMs"`
+	CostUSDTicks        *int64         `json:"costUsdTicks,omitempty"`
+	CostIsPartial       optionalBool   `json:"costIsPartial"`
 }
 
 func grokBuildEventsFromTerminal(
@@ -394,7 +411,7 @@ func grokBuildEventsFromTerminal(
 		return nil, true, nil
 	}
 	if usage.InputTokens.value == 0 && usage.OutputTokens.value == 0 &&
-		usage.CachedReadTokens.value == 0 {
+		usage.CachedReadTokens.value == 0 && usage.CacheCreationTokens.value == 0 {
 		return nil, true, nil
 	}
 	if !usage.ModelUsage.present || len(usage.ModelUsage.values) == 0 {
@@ -417,7 +434,7 @@ func grokBuildEventsFromTerminal(
 		}
 		row := usage.ModelUsage.values[rawModel]
 		if row.InputTokens.value == 0 && row.OutputTokens.value == 0 &&
-			row.CachedReadTokens.value == 0 {
+			row.CachedReadTokens.value == 0 && row.CacheCreationTokens.value == 0 {
 			continue
 		}
 		tokens := TokenCounts{
@@ -427,6 +444,9 @@ func grokBuildEventsFromTerminal(
 			TotalTokens:       int64(row.TotalTokens.value),
 		}
 		cost, status := EstimateGrokBuildCostMicros(model, tokens)
+		if cost != nil && row.CacheCreationTokens.value > 0 {
+			status = CostStatusPartial
+		}
 		events = append(events, Event{
 			EventKey:            GrokBuildEventID(promptID, model),
 			SessionID:           sessionKey,
@@ -459,6 +479,7 @@ func validateGrokBuildUsage(usage grokBuildUsage) error {
 	if !usage.ModelUsage.present {
 		if usage.InputTokens.value == 0 && usage.OutputTokens.value == 0 &&
 			usage.CachedReadTokens.value == 0 && usage.TotalTokens.value == 0 &&
+			usage.CacheCreationTokens.value == 0 &&
 			usage.ReasoningTokens.value == 0 && usage.ModelCalls.value == 0 &&
 			usage.APIDurationMS.value == 0 {
 			return nil
@@ -488,6 +509,7 @@ func validateGrokBuildUsage(usage grokBuildUsage) error {
 		sums.output != usage.OutputTokens.value ||
 		sums.total != usage.TotalTokens.value ||
 		sums.cached != usage.CachedReadTokens.value ||
+		(usage.CacheCreationTokens.set && sums.cacheCreation != usage.CacheCreationTokens.value) ||
 		sums.reasoning != usage.ReasoningTokens.value ||
 		sums.calls != usage.ModelCalls.value ||
 		sums.duration != usage.APIDurationMS.value {
@@ -511,17 +533,26 @@ func validateGrokBuildUsageModel(model grokBuildUsageModel) error {
 			return errors.New("terminal usage contains an invalid total")
 		}
 	}
+	if model.CacheCreationTokens.set && model.CacheCreationTokens.value > math.MaxInt64 {
+		return errors.New("terminal usage contains an invalid total")
+	}
 	total, ok := addUint64(model.InputTokens.value, model.OutputTokens.value)
 	if !ok || model.TotalTokens.value != total ||
 		model.CachedReadTokens.value > model.InputTokens.value ||
 		model.ReasoningTokens.value > model.OutputTokens.value {
 		return errors.New("terminal usage totals are inconsistent")
 	}
+	if model.CacheCreationTokens.set {
+		inputBuckets, ok := addUint64(model.CachedReadTokens.value, model.CacheCreationTokens.value)
+		if !ok || inputBuckets > model.InputTokens.value {
+			return errors.New("terminal usage input buckets are inconsistent")
+		}
+	}
 	return nil
 }
 
 type grokBuildUsageSums struct {
-	input, output, total, cached, reasoning, calls, duration uint64
+	input, output, total, cached, cacheCreation, reasoning, calls, duration uint64
 }
 
 func (sums *grokBuildUsageSums) add(model grokBuildUsageModel) bool {
@@ -533,6 +564,7 @@ func (sums *grokBuildUsageSums) add(model grokBuildUsageModel) bool {
 		{&sums.output, model.OutputTokens.value},
 		{&sums.total, model.TotalTokens.value},
 		{&sums.cached, model.CachedReadTokens.value},
+		{&sums.cacheCreation, model.CacheCreationTokens.value},
 		{&sums.reasoning, model.ReasoningTokens.value},
 		{&sums.calls, model.ModelCalls.value},
 		{&sums.duration, model.APIDurationMS.value},

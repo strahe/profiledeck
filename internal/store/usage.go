@@ -152,6 +152,7 @@ type UsageImportObservation struct {
 	SourceID        int64
 	FileKey         UsageKey
 	MetadataDigest  UsageKey
+	ParserRevision  int64
 	Status          UsageImportObservationStatus
 	UpdatedAtUnixMS int64
 }
@@ -772,7 +773,8 @@ func validateUsageSyncCompletion(params CompleteUsageSyncParams) error {
 	}
 	for _, observation := range params.Observations {
 		if observation.SourceID != params.SourceID || observation.FileKey.IsZero() ||
-			observation.MetadataDigest.IsZero() || !observation.Status.valid() ||
+			observation.MetadataDigest.IsZero() || observation.ParserRevision <= 0 ||
+			!observation.Status.valid() ||
 			observation.UpdatedAtUnixMS < 0 {
 			return errors.New("usage import observation is invalid")
 		}
@@ -813,7 +815,8 @@ func (s *Store) ListUsageImportObservations(ctx context.Context, sourceID int64)
 		return nil, errors.New("usage import observation query is invalid")
 	}
 	rows, err := s.executor().QueryContext(ctx, `
-		SELECT source_id, file_key, metadata_digest, status, updated_at_unix_ms
+		SELECT source_id, file_key, metadata_digest, parser_revision, status,
+			updated_at_unix_ms
 		FROM usage_import_observations
 		WHERE source_id = ?
 		ORDER BY file_key
@@ -829,6 +832,7 @@ func (s *Store) ListUsageImportObservations(ctx context.Context, sourceID int64)
 			&observation.SourceID,
 			&observation.FileKey,
 			&observation.MetadataDigest,
+			&observation.ParserRevision,
 			&observation.Status,
 			&observation.UpdatedAtUnixMS,
 		); err != nil {
@@ -849,10 +853,12 @@ func (s *Store) upsertUsageImportObservations(
 	}
 	stmt, err := s.executor().PrepareContext(ctx, `
 		INSERT INTO usage_import_observations (
-			source_id, file_key, metadata_digest, status, updated_at_unix_ms
-		) VALUES (?, ?, ?, ?, ?)
+			source_id, file_key, metadata_digest, parser_revision, status,
+			updated_at_unix_ms
+		) VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(source_id, file_key) DO UPDATE SET
 			metadata_digest = excluded.metadata_digest,
+			parser_revision = excluded.parser_revision,
 			status = excluded.status,
 			updated_at_unix_ms = excluded.updated_at_unix_ms
 	`)
@@ -863,7 +869,8 @@ func (s *Store) upsertUsageImportObservations(
 	now := time.Now().UnixMilli()
 	for _, observation := range observations {
 		if observation.SourceID != source.ID || observation.FileKey.IsZero() ||
-			observation.MetadataDigest.IsZero() || !observation.Status.valid() ||
+			observation.MetadataDigest.IsZero() || observation.ParserRevision <= 0 ||
+			!observation.Status.valid() ||
 			observation.UpdatedAtUnixMS < 0 {
 			return errors.New("usage import observation is invalid")
 		}
@@ -876,6 +883,7 @@ func (s *Store) upsertUsageImportObservations(
 			observation.SourceID,
 			observation.FileKey,
 			observation.MetadataDigest,
+			observation.ParserRevision,
 			observation.Status,
 			updatedAt,
 		); err != nil {
