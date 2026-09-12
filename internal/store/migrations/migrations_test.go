@@ -168,3 +168,71 @@ func TestUsageIncrementalCheckpointPreservesCompletedLegacyProgress(t *testing.T
 		t.Fatalf("migration replay completed interrupted generation: got %d", completedGeneration)
 	}
 }
+
+func TestUsageObservationParserRevisionUpgradeIsReplaySafeAndReversible(t *testing.T) {
+	ctx := context.Background()
+	sqlDB, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migration.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := bun.NewDB(sqlDB, sqlitedialect.New())
+	defer db.Close()
+	if err := upStableBaseline(ctx, db); err != nil {
+		t.Fatalf("create stable baseline: %v", err)
+	}
+	if err := upGrokBuildUsageImport(ctx, db); err != nil {
+		t.Fatalf("create Grok Build baseline: %v", err)
+	}
+	if err := upUsageIncrementalCheckpoint(ctx, db); err != nil {
+		t.Fatalf("create incremental baseline: %v", err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `
+		INSERT INTO providers (id, name, adapter_id, created_at_unix_ms, updated_at_unix_ms)
+		VALUES ('codex', 'Codex', 'codex', 1, 1);
+		INSERT INTO usage_sources (provider_id, source_key, identity_revision)
+		VALUES ('codex', 'codex-session-jsonl', 1);
+		INSERT INTO usage_import_observations (
+			source_id, file_key, metadata_digest, status, updated_at_unix_ms
+		) VALUES (
+			1,
+			X'0101010101010101010101010101010101010101010101010101010101010101',
+			X'0202020202020202020202020202020202020202020202020202020202020202',
+			'unavailable', 1
+		)`); err != nil {
+		t.Fatalf("seed legacy observation: %v", err)
+	}
+
+	if err := upUsageObservationParserRevision(ctx, db); err != nil {
+		t.Fatalf("upgrade observation parser revision: %v", err)
+	}
+	var parserRevision int64
+	if err := sqlDB.QueryRowContext(ctx, `SELECT parser_revision FROM usage_import_observations`).Scan(&parserRevision); err != nil {
+		t.Fatalf("read upgraded observation: %v", err)
+	}
+	if parserRevision != 0 {
+		t.Fatalf("legacy observation parser revision = %d, want 0", parserRevision)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE usage_import_observations SET parser_revision = 7`); err != nil {
+		t.Fatalf("set upgraded observation revision: %v", err)
+	}
+	if err := upUsageObservationParserRevision(ctx, db); err != nil {
+		t.Fatalf("replay observation parser revision: %v", err)
+	}
+	if err := sqlDB.QueryRowContext(ctx, `SELECT parser_revision FROM usage_import_observations`).Scan(&parserRevision); err != nil {
+		t.Fatalf("read replayed observation: %v", err)
+	}
+	if parserRevision != 7 {
+		t.Fatalf("replayed observation parser revision = %d, want 7", parserRevision)
+	}
+
+	if err := downUsageObservationParserRevision(ctx, db); err != nil {
+		t.Fatalf("rollback observation parser revision: %v", err)
+	}
+	exists, err := usageColumnExists(ctx, db, "usage_import_observations", "parser_revision")
+	if err != nil {
+		t.Fatalf("inspect rolled-back observation column: %v", err)
+	}
+	if exists {
+		t.Fatal("rollback retained observation parser revision column")
+	}
+}

@@ -24,8 +24,8 @@ const (
 	PricingSourceURL         = "https://developers.openai.com/api/docs/pricing"
 	PricingVerifiedAt        = "2026-09-12"
 	GrokBuildPricingBasis    = "xai-standard-api-short-context"
-	GrokBuildPricingSource   = "https://docs.x.ai/developers/models/grok-4.5"
-	GrokBuildPricingVerified = "2026-07-30"
+	GrokBuildPricingSource   = "https://docs.x.ai/developers/pricing"
+	GrokBuildPricingVerified = "2026-09-12"
 )
 
 // CodexUsageIdentityRevision changes whenever fact identity semantics change;
@@ -122,14 +122,16 @@ var codexPriceCatalog = newPriceCatalog(map[string]Price{
 	"gpt-4.1-nano":  price(100_000, 25_000, 400_000),
 })
 
-// Static price source: xAI Grok 4.5 and pricing documentation, accessed
-// 2026-07-30. Aggregated Grok Build records do not identify long-context calls,
-// so estimates intentionally use only the short-context Standard API tier.
-// Grok Build session records may emit grok-4.5-build for Grok 4.5 work.
+// Static price source: xAI pricing documentation, accessed 2026-09-12.
+// Aggregated Grok Build records do not identify long-context calls, so
+// estimates intentionally use only the short-context Standard API tier.
+// Grok Build session records may emit model-specific -build identifiers.
 var grokBuildPriceCatalog = newPriceCatalog(map[string]Price{
 	"grok-4.5":          price(2_000_000, 300_000, 6_000_000),
 	"grok-4.5-build":    price(2_000_000, 300_000, 6_000_000),
 	"grok-4.5-latest":   price(2_000_000, 300_000, 6_000_000),
+	"grok-4.6":          price(2_000_000, 500_000, 6_000_000),
+	"grok-4.6-build":    price(2_000_000, 500_000, 6_000_000),
 	"grok-build-latest": price(2_000_000, 300_000, 6_000_000),
 })
 

@@ -291,7 +291,7 @@ func TestInitializeRejectsMarkerGapSchemaDriftBeforeBackup(t *testing.T) {
 	}
 }
 
-func TestInitializeBacksUpPreviousBaselineBeforeIncrementalUsageMigration(t *testing.T) {
+func TestInitializeBacksUpPreviousBaselineBeforeUsageObservationParserMigration(t *testing.T) {
 	ctx := context.Background()
 	runtimeService := newRuntimeService(t)
 	createPreviousBaseline(t, ctx, runtimeService)
@@ -304,16 +304,16 @@ func TestInitializeBacksUpPreviousBaselineBeforeIncrementalUsageMigration(t *tes
 			snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
 			if len(snapshot.markers) != len(storemigrations.Migrations.Sorted())-1 ||
 				!snapshot.usageTable || !snapshot.grokUsageTable ||
-				snapshot.usageObservationTable || !snapshot.pathKeyIndex ||
+				!snapshot.usageObservationTable || !snapshot.pathKeyIndex ||
 				snapshot.setting != `{"kept":true}` {
-				t.Fatalf("stable baseline changed before backup: %#v", snapshot)
+				t.Fatalf("previous usage baseline changed before backup: %#v", snapshot)
 			}
 		},
 	}
 
 	result, err := NewService(runtimeService, backups, nil).Initialize(ctx)
 	if err != nil {
-		t.Fatalf("apply incremental usage migration: %v", err)
+		t.Fatalf("apply usage observation parser migration: %v", err)
 	}
 	if result.MigrationsApplied != 1 || backups.calls != 1 {
 		t.Fatalf("upgrade result = %#v, backups = %d", result, backups.calls)
@@ -427,7 +427,9 @@ func createPreviousBaseline(t *testing.T, ctx context.Context, runtimeService *r
 	if len(registered) < 2 {
 		t.Fatalf("registered migrations = %d, want at least 2", len(registered))
 	}
-	dropIncrementalUsageSchema(t, runtimeService.Paths().Database)
+	execDatabaseStatements(t, runtimeService.Paths().Database,
+		`ALTER TABLE usage_import_observations DROP COLUMN parser_revision`,
+	)
 	execDatabaseStatements(t, runtimeService.Paths().Database,
 		`DELETE FROM bun_migrations WHERE name = '`+registered[len(registered)-1].Name+`'`,
 	)

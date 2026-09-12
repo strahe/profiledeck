@@ -282,7 +282,13 @@ var schemaContracts = func() []schemaContract {
 					OR checkpoint_event_digest = zeroblob(32) OR parser_state_json <> '{}'
 				))`,
 	)
-	return []schemaContract{stable, grokBuild, incremental}
+	observationParserRevision := incremental
+	observationParserRevision.migrationKey = "usage_observation_parser_revision"
+	observationParserRevision.tableSpecs = replaceTableSpec(
+		observationParserRevision.tableSpecs,
+		usageImportObservationParserRevisionTableSpec,
+	)
+	return []schemaContract{stable, grokBuild, incremental, observationParserRevision}
 }()
 
 func jsonObjectExpression(column string) string {

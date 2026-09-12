@@ -460,6 +460,15 @@ var usageImportObservationTableSpec = tableSpec{
 	},
 }
 
+var usageImportObservationParserRevisionTableSpec = func() tableSpec {
+	spec := copyTableSpec(usageImportObservationTableSpec)
+	spec.columns = append(spec.columns,
+		columnSpec{name: "parser_revision", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+	)
+	spec.checks = append(spec.checks, "CHECK (parser_revision >= 0)")
+	return spec
+}()
+
 func stableBaselineTableSpec(name string) tableSpec {
 	for _, spec := range stableBaselineTableSpecs {
 		if spec.name == name {

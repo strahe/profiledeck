@@ -62,17 +62,40 @@ func TestParseGrokBuildSyntheticFixture(t *testing.T) {
 	}
 }
 
-func TestParseGrokBuildQuarantinesMalformedAndDriftFixtures(t *testing.T) {
-	for _, name := range []string{"malformed.jsonl", "format-drift.jsonl"} {
-		t.Run(name, func(t *testing.T) {
-			_, err := ParseGrokBuildSessionFile(grokBuildTestSourceFile(
-				t,
-				filepath.Join("testdata", "grok-build-v0.2.114", name),
-			))
-			if err == nil {
-				t.Fatal("fixture unexpectedly parsed")
-			}
-		})
+func TestParseGrokBuildQuarantinesMalformedFixtures(t *testing.T) {
+	_, err := ParseGrokBuildSessionFile(grokBuildTestSourceFile(
+		t,
+		filepath.Join("testdata", "grok-build-v0.2.114", "malformed.jsonl"),
+	))
+	if err == nil {
+		t.Fatal("malformed fixture unexpectedly parsed")
+	}
+}
+
+func TestParseGrokBuildAcceptsAdditiveFields(t *testing.T) {
+	result, err := ParseGrokBuildSessionFile(grokBuildTestSourceFile(
+		t,
+		filepath.Join("testdata", "grok-build-v0.2.114", "format-drift.jsonl"),
+	))
+	if err != nil || len(result.Events) != 1 {
+		t.Fatalf("additive field fixture = %#v, err = %v", result, err)
+	}
+}
+
+func TestParseGrokBuildCurrentSessionFixture(t *testing.T) {
+	result, err := ParseGrokBuildSessionFile(grokBuildTestSourceFile(
+		t,
+		filepath.Join("testdata", "grok-build-v1.0.25", "valid.jsonl"),
+	))
+	if err != nil || result.InvalidLines != 0 || result.UnsupportedLines != 0 || len(result.Events) != 1 {
+		t.Fatalf("current Grok Build fixture = %#v, err = %v", result, err)
+	}
+	event := result.Events[0]
+	if event.Model != "grok-4.6-build" || event.InputTokens != 1_000 ||
+		event.CachedInputTokens != 200 || event.OutputTokens != 100 ||
+		event.TotalTokens != 1_100 || event.EstimatedCostMicros == nil ||
+		*event.EstimatedCostMicros != 2_300 || event.CostStatus != CostStatusPartial {
+		t.Fatalf("current Grok Build event = %#v", event)
 	}
 }
 
@@ -83,6 +106,7 @@ func TestParseGrokBuildTerminalValidationFailsClosed(t *testing.T) {
 		"inconsistent total":           strings.Replace(base, `"totalTokens":12`, `"totalTokens":13`, 1),
 		"invalid agent result":         strings.Replace(base, `"agent_result":"discard me"`, `"agent_result":{"secret":"discard me"}`, 1),
 		"invalid cost shape":           strings.Replace(base, `"costUsdTicks":7`, `"costUsdTicks":"7"`, 1),
+		"invalid cache creation shape": strings.Replace(base, `"cachedReadTokens":1`, `"cachedReadTokens":1,"cacheCreationTokens":"1"`, 1),
 		"invalid metadata":             strings.Replace(base, `"_meta":{}`, `"_meta":[]`, 1),
 		"missing timestamp":            strings.Replace(base, `"timestamp":1,`, "", 1),
 		"null timestamp":               strings.Replace(base, `"timestamp":1`, `"timestamp":null`, 1),
@@ -96,6 +120,26 @@ func TestParseGrokBuildTerminalValidationFailsClosed(t *testing.T) {
 			base,
 			`"timestamp":1`,
 			fmt.Sprintf(`"timestamp":%d`, uint64(math.MaxInt64/1000)+1),
+			1,
+		),
+		"cache creation mismatch": func() string {
+			line := strings.Replace(
+				base,
+				`"cachedReadTokens":1`,
+				`"cachedReadTokens":1,"cacheCreationTokens":2`,
+				1,
+			)
+			return strings.Replace(
+				line,
+				`"cachedReadTokens":1,"reasoningTokens"`,
+				`"cachedReadTokens":1,"cacheCreationTokens":1,"reasoningTokens"`,
+				1,
+			)
+		}(),
+		"cache creation overflow": strings.Replace(
+			base,
+			`"cachedReadTokens":1`,
+			fmt.Sprintf(`"cachedReadTokens":1,"cacheCreationTokens":%d`, uint64(math.MaxInt64)+1),
 			1,
 		),
 	}
@@ -162,6 +206,12 @@ func TestEstimateGrokBuildCostUsesShortContextStandardPrices(t *testing.T) {
 		status != CostStatusUnknown {
 		t.Fatalf("unverified model cost = %v, status = %v", cost, status)
 	}
+	for _, model := range []string{"grok-4.6", "grok-4.6-build"} {
+		cost, status := EstimateGrokBuildCostMicros(model, tokens)
+		if status != CostStatusEstimated || cost == nil || *cost != 7_850_000 {
+			t.Fatalf("%s cost = %v, status = %v", model, cost, status)
+		}
+	}
 	if cost, status := EstimateGrokBuildCostMicros("grok-4.5", TokenCounts{
 		InputTokens:  math.MaxInt64,
 		OutputTokens: math.MaxInt64,
@@ -169,7 +219,7 @@ func TestEstimateGrokBuildCostUsesShortContextStandardPrices(t *testing.T) {
 		t.Fatalf("overflow cost = %v, status = %v", cost, status)
 	}
 	if GrokBuildPricingBasis != "xai-standard-api-short-context" ||
-		GrokBuildPricingSource != "https://docs.x.ai/developers/models/grok-4.5" ||
+		GrokBuildPricingSource != "https://docs.x.ai/developers/pricing" ||
 		GrokBuildPricingVerified == "" {
 		t.Fatalf("pricing metadata is incomplete")
 	}
