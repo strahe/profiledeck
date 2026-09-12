@@ -59,7 +59,7 @@ func (integration grokBuildIntegration) Sync(
 	stores store.Factory,
 	options SyncOptions,
 ) (SyncOutcome, error) {
-	files, cursors, observed, priceBackfill, noWorkResult, work, err := integration.preflight(ctx, stores, options)
+	_, _, _, priceBackfill, noWorkResult, work, err := integration.preflight(ctx, stores, options)
 	if err != nil {
 		return SyncOutcome{}, err
 	}
@@ -78,19 +78,9 @@ func (integration grokBuildIntegration) Sync(
 	if err != nil {
 		return SyncOutcome{}, err
 	}
-	if cursors == nil {
-		cursorRows, err := db.ListGrokBuildUsageImportFiles(ctx, source.ID)
-		if err != nil {
-			return SyncOutcome{}, err
-		}
-		cursors = grokBuildCursorMap(cursorRows)
-	}
-	if observed == nil {
-		observationRows, err := db.ListUsageImportObservations(ctx, source.ID)
-		if err != nil {
-			return SyncOutcome{}, err
-		}
-		observed = observationMap(observationRows)
+	files, cursors, observed, err := integration.loadSyncSnapshot(ctx, db, source.ID)
+	if err != nil {
+		return SyncOutcome{}, err
 	}
 	result := UsageSyncResult{
 		ProviderID: grokconfig.ProviderID,
@@ -252,6 +242,26 @@ func (integration grokBuildIntegration) Sync(
 		}
 	}
 	return SyncOutcome{Result: result, Performed: true}, nil
+}
+
+func (integration grokBuildIntegration) loadSyncSnapshot(
+	ctx context.Context,
+	db *store.Store,
+	sourceID int64,
+) ([]SourceFile, map[store.UsageKey]store.GrokBuildUsageImportFile, map[store.UsageKey]store.UsageImportObservation, error) {
+	files, err := ListGrokBuildSessionFilesContext(ctx, integration.grokHome)
+	if err != nil {
+		return nil, nil, nil, apperror.Wrap(apperror.UsageImportFailed, "failed to list Grok Build session files", err)
+	}
+	cursorRows, err := db.ListGrokBuildUsageImportFiles(ctx, sourceID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	observationRows, err := db.ListUsageImportObservations(ctx, sourceID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return files, grokBuildCursorMap(cursorRows), observationMap(observationRows), nil
 }
 
 func (integration grokBuildIntegration) preflight(

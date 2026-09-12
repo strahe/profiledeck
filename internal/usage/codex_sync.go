@@ -52,7 +52,7 @@ func (integration codexIntegration) Sync(
 	stores store.Factory,
 	options SyncOptions,
 ) (SyncOutcome, error) {
-	files, cursors, observed, priceBackfill, noWorkResult, work, err := integration.preflight(ctx, stores, options)
+	_, _, _, priceBackfill, noWorkResult, work, err := integration.preflight(ctx, stores, options)
 	if err != nil {
 		return SyncOutcome{}, err
 	}
@@ -71,19 +71,9 @@ func (integration codexIntegration) Sync(
 	if err != nil {
 		return SyncOutcome{}, err
 	}
-	if cursors == nil {
-		cursorRows, err := db.ListCodexUsageImportFiles(ctx, source.ID)
-		if err != nil {
-			return SyncOutcome{}, err
-		}
-		cursors = codexCursorMap(cursorRows)
-	}
-	if observed == nil {
-		observationRows, err := db.ListUsageImportObservations(ctx, source.ID)
-		if err != nil {
-			return SyncOutcome{}, err
-		}
-		observed = observationMap(observationRows)
+	files, cursors, observed, err := integration.loadSyncSnapshot(ctx, db, source.ID)
+	if err != nil {
+		return SyncOutcome{}, err
 	}
 	result := UsageSyncResult{ProviderID: ProviderCodex, Source: SourceCodexSessionJSONL}
 	discoveredFileKeys := make([]store.UsageKey, 0, len(files))
@@ -125,12 +115,16 @@ func (integration codexIntegration) Sync(
 		invalidLines := parsed.InvalidLines
 		unsupportedLines := parsed.UnsupportedLines
 		if hasCursor {
-			if fullParse && !codexCheckpointPrefixMatches(parsed.Events, cursor) {
-				result.Errors = append(result.Errors, codexObservationError(file, store.UsageImportObservationHistoryChanged))
-				observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationHistoryChanged))
-				continue
-			}
 			if fullParse {
+				prefixMatches, err := codexCheckpointPrefixMatches(ctx, db, parsed.Events, cursor)
+				if err != nil {
+					return SyncOutcome{}, err
+				}
+				if !prefixMatches {
+					result.Errors = append(result.Errors, codexObservationError(file, store.UsageImportObservationHistoryChanged))
+					observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationHistoryChanged))
+					continue
+				}
 				eventsToStore = parsed.Events[cursor.ImportedFacts:]
 				importedFacts = int64(len(parsed.Events))
 			} else {
@@ -212,6 +206,26 @@ func (integration codexIntegration) Sync(
 		}
 	}
 	return SyncOutcome{Result: result, Performed: true}, nil
+}
+
+func (integration codexIntegration) loadSyncSnapshot(
+	ctx context.Context,
+	db *store.Store,
+	sourceID int64,
+) ([]SourceFile, map[store.UsageKey]store.CodexUsageImportFile, map[store.UsageKey]store.UsageImportObservation, error) {
+	files, err := ListCodexSessionFilesContext(ctx, integration.codexDir)
+	if err != nil {
+		return nil, nil, nil, apperror.Wrap(apperror.UsageImportFailed, "failed to list Codex session files", err)
+	}
+	cursorRows, err := db.ListCodexUsageImportFiles(ctx, sourceID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	observationRows, err := db.ListUsageImportObservations(ctx, sourceID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return files, codexCursorMap(cursorRows), observationMap(observationRows), nil
 }
 
 func (integration codexIntegration) preflight(
@@ -377,15 +391,27 @@ func parseCodexUsageChange(
 	return parsed, true, err
 }
 
-func codexCheckpointPrefixMatches(events []Event, cursor store.CodexUsageImportFile) bool {
+func codexCheckpointPrefixMatches(
+	ctx context.Context,
+	db *store.Store,
+	events []Event,
+	cursor store.CodexUsageImportFile,
+) (bool, error) {
 	if cursor.ImportedFacts < 0 || cursor.ImportedFacts > int64(len(events)) ||
 		cursor.IdentityRevision != CodexUsageIdentityRevision {
-		return false
+		return false, nil
 	}
+	var digestMatches bool
 	if cursor.CheckpointRevision == usageCheckpointRevision {
-		return checkpointEventDigest(ProviderCodex, events, cursor.ImportedFacts) == cursor.CheckpointEventDigest
+		digestMatches = checkpointEventDigest(ProviderCodex, events, cursor.ImportedFacts) == cursor.CheckpointEventDigest
+	} else {
+		digestMatches = cursor.CheckpointRevision == 0 && EventDigest(events, cursor.ImportedFacts) == cursor.EventDigest
 	}
-	return cursor.CheckpointRevision == 0 && EventDigest(events, cursor.ImportedFacts) == cursor.EventDigest
+	if !digestMatches {
+		return false, nil
+	}
+	facts := usageEventsToFactParams(cursor.SourceID, events[:cursor.ImportedFacts])
+	return db.CodexUsageFactPrefixMatches(ctx, cursor.SourceID, facts)
 }
 
 func codexCursorMatchesFile(cursor store.CodexUsageImportFile, file SourceFile) bool {

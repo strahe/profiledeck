@@ -856,6 +856,166 @@ func TestUsageSyncCodexRejectsTruncatedAndRewrittenHistory(t *testing.T) {
 	}
 }
 
+func TestUsageSyncCodexRejectsTimestampAndModelOnlyPrefixRewrites(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		rewrite func(string) string
+	}{
+		{
+			name: "timestamp-only rewrite",
+			rewrite: func(original string) string {
+				oldLine := `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":2}}}}`
+				newLine := `{"type":"event_msg","timestamp":"2026-07-01T00:00:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":2}}}}`
+				return strings.Replace(original, oldLine, newLine, 1)
+			},
+		},
+		{
+			name: "stored-model-only rewrite",
+			rewrite: func(original string) string {
+				return strings.Replace(original, `"model":"gpt-5.3-codex"`, `"model":"gpt-5.3-codex-2026-07-01"`, 1)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			configDir := t.TempDir()
+			codexDir := t.TempDir()
+			environment := newUsageTestEnvironment(t, configDir, codexDir)
+			_, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx)
+			if err != nil {
+				t.Fatalf("initialize runtime: %v", err)
+			}
+			original := strings.Join([]string{
+				`{"type":"session_meta","session_id":"session-prefix-rewrite"}`,
+				`{"type":"turn_context","model":"gpt-5.3-codex"}`,
+				`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":2}}}}`,
+				`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"output_tokens":4}}}}`,
+			}, "\n")
+			path := writeAppUsageFixture(t, codexDir, original)
+			if result, err := environment.service.SyncCodex(ctx); err != nil || result.ImportedEvents != 2 {
+				t.Fatalf("initial sync result=%#v err=%v", result, err)
+			}
+			fileKey, err := SourceKey(path)
+			if err != nil {
+				t.Fatalf("derive file key: %v", err)
+			}
+			db, err := environment.runtime.StoreFactory().OpenHealthy(ctx, true)
+			if err != nil {
+				t.Fatalf("open database: %v", err)
+			}
+			source, err := db.GetUsageSource(ctx, ProviderCodex, SourceCodexSessionJSONL)
+			if err != nil {
+				_ = db.Close()
+				t.Fatalf("read usage source: %v", err)
+			}
+			before, err := db.GetCodexUsageImportFile(ctx, source.ID, fileKey)
+			if closeErr := db.Close(); err == nil && closeErr != nil {
+				err = closeErr
+			}
+			if err != nil {
+				t.Fatalf("read initial cursor: %v", err)
+			}
+
+			rewritten := test.rewrite(original)
+			if rewritten == original {
+				t.Fatal("rewrite did not change the fixture")
+			}
+			writeAppUsageFile(t, path, rewritten)
+			future := time.Now().Add(2 * time.Second)
+			if err := os.Chtimes(path, future, future); err != nil {
+				t.Fatalf("advance rewritten fixture timestamp: %v", err)
+			}
+			result, err := environment.service.SyncCodex(ctx)
+			if err != nil || result.ImportedEvents != 0 || len(result.Errors) != 1 || result.Errors[0].Message != codexHistoryChangedMessage {
+				t.Fatalf("changed history sync result=%#v err=%v", result, err)
+			}
+
+			db, err = environment.runtime.StoreFactory().OpenHealthy(ctx, true)
+			if err != nil {
+				t.Fatalf("reopen database: %v", err)
+			}
+			after, err := db.GetCodexUsageImportFile(ctx, source.ID, fileKey)
+			if closeErr := db.Close(); err == nil && closeErr != nil {
+				err = closeErr
+			}
+			if err != nil {
+				t.Fatalf("read unchanged cursor: %v", err)
+			}
+			if after != before {
+				t.Fatalf("history rewrite advanced cursor: before=%#v after=%#v", before, after)
+			}
+			summary, err := environment.service.Summary(ctx, UsageSummaryRequest{ProviderID: ProviderCodex})
+			if err != nil || summary.EventCount != 2 || summary.TotalTokens != 24 {
+				t.Fatalf("changed history altered facts: summary=%#v err=%v", summary, err)
+			}
+		})
+	}
+}
+
+func TestBackgroundCodexSyncKeepsCursorCreatedAfterPreflight(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	oldPath := writeAppUsageFixture(t, codexDir, strings.Join([]string{
+		`{"type":"session_meta","session_id":"session-old"}`,
+		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":2}}}}`,
+	}, "\n"))
+	environment := newUsageTestEnvironment(t, configDir, codexDir)
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+	if _, err := environment.service.SyncCodex(ctx); err != nil {
+		t.Fatalf("initial Codex sync: %v", err)
+	}
+	if err := os.Remove(oldPath); err != nil {
+		t.Fatalf("remove old Codex fixture: %v", err)
+	}
+
+	newPath := filepath.Join(codexDir, "sessions", "2026", "07", "07", "session-new.jsonl")
+	var second BackgroundSyncOutcome
+	var secondErr error
+	first, err := environment.service.SyncCodexBackground(ctx, func() {
+		writeAppUsageFile(t, newPath, strings.Join([]string{
+			`{"type":"session_meta","session_id":"session-new"}`,
+			`{"type":"turn_context","model":"gpt-5.3-codex"}`,
+			`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"output_tokens":4}}}}`,
+		}, "\n"))
+		other := newUsageTestEnvironment(t, configDir, codexDir)
+		second, secondErr = other.service.SyncCodexBackground(ctx, nil)
+	})
+	if err != nil {
+		t.Fatalf("first background Codex sync: %v", err)
+	}
+	if secondErr != nil || !second.Performed || second.Result.ImportedEvents != 1 {
+		t.Fatalf("second background Codex sync = %#v, err = %v", second, secondErr)
+	}
+	if !first.Performed {
+		t.Fatalf("first background Codex sync was not performed: %#v", first)
+	}
+
+	fileKey, err := SourceKey(newPath)
+	if err != nil {
+		t.Fatalf("derive new Codex file key: %v", err)
+	}
+	db, err := environment.runtime.StoreFactory().OpenHealthy(ctx, true)
+	if err != nil {
+		t.Fatalf("open Store: %v", err)
+	}
+	defer db.Close()
+	source, err := db.GetUsageSource(ctx, ProviderCodex, SourceCodexSessionJSONL)
+	if err != nil {
+		t.Fatalf("read Codex usage source: %v", err)
+	}
+	if _, err := db.GetCodexUsageImportFile(ctx, source.ID, fileKey); err != nil {
+		t.Fatalf("new Codex cursor was removed by stale finalization: %v", err)
+	}
+	summary, err := environment.service.Summary(ctx, UsageSummaryRequest{ProviderID: ProviderCodex})
+	if err != nil || summary.EventCount != 2 || summary.TotalTokens != 36 {
+		t.Fatalf("Codex summary after stale-snapshot race = %#v, err = %v", summary, err)
+	}
+}
+
 func TestUsageSyncCodexRevalidatesCompatibleParserRevision(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()

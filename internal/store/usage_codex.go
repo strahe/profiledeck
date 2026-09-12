@@ -130,6 +130,119 @@ func (s *Store) ListCodexUsageImportFiles(ctx context.Context, sourceID int64) (
 	return files, rows.Err()
 }
 
+// CodexUsageFactPrefixMatches verifies the persisted, non-cost semantics of a
+// parsed Codex prefix before the caller discards that prefix during a full
+// checkpoint revalidation.
+func (s *Store) CodexUsageFactPrefixMatches(
+	ctx context.Context,
+	sourceID int64,
+	facts []CreateUsageFactParams,
+) (bool, error) {
+	if sourceID <= 0 {
+		return false, errors.New("Codex usage fact prefix source is invalid")
+	}
+	if len(facts) == 0 {
+		return true, nil
+	}
+	for _, fact := range facts {
+		if fact.SourceID != sourceID {
+			return false, errors.New("Codex usage fact prefix source is invalid")
+		}
+		if err := validateUsageFact(fact); err != nil {
+			return false, err
+		}
+	}
+
+	const queryBatchSize = 200
+	for start := 0; start < len(facts); start += queryBatchSize {
+		end := start + queryBatchSize
+		if end > len(facts) {
+			end = len(facts)
+		}
+		batch := facts[start:end]
+		placeholders := strings.TrimRight(strings.Repeat("?,", len(batch)), ",")
+		rows, err := s.executor().QueryContext(ctx, `
+			SELECT facts.event_key, facts.source_id,
+				COALESCE(sessions.session_key, ''),
+				COALESCE(models.model_key, ''),
+				facts.occurred_at_unix_ms,
+				facts.input_tokens, facts.cached_input_tokens,
+				facts.output_tokens, facts.total_tokens
+			FROM usage_facts AS facts
+			LEFT JOIN usage_sessions AS sessions
+				ON sessions.source_id = facts.source_id AND sessions.id = facts.session_id
+			LEFT JOIN usage_models AS models
+				ON models.source_id = facts.source_id AND models.id = facts.model_id
+			WHERE facts.source_id = ? AND facts.event_key IN (`+placeholders+`)
+		`, append([]any{sourceID}, usageKeysAsArgs(batch)...)...)
+		if err != nil {
+			return false, err
+		}
+
+		persisted := make(map[UsageKey]codexUsageFactSnapshot, len(batch))
+		for rows.Next() {
+			var snapshot codexUsageFactSnapshot
+			if err := rows.Scan(
+				&snapshot.EventKey,
+				&snapshot.SourceID,
+				&snapshot.SessionKey,
+				&snapshot.ModelKey,
+				&snapshot.OccurredAtUnixMS,
+				&snapshot.InputTokens,
+				&snapshot.CachedInputTokens,
+				&snapshot.OutputTokens,
+				&snapshot.TotalTokens,
+			); err != nil {
+				_ = rows.Close()
+				return false, err
+			}
+			persisted[snapshot.EventKey] = snapshot
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return false, err
+		}
+		if err := rows.Close(); err != nil {
+			return false, err
+		}
+
+		for _, fact := range batch {
+			snapshot, ok := persisted[fact.EventKey]
+			if !ok || snapshot.SourceID != sourceID ||
+				snapshot.SessionKey != fact.SessionKey ||
+				snapshot.ModelKey != NormalizeUsageModelKey(fact.ModelKey) ||
+				snapshot.OccurredAtUnixMS != fact.OccurredAtUnixMS ||
+				snapshot.InputTokens != fact.InputTokens ||
+				snapshot.CachedInputTokens != fact.CachedInputTokens ||
+				snapshot.OutputTokens != fact.OutputTokens ||
+				snapshot.TotalTokens != fact.TotalTokens {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+type codexUsageFactSnapshot struct {
+	EventKey          UsageKey
+	SourceID          int64
+	SessionKey        string
+	ModelKey          string
+	OccurredAtUnixMS  int64
+	InputTokens       int64
+	CachedInputTokens int64
+	OutputTokens      int64
+	TotalTokens       int64
+}
+
+func usageKeysAsArgs(facts []CreateUsageFactParams) []any {
+	args := make([]any, len(facts))
+	for index, fact := range facts {
+		args[index] = fact.EventKey
+	}
+	return args
+}
+
 func scanCodexUsageImportFile(row rowScanner) (CodexUsageImportFile, error) {
 	var cursor CodexUsageImportFile
 	if err := row.Scan(

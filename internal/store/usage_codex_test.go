@@ -71,6 +71,79 @@ func TestCodexUsageImportFileUsesCompareAndSwap(t *testing.T) {
 	}
 }
 
+func TestCodexUsageFactPrefixMatchesPersistedSemantics(t *testing.T) {
+	ctx := context.Background()
+	db := migratedTestStore(t, ctx)
+	defer closeTestStore(t, db)
+	createUsageProviderFixture(t, ctx, db, "codex")
+	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
+	if err != nil {
+		t.Fatalf("begin usage sync: %v", err)
+	}
+	facts := []CreateUsageFactParams{
+		{
+			EventKey:         testUsageKey("prefix-first"),
+			SourceID:         source.ID,
+			SessionKey:       "session-prefix",
+			ModelKey:         "gpt-5.3-codex",
+			OccurredAtUnixMS: 1_000,
+			InputTokens:      10,
+			OutputTokens:     2,
+			TotalTokens:      12,
+			CostStatus:       UsageCostStatusUnknown,
+		},
+		{
+			EventKey:         testUsageKey("prefix-second"),
+			SourceID:         source.ID,
+			SessionKey:       "session-prefix",
+			ModelKey:         "gpt-5.3-codex",
+			OccurredAtUnixMS: 2_000,
+			InputTokens:      20,
+			OutputTokens:     4,
+			TotalTokens:      24,
+			CostStatus:       UsageCostStatusUnknown,
+		},
+	}
+	if _, err := db.InsertUsageFacts(ctx, testUsageFactBatch(source, facts)); err != nil {
+		t.Fatalf("insert usage facts: %v", err)
+	}
+
+	matched, err := db.CodexUsageFactPrefixMatches(ctx, source.ID, facts)
+	if err != nil || !matched {
+		t.Fatalf("matching prefix = %v, err = %v", matched, err)
+	}
+
+	costChanged := append([]CreateUsageFactParams(nil), facts...)
+	estimatedCost := int64(123)
+	costChanged[0].EstimatedCostMicros = &estimatedCost
+	costChanged[0].CostStatus = UsageCostStatusEstimated
+	matched, err = db.CodexUsageFactPrefixMatches(ctx, source.ID, costChanged)
+	if err != nil || !matched {
+		t.Fatalf("derived cost change matched prefix = %v, err = %v", matched, err)
+	}
+
+	timestampChanged := append([]CreateUsageFactParams(nil), facts...)
+	timestampChanged[0].OccurredAtUnixMS++
+	matched, err = db.CodexUsageFactPrefixMatches(ctx, source.ID, timestampChanged)
+	if err != nil || matched {
+		t.Fatalf("timestamp change matched prefix = %v, err = %v", matched, err)
+	}
+
+	modelChanged := append([]CreateUsageFactParams(nil), facts...)
+	modelChanged[0].ModelKey = "gpt-5.4"
+	matched, err = db.CodexUsageFactPrefixMatches(ctx, source.ID, modelChanged)
+	if err != nil || matched {
+		t.Fatalf("model change matched prefix = %v, err = %v", matched, err)
+	}
+
+	missing := append([]CreateUsageFactParams(nil), facts...)
+	missing[1].EventKey = testUsageKey("prefix-missing")
+	matched, err = db.CodexUsageFactPrefixMatches(ctx, source.ID, missing)
+	if err != nil || matched {
+		t.Fatalf("missing fact matched prefix = %v, err = %v", matched, err)
+	}
+}
+
 func TestCodexUsageFinalizationCountsOnlyPersistedCursors(t *testing.T) {
 	ctx := context.Background()
 	db := migratedTestStore(t, ctx)
