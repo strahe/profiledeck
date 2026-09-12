@@ -235,7 +235,54 @@ var schemaContracts = func() []schemaContract {
 					AND usage_sources.identity_revision = value.identity_revision
 			)`,
 	)
-	return []schemaContract{stable, grokBuild}
+	incremental := grokBuild
+	incremental.migrationKey = "usage_incremental_checkpoint"
+	incremental.tableSpecs = replaceTableSpec(incremental.tableSpecs, usageIncrementalSourceTableSpec)
+	incremental.tableSpecs = replaceTableSpec(incremental.tableSpecs, usageIncrementalCodexImportTableSpec)
+	incremental.tableSpecs = replaceTableSpec(incremental.tableSpecs, usageIncrementalGrokBuildImportTableSpec)
+	incremental.tableSpecs = append(incremental.tableSpecs, usageImportObservationTableSpec)
+	incremental.jsonQueries = append(
+		append([]string(nil), grokBuild.jsonQueries...),
+		`SELECT COUNT(1) FROM codex_usage_import_files
+			WHERE NOT (`+jsonObjectExpression("parser_state_json")+`)`,
+		`SELECT COUNT(1) FROM grok_build_usage_import_files
+			WHERE NOT (`+jsonObjectExpression("parser_state_json")+`)`,
+	)
+	incremental.referenceQueries = append(
+		append([]string(nil), grokBuild.referenceQueries...),
+		`SELECT COUNT(1) FROM usage_import_observations AS value
+			WHERE NOT EXISTS (
+				SELECT 1 FROM usage_sources WHERE usage_sources.id = value.source_id
+			)`,
+	)
+	incremental.stateQueries = append(
+		append([]string(nil), grokBuild.stateQueries...),
+		`SELECT COUNT(1) FROM usage_sources
+			WHERE completed_generation < 0 OR completed_generation > sync_generation`,
+		`SELECT COUNT(1) FROM codex_usage_import_files
+			WHERE checkpoint_revision NOT IN (0, 1)
+				OR (checkpoint_revision = 0 AND (
+					processed_bytes <> 0 OR metadata_digest <> zeroblob(32)
+					OR file_identity_digest <> zeroblob(32) OR boundary_digest <> zeroblob(32)
+					OR checkpoint_event_digest <> zeroblob(32) OR parser_state_json <> '{}'
+				))
+				OR (checkpoint_revision = 1 AND (
+					metadata_digest = zeroblob(32) OR boundary_digest = zeroblob(32)
+					OR checkpoint_event_digest = zeroblob(32)
+				))`,
+		`SELECT COUNT(1) FROM grok_build_usage_import_files
+			WHERE checkpoint_revision NOT IN (0, 1)
+				OR (checkpoint_revision = 0 AND (
+					processed_bytes <> 0 OR metadata_digest <> zeroblob(32)
+					OR file_identity_digest <> zeroblob(32) OR boundary_digest <> zeroblob(32)
+					OR checkpoint_event_digest <> zeroblob(32) OR parser_state_json <> '{}'
+				))
+				OR (checkpoint_revision = 1 AND (
+					metadata_digest = zeroblob(32) OR boundary_digest = zeroblob(32)
+					OR checkpoint_event_digest = zeroblob(32) OR parser_state_json <> '{}'
+				))`,
+	)
+	return []schemaContract{stable, grokBuild, incremental}
 }()
 
 func jsonObjectExpression(column string) string {
@@ -392,6 +439,17 @@ func (s *Store) InspectIntegrity(ctx context.Context, scope IntegrityScope) (Int
 	issues, err := s.inspectContractIntegrity(ctx, contract)
 	if err != nil {
 		return IntegrityReport{}, err
+	}
+	if scope == IntegrityAppliedBaseline && len(issues) != 0 && state.Pending > 0 {
+		nextContract, nextErr := schemaContractForApplied(state.Applied + 1)
+		if nextErr != nil {
+			return IntegrityReport{}, nextErr
+		}
+		if replayIssues, replayErr := s.inspectContractIntegrity(ctx, nextContract); replayErr != nil {
+			return IntegrityReport{}, replayErr
+		} else if len(replayIssues) == 0 {
+			issues = nil
+		}
 	}
 	if scope == IntegrityCurrentBaseline && !state.Current {
 		issues = addIntegrityIssue(issues, IntegrityIssueSchema, 1)

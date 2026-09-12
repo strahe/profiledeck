@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -102,6 +103,144 @@ func TestUsageSyncGrokBuildImportsIncrementallyAcrossRestart(t *testing.T) {
 	metadata, err := grokpreset.DecodeProviderMetadata(provider.MetadataJSON)
 	if err != nil || metadata.GrokHome != grokHome {
 		t.Fatalf("Provider metadata = %#v, err = %v", metadata, err)
+	}
+}
+
+func TestBackgroundGrokBuildSyncNoopAndBoundedAppend(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	grokHome := t.TempDir()
+	benign := `{"timestamp":1,"method":"session/update","params":{"sessionId":"session-tail","update":{"sessionUpdate":"agent_message_chunk"}}}` + "\n"
+	path := writeGrokBuildUsageFixture(
+		t,
+		grokHome,
+		"workspace-tail",
+		"session-tail",
+		strings.Repeat(benign, 20_000)+syntheticGrokBuildUsageLine(
+			"session-tail",
+			"prompt-a",
+			"grok-build-latest",
+			1_750_000_000,
+			TokenCounts{InputTokens: 100, CachedInputTokens: 20, OutputTokens: 10, TotalTokens: 110},
+		),
+	)
+	environment := newGrokBuildUsageTestEnvironment(t, configDir, grokHome)
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+	if _, err := environment.service.SyncGrokBuild(ctx); err != nil {
+		t.Fatalf("initial Grok Build sync: %v", err)
+	}
+
+	idleObserver := &usageSyncReadObserver{}
+	idle, err := environment.service.sync(ctx, UsageSyncRequest{ProviderID: grokconfig.ProviderID}, SyncOptions{
+		ProvisionMode: SyncExistingProvider,
+		Observer:      idleObserver,
+	})
+	if err != nil || idle.Performed || idle.Result.SkippedUnchangedFiles != 1 {
+		t.Fatalf("idle Grok Build outcome = %#v, err = %v", idle, err)
+	}
+	if idleObserver.opened.Load() != 0 || idleObserver.bytes.Load() != 0 {
+		t.Fatalf("idle Grok Build sync read content: opens=%d bytes=%d", idleObserver.opened.Load(), idleObserver.bytes.Load())
+	}
+
+	appendedLine := syntheticGrokBuildUsageLine(
+		"session-tail",
+		"prompt-b",
+		"grok-4.5",
+		1_750_000_001,
+		TokenCounts{InputTokens: 50, CachedInputTokens: 10, OutputTokens: 5, TotalTokens: 55},
+	)
+	appendAppUsageFixture(t, path, appendedLine)
+	appendObserver := &usageSyncReadObserver{}
+	appended, err := environment.service.sync(ctx, UsageSyncRequest{ProviderID: grokconfig.ProviderID}, SyncOptions{
+		ProvisionMode: SyncExistingProvider,
+		Observer:      appendObserver,
+	})
+	if err != nil || !appended.Performed || appended.Result.ImportedEvents != 1 {
+		t.Fatalf("Grok Build tail outcome = %#v, err = %v", appended, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat Grok Build fixture: %v", err)
+	}
+	maxRead := usageBoundaryBytes + int64(len(appendedLine)+1)
+	if appendObserver.opened.Load() != 1 || appendObserver.bytes.Load() > maxRead {
+		t.Fatalf("Grok Build append read was not bounded: opens=%d bytes=%d size=%d", appendObserver.opened.Load(), appendObserver.bytes.Load(), info.Size())
+	}
+}
+
+func TestBackgroundGrokBuildSyncKeepsCursorCreatedAfterPreflight(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	grokHome := t.TempDir()
+	oldPath := writeGrokBuildUsageFixture(
+		t,
+		grokHome,
+		"workspace-old",
+		"session-old",
+		syntheticGrokBuildUsageLine(
+			"session-old",
+			"prompt-old",
+			"grok-build-latest",
+			1_750_000_000,
+			TokenCounts{InputTokens: 10, OutputTokens: 2, TotalTokens: 12},
+		),
+	)
+	environment := newGrokBuildUsageTestEnvironment(t, configDir, grokHome)
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+	if _, err := environment.service.SyncGrokBuild(ctx); err != nil {
+		t.Fatalf("initial Grok Build sync: %v", err)
+	}
+	if err := os.Remove(oldPath); err != nil {
+		t.Fatalf("remove old Grok Build fixture: %v", err)
+	}
+
+	var second BackgroundSyncOutcome
+	var secondErr error
+	newPath := filepath.Join(grokHome, "sessions", "workspace-new", "session-new", "updates.jsonl")
+	first, err := environment.service.SyncProviderBackground(ctx, grokconfig.ProviderID, func() {
+		writeAppUsageFile(t, newPath, syntheticGrokBuildUsageLine(
+			"session-new",
+			"prompt-new",
+			"grok-build-latest",
+			1_750_000_001,
+			TokenCounts{InputTokens: 20, OutputTokens: 4, TotalTokens: 24},
+		))
+		other := newGrokBuildUsageTestEnvironment(t, configDir, grokHome)
+		second, secondErr = other.service.SyncProviderBackground(ctx, grokconfig.ProviderID, nil)
+	})
+	if err != nil {
+		t.Fatalf("first background Grok Build sync: %v", err)
+	}
+	if secondErr != nil || !second.Performed || second.Result.ImportedEvents != 1 {
+		t.Fatalf("second background Grok Build sync = %#v, err = %v", second, secondErr)
+	}
+	if !first.Performed {
+		t.Fatalf("first background Grok Build sync was not performed: %#v", first)
+	}
+
+	fileKey, err := SourceKey(newPath)
+	if err != nil {
+		t.Fatalf("derive new Grok Build file key: %v", err)
+	}
+	db, err := environment.runtime.StoreFactory().OpenHealthy(ctx, true)
+	if err != nil {
+		t.Fatalf("open Store: %v", err)
+	}
+	defer db.Close()
+	source, err := db.GetUsageSource(ctx, grokconfig.ProviderID, SourceGrokBuildSessionJSONL)
+	if err != nil {
+		t.Fatalf("read Grok Build usage source: %v", err)
+	}
+	if _, err := db.GetGrokBuildUsageImportFile(ctx, source.ID, fileKey); err != nil {
+		t.Fatalf("new Grok Build cursor was removed by stale finalization: %v", err)
+	}
+	summary, err := environment.service.Summary(ctx, UsageSummaryRequest{ProviderID: grokconfig.ProviderID})
+	if err != nil || summary.EventCount != 2 || summary.TotalTokens != 36 {
+		t.Fatalf("Grok Build summary after stale-snapshot race = %#v, err = %v", summary, err)
 	}
 }
 
@@ -450,8 +589,8 @@ func TestBackgroundGrokBuildSyncDoesNotCreateOrRebindProvider(t *testing.T) {
 	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("initialize runtime: %v", err)
 	}
-	background, err := environment.service.SyncProviderBackground(ctx, grokconfig.ProviderID)
-	if err != nil || background.ProviderID != grokconfig.ProviderID || background.ImportedEvents != 0 {
+	background, err := environment.service.SyncProviderBackground(ctx, grokconfig.ProviderID, nil)
+	if err != nil || background.Result.ProviderID != grokconfig.ProviderID || background.Result.ImportedEvents != 0 || background.Performed {
 		t.Fatalf("missing Provider background sync = %#v, err = %v", background, err)
 	}
 	db, err := environment.runtime.StoreFactory().OpenHealthy(ctx, true)

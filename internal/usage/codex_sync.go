@@ -15,6 +15,8 @@ import (
 
 const codexHistoryChangedMessage = "This Codex session file changed before the saved import point, so it was skipped to protect existing usage history."
 
+const codexFactConflictMessage = "This Codex session file conflicts with previously imported usage, so it was skipped."
+
 type codexIntegration struct {
 	codexDir    string
 	provisioner ProviderProvisioner
@@ -48,74 +50,107 @@ func (codexIntegration) PricingInfo() UsagePricingInfo {
 func (integration codexIntegration) Sync(
 	ctx context.Context,
 	stores store.Factory,
-	mode SyncProvisionMode,
-) (UsageSyncResult, error) {
+	options SyncOptions,
+) (SyncOutcome, error) {
+	_, _, _, priceBackfill, noWorkResult, work, err := integration.preflight(ctx, stores, options)
+	if err != nil {
+		return SyncOutcome{}, err
+	}
+	if !work {
+		return SyncOutcome{Result: noWorkResult}, nil
+	}
+	if options.OnWorkDetected != nil {
+		options.OnWorkDetected()
+	}
 	db, err := stores.OpenHealthy(ctx, false)
 	if err != nil {
-		return UsageSyncResult{}, err
+		return SyncOutcome{}, err
 	}
 	defer db.Close()
-
-	source, err := beginCodexUsageSync(ctx, db, integration.provisioner, mode)
+	source, err := beginCodexUsageSync(ctx, db, integration.provisioner, options.ProvisionMode)
 	if err != nil {
-		return UsageSyncResult{}, err
+		return SyncOutcome{}, err
 	}
-	files, err := ListCodexSessionFilesContext(ctx, integration.codexDir)
+	files, cursors, observed, err := integration.loadSyncSnapshot(ctx, db, source.ID)
 	if err != nil {
-		return UsageSyncResult{}, apperror.Wrap(apperror.UsageImportFailed, "failed to list Codex session files", err)
+		return SyncOutcome{}, err
 	}
 	result := UsageSyncResult{ProviderID: ProviderCodex, Source: SourceCodexSessionJSONL}
 	discoveredFileKeys := make([]store.UsageKey, 0, len(files))
+	observations := make([]store.UsageImportObservation, 0)
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
-			return UsageSyncResult{}, apperror.Wrap(apperror.UsageImportFailed, "usage import canceled", err)
+			return SyncOutcome{}, apperror.Wrap(apperror.UsageImportFailed, "usage import canceled", err)
 		}
 		discoveredFileKeys = append(discoveredFileKeys, file.SourceKey)
 		result.ScannedFiles++
-
-		cursor, hasCursor, err := codexUsageCursor(ctx, db, source.ID, file.SourceKey)
-		if err != nil {
-			return UsageSyncResult{}, apperror.Wrap(apperror.UsageImportFailed, "failed to inspect usage import progress", err)
-		}
-		if hasCursor && cursor.ModifiedUnixMS == file.ModifiedUnixMS && cursor.SizeBytes == file.SizeBytes &&
-			cursor.ParserRevision == CodexUsageParserRevision && cursor.IdentityRevision == CodexUsageIdentityRevision {
+		cursor, hasCursor := cursors[file.SourceKey]
+		if hasCursor && codexCursorMatchesFile(cursor, file) {
 			result.SkippedUnchangedFiles++
 			continue
 		}
+		if observation, ok := observed[file.SourceKey]; ok &&
+			observation.MetadataDigest == file.MetadataDigest && !options.ForceObservedRetry {
+			result.SkippedUnchangedFiles++
+			result.Errors = append(result.Errors, codexObservationError(file, observation.Status))
+			continue
+		}
+		if hasCursor && codexFileIsShorterThanCheckpoint(cursor, file) {
+			result.Errors = append(result.Errors, codexObservationError(file, store.UsageImportObservationHistoryChanged))
+			observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationHistoryChanged))
+			continue
+		}
 
-		parsed, err := ParseCodexSessionFileContext(ctx, file)
+		parsed, fullParse, err := parseCodexUsageChange(ctx, file, cursor, hasCursor, options)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return UsageSyncResult{}, apperror.Wrap(apperror.UsageImportFailed, "usage import canceled", ctxErr)
+				return SyncOutcome{}, apperror.Wrap(apperror.UsageImportFailed, "usage import canceled", ctxErr)
 			}
-			result.Errors = append(result.Errors, UsageImportError{
-				SourceKey: file.SourceKey.String(),
-				FileName:  filepath.Base(file.Path),
-				Message:   sanitizedUsageImportError(err),
-			})
+			result.Errors = append(result.Errors, codexObservationError(file, store.UsageImportObservationUnavailable))
+			observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationUnavailable))
 			continue
 		}
-
-		eventsToStore, safe := codexEventsAfterCursor(parsed.Events, cursor, hasCursor, file)
-		if !safe {
-			result.Errors = append(result.Errors, UsageImportError{
-				SourceKey: file.SourceKey.String(),
-				FileName:  filepath.Base(file.Path),
-				Message:   codexHistoryChangedMessage,
-			})
-			continue
+		eventsToStore := parsed.Events
+		importedFacts := int64(len(parsed.Events))
+		invalidLines := parsed.InvalidLines
+		unsupportedLines := parsed.UnsupportedLines
+		if hasCursor {
+			if fullParse {
+				prefixMatches, err := codexCheckpointPrefixMatches(ctx, db, parsed.Events, cursor)
+				if err != nil {
+					return SyncOutcome{}, err
+				}
+				if !prefixMatches {
+					result.Errors = append(result.Errors, codexObservationError(file, store.UsageImportObservationHistoryChanged))
+					observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationHistoryChanged))
+					continue
+				}
+				eventsToStore = parsed.Events[cursor.ImportedFacts:]
+				importedFacts = int64(len(parsed.Events))
+			} else {
+				importedFacts = cursor.ImportedFacts + int64(len(parsed.Events))
+				invalidLines += cursor.InvalidLines
+				unsupportedLines += cursor.UnsupportedLines
+			}
 		}
 		desired := store.CodexUsageImportFile{
-			SourceID:         source.ID,
-			FileKey:          file.SourceKey,
-			ModifiedUnixMS:   file.ModifiedUnixMS,
-			SizeBytes:        file.SizeBytes,
-			ImportedFacts:    int64(len(parsed.Events)),
-			InvalidLines:     parsed.InvalidLines,
-			UnsupportedLines: parsed.UnsupportedLines,
-			ParserRevision:   CodexUsageParserRevision,
-			IdentityRevision: CodexUsageIdentityRevision,
-			EventDigest:      EventDigest(parsed.Events, int64(len(parsed.Events))),
+			SourceID:              source.ID,
+			FileKey:               file.SourceKey,
+			ModifiedUnixMS:        file.ModifiedUnixMS,
+			SizeBytes:             file.SizeBytes,
+			ImportedFacts:         importedFacts,
+			InvalidLines:          invalidLines,
+			UnsupportedLines:      unsupportedLines,
+			ParserRevision:        CodexUsageParserRevision,
+			IdentityRevision:      CodexUsageIdentityRevision,
+			EventDigest:           parsed.CheckpointEventDigest,
+			CheckpointRevision:    usageCheckpointRevision,
+			ProcessedBytes:        parsed.ProcessedBytes,
+			MetadataDigest:        file.MetadataDigest,
+			FileIdentityDigest:    file.FileIdentityDigest,
+			BoundaryDigest:        parsed.BoundaryDigest,
+			CheckpointEventDigest: parsed.CheckpointEventDigest,
+			ParserStateJSON:       parsed.ParserStateJSON,
 		}
 		var expected *store.CodexUsageImportFile
 		if hasCursor {
@@ -131,22 +166,27 @@ func (integration codexIntegration) Sync(
 			current, readErr := db.GetCodexUsageImportFile(ctx, source.ID, file.SourceKey)
 			if readErr == nil && sameCodexUsageImportProgress(current, desired) {
 				result.SkippedDuplicateEvents += int64(len(eventsToStore))
-				result.InvalidLines += parsed.InvalidLines
-				result.UnsupportedLines += parsed.UnsupportedLines
+				result.InvalidLines += invalidLines
+				result.UnsupportedLines += unsupportedLines
 				continue
 			}
 			if readErr != nil && !errors.Is(readErr, store.ErrNotFound) {
-				return UsageSyncResult{}, apperror.Wrap(apperror.UsageImportFailed, "failed to inspect concurrent usage sync", readErr)
+				return SyncOutcome{}, apperror.Wrap(apperror.UsageImportFailed, "failed to inspect concurrent usage sync", readErr)
 			}
-			return UsageSyncResult{}, err
+			return SyncOutcome{}, err
+		}
+		if errors.Is(err, store.ErrUsageFactConflict) {
+			result.Errors = append(result.Errors, codexObservationError(file, store.UsageImportObservationFactConflict))
+			observations = append(observations, newUsageObservation(source.ID, file, store.UsageImportObservationFactConflict))
+			continue
 		}
 		if err != nil {
-			return UsageSyncResult{}, err
+			return SyncOutcome{}, err
 		}
 		result.ImportedEvents += int64(insertResult.Inserted)
 		result.SkippedDuplicateEvents += int64(insertResult.Duplicates)
-		result.InvalidLines += parsed.InvalidLines
-		result.UnsupportedLines += parsed.UnsupportedLines
+		result.InvalidLines += invalidLines
+		result.UnsupportedLines += unsupportedLines
 	}
 
 	if err := db.CompleteUsageSync(ctx, store.CompleteUsageSyncParams{
@@ -156,13 +196,300 @@ func (integration codexIntegration) Sync(
 		Finalization: &store.CodexUsageSyncFinalization{
 			DiscoveredFileKeys: discoveredFileKeys,
 		},
+		Observations: observations,
 	}); err != nil {
-		return UsageSyncResult{}, err
+		return SyncOutcome{}, err
 	}
-	if err := backfillPartialUsageCosts(ctx, db); err != nil {
-		return UsageSyncResult{}, apperror.Wrap(apperror.UsageImportFailed, "failed to update usage pricing", err)
+	if options.ProvisionMode == SyncProvisionProvider || priceBackfill {
+		if err := backfillPartialUsageCosts(ctx, db); err != nil {
+			return SyncOutcome{}, apperror.Wrap(apperror.UsageImportFailed, "failed to update usage pricing", err)
+		}
 	}
-	return result, nil
+	return SyncOutcome{Result: result, Performed: true}, nil
+}
+
+func (integration codexIntegration) loadSyncSnapshot(
+	ctx context.Context,
+	db *store.Store,
+	sourceID int64,
+) ([]SourceFile, map[store.UsageKey]store.CodexUsageImportFile, map[store.UsageKey]store.UsageImportObservation, error) {
+	files, err := ListCodexSessionFilesContext(ctx, integration.codexDir)
+	if err != nil {
+		return nil, nil, nil, apperror.Wrap(apperror.UsageImportFailed, "failed to list Codex session files", err)
+	}
+	cursorRows, err := db.ListCodexUsageImportFiles(ctx, sourceID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	observationRows, err := db.ListUsageImportObservations(ctx, sourceID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return files, codexCursorMap(cursorRows), observationMap(observationRows), nil
+}
+
+func (integration codexIntegration) preflight(
+	ctx context.Context,
+	stores store.Factory,
+	options SyncOptions,
+) (
+	[]SourceFile,
+	map[store.UsageKey]store.CodexUsageImportFile,
+	map[store.UsageKey]store.UsageImportObservation,
+	bool,
+	UsageSyncResult,
+	bool,
+	error,
+) {
+	if options.ProvisionMode == SyncProvisionProvider {
+		files, err := ListCodexSessionFilesContext(ctx, integration.codexDir)
+		if err != nil {
+			return nil, nil, nil, false, UsageSyncResult{}, false,
+				apperror.Wrap(apperror.UsageImportFailed, "failed to list Codex session files", err)
+		}
+		result := UsageSyncResult{
+			ProviderID:   ProviderCodex,
+			Source:       SourceCodexSessionJSONL,
+			ScannedFiles: int64(len(files)),
+		}
+		return files, nil, nil, true, result, true, nil
+	}
+	db, err := stores.OpenHealthy(ctx, true)
+	if err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, err
+	}
+	defer db.Close()
+	if integration.provisioner == nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false,
+			errors.New("usage Provider provisioner for Codex is required")
+	}
+	if err := integration.provisioner.Ensure(ctx, db, SyncExistingProvider); err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, err
+	}
+	source, err := db.GetUsageSource(ctx, ProviderCodex, SourceCodexSessionJSONL)
+	if errors.Is(err, store.ErrNotFound) {
+		files, listErr := ListCodexSessionFilesContext(ctx, integration.codexDir)
+		if listErr != nil {
+			return nil, nil, nil, false, UsageSyncResult{}, false,
+				apperror.Wrap(apperror.UsageImportFailed, "failed to list Codex session files", listErr)
+		}
+		result := UsageSyncResult{
+			ProviderID:   ProviderCodex,
+			Source:       SourceCodexSessionJSONL,
+			ScannedFiles: int64(len(files)),
+		}
+		return files, nil, nil, false, result, true, nil
+	}
+	if err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, err
+	}
+	if source.IdentityRevision != CodexUsageIdentityRevision {
+		return nil, nil, nil, false, UsageSyncResult{}, false, store.ErrUsageIdentityRevision
+	}
+	cursorRows, err := db.ListCodexUsageImportFiles(ctx, source.ID)
+	if err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, err
+	}
+	observationRows, err := db.ListUsageImportObservations(ctx, source.ID)
+	if err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, err
+	}
+	unknownModels, err := db.ListUnknownUsageCostModels(ctx, ProviderCodex)
+	if err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, err
+	}
+	files, err := ListCodexSessionFilesContext(ctx, integration.codexDir)
+	if err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false,
+			apperror.Wrap(apperror.UsageImportFailed, "failed to list Codex session files", err)
+	}
+	result := UsageSyncResult{
+		ProviderID:   ProviderCodex,
+		Source:       SourceCodexSessionJSONL,
+		ScannedFiles: int64(len(files)),
+	}
+	cursors := codexCursorMap(cursorRows)
+	observations := observationMap(observationRows)
+	priceBackfill := hasSupportedUnknownUsageModel(unknownModels, codexPriceCatalog.Supports)
+	work := source.SyncGeneration != source.CompletedGeneration || priceBackfill
+	discovered := make(map[store.UsageKey]struct{}, len(files))
+	for _, file := range files {
+		discovered[file.SourceKey] = struct{}{}
+		if cursor, ok := cursors[file.SourceKey]; ok {
+			if cursor.IdentityRevision != CodexUsageIdentityRevision {
+				return nil, nil, nil, false, UsageSyncResult{}, false, store.ErrUsageIdentityRevision
+			}
+			if codexCursorMatchesFile(cursor, file) {
+				result.SkippedUnchangedFiles++
+				continue
+			}
+		}
+		if observation, ok := observations[file.SourceKey]; ok &&
+			observation.MetadataDigest == file.MetadataDigest && !options.ForceObservedRetry {
+			result.SkippedUnchangedFiles++
+			result.Errors = append(result.Errors, codexObservationError(file, observation.Status))
+			continue
+		}
+		work = true
+	}
+	for key := range cursors {
+		if _, ok := discovered[key]; !ok {
+			work = true
+		}
+	}
+	for key := range observations {
+		if _, ok := discovered[key]; !ok {
+			work = true
+		}
+	}
+	return files, cursors, observations, priceBackfill, result, work, nil
+}
+
+func parseCodexUsageChange(
+	ctx context.Context,
+	file SourceFile,
+	cursor store.CodexUsageImportFile,
+	hasCursor bool,
+	options SyncOptions,
+) (checkpointParseResult, bool, error) {
+	if hasCursor && cursor.CheckpointRevision == usageCheckpointRevision &&
+		cursor.ParserRevision == CodexUsageParserRevision &&
+		cursor.IdentityRevision == CodexUsageIdentityRevision &&
+		!cursor.FileIdentityDigest.IsZero() &&
+		cursor.FileIdentityDigest == file.FileIdentityDigest &&
+		file.SizeBytes > cursor.SizeBytes {
+		state, err := decodeCodexParserState(cursor.ParserStateJSON)
+		if err == nil {
+			parsed, parseErr := parseCodexCheckpointFile(
+				ctx,
+				file,
+				cursor.ProcessedBytes,
+				state,
+				cursor.CheckpointEventDigest,
+				cursor.BoundaryDigest,
+				options.fileSystem,
+				options.Observer,
+			)
+			if parseErr == nil {
+				return parsed, false, nil
+			}
+			if !errors.Is(parseErr, errUsageBoundaryChanged) {
+				return checkpointParseResult{}, false, parseErr
+			}
+		}
+	}
+	parsed, err := parseCodexCheckpointFile(
+		ctx,
+		file,
+		0,
+		newCodexParserState(file),
+		store.UsageKey{},
+		store.UsageKey{},
+		options.fileSystem,
+		options.Observer,
+	)
+	return parsed, true, err
+}
+
+func codexCheckpointPrefixMatches(
+	ctx context.Context,
+	db *store.Store,
+	events []Event,
+	cursor store.CodexUsageImportFile,
+) (bool, error) {
+	if cursor.ImportedFacts < 0 || cursor.ImportedFacts > int64(len(events)) ||
+		cursor.IdentityRevision != CodexUsageIdentityRevision {
+		return false, nil
+	}
+	var digestMatches bool
+	if cursor.CheckpointRevision == usageCheckpointRevision {
+		digestMatches = checkpointEventDigest(ProviderCodex, events, cursor.ImportedFacts) == cursor.CheckpointEventDigest
+	} else {
+		digestMatches = cursor.CheckpointRevision == 0 && EventDigest(events, cursor.ImportedFacts) == cursor.EventDigest
+	}
+	if !digestMatches {
+		return false, nil
+	}
+	facts := usageEventsToFactParams(cursor.SourceID, events[:cursor.ImportedFacts])
+	return db.CodexUsageFactPrefixMatches(ctx, cursor.SourceID, facts)
+}
+
+func codexCursorMatchesFile(cursor store.CodexUsageImportFile, file SourceFile) bool {
+	if cursor.ParserRevision != CodexUsageParserRevision ||
+		cursor.IdentityRevision != CodexUsageIdentityRevision {
+		return false
+	}
+	if cursor.CheckpointRevision == usageCheckpointRevision {
+		return cursor.MetadataDigest == file.MetadataDigest
+	}
+	return cursor.CheckpointRevision == 0 &&
+		cursor.ModifiedUnixMS == file.ModifiedUnixMS && cursor.SizeBytes == file.SizeBytes
+}
+
+func codexFileIsShorterThanCheckpoint(cursor store.CodexUsageImportFile, file SourceFile) bool {
+	if cursor.CheckpointRevision == usageCheckpointRevision {
+		return file.SizeBytes < cursor.ProcessedBytes
+	}
+	return file.SizeBytes < cursor.SizeBytes
+}
+
+func codexCursorMap(rows []store.CodexUsageImportFile) map[store.UsageKey]store.CodexUsageImportFile {
+	result := make(map[store.UsageKey]store.CodexUsageImportFile, len(rows))
+	for _, row := range rows {
+		result[row.FileKey] = row
+	}
+	return result
+}
+
+func observationMap(rows []store.UsageImportObservation) map[store.UsageKey]store.UsageImportObservation {
+	result := make(map[store.UsageKey]store.UsageImportObservation, len(rows))
+	for _, row := range rows {
+		result[row.FileKey] = row
+	}
+	return result
+}
+
+func hasSupportedUnknownUsageModel(
+	models []store.UsageUnknownCostModel,
+	supports func(string) bool,
+) bool {
+	for _, model := range models {
+		if supports(model.Model) {
+			return true
+		}
+	}
+	return false
+}
+
+func newUsageObservation(
+	sourceID int64,
+	file SourceFile,
+	status store.UsageImportObservationStatus,
+) store.UsageImportObservation {
+	return store.UsageImportObservation{
+		SourceID:       sourceID,
+		FileKey:        file.SourceKey,
+		MetadataDigest: file.MetadataDigest,
+		Status:         status,
+	}
+}
+
+func codexObservationError(
+	file SourceFile,
+	status store.UsageImportObservationStatus,
+) UsageImportError {
+	message := sanitizedUsageImportError(errors.New("usage file unavailable"))
+	switch status {
+	case store.UsageImportObservationHistoryChanged:
+		message = codexHistoryChangedMessage
+	case store.UsageImportObservationFactConflict:
+		message = codexFactConflictMessage
+	}
+	return UsageImportError{
+		SourceKey: file.SourceKey.String(),
+		FileName:  filepath.Base(file.Path),
+		Message:   message,
+	}
 }
 
 func beginCodexUsageSync(
@@ -241,36 +568,19 @@ func (provisioner codexProviderProvisioner) Ensure(
 	return nil
 }
 
-func codexUsageCursor(ctx context.Context, db *store.Store, sourceID int64, fileKey store.UsageKey) (store.CodexUsageImportFile, bool, error) {
-	cursor, err := db.GetCodexUsageImportFile(ctx, sourceID, fileKey)
-	if errors.Is(err, store.ErrNotFound) {
-		return store.CodexUsageImportFile{}, false, nil
-	}
-	return cursor, err == nil, err
-}
-
-func codexEventsAfterCursor(events []Event, cursor store.CodexUsageImportFile, hasCursor bool, file SourceFile) ([]Event, bool) {
-	if !hasCursor {
-		return events, true
-	}
-	// A shorter or rewritten append-only file is ambiguous, so retain its
-	// checkpoint and facts unchanged instead of reinterpreting prior history.
-	if cursor.IdentityRevision != CodexUsageIdentityRevision || cursor.ImportedFacts < 0 ||
-		cursor.ImportedFacts > int64(len(events)) || file.SizeBytes < cursor.SizeBytes {
-		return nil, false
-	}
-	if EventDigest(events, cursor.ImportedFacts) != cursor.EventDigest {
-		return nil, false
-	}
-	return events[cursor.ImportedFacts:], true
-}
-
 func sameCodexUsageImportProgress(left, right store.CodexUsageImportFile) bool {
 	return left.SourceID == right.SourceID && left.FileKey == right.FileKey &&
 		left.ModifiedUnixMS == right.ModifiedUnixMS && left.SizeBytes == right.SizeBytes &&
 		left.ImportedFacts == right.ImportedFacts && left.InvalidLines == right.InvalidLines &&
 		left.UnsupportedLines == right.UnsupportedLines && left.ParserRevision == right.ParserRevision &&
-		left.IdentityRevision == right.IdentityRevision && left.EventDigest == right.EventDigest
+		left.IdentityRevision == right.IdentityRevision && left.EventDigest == right.EventDigest &&
+		left.CheckpointRevision == right.CheckpointRevision &&
+		left.ProcessedBytes == right.ProcessedBytes &&
+		left.MetadataDigest == right.MetadataDigest &&
+		left.FileIdentityDigest == right.FileIdentityDigest &&
+		left.BoundaryDigest == right.BoundaryDigest &&
+		left.CheckpointEventDigest == right.CheckpointEventDigest &&
+		left.ParserStateJSON == right.ParserStateJSON
 }
 
 func usageEventsToFactParams(sourceID int64, events []Event) []store.CreateUsageFactParams {

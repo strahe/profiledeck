@@ -26,12 +26,15 @@ func (integration *registryTestIntegration) SourceIDs() []string {
 	return append([]string(nil), integration.sources...)
 }
 
-func (integration *registryTestIntegration) Sync(context.Context, store.Factory, SyncProvisionMode) (UsageSyncResult, error) {
+func (integration *registryTestIntegration) Sync(context.Context, store.Factory, SyncOptions) (SyncOutcome, error) {
 	integration.called = true
 	if integration.syncErr != nil {
-		return UsageSyncResult{}, integration.syncErr
+		return SyncOutcome{}, integration.syncErr
 	}
-	return UsageSyncResult{ProviderID: integration.provider, Source: integration.sources[0]}, nil
+	return SyncOutcome{
+		Result:    UsageSyncResult{ProviderID: integration.provider, Source: integration.sources[0]},
+		Performed: true,
+	}, nil
 }
 
 func (*registryTestIntegration) PricingInfo() UsagePricingInfo {

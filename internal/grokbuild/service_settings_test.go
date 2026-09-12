@@ -82,3 +82,48 @@ func TestGrokBuildUsageSyncSettingsShareStrictProviderPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestGrokBuildUsageSyncSettingsMapRetiredFiveSecondInterval(t *testing.T) {
+	ctx := context.Background()
+	application := newApplication(t, t.TempDir())
+	if _, err := application.Usage().SyncGrokBuild(ctx); err != nil {
+		t.Fatalf("explicit usage sync did not provision Provider: %v", err)
+	}
+	db, err := application.Runtime().StoreFactory().OpenHealthy(ctx, false)
+	if err != nil {
+		t.Fatalf("open Store: %v", err)
+	}
+	if _, err := db.UpsertProviderSetting(ctx, store.UpsertProviderSettingParams{
+		ProviderID: grokconfig.ProviderID, SchemaVersion: store.ProviderSettingsSchemaVersion,
+		SettingsJSON: `{"usage_sync_interval_seconds":5}`,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("write retired interval: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close Store: %v", err)
+	}
+
+	loaded, err := application.GrokBuild().GetSettings(ctx)
+	if err != nil || loaded.UsageSyncIntervalSeconds != 15 {
+		t.Fatalf("loaded retired interval = %#v, err = %v", loaded, err)
+	}
+
+	retired := 5
+	saved, err := application.GrokBuild().UpdateSettings(ctx, grokbuild.UpdateSettingsRequest{
+		UsageSyncIntervalSeconds: &retired,
+	})
+	if err != nil || saved.UsageSyncIntervalSeconds != 15 {
+		t.Fatalf("saved retired interval = %#v, err = %v", saved, err)
+	}
+
+	db, err = application.Runtime().StoreFactory().OpenHealthy(ctx, true)
+	if err != nil {
+		t.Fatalf("reopen Store: %v", err)
+	}
+	defer db.Close()
+	setting, err := db.GetProviderSetting(ctx, grokconfig.ProviderID)
+	if err != nil || setting.SettingsJSON != `{"usage_sync_interval_seconds":15}` {
+		t.Fatalf("persisted retired interval = %#v, err = %v", setting, err)
+	}
+}

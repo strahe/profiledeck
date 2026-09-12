@@ -720,7 +720,7 @@ func TestUsageSyncGrokBuildUsesGlobalHomeAndOmitsFileIdentifiers(t *testing.T) {
 	configDir := t.TempDir()
 	grokHome := t.TempDir()
 	writeCLIGrokBuildUsageFixture(t, grokHome, "workspace", "valid", `{"timestamp":1750000000,"method":"_x.ai/session/update","params":{"sessionId":"synthetic-session","update":{"sessionUpdate":"turn_completed","prompt_id":"synthetic-prompt","stop_reason":"end_turn","agent_result":"discarded synthetic result","usage":{"inputTokens":100,"outputTokens":20,"totalTokens":120,"cachedReadTokens":40,"reasoningTokens":5,"modelCalls":1,"apiDurationMs":10,"costUsdTicks":999,"costIsPartial":false,"modelUsage":{"grok-build-latest":{"inputTokens":100,"outputTokens":20,"totalTokens":120,"cachedReadTokens":40,"reasoningTokens":5,"modelCalls":1,"apiDurationMs":10,"costUsdTicks":999,"costIsPartial":false}},"numTurns":1}}}}`)
-	writeCLIGrokBuildUsageFixture(t, grokHome, "workspace", "malformed", `{"timestamp":`)
+	writeCLIGrokBuildUsageFixture(t, grokHome, "workspace", "malformed", "{\"timestamp\":\n")
 
 	base := []string{"--config-dir", configDir, "--grok-home", grokHome}
 	if _, err := runCLI(t, append(base, "init", "--json")...); err != nil {

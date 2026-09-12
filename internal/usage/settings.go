@@ -13,7 +13,7 @@ import (
 	"github.com/strahe/profiledeck/internal/store"
 )
 
-const UsageSyncIntervalDefault = 15
+const UsageSyncIntervalDefault = 60
 
 type ProviderSyncSettings struct {
 	UsageSyncIntervalSeconds int `json:"usage_sync_interval_seconds"`
@@ -21,7 +21,10 @@ type ProviderSyncSettings struct {
 
 func NormalizeUsageSyncInterval(value int) (int, *apperror.Error) {
 	switch value {
-	case 5, 15, 30, 60:
+	case 5:
+		// Retired cadence: keep existing Provider settings loadable.
+		return 15, nil
+	case 15, 30, 60, 120, 300:
 		return value, nil
 	default:
 		return 0, apperror.New(

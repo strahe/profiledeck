@@ -92,12 +92,7 @@ func collectCodexSessionTree(ctx context.Context, sessionsDir string, files *[]S
 		if err != nil {
 			return err
 		}
-		*files = append(*files, SourceFile{
-			Path:           path,
-			SourceKey:      sourceKey,
-			ModifiedUnixMS: info.ModTime().UnixMilli(),
-			SizeBytes:      info.Size(),
-		})
+		*files = append(*files, sourceFileFromInfo(path, sourceKey, info))
 		return nil
 	})
 }
@@ -132,12 +127,7 @@ func collectArchivedCodexSessions(ctx context.Context, archivedDir string, files
 		if err != nil {
 			return err
 		}
-		*files = append(*files, SourceFile{
-			Path:           path,
-			SourceKey:      sourceKey,
-			ModifiedUnixMS: info.ModTime().UnixMilli(),
-			SizeBytes:      info.Size(),
-		})
+		*files = append(*files, sourceFileFromInfo(path, sourceKey, info))
 	}
 	return nil
 }
@@ -148,6 +138,88 @@ func ParseCodexSessionFile(file SourceFile) (FileParseResult, error) {
 
 func ParseCodexSessionFileContext(ctx context.Context, file SourceFile) (FileParseResult, error) {
 	return parseCodexSessionFile(ctx, file, maxCodexSessionLineBytes)
+}
+
+type codexParserState struct {
+	CurrentSessionKey string                 `json:"current_session_key"`
+	HasLogSessionID   bool                   `json:"has_log_session_id"`
+	ModelForStorage   string                 `json:"model_for_storage"`
+	ModelForPricing   string                 `json:"model_for_pricing"`
+	PreviousTotals    map[string]TokenCounts `json:"previous_totals"`
+	UsageOrdinals     map[string]int64       `json:"usage_ordinals"`
+}
+
+func newCodexParserState(file SourceFile) codexParserState {
+	fallback := strings.TrimSuffix(filepath.Base(file.Path), filepath.Ext(file.Path))
+	return codexParserState{
+		CurrentSessionKey: storedSessionID(eventIdentitySessionID(fallback, file.SourceKey, false)),
+		ModelForStorage:   store.UsageUnknownModelKey,
+		PreviousTotals:    make(map[string]TokenCounts),
+		UsageOrdinals:     make(map[string]int64),
+	}
+}
+
+func (state *codexParserState) parseLine(line []byte) (*Event, bool, bool) {
+	var payload any
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return nil, true, false
+	}
+	object, ok := payload.(map[string]any)
+	if !ok {
+		return nil, false, true
+	}
+
+	eventType := eventTypeFromObject(object)
+	if found := sessionIDFromObject(object, eventType); found != "" {
+		state.CurrentSessionKey = storedSessionID(found)
+		state.HasLogSessionID = true
+	}
+	if found := modelFromObject(object); found.Stored != "" {
+		state.ModelForStorage = found.Stored
+		state.ModelForPricing = found.Pricing
+	}
+
+	counts, _, cumulative, ok := tokenCountsFromObject(object)
+	if !ok {
+		return nil, false, false
+	}
+	counts.normalizeTotal()
+	if !counts.valid() {
+		return nil, false, true
+	}
+
+	delta := counts
+	if cumulative {
+		previous := state.PreviousTotals[state.CurrentSessionKey]
+		delta = deltaFromCumulative(previous, counts)
+		state.PreviousTotals[state.CurrentSessionKey] = counts
+	}
+	delta.normalizeTotal()
+	if !delta.valid() {
+		return nil, false, true
+	}
+	if delta.empty() {
+		return nil, false, false
+	}
+
+	state.UsageOrdinals[state.CurrentSessionKey]++
+	usageOrdinal := state.UsageOrdinals[state.CurrentSessionKey]
+	costMicros, costStatus := EstimateCostMicros(state.ModelForPricing, delta)
+	event := Event{
+		EventKey:            EventID(ProviderCodex, SourceCodexSessionJSONL, usageOrdinal, state.CurrentSessionKey, state.ModelForStorage, delta),
+		SessionID:           state.CurrentSessionKey,
+		Model:               state.ModelForStorage,
+		OccurredAtUnixMS:    occurredAtUnixMS(object),
+		InputTokens:         delta.InputTokens,
+		CachedInputTokens:   delta.CachedInputTokens,
+		OutputTokens:        delta.OutputTokens,
+		TotalTokens:         delta.TotalTokens,
+		EstimatedCostMicros: costMicros,
+		CostStatus:          costStatus,
+	}
+	return &event, false, false
 }
 
 func parseCodexSessionFile(ctx context.Context, file SourceFile, maxLineBytes int) (FileParseResult, error) {
@@ -162,13 +234,7 @@ func parseCodexSessionFile(ctx context.Context, file SourceFile, maxLineBytes in
 
 	result := FileParseResult{}
 	reader := bufio.NewReaderSize(handle, 64*1024)
-
-	sessionID := strings.TrimSuffix(filepath.Base(file.Path), filepath.Ext(file.Path))
-	hasLogSessionID := false
-	modelForStorage := store.UsageUnknownModelKey
-	modelForPricing := ""
-	previousTotals := map[string]TokenCounts{}
-	usageOrdinals := map[string]int64{}
+	state := newCodexParserState(file)
 	for {
 		// Background imports must remain cancellable while scanning large local
 		// session files so Desktop shutdown and per-run deadlines can complete.
@@ -192,71 +258,18 @@ func parseCodexSessionFile(ctx context.Context, file SourceFile, maxLineBytes in
 			continue
 		}
 
-		var payload any
-		decoder := json.NewDecoder(bytes.NewReader(line))
-		decoder.UseNumber()
-		if err := decoder.Decode(&payload); err != nil {
+		event, invalid, unsupported := state.parseLine(line)
+		if invalid {
 			result.InvalidLines++
 			continue
 		}
-		object, ok := payload.(map[string]any)
-		if !ok {
+		if unsupported {
 			result.UnsupportedLines++
 			continue
 		}
-
-		eventType := eventTypeFromObject(object)
-		if found := sessionIDFromObject(object, eventType); found != "" {
-			sessionID = found
-			hasLogSessionID = true
+		if event != nil {
+			result.Events = append(result.Events, *event)
 		}
-		if found := modelFromObject(object); found.Stored != "" {
-			modelForStorage = found.Stored
-			modelForPricing = found.Pricing
-		}
-
-		counts, _, cumulative, ok := tokenCountsFromObject(object)
-		if !ok {
-			continue
-		}
-		counts.normalizeTotal()
-		if !counts.valid() {
-			result.UnsupportedLines++
-			continue
-		}
-
-		delta := counts
-		if cumulative {
-			previous := previousTotals[sessionID]
-			delta = deltaFromCumulative(previous, counts)
-			previousTotals[sessionID] = counts
-		}
-		delta.normalizeTotal()
-		if !delta.valid() {
-			result.UnsupportedLines++
-			continue
-		}
-		if delta.empty() {
-			continue
-		}
-
-		sessionIdentity := eventIdentitySessionID(sessionID, file.SourceKey, hasLogSessionID)
-		storedSessionIdentity := storedSessionID(sessionIdentity)
-		usageOrdinals[storedSessionIdentity]++
-		usageOrdinal := usageOrdinals[storedSessionIdentity]
-		costMicros, costStatus := EstimateCostMicros(modelForPricing, delta)
-		result.Events = append(result.Events, Event{
-			EventKey:            EventID(ProviderCodex, SourceCodexSessionJSONL, usageOrdinal, storedSessionIdentity, modelForStorage, delta),
-			SessionID:           storedSessionIdentity,
-			Model:               modelForStorage,
-			OccurredAtUnixMS:    occurredAtUnixMS(object),
-			InputTokens:         delta.InputTokens,
-			CachedInputTokens:   delta.CachedInputTokens,
-			OutputTokens:        delta.OutputTokens,
-			TotalTokens:         delta.TotalTokens,
-			EstimatedCostMicros: costMicros,
-			CostStatus:          costStatus,
-		})
 	}
 	return result, nil
 }

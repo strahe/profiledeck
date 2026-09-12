@@ -443,9 +443,9 @@ func TestCodexSettingsServiceKeepsConcurrentUsageIntervalUpdatesConsistent(t *te
 	}
 
 	start := make(chan struct{})
-	errorsByUpdate := make(chan error, 4)
+	errorsByUpdate := make(chan error, 5)
 	var wg sync.WaitGroup
-	for _, interval := range []int{5, 15, 30, 60} {
+	for _, interval := range []int{15, 30, 60, 120, 300} {
 		interval := interval
 		wg.Add(1)
 		go func() {
@@ -493,9 +493,9 @@ func TestGrokBuildSettingsKeepProviderIntervalsIndependentUnderConcurrency(t *te
 	codexBefore := services.codexUsageSync.Status()
 
 	start := make(chan struct{})
-	errorsByUpdate := make(chan error, 4)
+	errorsByUpdate := make(chan error, 5)
 	var wg sync.WaitGroup
-	for _, interval := range []int{5, 15, 30, 60} {
+	for _, interval := range []int{15, 30, 60, 120, 300} {
 		interval := interval
 		wg.Add(1)
 		go func() {

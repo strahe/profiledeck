@@ -421,6 +421,95 @@ var grokBuildUsageImportTableSpec = tableSpec{
 	},
 }
 
+var usageIncrementalSourceTableSpec = func() tableSpec {
+	spec := copyTableSpec(stableBaselineTableSpec("usage_sources"))
+	spec.columns = append(spec.columns,
+		columnSpec{name: "completed_generation", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+	)
+	spec.checks = append(spec.checks,
+		"CHECK (completed_generation >= 0 AND completed_generation <= sync_generation)",
+	)
+	return spec
+}()
+
+var usageIncrementalCodexImportTableSpec = extendUsageImportTableSpec(
+	stableBaselineTableSpec("codex_usage_import_files"),
+)
+
+var usageIncrementalGrokBuildImportTableSpec = extendUsageImportTableSpec(
+	grokBuildUsageImportTableSpec,
+)
+
+var usageImportObservationTableSpec = tableSpec{
+	name:   "usage_import_observations",
+	strict: true,
+	columns: []columnSpec{
+		{name: "source_id", columnType: "INTEGER", notNull: true, primaryKey: true},
+		{name: "file_key", columnType: "BLOB", notNull: true, primaryKey: true},
+		{name: "metadata_digest", columnType: "BLOB", notNull: true},
+		{name: "status", columnType: "TEXT", notNull: true},
+		{name: "updated_at_unix_ms", columnType: "INTEGER", notNull: true},
+	},
+	checks: []string{
+		"CHECK (typeof(file_key) = 'blob' AND length(file_key) = 32 AND file_key <> zeroblob(32))",
+		"CHECK (typeof(metadata_digest) = 'blob' AND length(metadata_digest) = 32 AND metadata_digest <> zeroblob(32))",
+		"CHECK (status IN ('history_changed', 'unavailable', 'fact_conflict'))",
+		"CHECK (updated_at_unix_ms >= 0)",
+		"FOREIGN KEY (source_id) REFERENCES usage_sources(id) ON UPDATE RESTRICT ON DELETE CASCADE",
+		"WITHOUT ROWID",
+	},
+}
+
+func stableBaselineTableSpec(name string) tableSpec {
+	for _, spec := range stableBaselineTableSpecs {
+		if spec.name == name {
+			return spec
+		}
+	}
+	panic("missing stable baseline table spec: " + name)
+}
+
+func copyTableSpec(spec tableSpec) tableSpec {
+	spec.columns = append([]columnSpec(nil), spec.columns...)
+	spec.checks = append([]string(nil), spec.checks...)
+	return spec
+}
+
+func extendUsageImportTableSpec(spec tableSpec) tableSpec {
+	spec = copyTableSpec(spec)
+	spec.columns = append(spec.columns,
+		columnSpec{name: "checkpoint_revision", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+		columnSpec{name: "processed_bytes", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+		columnSpec{name: "metadata_digest", columnType: "BLOB", notNull: true, requireDefault: true, defaultValue: "X'0000000000000000000000000000000000000000000000000000000000000000'"},
+		columnSpec{name: "file_identity_digest", columnType: "BLOB", notNull: true, requireDefault: true, defaultValue: "X'0000000000000000000000000000000000000000000000000000000000000000'"},
+		columnSpec{name: "boundary_digest", columnType: "BLOB", notNull: true, requireDefault: true, defaultValue: "X'0000000000000000000000000000000000000000000000000000000000000000'"},
+		columnSpec{name: "checkpoint_event_digest", columnType: "BLOB", notNull: true, requireDefault: true, defaultValue: "X'0000000000000000000000000000000000000000000000000000000000000000'"},
+		columnSpec{name: "parser_state_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"},
+	)
+	spec.checks = append(spec.checks,
+		"CHECK (checkpoint_revision >= 0)",
+		"CHECK (processed_bytes >= 0 AND processed_bytes <= size_bytes)",
+		"CHECK (typeof(metadata_digest) = 'blob' AND length(metadata_digest) = 32)",
+		"CHECK (typeof(file_identity_digest) = 'blob' AND length(file_identity_digest) = 32)",
+		"CHECK (typeof(boundary_digest) = 'blob' AND length(boundary_digest) = 32)",
+		"CHECK (typeof(checkpoint_event_digest) = 'blob' AND length(checkpoint_event_digest) = 32)",
+		"CHECK (CASE WHEN json_valid(parser_state_json) THEN json_type(parser_state_json) = 'object' AND length(CAST(parser_state_json AS BLOB)) <= 1048576 ELSE 0 END)",
+	)
+	return spec
+}
+
+func replaceTableSpec(specs []tableSpec, replacement tableSpec) []tableSpec {
+	result := make([]tableSpec, len(specs))
+	copy(result, specs)
+	for index := range result {
+		if result[index].name == replacement.name {
+			result[index] = replacement
+			return result
+		}
+	}
+	panic("missing table spec replacement: " + replacement.name)
+}
+
 var stableBaselineIndexSpecs = []indexSpec{
 	{name: "idx_providers_adapter_id", table: "providers", columns: []string{"adapter_id"}},
 	{name: "idx_provider_profile_settings_provider_id", table: "provider_profile_settings", columns: []string{"provider_id"}},

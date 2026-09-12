@@ -11,17 +11,24 @@ import (
 )
 
 type GrokBuildUsageImportFile struct {
-	SourceID         int64
-	FileKey          UsageKey
-	ModifiedUnixMS   int64
-	SizeBytes        int64
-	ImportedFacts    int64
-	InvalidLines     int64
-	UnsupportedLines int64
-	ParserRevision   int64
-	IdentityRevision int64
-	EventDigest      UsageKey
-	UpdatedAtUnixMS  int64
+	SourceID              int64
+	FileKey               UsageKey
+	ModifiedUnixMS        int64
+	SizeBytes             int64
+	ImportedFacts         int64
+	InvalidLines          int64
+	UnsupportedLines      int64
+	ParserRevision        int64
+	IdentityRevision      int64
+	EventDigest           UsageKey
+	CheckpointRevision    int64
+	ProcessedBytes        int64
+	MetadataDigest        UsageKey
+	FileIdentityDigest    UsageKey
+	BoundaryDigest        UsageKey
+	CheckpointEventDigest UsageKey
+	ParserStateJSON       string
+	UpdatedAtUnixMS       int64
 }
 
 type CommitGrokBuildUsageImportParams struct {
@@ -93,7 +100,9 @@ func (s *Store) GetGrokBuildUsageImportFile(
 	row := s.executor().QueryRowContext(ctx, `
 		SELECT source_id, file_key, modified_unix_ms, size_bytes, imported_facts,
 			invalid_lines, unsupported_lines, parser_revision, identity_revision,
-			event_digest, updated_at_unix_ms
+			event_digest, checkpoint_revision, processed_bytes, metadata_digest,
+			file_identity_digest, boundary_digest, checkpoint_event_digest,
+			parser_state_json, updated_at_unix_ms
 		FROM grok_build_usage_import_files
 		WHERE source_id = ? AND file_key = ?
 	`, sourceID, fileKey)
@@ -102,6 +111,38 @@ func (s *Store) GetGrokBuildUsageImportFile(
 		return GrokBuildUsageImportFile{}, ErrNotFound
 	}
 	return cursor, err
+}
+
+func (s *Store) ListGrokBuildUsageImportFiles(
+	ctx context.Context,
+	sourceID int64,
+) ([]GrokBuildUsageImportFile, error) {
+	if sourceID <= 0 {
+		return nil, errors.New("invalid Grok Build usage import query")
+	}
+	rows, err := s.executor().QueryContext(ctx, `
+		SELECT source_id, file_key, modified_unix_ms, size_bytes, imported_facts,
+			invalid_lines, unsupported_lines, parser_revision, identity_revision,
+			event_digest, checkpoint_revision, processed_bytes, metadata_digest,
+			file_identity_digest, boundary_digest, checkpoint_event_digest,
+			parser_state_json, updated_at_unix_ms
+		FROM grok_build_usage_import_files
+		WHERE source_id = ?
+		ORDER BY file_key
+	`, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	files := make([]GrokBuildUsageImportFile, 0)
+	for rows.Next() {
+		file, err := scanGrokBuildUsageImportFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, file)
+	}
+	return files, rows.Err()
 }
 
 func scanGrokBuildUsageImportFile(row rowScanner) (GrokBuildUsageImportFile, error) {
@@ -117,6 +158,13 @@ func scanGrokBuildUsageImportFile(row rowScanner) (GrokBuildUsageImportFile, err
 		&cursor.ParserRevision,
 		&cursor.IdentityRevision,
 		&cursor.EventDigest,
+		&cursor.CheckpointRevision,
+		&cursor.ProcessedBytes,
+		&cursor.MetadataDigest,
+		&cursor.FileIdentityDigest,
+		&cursor.BoundaryDigest,
+		&cursor.CheckpointEventDigest,
+		&cursor.ParserStateJSON,
 		&cursor.UpdatedAtUnixMS,
 	); err != nil {
 		return GrokBuildUsageImportFile{}, err
@@ -158,6 +206,9 @@ func (s *Store) commitGrokBuildUsageImport(
 		return UsageInsertResult{}, err
 	}
 	if err := s.upsertGrokBuildUsageImportFileCAS(ctx, params.File, params.Expected); err != nil {
+		return UsageInsertResult{}, err
+	}
+	if err := s.deleteUsageImportObservation(ctx, params.File.SourceID, params.File.FileKey); err != nil {
 		return UsageInsertResult{}, err
 	}
 	return result, nil
@@ -218,6 +269,9 @@ func (s *Store) upsertGrokBuildUsageImportFileCAS(
 	if err := validateGrokBuildUsageImportFile(file); err != nil {
 		return err
 	}
+	if file.CheckpointRevision == 0 && strings.TrimSpace(file.ParserStateJSON) == "" {
+		file.ParserStateJSON = "{}"
+	}
 	source, err := s.getUsageSourceByID(ctx, file.SourceID)
 	if err != nil {
 		return err
@@ -232,8 +286,10 @@ func (s *Store) upsertGrokBuildUsageImportFileCAS(
 			INSERT INTO grok_build_usage_import_files (
 				source_id, file_key, modified_unix_ms, size_bytes, imported_facts,
 				invalid_lines, unsupported_lines, parser_revision, identity_revision,
-				event_digest, updated_at_unix_ms
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				event_digest, checkpoint_revision, processed_bytes, metadata_digest,
+				file_identity_digest, boundary_digest, checkpoint_event_digest,
+				parser_state_json, updated_at_unix_ms
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
 			file.SourceID,
 			file.FileKey,
@@ -245,6 +301,13 @@ func (s *Store) upsertGrokBuildUsageImportFileCAS(
 			file.ParserRevision,
 			file.IdentityRevision,
 			file.EventDigest,
+			file.CheckpointRevision,
+			file.ProcessedBytes,
+			file.MetadataDigest,
+			file.FileIdentityDigest,
+			file.BoundaryDigest,
+			file.CheckpointEventDigest,
+			file.ParserStateJSON,
 			updatedAt,
 		)
 		if isSQLiteConstraintError(err) {
@@ -262,11 +325,17 @@ func (s *Store) upsertGrokBuildUsageImportFileCAS(
 		UPDATE grok_build_usage_import_files
 		SET modified_unix_ms = ?, size_bytes = ?, imported_facts = ?,
 			invalid_lines = ?, unsupported_lines = ?, parser_revision = ?,
-			identity_revision = ?, event_digest = ?, updated_at_unix_ms = ?
+			identity_revision = ?, event_digest = ?, checkpoint_revision = ?,
+			processed_bytes = ?, metadata_digest = ?, file_identity_digest = ?,
+			boundary_digest = ?, checkpoint_event_digest = ?, parser_state_json = ?,
+			updated_at_unix_ms = ?
 		WHERE source_id = ? AND file_key = ?
 			AND modified_unix_ms = ? AND size_bytes = ? AND imported_facts = ?
 			AND invalid_lines = ? AND unsupported_lines = ? AND parser_revision = ?
-			AND identity_revision = ? AND event_digest = ? AND updated_at_unix_ms = ?
+			AND identity_revision = ? AND event_digest = ? AND checkpoint_revision = ?
+			AND processed_bytes = ? AND metadata_digest = ? AND file_identity_digest = ?
+			AND boundary_digest = ? AND checkpoint_event_digest = ? AND parser_state_json = ?
+			AND updated_at_unix_ms = ?
 	`,
 		file.ModifiedUnixMS,
 		file.SizeBytes,
@@ -276,6 +345,13 @@ func (s *Store) upsertGrokBuildUsageImportFileCAS(
 		file.ParserRevision,
 		file.IdentityRevision,
 		file.EventDigest,
+		file.CheckpointRevision,
+		file.ProcessedBytes,
+		file.MetadataDigest,
+		file.FileIdentityDigest,
+		file.BoundaryDigest,
+		file.CheckpointEventDigest,
+		file.ParserStateJSON,
 		updatedAt,
 		file.SourceID,
 		file.FileKey,
@@ -287,6 +363,13 @@ func (s *Store) upsertGrokBuildUsageImportFileCAS(
 		expected.ParserRevision,
 		expected.IdentityRevision,
 		expected.EventDigest,
+		expected.CheckpointRevision,
+		expected.ProcessedBytes,
+		expected.MetadataDigest,
+		expected.FileIdentityDigest,
+		expected.BoundaryDigest,
+		expected.CheckpointEventDigest,
+		expected.ParserStateJSON,
 		expected.UpdatedAtUnixMS,
 	)
 	if err != nil {
@@ -307,8 +390,22 @@ func validateGrokBuildUsageImportFile(file GrokBuildUsageImportFile) error {
 		file.ModifiedUnixMS < 0 || file.SizeBytes < 0 || file.ImportedFacts < 0 ||
 		file.InvalidLines < 0 || file.UnsupportedLines < 0 ||
 		file.ParserRevision <= 0 || file.IdentityRevision <= 0 ||
-		file.UpdatedAtUnixMS < 0 {
+		file.UpdatedAtUnixMS < 0 || file.CheckpointRevision < 0 ||
+		file.ProcessedBytes < 0 || file.ProcessedBytes > file.SizeBytes {
 		return errors.New("invalid Grok Build usage import file")
+	}
+	if file.CheckpointRevision == 0 {
+		if file.ProcessedBytes != 0 || !file.MetadataDigest.IsZero() ||
+			!file.FileIdentityDigest.IsZero() || !file.BoundaryDigest.IsZero() ||
+			!file.CheckpointEventDigest.IsZero() || file.ParserStateJSON != "" && file.ParserStateJSON != "{}" {
+			return errors.New("invalid Grok Build legacy checkpoint")
+		}
+		return nil
+	}
+	if file.CheckpointRevision != 1 || file.MetadataDigest.IsZero() ||
+		file.BoundaryDigest.IsZero() || file.CheckpointEventDigest.IsZero() ||
+		file.ParserStateJSON != "{}" {
+		return errors.New("invalid Grok Build checkpoint")
 	}
 	return nil
 }
@@ -359,6 +456,9 @@ func (finalization *GrokBuildUsageSyncFinalization) applyUsageSyncFinalization(
 		`, source.ID, fileKey); err != nil {
 			return usageSyncFinalizationResult{}, err
 		}
+	}
+	if err := store.deleteMissingUsageImportObservations(ctx, source.ID, discovered); err != nil {
+		return usageSyncFinalizationResult{}, err
 	}
 
 	var result usageSyncFinalizationResult

@@ -64,37 +64,41 @@ type UsageSummaryResult struct {
 }
 
 func (service *Service) Sync(ctx context.Context, req UsageSyncRequest) (UsageSyncResult, error) {
-	return service.sync(ctx, req, SyncProvisionProvider)
+	outcome, err := service.sync(ctx, req, SyncOptions{
+		ProvisionMode:      SyncProvisionProvider,
+		ForceObservedRetry: true,
+	})
+	return outcome.Result, err
 }
 
 func (service *Service) sync(
 	ctx context.Context,
 	req UsageSyncRequest,
-	mode SyncProvisionMode,
-) (UsageSyncResult, error) {
+	options SyncOptions,
+) (SyncOutcome, error) {
 	providerID, integration, appErr := service.resolveIntegration(req.ProviderID)
 	if appErr != nil {
-		return UsageSyncResult{}, appErr
+		return SyncOutcome{}, appErr
 	}
 
 	workCtx, releaseWork, err := service.acquireSyncForWork(ctx)
 	if err != nil {
-		return UsageSyncResult{}, usageSyncError(providerID, err)
+		return SyncOutcome{}, usageSyncError(providerID, err)
 	}
 	defer releaseWork()
 
-	result, err := integration.Sync(workCtx, service.stores, mode)
-	if mode == SyncExistingProvider && errors.Is(err, store.ErrUsageProviderMissing) {
-		return UsageSyncResult{
+	outcome, err := integration.Sync(workCtx, service.stores, options)
+	if options.ProvisionMode == SyncExistingProvider && errors.Is(err, store.ErrUsageProviderMissing) {
+		return SyncOutcome{Result: UsageSyncResult{
 			ProviderID: providerID,
 			Source:     summarySource(integration.SourceIDs()),
 			Errors:     []UsageImportError{},
-		}, nil
+		}}, nil
 	}
 	if err != nil {
-		return UsageSyncResult{}, usageSyncError(providerID, err)
+		return SyncOutcome{}, usageSyncError(providerID, err)
 	}
-	return result, nil
+	return outcome, nil
 }
 
 type phaseTimeoutKey struct{}
@@ -219,8 +223,14 @@ func (service *Service) SyncCodex(ctx context.Context) (UsageSyncResult, error) 
 
 // SyncCodexBackground never provisions a deleted Provider. A later explicit
 // sync remains the only action that may recreate it.
-func (service *Service) SyncCodexBackground(ctx context.Context) (UsageSyncResult, error) {
-	return service.sync(ctx, UsageSyncRequest{ProviderID: ProviderCodex}, SyncExistingProvider)
+func (service *Service) SyncCodexBackground(
+	ctx context.Context,
+	onWorkDetected func(),
+) (BackgroundSyncOutcome, error) {
+	return service.sync(ctx, UsageSyncRequest{ProviderID: ProviderCodex}, SyncOptions{
+		ProvisionMode:  SyncExistingProvider,
+		OnWorkDetected: onWorkDetected,
+	})
 }
 
 func (service *Service) SyncGrokBuild(ctx context.Context) (UsageSyncResult, error) {
@@ -231,8 +241,12 @@ func (service *Service) SyncGrokBuild(ctx context.Context) (UsageSyncResult, err
 func (service *Service) SyncProviderBackground(
 	ctx context.Context,
 	providerID string,
-) (UsageSyncResult, error) {
-	return service.sync(ctx, UsageSyncRequest{ProviderID: providerID}, SyncExistingProvider)
+	onWorkDetected func(),
+) (BackgroundSyncOutcome, error) {
+	return service.sync(ctx, UsageSyncRequest{ProviderID: providerID}, SyncOptions{
+		ProvisionMode:  SyncExistingProvider,
+		OnWorkDetected: onWorkDetected,
+	})
 }
 
 func (service *Service) Summary(ctx context.Context, req UsageSummaryRequest) (UsageSummaryResult, error) {

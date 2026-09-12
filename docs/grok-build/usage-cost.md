@@ -6,7 +6,9 @@ ProfileDeck reads local Grok Build session records to show token usage, activity
 
 The Desktop app syncs after startup and continues while ProfileDeck is open or in the menu bar.
 
-To change the interval, open **Grok Build → Settings → Usage reports → Update frequency** and choose 5, 15, 30, or 60 seconds. The default is 15 seconds. Codex and Grok Build use separate intervals and sync status.
+To change the interval, open **Grok Build → Settings → Usage reports → Update frequency** and choose 15 seconds, 30 seconds, 1 minute, 2 minutes, or 5 minutes. The default is 1 minute. Codex and Grok Build use separate intervals and sync status.
+
+When session files have not changed, background sync checks their metadata without reading their contents. Normal appends read only a small integrity boundary and the new part of each file.
 
 Background sync uses the existing Grok Build Provider. If it has not been created yet, open **Grok Build → Profiles** to create a Profile, or run an explicit CLI sync.
 
@@ -34,9 +36,9 @@ ProfileDeck reads ordinary files matching:
 
 It does not follow symbolic links. Nested `subagents` records are excluded because Grok Build already includes successful child-agent usage in the completed parent turn.
 
-You can repeat a sync safely; previously imported usage is not counted again. Records with missing, empty, or incomplete usage are skipped. If a file changes while it is being read, contains an oversized or malformed terminal record, or has an unrecognized terminal format, ProfileDeck leaves all new data from that file uncommitted and retries it during a later sync. The source file is never moved or changed.
+You can repeat a sync safely; previously imported usage is not counted again. Records with missing, empty, or incomplete usage are skipped. If a file changes while it is being read, contains an oversized or malformed terminal record, or has an unrecognized terminal format, ProfileDeck leaves all new data from that file uncommitted. Background sync checks that file again after it changes; a CLI sync checks it immediately. The source file is never moved or changed.
 
-Copied fork history is counted once. When the same completed turn appears in multiple sessions with identical usage, ProfileDeck assigns it to one stable derived session without storing the original session identifier. Conflicting usage for that same turn causes the affected file to be retried instead.
+Copied fork history is counted once. When the same completed turn appears in multiple sessions with identical usage, ProfileDeck assigns it to one stable derived session without storing the original session identifier. Conflicting usage for that same turn leaves the affected file uncommitted until it changes or you run another CLI sync.
 
 Deleting the Grok Build Provider also deletes its saved usage reports, import progress, and sync setting. Desktop background sync will not recreate a deleted Provider. Running this CLI sync is an explicit request: it can set up the Provider again and reimport usage still present in local session files.
 

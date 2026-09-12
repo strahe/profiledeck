@@ -13,9 +13,24 @@ import (
 type Integration interface {
 	ProviderID() string
 	SourceIDs() []string
-	Sync(context.Context, store.Factory, SyncProvisionMode) (UsageSyncResult, error)
+	Sync(context.Context, store.Factory, SyncOptions) (SyncOutcome, error)
 	PricingInfo() UsagePricingInfo
 }
+
+type SyncOptions struct {
+	ProvisionMode      SyncProvisionMode
+	ForceObservedRetry bool
+	OnWorkDetected     func()
+	Observer           UsageSyncObserver
+	fileSystem         usageFileSystem
+}
+
+type SyncOutcome struct {
+	Result    UsageSyncResult
+	Performed bool
+}
+
+type BackgroundSyncOutcome = SyncOutcome
 
 type SyncProvisionMode int
 
