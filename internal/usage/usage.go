@@ -22,7 +22,7 @@ const (
 	CodexUsageParserRevision = int64(1)
 	PricingBasis             = "openai-standard-api"
 	PricingSourceURL         = "https://developers.openai.com/api/docs/pricing"
-	PricingVerifiedAt        = "2026-07-10"
+	PricingVerifiedAt        = "2026-09-12"
 	GrokBuildPricingBasis    = "xai-standard-api-short-context"
 	GrokBuildPricingSource   = "https://docs.x.ai/developers/models/grok-4.5"
 	GrokBuildPricingVerified = "2026-07-30"
@@ -90,13 +90,15 @@ func newPriceCatalog(prices map[string]Price) PriceCatalog {
 	return PriceCatalog{prices: copied}
 }
 
-// Static price source: OpenAI API pricing, accessed 2026-07-10.
+// Static price source: OpenAI API pricing, accessed 2026-09-12.
 // These local estimates use Standard API prices. For models with multiple
 // context tiers, the table uses the short-context rate until Codex logs expose
 // enough billing context to select batch, flex, priority, or long-context rates.
-// GPT-5.6 logs do not expose cache-write tokens, so their stored amount is the
-// verifiable input/cache-read/output subtotal and remains explicitly partial.
+// GPT-5.6 and GPT-6 Astra logs do not expose cache-write tokens, so their stored
+// amount is the verifiable input/cache-read/output subtotal and remains
+// explicitly partial.
 var codexPriceCatalog = newPriceCatalog(map[string]Price{
+	"gpt-6-astra":   priceWithCacheWrite(10_000_000, 1_000_000, 12_500_000, 50_000_000),
 	"gpt-5.6-sol":   priceWithCacheWrite(5_000_000, 500_000, 6_250_000, 30_000_000),
 	"gpt-5.6-terra": priceWithCacheWrite(2_500_000, 250_000, 3_125_000, 15_000_000),
 	"gpt-5.6-luna":  priceWithCacheWrite(1_000_000, 100_000, 1_250_000, 6_000_000),

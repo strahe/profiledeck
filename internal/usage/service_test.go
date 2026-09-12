@@ -1306,66 +1306,78 @@ func TestUsageSyncCodexConcurrentRunsRemainIdempotentWhenOneRunIsSuperseded(t *t
 	}
 }
 
-func TestUsageSyncCodexBackfillsExistingGPT56PartialCost(t *testing.T) {
-	ctx := context.Background()
-	configDir := t.TempDir()
-	codexDir := t.TempDir()
-	environment := newUsageTestEnvironment(t, configDir, codexDir)
-	initialized, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx)
-	if err != nil {
-		t.Fatalf("expected init to succeed, got %v", err)
-	}
-	if _, err := environment.service.SyncCodex(ctx); err != nil {
-		t.Fatalf("expected explicit sync to provision Provider fixture, got %v", err)
-	}
-	db, err := store.Open(ctx, initialized.DatabasePath, false)
-	if err != nil {
-		t.Fatalf("expected fixture store open, got %v", err)
-	}
-	source, err := db.BeginUsageSync(ctx, ProviderCodex, SourceCodexSessionJSONL, CodexUsageIdentityRevision)
-	if err != nil {
-		_ = db.Close()
-		t.Fatalf("expected usage source fixture, got %v", err)
-	}
-	if result, err := db.InsertUsageFacts(ctx, store.InsertUsageFactsParams{
-		SourceID: source.ID, Generation: source.SyncGeneration, Facts: []store.CreateUsageFactParams{{
-			EventKey: usageTestEventKey("existing-gpt-5.6"), SourceID: source.ID,
-			SessionKey: "session", ModelKey: "GPT-5.6-SOL", OccurredAtUnixMS: time.Now().UnixMilli(),
-			InputTokens: 1_000_000, CachedInputTokens: 100_000, OutputTokens: 1_000_000, TotalTokens: 2_000_000,
-			CostStatus: store.UsageCostStatusUnknown,
-		}},
-	}); err != nil || result.Inserted != 1 {
-		_ = db.Close()
-		t.Fatalf("expected unknown historical usage fixture, result=%#v err=%v", result, err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("expected fixture store close, got %v", err)
-	}
+func TestUsageSyncCodexBackfillsRecognizedPartialCost(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		model    string
+		eventKey string
+		wantCost string
+	}{
+		{name: "gpt-5.6-sol", model: "GPT-5.6-SOL", eventKey: "existing-gpt-5.6", wantCost: "34.550000"},
+		{name: "gpt-6-astra", model: "gpt-6-astra", eventKey: "existing-gpt-6-astra", wantCost: "59.100000"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			configDir := t.TempDir()
+			codexDir := t.TempDir()
+			environment := newUsageTestEnvironment(t, configDir, codexDir)
+			initialized, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx)
+			if err != nil {
+				t.Fatalf("expected init to succeed, got %v", err)
+			}
+			if _, err := environment.service.SyncCodex(ctx); err != nil {
+				t.Fatalf("expected explicit sync to provision Provider fixture, got %v", err)
+			}
+			db, err := store.Open(ctx, initialized.DatabasePath, false)
+			if err != nil {
+				t.Fatalf("expected fixture store open, got %v", err)
+			}
+			source, err := db.BeginUsageSync(ctx, ProviderCodex, SourceCodexSessionJSONL, CodexUsageIdentityRevision)
+			if err != nil {
+				_ = db.Close()
+				t.Fatalf("expected usage source fixture, got %v", err)
+			}
+			if result, err := db.InsertUsageFacts(ctx, store.InsertUsageFactsParams{
+				SourceID: source.ID, Generation: source.SyncGeneration, Facts: []store.CreateUsageFactParams{{
+					EventKey: usageTestEventKey(test.eventKey), SourceID: source.ID,
+					SessionKey: "session", ModelKey: test.model, OccurredAtUnixMS: time.Now().UnixMilli(),
+					InputTokens: 1_000_000, CachedInputTokens: 100_000, OutputTokens: 1_000_000, TotalTokens: 2_000_000,
+					CostStatus: store.UsageCostStatusUnknown,
+				}},
+			}); err != nil || result.Inserted != 1 {
+				_ = db.Close()
+				t.Fatalf("expected unknown historical usage fixture, result=%#v err=%v", result, err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatalf("expected fixture store close, got %v", err)
+			}
 
-	if _, err := environment.service.SyncCodex(ctx); err != nil {
-		t.Fatalf("expected sync to backfill GPT-5.6 cost, got %v", err)
-	}
-	report, err := newUsageTestEnvironment(t, configDir, "").service.Report(ctx, UsageReportRequest{Range: UsageRangeAll})
-	if err != nil {
-		t.Fatalf("expected usage report, got %v", err)
-	}
-	if report.Summary.KnownEstimatedCostUSD != "34.550000" || report.Summary.CostStatus != "partial" ||
-		report.Summary.PartialCostEventCount != 1 || report.Summary.UnknownCostEventCount != 0 || report.Summary.PricingCoverage != 1 {
-		t.Fatalf("unexpected GPT-5.6 partial pricing summary: %#v", report.Summary)
-	}
-	if len(report.Models) != 1 || report.Models[0].Model != "GPT-5.6-SOL" || report.Models[0].Summary.KnownEstimatedCostUSD != "34.550000" {
-		t.Fatalf("unexpected GPT-5.6 model summary: %#v", report.Models)
-	}
-	if len(report.Trend) != 1 || report.Trend[0].Summary.KnownEstimatedCostUSD != "34.550000" ||
-		report.Trend[0].Summary.CostStatus != "partial" || report.Trend[0].Summary.PartialCostEventCount != 1 {
-		t.Fatalf("expected GPT-5.6 base cost in the trend bucket, got %#v", report.Trend)
-	}
-	legacy, err := newUsageTestEnvironment(t, configDir, "").service.Summary(ctx, UsageSummaryRequest{ProviderID: "codex"})
-	if err != nil {
-		t.Fatalf("expected legacy usage summary, got %v", err)
-	}
-	if legacy.CostStatus != "unknown" || legacy.EstimatedCostUSD != nil || legacy.UnknownCostEventCount != 1 {
-		t.Fatalf("expected legacy summary to preserve its conservative contract, got %#v", legacy)
+			if _, err := environment.service.SyncCodex(ctx); err != nil {
+				t.Fatalf("expected sync to backfill %s cost, got %v", test.model, err)
+			}
+			report, err := newUsageTestEnvironment(t, configDir, "").service.Report(ctx, UsageReportRequest{Range: UsageRangeAll})
+			if err != nil {
+				t.Fatalf("expected usage report, got %v", err)
+			}
+			if report.Summary.KnownEstimatedCostUSD != test.wantCost || report.Summary.CostStatus != "partial" ||
+				report.Summary.PartialCostEventCount != 1 || report.Summary.UnknownCostEventCount != 0 || report.Summary.PricingCoverage != 1 {
+				t.Fatalf("unexpected %s partial pricing summary: %#v", test.model, report.Summary)
+			}
+			if len(report.Models) != 1 || report.Models[0].Model != test.model || report.Models[0].Summary.KnownEstimatedCostUSD != test.wantCost {
+				t.Fatalf("unexpected %s model summary: %#v", test.model, report.Models)
+			}
+			if len(report.Trend) != 1 || report.Trend[0].Summary.KnownEstimatedCostUSD != test.wantCost ||
+				report.Trend[0].Summary.CostStatus != "partial" || report.Trend[0].Summary.PartialCostEventCount != 1 {
+				t.Fatalf("expected %s base cost in the trend bucket, got %#v", test.model, report.Trend)
+			}
+			legacy, err := newUsageTestEnvironment(t, configDir, "").service.Summary(ctx, UsageSummaryRequest{ProviderID: "codex"})
+			if err != nil {
+				t.Fatalf("expected legacy usage summary, got %v", err)
+			}
+			if legacy.CostStatus != "unknown" || legacy.EstimatedCostUSD != nil || legacy.UnknownCostEventCount != 1 {
+				t.Fatalf("expected legacy summary to preserve its conservative contract, got %#v", legacy)
+			}
+		})
 	}
 }
 
