@@ -68,7 +68,7 @@ func TestEstimateCostMicrosCoversCurrentOpenAIAndCodexModels(t *testing.T) {
 	}
 }
 
-func TestEstimateCostMicrosReportsGPT56BaseCostAsPartial(t *testing.T) {
+func TestEstimateCostMicrosReportsCacheWriteModelsAsPartial(t *testing.T) {
 	tokens := TokenCounts{
 		InputTokens:       1_000_000,
 		CachedInputTokens: 100_000,
@@ -79,6 +79,7 @@ func TestEstimateCostMicrosReportsGPT56BaseCostAsPartial(t *testing.T) {
 		model string
 		want  int64
 	}{
+		{model: "gpt-6-astra", want: 59_100_000},
 		{model: "gpt-5.6-sol", want: 34_550_000},
 		{model: "gpt-5.6-terra", want: 17_275_000},
 		{model: "gpt-5.6-luna", want: 6_910_000},

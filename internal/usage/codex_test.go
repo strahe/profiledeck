@@ -76,28 +76,41 @@ func TestParseCodexSessionFileComputesCumulativeDeltas(t *testing.T) {
 	}
 }
 
-func TestParseCodexSessionFileStoresGPT56BaseCostAsPartial(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
-	writeTestFile(t, path, strings.Join([]string{
-		`{"type":"session_meta","session_id":"session-1"}`,
-		`{"type":"turn_context","model":"gpt-5.6-sol"}`,
-		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000000,"cached_input_tokens":100000,"output_tokens":1000000,"total_tokens":2000000}}}}`,
-	}, "\n"))
+func TestParseCodexSessionFileStoresCacheWriteModelsAsPartial(t *testing.T) {
+	for _, test := range []struct {
+		model string
+		want  int64
+	}{
+		{model: "gpt-6-astra", want: 59_100_000},
+		{model: "gpt-5.6-sol", want: 34_550_000},
+	} {
+		t.Run(test.model, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "session.jsonl")
+			writeTestFile(t, path, strings.Join([]string{
+				`{"type":"session_meta","session_id":"session-1"}`,
+				`{"type":"turn_context","model":"` + test.model + `"}`,
+				`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000000,"cached_input_tokens":100000,"output_tokens":1000000,"total_tokens":2000000}}}}`,
+			}, "\n"))
 
-	sourceKey, err := SourceKey(path)
-	if err != nil {
-		t.Fatalf("expected source key, got %v", err)
-	}
-	result, err := ParseCodexSessionFile(SourceFile{Path: path, SourceKey: sourceKey})
-	if err != nil {
-		t.Fatalf("expected parse to succeed, got %v", err)
-	}
-	if len(result.Events) != 1 {
-		t.Fatalf("expected one usage event, got %d", len(result.Events))
-	}
-	event := result.Events[0]
-	if event.CostStatus != CostStatusPartial || event.EstimatedCostMicros == nil || *event.EstimatedCostMicros != 34_550_000 {
-		t.Fatalf("expected GPT-5.6 base cost to remain explicitly partial, got %#v", event)
+			sourceKey, err := SourceKey(path)
+			if err != nil {
+				t.Fatalf("expected source key, got %v", err)
+			}
+			result, err := ParseCodexSessionFile(SourceFile{Path: path, SourceKey: sourceKey})
+			if err != nil {
+				t.Fatalf("expected parse to succeed, got %v", err)
+			}
+			if len(result.Events) != 1 {
+				t.Fatalf("expected one usage event, got %d", len(result.Events))
+			}
+			event := result.Events[0]
+			if event.Model != test.model {
+				t.Fatalf("expected model %q, got %#v", test.model, event)
+			}
+			if event.CostStatus != CostStatusPartial || event.EstimatedCostMicros == nil || *event.EstimatedCostMicros != test.want {
+				t.Fatalf("expected %s base cost %d to remain explicitly partial, got %#v", test.model, test.want, event)
+			}
+		})
 	}
 }
 
