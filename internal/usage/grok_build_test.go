@@ -136,6 +136,20 @@ func TestParseGrokBuildTerminalValidationFailsClosed(t *testing.T) {
 				1,
 			)
 		}(),
+		"cache creation exceeds input": func() string {
+			line := strings.Replace(
+				base,
+				`"cachedReadTokens":1,"reasoningTokens":1,"modelCalls":1`,
+				`"cachedReadTokens":1,"cacheCreationTokens":10,"reasoningTokens":1,"modelCalls":1`,
+				1,
+			)
+			return strings.Replace(
+				line,
+				`"modelUsage":{"grok-build-latest":{"inputTokens":10,"outputTokens":2,"totalTokens":12,"cachedReadTokens":1,"reasoningTokens":1`,
+				`"modelUsage":{"grok-build-latest":{"inputTokens":10,"outputTokens":2,"totalTokens":12,"cachedReadTokens":1,"cacheCreationTokens":10,"reasoningTokens":1`,
+				1,
+			)
+		}(),
 		"cache creation overflow": strings.Replace(
 			base,
 			`"cachedReadTokens":1`,

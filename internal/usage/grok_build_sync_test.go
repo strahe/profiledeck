@@ -145,7 +145,7 @@ func TestBackgroundGrokBuildSyncRetriesObservationAfterParserUpgrade(t *testing.
 		t.Fatalf("read current Grok Build fixture: %v", err)
 	}
 	broken := strings.Replace(string(fixture), `"cacheCreationTokens":50`, `"cacheCreationTokens":"50"`, 1)
-	writeGrokBuildUsageFixture(t, grokHome, "workspace-broken", "session-broken", broken)
+	path := writeGrokBuildUsageFixture(t, grokHome, "workspace-broken", "session-broken", broken)
 	environment := newGrokBuildUsageTestEnvironment(t, configDir, grokHome)
 	initialized, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx)
 	if err != nil {
@@ -155,12 +155,24 @@ func TestBackgroundGrokBuildSyncRetriesObservationAfterParserUpgrade(t *testing.
 	if err != nil || len(first.Errors) != 1 {
 		t.Fatalf("initial broken Grok Build sync = %#v, err = %v", first, err)
 	}
+	additive, err := os.ReadFile(filepath.Join("testdata", "grok-build-v0.2.114", "format-drift.jsonl"))
+	if err != nil {
+		t.Fatalf("read additive Grok Build fixture: %v", err)
+	}
+	writeAppUsageFile(t, path, string(additive))
+	files, err := ListGrokBuildSessionFilesContext(ctx, grokHome)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("list rewritten Grok Build fixture: files=%#v, err=%v", files, err)
+	}
 
 	rawDB, err := sql.Open("sqlite", initialized.DatabasePath)
 	if err != nil {
 		t.Fatalf("open usage database: %v", err)
 	}
-	if _, err := rawDB.ExecContext(ctx, `UPDATE usage_import_observations SET parser_revision = 0`); err != nil {
+	if _, err := rawDB.ExecContext(ctx, `
+		UPDATE usage_import_observations
+		SET parser_revision = 0, metadata_digest = ?
+	`, files[0].MetadataDigest); err != nil {
 		_ = rawDB.Close()
 		t.Fatalf("downgrade observation fixture: %v", err)
 	}
@@ -173,7 +185,8 @@ func TestBackgroundGrokBuildSyncRetriesObservationAfterParserUpgrade(t *testing.
 		ProvisionMode: SyncExistingProvider,
 		Observer:      observer,
 	})
-	if err != nil || !retried.Performed || len(retried.Result.Errors) != 1 || observer.opened.Load() != 1 {
+	if err != nil || !retried.Performed || retried.Result.ImportedEvents != 1 ||
+		len(retried.Result.Errors) != 0 || observer.opened.Load() != 1 {
 		t.Fatalf("parser-upgrade retry = %#v, err = %v, opens = %d", retried, err, observer.opened.Load())
 	}
 
@@ -182,12 +195,16 @@ func TestBackgroundGrokBuildSyncRetriesObservationAfterParserUpgrade(t *testing.
 		t.Fatalf("reopen usage database: %v", err)
 	}
 	defer rawDB.Close()
-	var parserRevision int64
-	if err := rawDB.QueryRowContext(ctx, `SELECT parser_revision FROM usage_import_observations`).Scan(&parserRevision); err != nil {
-		t.Fatalf("read retried observation: %v", err)
+	var observations int64
+	if err := rawDB.QueryRowContext(ctx, `SELECT COUNT(1) FROM usage_import_observations`).Scan(&observations); err != nil {
+		t.Fatalf("read retried observations: %v", err)
 	}
-	if parserRevision != GrokBuildUsageParserRevision {
-		t.Fatalf("observation parser revision = %d, want %d", parserRevision, GrokBuildUsageParserRevision)
+	if observations != 0 {
+		t.Fatalf("retried observations = %d, want 0", observations)
+	}
+	summary, err := environment.service.Summary(ctx, UsageSummaryRequest{ProviderID: grokconfig.ProviderID})
+	if err != nil || summary.EventCount != 1 || summary.TotalTokens != 2 {
+		t.Fatalf("parser-upgrade summary = %#v, err = %v", summary, err)
 	}
 }
 

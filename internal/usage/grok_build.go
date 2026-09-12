@@ -542,6 +542,12 @@ func validateGrokBuildUsageModel(model grokBuildUsageModel) error {
 		model.ReasoningTokens.value > model.OutputTokens.value {
 		return errors.New("terminal usage totals are inconsistent")
 	}
+	if model.CacheCreationTokens.set {
+		inputBuckets, ok := addUint64(model.CachedReadTokens.value, model.CacheCreationTokens.value)
+		if !ok || inputBuckets > model.InputTokens.value {
+			return errors.New("terminal usage input buckets are inconsistent")
+		}
+	}
 	return nil
 }
 
