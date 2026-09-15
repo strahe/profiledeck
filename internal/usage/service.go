@@ -49,18 +49,23 @@ type UsageSummaryRequest struct {
 }
 
 type UsageSummaryResult struct {
-	ProviderID              string   `json:"provider_id"`
-	Source                  string   `json:"source"`
-	Sources                 []string `json:"sources"`
-	EventCount              int64    `json:"event_count"`
-	InputTokens             int64    `json:"input_tokens"`
-	CachedInputTokens       int64    `json:"cached_input_tokens"`
-	OutputTokens            int64    `json:"output_tokens"`
-	TotalTokens             int64    `json:"total_tokens"`
-	EstimatedCostUSD        *string  `json:"estimated_cost_usd"`
-	CostStatus              string   `json:"cost_status"`
-	UnknownCostEventCount   int64    `json:"unknown_cost_event_count"`
-	EstimatedCostEventCount int64    `json:"estimated_cost_event_count"`
+	ProviderID                    string   `json:"provider_id"`
+	Source                        string   `json:"source"`
+	Sources                       []string `json:"sources"`
+	EventCount                    int64    `json:"event_count"`
+	InputTokens                   int64    `json:"input_tokens"`
+	CachedInputTokens             int64    `json:"cached_input_tokens"`
+	OutputTokens                  int64    `json:"output_tokens"`
+	TotalTokens                   int64    `json:"total_tokens"`
+	EstimatedCostUSD              *string  `json:"estimated_cost_usd"`
+	CostStatus                    string   `json:"cost_status"`
+	UnknownCostEventCount         int64    `json:"unknown_cost_event_count"`
+	EstimatedCostEventCount       int64    `json:"estimated_cost_event_count"`
+	ReportedCostUSD               *string  `json:"reported_cost_usd"`
+	ReportedCostStatus            string   `json:"reported_cost_status"`
+	UnknownReportedCostEventCount int64    `json:"unknown_reported_cost_event_count"`
+	ReportedCostEventCount        int64    `json:"reported_cost_event_count"`
+	PartialReportedCostEventCount int64    `json:"partial_reported_cost_event_count"`
 }
 
 func (service *Service) Sync(ctx context.Context, req UsageSyncRequest) (UsageSyncResult, error) {
@@ -265,18 +270,32 @@ func (service *Service) Summary(ctx context.Context, req UsageSummaryRequest) (U
 		return UsageSummaryResult{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to read usage summary", err)
 	}
 	result := UsageSummaryResult{
-		ProviderID:              providerID,
-		Source:                  summarySource(summary.Sources),
-		Sources:                 summary.Sources,
-		EventCount:              summary.EventCount,
-		InputTokens:             summary.InputTokens,
-		CachedInputTokens:       summary.CachedInputTokens,
-		OutputTokens:            summary.OutputTokens,
-		TotalTokens:             summary.TotalTokens,
-		CostStatus:              CostStatusEstimated.String(),
-		UnknownCostEventCount:   summary.UnknownCostEvents + summary.PartialCostEvents,
-		EstimatedCostEventCount: summary.EstimatedCostEventCount,
+		ProviderID:                    providerID,
+		Source:                        summarySource(summary.Sources),
+		Sources:                       summary.Sources,
+		EventCount:                    summary.EventCount,
+		InputTokens:                   summary.InputTokens,
+		CachedInputTokens:             summary.CachedInputTokens,
+		OutputTokens:                  summary.OutputTokens,
+		TotalTokens:                   summary.TotalTokens,
+		CostStatus:                    CostStatusEstimated.String(),
+		UnknownCostEventCount:         summary.UnknownCostEvents + summary.PartialCostEvents,
+		EstimatedCostEventCount:       summary.EstimatedCostEventCount,
+		ReportedCostStatus:            ReportedCostStatusUnknown.String(),
+		UnknownReportedCostEventCount: summary.UnknownReportedCostEvents,
+		ReportedCostEventCount:        summary.ReportedCostEventCount,
+		PartialReportedCostEventCount: summary.PartialReportedCostEvents,
 	}
+	if summary.ReportedCostEventCount+summary.PartialReportedCostEvents > 0 {
+		reportedCost := USDStringFromTicks(summary.ReportedCostUSDTicks)
+		result.ReportedCostUSD = &reportedCost
+	}
+	result.ReportedCostStatus = aggregateReportedCostStatus(
+		summary.EventCount,
+		summary.ReportedCostEventCount,
+		summary.PartialReportedCostEvents,
+		summary.UnknownReportedCostEvents,
+	)
 	// The legacy summary contract has no partial-cost state. Keep treating any
 	// incomplete subtotal as unknown instead of overstating precision.
 	if result.UnknownCostEventCount > 0 {

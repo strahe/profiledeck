@@ -17,6 +17,13 @@ export interface UsageAggregateSummary {
     "unknown_cost_event_count": number;
     "estimated_token_count": number;
     "pricing_coverage": number;
+    "known_reported_cost_usd": string;
+    "reported_cost_status": string;
+    "reported_cost_event_count": number;
+    "partial_reported_cost_event_count": number;
+    "unknown_reported_cost_event_count": number;
+    "reported_cost_token_count": number;
+    "reported_cost_coverage": number;
     "undated_event_count": number;
 }
 
@@ -88,6 +95,11 @@ export interface UsageSummaryResult {
     "cost_status": string;
     "unknown_cost_event_count": number;
     "estimated_cost_event_count": number;
+    "reported_cost_usd": string | null;
+    "reported_cost_status": string;
+    "unknown_reported_cost_event_count": number;
+    "reported_cost_event_count": number;
+    "partial_reported_cost_event_count": number;
 }
 
 export interface UsageTrendPoint {

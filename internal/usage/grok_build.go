@@ -23,7 +23,7 @@ import (
 
 const (
 	SourceGrokBuildSessionJSONL    = "grok-build-session-jsonl"
-	GrokBuildUsageParserRevision   = int64(2)
+	GrokBuildUsageParserRevision   = int64(3)
 	GrokBuildUsageIdentityRevision = int64(1)
 	maxGrokBuildSessionLineBytes   = 16 * 1024 * 1024
 
@@ -447,23 +447,49 @@ func grokBuildEventsFromTerminal(
 		if cost != nil && row.CacheCreationTokens.value > 0 {
 			status = CostStatusPartial
 		}
+		reportedCost, reportedStatus := grokBuildReportedCost(row, *usage, len(models) == 1)
 		events = append(events, Event{
-			EventKey:            GrokBuildEventID(promptID, model),
-			SessionID:           sessionKey,
-			Model:               model,
-			OccurredAtUnixMS:    occurredAt,
-			InputTokens:         tokens.InputTokens,
-			CachedInputTokens:   tokens.CachedInputTokens,
-			OutputTokens:        tokens.OutputTokens,
-			TotalTokens:         tokens.TotalTokens,
-			EstimatedCostMicros: cost,
-			CostStatus:          status,
+			EventKey:             GrokBuildEventID(promptID, model),
+			SessionID:            sessionKey,
+			Model:                model,
+			OccurredAtUnixMS:     occurredAt,
+			InputTokens:          tokens.InputTokens,
+			CachedInputTokens:    tokens.CachedInputTokens,
+			OutputTokens:         tokens.OutputTokens,
+			TotalTokens:          tokens.TotalTokens,
+			EstimatedCostMicros:  cost,
+			CostStatus:           status,
+			ReportedCostUSDTicks: reportedCost,
+			ReportedCostStatus:   reportedStatus,
 		})
 	}
 	if len(events) == 0 {
 		return nil, true, nil
 	}
 	return events, false, nil
+}
+
+func grokBuildReportedCost(
+	model grokBuildUsageModel,
+	usage grokBuildUsage,
+	singleModel bool,
+) (*int64, store.UsageReportedCostStatus) {
+	ticks := model.CostUSDTicks
+	partial := model.CostIsPartial.set && model.CostIsPartial.value
+	if ticks == nil || *ticks <= 0 {
+		if !singleModel || usage.CostUSDTicks == nil || *usage.CostUSDTicks <= 0 {
+			return nil, ReportedCostStatusUnknown
+		}
+		ticks = usage.CostUSDTicks
+		partial = usage.CostIsPartial.set && usage.CostIsPartial.value
+	} else if singleModel && usage.CostIsPartial.set && usage.CostIsPartial.value {
+		partial = true
+	}
+	value := *ticks
+	if partial {
+		return &value, ReportedCostStatusPartial
+	}
+	return &value, ReportedCostStatusReported
 }
 
 func validateGrokBuildUsage(usage grokBuildUsage) error {

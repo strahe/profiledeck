@@ -71,11 +71,14 @@ func TestUsageReportAggregatesRangeModelsBucketsAndImportHealth(t *testing.T) {
 	cost10 := int64(10)
 	cost20 := int64(20)
 	cost5 := int64(5)
+	reported100 := int64(100)
+	reported200 := int64(200)
+	reported50 := int64(50)
 	facts := []CreateUsageFactParams{
-		{EventKey: testUsageKey("event-a1"), SourceID: source.ID, SessionKey: "session-a", ModelKey: "model-a", OccurredAtUnixMS: 1_000, InputTokens: 100, CachedInputTokens: 40, OutputTokens: 20, TotalTokens: 120, EstimatedCostMicros: &cost10, CostStatus: UsageCostStatusEstimated},
+		{EventKey: testUsageKey("event-a1"), SourceID: source.ID, SessionKey: "session-a", ModelKey: "model-a", OccurredAtUnixMS: 1_000, InputTokens: 100, CachedInputTokens: 40, OutputTokens: 20, TotalTokens: 120, EstimatedCostMicros: &cost10, CostStatus: UsageCostStatusEstimated, ReportedCostUSDTicks: &reported100, ReportedCostStatus: UsageReportedCostStatusReported},
 		{EventKey: testUsageKey("event-a2"), SourceID: source.ID, SessionKey: "session-a", ModelKey: "model-a", OccurredAtUnixMS: 1_500, InputTokens: 50, CachedInputTokens: 10, OutputTokens: 10, TotalTokens: 60, CostStatus: UsageCostStatusUnknown},
-		{EventKey: testUsageKey("event-b1"), SourceID: source.ID, SessionKey: "session-b", ModelKey: "model-b", OccurredAtUnixMS: 2_500, InputTokens: 80, CachedInputTokens: 80, OutputTokens: 20, TotalTokens: 100, EstimatedCostMicros: &cost20, CostStatus: UsageCostStatusEstimated},
-		{EventKey: testUsageKey("event-undated"), SourceID: source.ID, SessionKey: "session-c", ModelKey: "model-b", InputTokens: 30, OutputTokens: 5, TotalTokens: 35, EstimatedCostMicros: &cost5, CostStatus: UsageCostStatusEstimated},
+		{EventKey: testUsageKey("event-b1"), SourceID: source.ID, SessionKey: "session-b", ModelKey: "model-b", OccurredAtUnixMS: 2_500, InputTokens: 80, CachedInputTokens: 80, OutputTokens: 20, TotalTokens: 100, EstimatedCostMicros: &cost20, CostStatus: UsageCostStatusEstimated, ReportedCostUSDTicks: &reported200, ReportedCostStatus: UsageReportedCostStatusPartial},
+		{EventKey: testUsageKey("event-undated"), SourceID: source.ID, SessionKey: "session-c", ModelKey: "model-b", InputTokens: 30, OutputTokens: 5, TotalTokens: 35, EstimatedCostMicros: &cost5, CostStatus: UsageCostStatusEstimated, ReportedCostUSDTicks: &reported50, ReportedCostStatus: UsageReportedCostStatusReported},
 	}
 	if result, err := db.InsertUsageFacts(ctx, testUsageFactBatch(source, facts)); err != nil || result.Inserted != len(facts) {
 		t.Fatalf("expected usage fixture insert, result=%#v err=%v", result, err)
@@ -114,6 +117,11 @@ func TestUsageReportAggregatesRangeModelsBucketsAndImportHealth(t *testing.T) {
 	}
 	if report.Summary.EstimatedCostMicros != 30 || report.Summary.EstimatedTokenCount != 220 || report.Summary.UnknownCostEvents != 1 || report.Summary.UndatedEventCount != 1 {
 		t.Fatalf("unexpected ranged cost and undated aggregate: %#v", report.Summary)
+	}
+	if report.Summary.ReportedCostUSDTicks != 300 || report.Summary.ReportedCostTokenCount != 120 ||
+		report.Summary.ReportedCostEventCount != 1 || report.Summary.PartialReportedCostEventCount != 1 ||
+		report.Summary.UnknownReportedCostEvents != 1 {
+		t.Fatalf("unexpected ranged reported cost aggregate: %#v", report.Summary)
 	}
 	if len(report.Trend) != 3 || report.Trend[0].TotalTokens != 180 || report.Trend[1].EventCount != 0 || report.Trend[2].TotalTokens != 100 {
 		t.Fatalf("unexpected zero-filled trend: %#v", report.Trend)

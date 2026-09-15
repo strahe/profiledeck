@@ -593,17 +593,19 @@ func usageEventsToFactParams(sourceID int64, events []Event) []store.CreateUsage
 	facts := make([]store.CreateUsageFactParams, 0, len(events))
 	for _, event := range events {
 		facts = append(facts, store.CreateUsageFactParams{
-			EventKey:            event.EventKey,
-			SourceID:            sourceID,
-			SessionKey:          event.SessionID,
-			ModelKey:            event.Model,
-			OccurredAtUnixMS:    event.OccurredAtUnixMS,
-			InputTokens:         event.InputTokens,
-			CachedInputTokens:   event.CachedInputTokens,
-			OutputTokens:        event.OutputTokens,
-			TotalTokens:         event.TotalTokens,
-			EstimatedCostMicros: event.EstimatedCostMicros,
-			CostStatus:          event.CostStatus,
+			EventKey:             event.EventKey,
+			SourceID:             sourceID,
+			SessionKey:           event.SessionID,
+			ModelKey:             event.Model,
+			OccurredAtUnixMS:     event.OccurredAtUnixMS,
+			InputTokens:          event.InputTokens,
+			CachedInputTokens:    event.CachedInputTokens,
+			OutputTokens:         event.OutputTokens,
+			TotalTokens:          event.TotalTokens,
+			EstimatedCostMicros:  event.EstimatedCostMicros,
+			CostStatus:           event.CostStatus,
+			ReportedCostUSDTicks: event.ReportedCostUSDTicks,
+			ReportedCostStatus:   event.ReportedCostStatus,
 		})
 	}
 	return facts

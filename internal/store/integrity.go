@@ -288,7 +288,13 @@ var schemaContracts = func() []schemaContract {
 		observationParserRevision.tableSpecs,
 		usageImportObservationParserRevisionTableSpec,
 	)
-	return []schemaContract{stable, grokBuild, incremental, observationParserRevision}
+	reportedCost := observationParserRevision
+	reportedCost.migrationKey = "grok_build_reported_cost"
+	reportedCost.tableSpecs = replaceTableSpec(
+		reportedCost.tableSpecs,
+		grokBuildReportedCostFactTableSpec,
+	)
+	return []schemaContract{stable, grokBuild, incremental, observationParserRevision, reportedCost}
 }()
 
 func jsonObjectExpression(column string) string {

@@ -131,8 +131,95 @@ func TestUsageSyncGrokBuildImportsCurrentSessionFormat(t *testing.T) {
 	})
 	if err != nil || report.Summary.EventCount != 1 || report.Summary.TotalTokens != 1_100 ||
 		report.Summary.CostStatus != CostStatusPartial.String() ||
-		report.Summary.KnownEstimatedCostUSD != "0.002300" || report.Summary.PartialCostEventCount != 1 {
+		report.Summary.KnownEstimatedCostUSD != "0.002300" || report.Summary.PartialCostEventCount != 1 ||
+		report.Summary.KnownReportedCostUSD != "0.0000012345" ||
+		report.Summary.ReportedCostStatus != ReportedCostStatusReported.String() ||
+		report.Summary.ReportedCostEventCount != 1 || report.Summary.ReportedCostCoverage != 1 {
 		t.Fatalf("current Grok Build report = %#v, err = %v", report, err)
+	}
+}
+
+func TestUsageSyncGrokBuildParserUpgradeBackfillsReportedCost(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	grokHome := t.TempDir()
+	fixture, err := os.ReadFile(filepath.Join("testdata", "grok-build-v1.0.25", "valid.jsonl"))
+	if err != nil {
+		t.Fatalf("read current Grok Build fixture: %v", err)
+	}
+	writeGrokBuildUsageFixture(t, grokHome, "workspace-upgrade", "session-upgrade", string(fixture))
+	environment := newGrokBuildUsageTestEnvironment(t, configDir, grokHome)
+	initialized, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx)
+	if err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+	if _, err := environment.service.SyncGrokBuild(ctx); err != nil {
+		t.Fatalf("initial Grok Build sync: %v", err)
+	}
+
+	rawDB, err := sql.Open("sqlite", initialized.DatabasePath)
+	if err != nil {
+		t.Fatalf("open usage database: %v", err)
+	}
+	if _, err := rawDB.ExecContext(ctx, `
+		UPDATE usage_facts SET reported_cost_usd_ticks = NULL, reported_cost_status = 0;
+		UPDATE grok_build_usage_import_files SET parser_revision = ?
+	`, GrokBuildUsageParserRevision-1); err != nil {
+		_ = rawDB.Close()
+		t.Fatalf("downgrade reported cost fixture: %v", err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close usage database: %v", err)
+	}
+
+	result, err := environment.service.SyncGrokBuild(ctx)
+	if err != nil || result.SkippedDuplicateEvents != 1 || result.InvalidLines != 0 {
+		t.Fatalf("parser upgrade sync = %#v, err = %v, cause = %v", result, err, errors.Unwrap(err))
+	}
+	summary, err := environment.service.Summary(ctx, UsageSummaryRequest{ProviderID: grokconfig.ProviderID})
+	if err != nil || summary.ReportedCostUSD == nil || *summary.ReportedCostUSD != "0.0000012345" ||
+		summary.ReportedCostStatus != ReportedCostStatusReported.String() {
+		t.Fatalf("backfilled reported cost summary = %#v, err = %v", summary, err)
+	}
+}
+
+func TestUsageSyncGrokBuildSameRevisionBackfillsReportedCost(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	grokHome := t.TempDir()
+	line := syntheticGrokBuildUsageLine(
+		"session-enriched",
+		"prompt-enriched",
+		"grok-4.6-build",
+		1_750_000_000,
+		TokenCounts{InputTokens: 100, CachedInputTokens: 40, OutputTokens: 20, TotalTokens: 120},
+	)
+	path := writeGrokBuildUsageFixture(t, grokHome, "workspace-enriched", "session-enriched", line)
+	environment := newGrokBuildUsageTestEnvironment(t, configDir, grokHome)
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+	if _, err := environment.service.SyncGrokBuild(ctx); err != nil {
+		t.Fatalf("initial Grok Build sync: %v", err)
+	}
+	before, err := environment.service.Summary(ctx, UsageSummaryRequest{ProviderID: grokconfig.ProviderID})
+	if err != nil || before.ReportedCostUSD != nil || before.ReportedCostStatus != ReportedCostStatusUnknown.String() {
+		t.Fatalf("initial reported cost summary = %#v, err = %v", before, err)
+	}
+
+	enriched := strings.ReplaceAll(line, `"costIsPartial":false`, `"costIsPartial":false,"costUsdTicks":5452000000`)
+	if strings.Count(enriched, `"costUsdTicks"`) != 2 {
+		t.Fatalf("reported cost fixture was not enriched: %s", enriched)
+	}
+	writeAppUsageFile(t, path, enriched)
+	result, err := environment.service.SyncGrokBuild(ctx)
+	if err != nil || result.ImportedEvents != 0 || result.SkippedDuplicateEvents != 1 || len(result.Errors) != 0 {
+		t.Fatalf("same-revision cost backfill = %#v, err = %v", result, err)
+	}
+	after, err := environment.service.Summary(ctx, UsageSummaryRequest{ProviderID: grokconfig.ProviderID})
+	if err != nil || after.ReportedCostUSD == nil || *after.ReportedCostUSD != "0.5452000000" ||
+		after.ReportedCostStatus != ReportedCostStatusReported.String() {
+		t.Fatalf("backfilled reported cost summary = %#v, err = %v", after, err)
 	}
 }
 

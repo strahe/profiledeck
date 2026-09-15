@@ -31,22 +31,29 @@ type UsageResolvedRange struct {
 }
 
 type UsageAggregateSummary struct {
-	EventCount              int64   `json:"event_count"`
-	SessionCount            int64   `json:"session_count"`
-	FreshInputTokens        int64   `json:"fresh_input_tokens"`
-	InputTokens             int64   `json:"input_tokens"`
-	CachedInputTokens       int64   `json:"cached_input_tokens"`
-	OutputTokens            int64   `json:"output_tokens"`
-	TotalTokens             int64   `json:"total_tokens"`
-	CacheHitRate            float64 `json:"cache_hit_rate"`
-	KnownEstimatedCostUSD   string  `json:"known_estimated_cost_usd"`
-	CostStatus              string  `json:"cost_status"`
-	EstimatedCostEventCount int64   `json:"estimated_cost_event_count"`
-	PartialCostEventCount   int64   `json:"partial_cost_event_count"`
-	UnknownCostEventCount   int64   `json:"unknown_cost_event_count"`
-	EstimatedTokenCount     int64   `json:"estimated_token_count"`
-	PricingCoverage         float64 `json:"pricing_coverage"`
-	UndatedEventCount       int64   `json:"undated_event_count"`
+	EventCount                    int64   `json:"event_count"`
+	SessionCount                  int64   `json:"session_count"`
+	FreshInputTokens              int64   `json:"fresh_input_tokens"`
+	InputTokens                   int64   `json:"input_tokens"`
+	CachedInputTokens             int64   `json:"cached_input_tokens"`
+	OutputTokens                  int64   `json:"output_tokens"`
+	TotalTokens                   int64   `json:"total_tokens"`
+	CacheHitRate                  float64 `json:"cache_hit_rate"`
+	KnownEstimatedCostUSD         string  `json:"known_estimated_cost_usd"`
+	CostStatus                    string  `json:"cost_status"`
+	EstimatedCostEventCount       int64   `json:"estimated_cost_event_count"`
+	PartialCostEventCount         int64   `json:"partial_cost_event_count"`
+	UnknownCostEventCount         int64   `json:"unknown_cost_event_count"`
+	EstimatedTokenCount           int64   `json:"estimated_token_count"`
+	PricingCoverage               float64 `json:"pricing_coverage"`
+	KnownReportedCostUSD          string  `json:"known_reported_cost_usd"`
+	ReportedCostStatus            string  `json:"reported_cost_status"`
+	ReportedCostEventCount        int64   `json:"reported_cost_event_count"`
+	PartialReportedCostEventCount int64   `json:"partial_reported_cost_event_count"`
+	UnknownReportedCostEventCount int64   `json:"unknown_reported_cost_event_count"`
+	ReportedCostTokenCount        int64   `json:"reported_cost_token_count"`
+	ReportedCostCoverage          float64 `json:"reported_cost_coverage"`
+	UndatedEventCount             int64   `json:"undated_event_count"`
 }
 
 type UsageTrendPoint struct {
@@ -188,29 +195,55 @@ func (service *Service) usageReportAt(ctx context.Context, req UsageReportReques
 func usageAggregateSummary(aggregate store.UsageAggregate) UsageAggregateSummary {
 	cacheHitRate := ratio(aggregate.CachedInputTokens, aggregate.InputTokens)
 	pricingCoverage := ratio(aggregate.EstimatedTokenCount, aggregate.TotalTokens)
+	reportedCostCoverage := ratio(aggregate.ReportedCostTokenCount, aggregate.TotalTokens)
 	costStatus := CostStatusUnknown.String()
 	if aggregate.EventCount > 0 && aggregate.UnknownCostEvents == 0 && aggregate.PartialCostEventCount > 0 {
 		costStatus = CostStatusPartial.String()
 	} else if aggregate.EventCount > 0 && aggregate.UnknownCostEvents == 0 {
 		costStatus = CostStatusEstimated.String()
 	}
+	reportedCostStatus := aggregateReportedCostStatus(
+		aggregate.EventCount,
+		aggregate.ReportedCostEventCount,
+		aggregate.PartialReportedCostEventCount,
+		aggregate.UnknownReportedCostEvents,
+	)
 	return UsageAggregateSummary{
-		EventCount:              aggregate.EventCount,
-		SessionCount:            aggregate.SessionCount,
-		FreshInputTokens:        aggregate.FreshInputTokens,
-		InputTokens:             aggregate.InputTokens,
-		CachedInputTokens:       aggregate.CachedInputTokens,
-		OutputTokens:            aggregate.OutputTokens,
-		TotalTokens:             aggregate.TotalTokens,
-		CacheHitRate:            cacheHitRate,
-		KnownEstimatedCostUSD:   USDStringFromMicros(aggregate.EstimatedCostMicros),
-		CostStatus:              costStatus,
-		EstimatedCostEventCount: aggregate.EstimatedCostEventCount,
-		PartialCostEventCount:   aggregate.PartialCostEventCount,
-		UnknownCostEventCount:   aggregate.UnknownCostEvents,
-		EstimatedTokenCount:     aggregate.EstimatedTokenCount,
-		PricingCoverage:         pricingCoverage,
-		UndatedEventCount:       aggregate.UndatedEventCount,
+		EventCount:                    aggregate.EventCount,
+		SessionCount:                  aggregate.SessionCount,
+		FreshInputTokens:              aggregate.FreshInputTokens,
+		InputTokens:                   aggregate.InputTokens,
+		CachedInputTokens:             aggregate.CachedInputTokens,
+		OutputTokens:                  aggregate.OutputTokens,
+		TotalTokens:                   aggregate.TotalTokens,
+		CacheHitRate:                  cacheHitRate,
+		KnownEstimatedCostUSD:         USDStringFromMicros(aggregate.EstimatedCostMicros),
+		CostStatus:                    costStatus,
+		EstimatedCostEventCount:       aggregate.EstimatedCostEventCount,
+		PartialCostEventCount:         aggregate.PartialCostEventCount,
+		UnknownCostEventCount:         aggregate.UnknownCostEvents,
+		EstimatedTokenCount:           aggregate.EstimatedTokenCount,
+		PricingCoverage:               pricingCoverage,
+		KnownReportedCostUSD:          USDStringFromTicks(aggregate.ReportedCostUSDTicks),
+		ReportedCostStatus:            reportedCostStatus,
+		ReportedCostEventCount:        aggregate.ReportedCostEventCount,
+		PartialReportedCostEventCount: aggregate.PartialReportedCostEventCount,
+		UnknownReportedCostEventCount: aggregate.UnknownReportedCostEvents,
+		ReportedCostTokenCount:        aggregate.ReportedCostTokenCount,
+		ReportedCostCoverage:          reportedCostCoverage,
+		UndatedEventCount:             aggregate.UndatedEventCount,
+	}
+}
+
+func aggregateReportedCostStatus(eventCount, reported, partial, unknown int64) string {
+	known := reported + partial
+	switch {
+	case eventCount <= 0 || known <= 0:
+		return ReportedCostStatusUnknown.String()
+	case partial > 0 || unknown > 0 || known < eventCount:
+		return ReportedCostStatusPartial.String()
+	default:
+		return ReportedCostStatusReported.String()
 	}
 }
 

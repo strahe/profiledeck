@@ -236,3 +236,77 @@ func TestUsageObservationParserRevisionUpgradeIsReplaySafeAndReversible(t *testi
 		t.Fatal("rollback retained observation parser revision column")
 	}
 }
+
+func TestGrokBuildReportedCostUpgradeIsReplaySafeAndReversible(t *testing.T) {
+	ctx := context.Background()
+	sqlDB, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migration.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := bun.NewDB(sqlDB, sqlitedialect.New())
+	defer db.Close()
+	for _, step := range []struct {
+		name    string
+		migrate func(context.Context, *bun.DB) error
+	}{
+		{name: "stable baseline", migrate: upStableBaseline},
+		{name: "Grok Build usage", migrate: upGrokBuildUsageImport},
+		{name: "incremental checkpoint", migrate: upUsageIncrementalCheckpoint},
+		{name: "observation parser revision", migrate: upUsageObservationParserRevision},
+	} {
+		if err := step.migrate(ctx, db); err != nil {
+			t.Fatalf("create %s: %v", step.name, err)
+		}
+	}
+	if _, err := sqlDB.ExecContext(ctx, `
+		INSERT INTO providers (id, name, adapter_id, created_at_unix_ms, updated_at_unix_ms)
+		VALUES ('grok-build', 'Grok Build', 'grok-build', 1, 1);
+		INSERT INTO usage_sources (provider_id, source_key, identity_revision)
+		VALUES ('grok-build', 'grok-build-session-jsonl', 1);
+		INSERT INTO usage_models (source_id, model_key) VALUES (1, 'grok-4.6-build');
+		INSERT INTO usage_facts (event_key, source_id, model_id, total_tokens, cost_status)
+		VALUES (X'0101010101010101010101010101010101010101010101010101010101010101', 1, 1, 1, 0)
+	`); err != nil {
+		t.Fatalf("seed pre-upgrade usage fact: %v", err)
+	}
+
+	if err := upGrokBuildReportedCost(ctx, db); err != nil {
+		t.Fatalf("upgrade reported cost: %v", err)
+	}
+	var ticks sql.NullInt64
+	var status int64
+	if err := sqlDB.QueryRowContext(ctx, `
+		SELECT reported_cost_usd_ticks, reported_cost_status FROM usage_facts
+	`).Scan(&ticks, &status); err != nil {
+		t.Fatalf("read upgraded usage fact: %v", err)
+	}
+	if ticks.Valid || status != 0 {
+		t.Fatalf("legacy reported cost = ticks %#v, status %d", ticks, status)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `
+		UPDATE usage_facts SET reported_cost_usd_ticks = 12345, reported_cost_status = 1
+	`); err != nil {
+		t.Fatalf("store reported cost: %v", err)
+	}
+	if err := upGrokBuildReportedCost(ctx, db); err != nil {
+		t.Fatalf("replay reported cost migration: %v", err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `
+		UPDATE usage_facts SET reported_cost_status = 0
+	`); err == nil {
+		t.Fatal("reported cost invariant accepted mismatched status")
+	}
+
+	if err := downGrokBuildReportedCost(ctx, db); err != nil {
+		t.Fatalf("rollback reported cost: %v", err)
+	}
+	for _, column := range []string{"reported_cost_usd_ticks", "reported_cost_status"} {
+		exists, err := usageColumnExists(ctx, db, "usage_facts", column)
+		if err != nil {
+			t.Fatalf("inspect rolled-back column %s: %v", column, err)
+		}
+		if exists {
+			t.Fatalf("rollback retained usage_facts.%s", column)
+		}
+	}
+}

@@ -14,18 +14,21 @@ import (
 )
 
 const (
-	ProviderCodex            = "codex"
-	SourceCodexSessionJSONL  = "codex-session-jsonl"
-	CostStatusEstimated      = store.UsageCostStatusEstimated
-	CostStatusPartial        = store.UsageCostStatusPartial
-	CostStatusUnknown        = store.UsageCostStatusUnknown
-	CodexUsageParserRevision = int64(1)
-	PricingBasis             = "openai-standard-api"
-	PricingSourceURL         = "https://developers.openai.com/api/docs/pricing"
-	PricingVerifiedAt        = "2026-09-12"
-	GrokBuildPricingBasis    = "xai-standard-api-short-context"
-	GrokBuildPricingSource   = "https://docs.x.ai/developers/pricing"
-	GrokBuildPricingVerified = "2026-09-12"
+	ProviderCodex              = "codex"
+	SourceCodexSessionJSONL    = "codex-session-jsonl"
+	CostStatusEstimated        = store.UsageCostStatusEstimated
+	CostStatusPartial          = store.UsageCostStatusPartial
+	CostStatusUnknown          = store.UsageCostStatusUnknown
+	ReportedCostStatusReported = store.UsageReportedCostStatusReported
+	ReportedCostStatusPartial  = store.UsageReportedCostStatusPartial
+	ReportedCostStatusUnknown  = store.UsageReportedCostStatusUnknown
+	CodexUsageParserRevision   = int64(1)
+	PricingBasis               = "openai-standard-api"
+	PricingSourceURL           = "https://developers.openai.com/api/docs/pricing"
+	PricingVerifiedAt          = "2026-09-12"
+	GrokBuildPricingBasis      = "xai-standard-api-short-context"
+	GrokBuildPricingSource     = "https://docs.x.ai/developers/pricing"
+	GrokBuildPricingVerified   = "2026-09-12"
 )
 
 // CodexUsageIdentityRevision changes whenever fact identity semantics change;
@@ -40,16 +43,18 @@ type TokenCounts struct {
 }
 
 type Event struct {
-	EventKey            store.UsageKey
-	SessionID           string
-	Model               string
-	OccurredAtUnixMS    int64
-	InputTokens         int64
-	CachedInputTokens   int64
-	OutputTokens        int64
-	TotalTokens         int64
-	EstimatedCostMicros *int64
-	CostStatus          store.UsageCostStatus
+	EventKey             store.UsageKey
+	SessionID            string
+	Model                string
+	OccurredAtUnixMS     int64
+	InputTokens          int64
+	CachedInputTokens    int64
+	OutputTokens         int64
+	TotalTokens          int64
+	EstimatedCostMicros  *int64
+	CostStatus           store.UsageCostStatus
+	ReportedCostUSDTicks *int64
+	ReportedCostStatus   store.UsageReportedCostStatus
 }
 
 type SourceFile struct {
@@ -338,4 +343,11 @@ func USDStringFromMicros(micros int64) string {
 		micros = 0
 	}
 	return fmt.Sprintf("%d.%06d", micros/1_000_000, micros%1_000_000)
+}
+
+func USDStringFromTicks(ticks int64) string {
+	if ticks < 0 {
+		ticks = 0
+	}
+	return fmt.Sprintf("%d.%010d", ticks/10_000_000_000, ticks%10_000_000_000)
 }

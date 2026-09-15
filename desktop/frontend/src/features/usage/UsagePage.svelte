@@ -19,11 +19,12 @@
 	import * as ToggleGroup from "$lib/components/ui/toggle-group";
 	import { desktopErrorMessage, isCancelError } from "$lib/desktop-errors";
 	import { currentDesktopLocale, translate } from "$lib/i18n";
+	import { cn } from "$lib/utils";
 	import UsageModelTable from "./UsageModelTable.svelte";
 	import UsageTrendChart from "./UsageTrendChart.svelte";
 
 	type UsageRange = "today" | "7d" | "30d" | "all";
-	type UsageMetric = "cost" | "tokens";
+	type UsageMetric = "cost" | "reported" | "tokens";
 	type Props = {
 		providerID: string;
 		providerName: string;
@@ -164,7 +165,7 @@
 	}
 
 	function changeMetric(value: string) {
-		if (value !== "cost" && value !== "tokens") {
+		if (value !== "cost" && value !== "tokens" && (value !== "reported" || providerID !== "grok-build")) {
 			metricSelection = metric;
 			return;
 		}
@@ -205,6 +206,21 @@
 		}).format(parsed);
 	}
 
+	function formatReportedCurrency(value: string): string {
+		const parsed = Number(value);
+		if (!Number.isFinite(parsed)) return value;
+		return new Intl.NumberFormat(currentDesktopLocale(), {
+			style: "currency",
+			currency: "USD",
+			minimumFractionDigits: 2,
+			maximumFractionDigits: 10,
+		}).format(parsed);
+	}
+
+	function hasKnownReportedCost(summary: UsageReportResult["summary"]): boolean {
+		return summary.reported_cost_event_count + summary.partial_reported_cost_event_count > 0;
+	}
+
 	function formatLastSync(unixMS: number): string {
 		if (unixMS <= 0) return translate("usage.neverSynced");
 		const value = new Date(unixMS);
@@ -227,7 +243,9 @@
 			+ Number(value.import.invalid_lines > 0 || value.import.unsupported_lines > 0)
 			+ Number(value.summary.undated_event_count > 0)
 			+ Number(value.summary.partial_cost_event_count > 0)
-			+ Number(value.summary.event_count > 0 && value.summary.unknown_cost_event_count > 0);
+			+ Number(value.summary.event_count > 0 && value.summary.unknown_cost_event_count > 0)
+			+ Number(providerID === "grok-build" && value.summary.partial_reported_cost_event_count > 0)
+			+ Number(providerID === "grok-build" && value.summary.event_count > 0 && value.summary.unknown_reported_cost_event_count > 0);
 	}
 </script>
 
@@ -282,7 +300,7 @@
 	{#if (loading && (!report || report.summary.event_count === 0)) || (report?.summary.event_count === 0 && initialSyncPending)}
 		<div class="grid min-h-56 place-items-center rounded-lg border bg-card"><Spinner class="size-5" /></div>
 	{:else if report}
-		{#if autoSyncStatus?.outcome === "warning" || report.import.invalid_lines > 0 || report.import.unsupported_lines > 0 || report.summary.undated_event_count > 0 || report.summary.partial_cost_event_count > 0 || (report.summary.event_count > 0 && report.summary.unknown_cost_event_count > 0)}
+		{#if autoSyncStatus?.outcome === "warning" || report.import.invalid_lines > 0 || report.import.unsupported_lines > 0 || report.summary.undated_event_count > 0 || report.summary.partial_cost_event_count > 0 || (report.summary.event_count > 0 && report.summary.unknown_cost_event_count > 0) || (providerID === "grok-build" && (report.summary.partial_reported_cost_event_count > 0 || (report.summary.event_count > 0 && report.summary.unknown_reported_cost_event_count > 0)))}
 			<Alert.Root>
 				<Alert.Title>{$_("usage.dataQuality.title")}</Alert.Title>
 				<Alert.Description>
@@ -297,6 +315,8 @@
 									{#if report.summary.undated_event_count > 0}<li>{$_("usage.dataQuality.undated", { values: { count: formatInteger(report.summary.undated_event_count) } })}</li>{/if}
 									{#if report.summary.partial_cost_event_count > 0}<li>{$_("usage.dataQuality.partialPricing", { values: { count: formatInteger(report.summary.partial_cost_event_count) } })}</li>{/if}
 									{#if report.summary.event_count > 0 && report.summary.unknown_cost_event_count > 0}<li>{$_("usage.dataQuality.pricing", { values: { count: formatInteger(report.summary.unknown_cost_event_count), coverage: formatPercent(report.summary.pricing_coverage) } })}</li>{/if}
+									{#if providerID === "grok-build" && report.summary.partial_reported_cost_event_count > 0}<li>{$_("usage.dataQuality.partialReportedCost", { values: { count: formatInteger(report.summary.partial_reported_cost_event_count) } })}</li>{/if}
+									{#if providerID === "grok-build" && report.summary.event_count > 0 && report.summary.unknown_reported_cost_event_count > 0}<li>{$_("usage.dataQuality.reportedCost", { values: { count: formatInteger(report.summary.unknown_reported_cost_event_count) } })}</li>{/if}
 								</ul>
 							</Accordion.Content>
 						</Accordion.Item>
@@ -313,7 +333,7 @@
 				</Empty.Header>
 			</Empty.Root>
 		{:else}
-			<div class="grid gap-3 sm:grid-cols-3">
+			<div class={cn("grid gap-3", providerID === "grok-build" ? "sm:grid-cols-2 lg:grid-cols-4" : "sm:grid-cols-3")}>
 				<Card.Root>
 					<Card.Header class="gap-1 py-3">
 						<div class="flex items-center justify-between gap-2">
@@ -332,6 +352,30 @@
 						</p>
 					</Card.Header>
 				</Card.Root>
+				{#if providerID === "grok-build"}
+					<Card.Root>
+						<Card.Header class="gap-1 py-3">
+							<div class="flex items-center justify-between gap-2">
+								<Card.Description>{$_("usage.reportedCost")}</Card.Description>
+								{#if report.summary.reported_cost_status !== "reported"}<Badge variant="outline">{hasKnownReportedCost(report.summary) ? $_("usage.reportedCostStatus.partial") : $_("usage.reportedCostStatus.unavailable")}</Badge>{/if}
+							</div>
+							<Card.Title class="text-xl tabular-nums">
+								{hasKnownReportedCost(report.summary) ? formatReportedCurrency(report.summary.known_reported_cost_usd) : "—"}
+							</Card.Title>
+							<p class="text-xs text-muted-foreground">
+								{#if report.summary.reported_cost_status === "reported"}
+									{$_("usage.reportedCostSource")}
+								{:else if report.summary.partial_reported_cost_event_count > 0}
+									{$_("usage.reportedCostPartial")}
+								{:else if hasKnownReportedCost(report.summary)}
+									{$_("usage.reportedCostCoverage", { values: { coverage: formatPercent(report.summary.reported_cost_coverage) } })}
+								{:else}
+									{$_("usage.reportedCostUnavailable")}
+								{/if}
+							</p>
+						</Card.Header>
+					</Card.Root>
+				{/if}
 				<Card.Root>
 					<Card.Header class="gap-1 py-3">
 						<Card.Description>{$_("usage.sessions")}</Card.Description>
@@ -351,7 +395,8 @@
 					<Card.Title class="text-sm">{$_("usage.trendTitle")}</Card.Title>
 					<Card.Action>
 						<ToggleGroup.Root type="single" bind:value={metricSelection} onValueChange={changeMetric} variant="outline" size="sm" aria-label={$_("usage.chart.metricLabel")}>
-							<ToggleGroup.Item value="cost">{$_("usage.chart.cost")}</ToggleGroup.Item>
+							<ToggleGroup.Item value="cost">{providerID === "grok-build" ? $_("usage.chart.apiCost") : $_("usage.chart.cost")}</ToggleGroup.Item>
+							{#if providerID === "grok-build"}<ToggleGroup.Item value="reported">{$_("usage.chart.reportedCost")}</ToggleGroup.Item>{/if}
 							<ToggleGroup.Item value="tokens">{$_("usage.chart.tokens")}</ToggleGroup.Item>
 						</ToggleGroup.Root>
 					</Card.Action>
@@ -363,7 +408,7 @@
 				<Card.Header class="pb-2">
 					<Card.Title class="text-sm">{$_("usage.modelsTitle")}</Card.Title>
 				</Card.Header>
-				<Card.Content class="px-0 pb-0"><UsageModelTable models={report.models ?? []} /></Card.Content>
+				<Card.Content class="px-0 pb-0"><UsageModelTable models={report.models ?? []} showReportedCost={providerID === "grok-build"} /></Card.Content>
 			</Card.Root>
 		{/if}
 	{/if}

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,6 +32,52 @@ func TestUsageSchemaSupportsPartialCost(t *testing.T) {
 	storeStatus, err := db.Status(ctx)
 	if err != nil || !storeStatus.SchemaHealthy {
 		t.Fatalf("expected usage schema to remain healthy, status=%#v err=%v", storeStatus, err)
+	}
+}
+
+func TestUsageFactsUpgradeReportedCostWithoutOverwritingIt(t *testing.T) {
+	ctx := context.Background()
+	db := openTestStore(t, ctx, filepath.Join(t.TempDir(), "profiledeck.db"), false)
+	defer closeTestStore(t, db)
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatalf("migrate usage store: %v", err)
+	}
+	createUsageProviderFixture(t, ctx, db, "grok-build")
+	source, err := db.BeginUsageSync(ctx, "grok-build", "grok-build-session-jsonl", 1)
+	if err != nil {
+		t.Fatalf("begin usage sync: %v", err)
+	}
+	fact := CreateUsageFactParams{
+		EventKey: testUsageKey("reported-cost-upgrade"), SourceID: source.ID,
+		SessionKey: "session", ModelKey: "grok-4.6-build",
+		InputTokens: 10, OutputTokens: 2, TotalTokens: 12,
+		CostStatus: UsageCostStatusUnknown,
+	}
+	if result, err := db.InsertUsageFacts(ctx, testUsageFactBatch(source, []CreateUsageFactParams{fact})); err != nil || result.Inserted != 1 {
+		t.Fatalf("insert unknown reported cost: result=%#v err=%v", result, err)
+	}
+	ticks := int64(5_452_000_000)
+	fact.ReportedCostUSDTicks = &ticks
+	fact.ReportedCostStatus = UsageReportedCostStatusReported
+	if result, err := db.InsertUsageFacts(ctx, testUsageFactBatch(source, []CreateUsageFactParams{fact})); err != nil || result.Duplicates != 1 {
+		t.Fatalf("upgrade reported cost: result=%#v err=%v", result, err)
+	}
+	if result, err := db.InsertUsageFacts(ctx, testUsageFactBatch(source, []CreateUsageFactParams{fact})); err != nil || result.Duplicates != 1 {
+		t.Fatalf("repeat reported cost: result=%#v err=%v", result, err)
+	}
+	otherTicks := ticks + 1
+	fact.ReportedCostUSDTicks = &otherTicks
+	if _, err := db.InsertUsageFacts(ctx, testUsageFactBatch(source, []CreateUsageFactParams{fact})); !errors.Is(err, ErrUsageFactConflict) {
+		t.Fatalf("conflicting reported cost error = %v, want ErrUsageFactConflict", err)
+	}
+	var persistedTicks, persistedStatus int64
+	if err := db.executor().QueryRowContext(ctx, `
+		SELECT reported_cost_usd_ticks, reported_cost_status FROM usage_facts WHERE event_key = ?
+	`, fact.EventKey).Scan(&persistedTicks, &persistedStatus); err != nil {
+		t.Fatalf("read reported cost: %v", err)
+	}
+	if persistedTicks != ticks || persistedStatus != int64(UsageReportedCostStatusReported) {
+		t.Fatalf("persisted reported cost = %d/%d", persistedTicks, persistedStatus)
 	}
 }
 
