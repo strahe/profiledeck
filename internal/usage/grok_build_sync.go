@@ -133,6 +133,7 @@ func (integration grokBuildIntegration) Sync(
 			continue
 		}
 		eventsToStore := parsed.Events
+		replayExistingFacts := false
 		importedFacts := int64(len(parsed.Events))
 		invalidLines := parsed.InvalidLines
 		unsupportedLines := parsed.UnsupportedLines
@@ -143,7 +144,12 @@ func (integration grokBuildIntegration) Sync(
 				continue
 			}
 			if fullParse {
-				eventsToStore = parsed.Events[cursor.ImportedFacts:]
+				if cursor.ParserRevision == GrokBuildUsageParserRevision {
+					eventsToStore = parsed.Events[cursor.ImportedFacts:]
+				} else {
+					eventsToStore = parsed.Events
+					replayExistingFacts = true
+				}
 				importedFacts = int64(len(parsed.Events))
 			} else {
 				importedFacts = cursor.ImportedFacts + int64(len(parsed.Events))
@@ -178,11 +184,12 @@ func (integration grokBuildIntegration) Sync(
 		insertResult, err := db.CommitGrokBuildUsageImport(
 			ctx,
 			store.CommitGrokBuildUsageImportParams{
-				ProviderID: grokconfig.ProviderID,
-				Generation: source.SyncGeneration,
-				Facts:      usageEventsToFactParams(source.ID, eventsToStore),
-				File:       desired,
-				Expected:   expected,
+				ProviderID:          grokconfig.ProviderID,
+				Generation:          source.SyncGeneration,
+				Facts:               usageEventsToFactParams(source.ID, eventsToStore),
+				File:                desired,
+				Expected:            expected,
+				ReplayExistingFacts: replayExistingFacts,
 			},
 		)
 		if errors.Is(err, store.ErrUsageCursorConflict) {

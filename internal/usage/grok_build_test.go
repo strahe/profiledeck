@@ -45,6 +45,10 @@ func TestParseGrokBuildSyntheticFixture(t *testing.T) {
 		first.CostStatus != CostStatusEstimated {
 		t.Fatalf("first event cost = %#v", first)
 	}
+	if first.ReportedCostUSDTicks == nil || *first.ReportedCostUSDTicks != 999 ||
+		first.ReportedCostStatus != ReportedCostStatusReported {
+		t.Fatalf("first event reported cost = %#v", first)
+	}
 
 	known, unknown := result.Events[1], result.Events[2]
 	if known.Model != "grok-4.5" || known.OccurredAtUnixMS != 0 ||
@@ -59,6 +63,11 @@ func TestParseGrokBuildSyntheticFixture(t *testing.T) {
 	}
 	if known.SessionID != unknown.SessionID {
 		t.Fatalf("one terminal produced different session keys: %q != %q", known.SessionID, unknown.SessionID)
+	}
+	if known.ReportedCostUSDTicks != nil || known.ReportedCostStatus != ReportedCostStatusUnknown ||
+		unknown.ReportedCostUSDTicks == nil || *unknown.ReportedCostUSDTicks != 123 ||
+		unknown.ReportedCostStatus != ReportedCostStatusPartial {
+		t.Fatalf("model reported costs = known %#v, unknown %#v", known, unknown)
 	}
 }
 
@@ -94,8 +103,39 @@ func TestParseGrokBuildCurrentSessionFixture(t *testing.T) {
 	if event.Model != "grok-4.6-build" || event.InputTokens != 1_000 ||
 		event.CachedInputTokens != 200 || event.OutputTokens != 100 ||
 		event.TotalTokens != 1_100 || event.EstimatedCostMicros == nil ||
-		*event.EstimatedCostMicros != 2_300 || event.CostStatus != CostStatusPartial {
+		*event.EstimatedCostMicros != 2_300 || event.CostStatus != CostStatusPartial ||
+		event.ReportedCostUSDTicks == nil || *event.ReportedCostUSDTicks != 12_345 ||
+		event.ReportedCostStatus != ReportedCostStatusReported {
 		t.Fatalf("current Grok Build event = %#v", event)
+	}
+}
+
+func TestParseGrokBuildUsesTopLevelReportedCostOnlyForSingleModel(t *testing.T) {
+	single := `{"timestamp":1,"method":"_x.ai/session/update","params":{"sessionId":"session","update":{"sessionUpdate":"turn_completed","prompt_id":"prompt","stop_reason":"end_turn","usage":{"inputTokens":10,"outputTokens":2,"totalTokens":12,"cachedReadTokens":1,"reasoningTokens":1,"modelCalls":1,"apiDurationMs":5,"costUsdTicks":7,"costIsPartial":true,"modelUsage":{"grok-build-latest":{"inputTokens":10,"outputTokens":2,"totalTokens":12,"cachedReadTokens":1,"reasoningTokens":1,"modelCalls":1,"apiDurationMs":5}},"numTurns":1}},"_meta":{}}}`
+	events, skipped, err := parseGrokBuildSessionLine([]byte(single))
+	if err != nil || skipped || len(events) != 1 || events[0].ReportedCostUSDTicks == nil ||
+		*events[0].ReportedCostUSDTicks != 7 || events[0].ReportedCostStatus != ReportedCostStatusPartial {
+		t.Fatalf("single-model reported cost fallback = %#v, skipped=%t, err=%v", events, skipped, err)
+	}
+
+	multiple := strings.Replace(single,
+		`"inputTokens":10,"outputTokens":2,"totalTokens":12,"cachedReadTokens":1,"reasoningTokens":1,"modelCalls":1,"apiDurationMs":5,"costUsdTicks":7`,
+		`"inputTokens":20,"outputTokens":4,"totalTokens":24,"cachedReadTokens":2,"reasoningTokens":2,"modelCalls":2,"apiDurationMs":10,"costUsdTicks":7`,
+		1,
+	)
+	multiple = strings.Replace(multiple,
+		`"modelUsage":{"grok-build-latest":{"inputTokens":10,"outputTokens":2,"totalTokens":12,"cachedReadTokens":1,"reasoningTokens":1,"modelCalls":1,"apiDurationMs":5}}`,
+		`"modelUsage":{"grok-build-latest":{"inputTokens":10,"outputTokens":2,"totalTokens":12,"cachedReadTokens":1,"reasoningTokens":1,"modelCalls":1,"apiDurationMs":5},"grok-4.5":{"inputTokens":10,"outputTokens":2,"totalTokens":12,"cachedReadTokens":1,"reasoningTokens":1,"modelCalls":1,"apiDurationMs":5}}`,
+		1,
+	)
+	events, skipped, err = parseGrokBuildSessionLine([]byte(multiple))
+	if err != nil || skipped || len(events) != 2 {
+		t.Fatalf("multi-model reported cost parse = %#v, skipped=%t, err=%v", events, skipped, err)
+	}
+	for _, event := range events {
+		if event.ReportedCostUSDTicks != nil || event.ReportedCostStatus != ReportedCostStatusUnknown {
+			t.Fatalf("top-level reported cost was duplicated across models: %#v", events)
+		}
 	}
 }
 
@@ -191,6 +231,12 @@ func TestGrokBuildEventAndSessionIdentityContracts(t *testing.T) {
 	alias.OccurredAtUnixMS = 2
 	if GrokBuildEventDigest([]Event{event}, 1) != GrokBuildEventDigest([]Event{alias}, 1) {
 		t.Fatal("prefix digest included fork-local session or timestamp")
+	}
+	reportedTicks := int64(123)
+	alias.ReportedCostUSDTicks = &reportedTicks
+	alias.ReportedCostStatus = ReportedCostStatusReported
+	if GrokBuildEventDigest([]Event{event}, 1) != GrokBuildEventDigest([]Event{alias}, 1) {
+		t.Fatal("prefix digest included parser-derived reported cost")
 	}
 	alias.TotalTokens++
 	if GrokBuildEventDigest([]Event{event}, 1) == GrokBuildEventDigest([]Event{alias}, 1) {

@@ -5,7 +5,7 @@
 
 	import { currentDesktopLocale, translate } from "$lib/i18n";
 
-	type UsageMetric = "cost" | "tokens";
+	type UsageMetric = "cost" | "reported" | "tokens";
 	type TooltipSource = "pointer" | "focus";
 	type TooltipState = {
 		index: number;
@@ -58,13 +58,25 @@
 	}
 
 	function metricValue(point: UsageTrendPoint): number {
-		if (metric === "cost") return costValue(point);
+		if (metric !== "tokens") return costValue(point);
 		return point.summary.fresh_input_tokens + point.summary.cached_input_tokens + point.summary.output_tokens;
 	}
 
 	function costValue(point: UsageTrendPoint): number {
-		const value = Number(point.summary.known_estimated_cost_usd);
+		const value = Number(metric === "reported" ? point.summary.known_reported_cost_usd : point.summary.known_estimated_cost_usd);
 		return Number.isFinite(value) ? Math.max(0, value) : 0;
+	}
+
+	function chartTitle(): string {
+		if (metric === "cost") return translate("usage.chart.costTitle");
+		if (metric === "reported") return translate("usage.chart.reportedCostTitle");
+		return translate("usage.chart.tokenTitle");
+	}
+
+	function chartDescription(): string {
+		if (metric === "cost") return translate("usage.chart.costDescription");
+		if (metric === "reported") return translate("usage.chart.reportedCostDescription");
+		return translate("usage.chart.tokenDescription");
 	}
 
 	function segmentHeight(value: number): number {
@@ -81,7 +93,7 @@
 			style: "currency",
 			currency: "USD",
 			minimumFractionDigits: 0,
-			maximumFractionDigits: value > 0 && value < 0.01 ? 6 : 2,
+			maximumFractionDigits: metric === "reported" ? 10 : value > 0 && value < 0.01 ? 6 : 2,
 		}).format(value);
 	}
 
@@ -104,6 +116,17 @@
 			currency: "USD",
 			minimumFractionDigits: 2,
 			maximumFractionDigits: 6,
+		}).format(parsed);
+	}
+
+	function formatReportedCurrency(value: string): string {
+		const parsed = Number(value);
+		if (!Number.isFinite(parsed)) return value;
+		return new Intl.NumberFormat(currentDesktopLocale(), {
+			style: "currency",
+			currency: "USD",
+			minimumFractionDigits: 2,
+			maximumFractionDigits: 10,
 		}).format(parsed);
 	}
 
@@ -178,6 +201,16 @@
 				bucket: fullBucketLabel(point.start_unix_ms),
 				cost: formatCurrency(point.summary.known_estimated_cost_usd),
 				coverage: formatPercent(point.summary.pricing_coverage),
+			});
+		}
+		if (metric === "reported") {
+			const key = point.summary.partial_reported_cost_event_count > 0
+				? "usage.chart.partialReportedCostBucketAria"
+				: "usage.chart.reportedCostBucketAria";
+			return translate(key, {
+				bucket: fullBucketLabel(point.start_unix_ms),
+				cost: formatReportedCurrency(point.summary.known_reported_cost_usd),
+				coverage: formatPercent(point.summary.reported_cost_coverage),
 			});
 		}
 		return translate("usage.chart.tokenBucketAria", {
@@ -286,8 +319,8 @@
 	{/if}
 
 	<svg class="h-auto w-full overflow-visible" viewBox={`0 0 ${width} ${height}`} role="group" aria-labelledby={`${chartTitleID} ${chartDescriptionID}`}>
-		<title id={chartTitleID}>{metric === "cost" ? $_("usage.chart.costTitle") : $_("usage.chart.tokenTitle")}</title>
-		<desc id={chartDescriptionID}>{metric === "cost" ? $_("usage.chart.costDescription") : $_("usage.chart.tokenDescription")}</desc>
+		<title id={chartTitleID}>{chartTitle()}</title>
+		<desc id={chartDescriptionID}>{chartDescription()}</desc>
 
 		{#each ticks as tick, index (index)}
 			{@const y = margin.top + index * plotHeight / 4}
@@ -323,7 +356,7 @@
 				class="cursor-pointer outline-none focus-visible:[&_rect[data-focus]]:stroke-ring"
 			>
 				<rect data-focus x="1" y={margin.top} width={Math.max(1, slotWidth - 2)} height={plotHeight} rx="3" fill={tooltip?.index === index ? "var(--accent)" : "transparent"} fill-opacity={tooltip?.index === index ? 0.65 : 0} stroke="transparent" stroke-width="2" />
-				{#if metric === "cost"}
+				{#if metric !== "tokens"}
 					<rect x={(slotWidth - barWidth) / 2} y={plotBottom - costHeight} width={barWidth} height={costHeight} fill="var(--chart-1)" />
 				{:else}
 					<rect x={(slotWidth - barWidth) / 2} y={plotBottom - freshHeight} width={barWidth} height={freshHeight} fill="var(--chart-1)" />
@@ -346,13 +379,19 @@
 			style={`left: ${tooltip.left}px; top: ${tooltip.top}px;`}
 		>
 			<div class="font-medium">{fullBucketLabel(tooltipPoint.start_unix_ms)}</div>
-			{#if metric === "cost"}
-				<div class="mt-1 flex items-center justify-between gap-4"><span>{$_("usage.chart.knownCost")}</span><span class="font-mono tabular-nums">{formatCurrency(tooltipPoint.summary.known_estimated_cost_usd)}</span></div>
-				{#if tooltipPoint.summary.partial_cost_event_count > 0}
+			{#if metric !== "tokens"}
+				<div class="mt-1 flex items-center justify-between gap-4">
+					<span>{metric === "reported" ? $_("usage.chart.knownReportedCost") : $_("usage.chart.knownCost")}</span>
+					<span class="font-mono tabular-nums">{metric === "reported" ? formatReportedCurrency(tooltipPoint.summary.known_reported_cost_usd) : formatCurrency(tooltipPoint.summary.known_estimated_cost_usd)}</span>
+				</div>
+				{#if metric === "cost" && tooltipPoint.summary.partial_cost_event_count > 0}
 					<div class="mt-1 text-muted-foreground">{$_("usage.chart.partialEstimate")}</div>
+				{:else if metric === "reported" && tooltipPoint.summary.partial_reported_cost_event_count > 0}
+					<div class="mt-1 text-muted-foreground">{$_("usage.chart.partialReportedCost")}</div>
 				{/if}
-				{#if tooltipPoint.summary.event_count > 0 && tooltipPoint.summary.pricing_coverage < 1}
-					<div class="mt-1 flex items-center justify-between gap-4 text-muted-foreground"><span>{$_("usage.chart.coverage")}</span><span class="font-mono tabular-nums">{formatPercent(tooltipPoint.summary.pricing_coverage)}</span></div>
+				{@const coverage = metric === "reported" ? tooltipPoint.summary.reported_cost_coverage : tooltipPoint.summary.pricing_coverage}
+				{#if tooltipPoint.summary.event_count > 0 && coverage < 1}
+					<div class="mt-1 flex items-center justify-between gap-4 text-muted-foreground"><span>{$_("usage.chart.coverage")}</span><span class="font-mono tabular-nums">{formatPercent(coverage)}</span></div>
 				{/if}
 			{:else}
 				<div class="mt-1 flex items-center justify-between gap-4"><span>{$_("usage.total")}</span><span class="font-mono tabular-nums">{formatInteger(tooltipPoint.summary.total_tokens)}</span></div>

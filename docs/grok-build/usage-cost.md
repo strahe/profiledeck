@@ -1,6 +1,6 @@
 # Grok Build Usage and Cost
 
-ProfileDeck reads local Grok Build session records to show token usage, activity, and estimated API-equivalent cost. Reports stay offline and do not assign activity to a Profile, saved login, or account.
+ProfileDeck reads local Grok Build session records to show token usage, activity, static API-equivalent cost estimates, and cost reported by Grok Build. Reports stay offline and do not assign activity to a Profile, saved login, or account.
 
 ## Sync in the Desktop app
 
@@ -51,7 +51,7 @@ profiledeck-cli usage summary --provider grok-build
 profiledeck-cli usage summary --provider grok-build --json
 ```
 
-The summary includes event count, input and output tokens, cached input, total tokens, estimated cost when available, and the number of events with unknown cost.
+The summary includes event count, input and output tokens, cached input, total tokens, API-equivalent cost when available, Grok-reported cost when available, and the number of events with unknown cost for each figure.
 
 ## View a report
 
@@ -62,9 +62,9 @@ profiledeck-cli usage report --provider grok-build --range 30d --json
 profiledeck-cli usage report --provider grok-build --range all
 ```
 
-The default range is `7d`. Reports use your computer's local time zone and include token totals, session count, cache hit rate, known cost, pricing coverage, model details, and sync status. Records without a timestamp are included in all-time totals and model details, reported separately, and excluded from the timeline.
+The default range is `7d`. Reports use your computer's local time zone and include token totals, session count, cache hit rate, API-equivalent and Grok-reported cost subtotals, coverage for both figures, model details, and sync status. Records without a timestamp are included in all-time totals and model details, reported separately, and excluded from the timeline.
 
-## Understand cost estimates
+## Understand cost figures
 
 ProfileDeck uses the short-context xAI Standard API-equivalent prices included with the installed version:
 
@@ -81,9 +81,13 @@ The prices come from [xAI pricing](https://docs.x.ai/developers/pricing). [Grok 
 
 When a session record includes cache-creation tokens, ProfileDeck keeps the event and reports a partial estimate because usage facts currently price only input, cached input, and output tokens.
 
-Amounts recorded by Grok Build are not imported as billing data. An unrecognized model keeps its token totals but has unknown cost. Existing estimates are not recalculated when a later ProfileDeck version changes its built-in prices; facts with unknown cost can receive an estimate when their model becomes recognized.
+When a completed turn contains `costUsdTicks`, ProfileDeck imports the per-model value as Grok-reported cost; 10,000,000,000 ticks equal US$1. A top-level value is used only when the turn contains exactly one model, so the same amount is never assigned to several models. Missing or nonpositive values remain unknown, and `costIsPartial` is shown as partial.
 
-These estimates are not invoices, credits, quotas, or account balances. ProfileDeck does not contact xAI or a billing API when syncing or producing a report.
+API-equivalent estimates and Grok-reported amounts remain separate and are never added together. Reports show the known subtotal and coverage when some completed turns are missing either figure. An unrecognized model keeps its token totals and Grok-reported amount but has unknown API-equivalent cost. Existing estimates are not recalculated when a later ProfileDeck version changes its built-in prices; facts with unknown API-equivalent cost can receive an estimate when their model becomes recognized.
+
+The Grok Build Usage Limit panel may cover only activity since the process started or was last resumed, while ProfileDeck reports completed turns found in local session history for the selected dates. Their totals can therefore differ even when both values came from the same local session.
+
+Neither figure is an invoice, credit balance, quota, or account charge. ProfileDeck does not contact xAI or a billing API when syncing or producing a report.
 
 ## Privacy limits
 

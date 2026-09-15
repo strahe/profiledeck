@@ -159,6 +159,30 @@ func TestUsageReportEmptyDefaultsAndValidation(t *testing.T) {
 	assertAppErrorCode(t, err, apperror.UsageInvalid)
 }
 
+func TestAggregateReportedCostStatusDistinguishesPartialCoverage(t *testing.T) {
+	tests := []struct {
+		name     string
+		events   int64
+		reported int64
+		partial  int64
+		unknown  int64
+		want     string
+	}{
+		{name: "empty", want: "unknown"},
+		{name: "all missing", events: 2, unknown: 2, want: "unknown"},
+		{name: "fully reported", events: 2, reported: 2, want: "reported"},
+		{name: "provider marked partial", events: 2, reported: 1, partial: 1, want: "partial"},
+		{name: "mixed coverage", events: 2, reported: 1, unknown: 1, want: "partial"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := aggregateReportedCostStatus(test.events, test.reported, test.partial, test.unknown); got != test.want {
+				t.Fatalf("reported cost status = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func reportEvent(id, sessionID, model string, occurredAt, input, cached, output int64, cost *int64, status store.UsageCostStatus) store.CreateUsageFactParams {
 	return store.CreateUsageFactParams{
 		EventKey: usageTestEventKey(id), SessionKey: sessionID, ModelKey: model, OccurredAtUnixMS: occurredAt,

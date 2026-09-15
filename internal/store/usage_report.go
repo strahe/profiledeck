@@ -9,17 +9,21 @@ import (
 )
 
 type UsageSummary struct {
-	ProviderID              string
-	Sources                 []string
-	EventCount              int64
-	InputTokens             int64
-	CachedInputTokens       int64
-	OutputTokens            int64
-	TotalTokens             int64
-	EstimatedCostMicros     int64
-	UnknownCostEvents       int64
-	PartialCostEvents       int64
-	EstimatedCostEventCount int64
+	ProviderID                string
+	Sources                   []string
+	EventCount                int64
+	InputTokens               int64
+	CachedInputTokens         int64
+	OutputTokens              int64
+	TotalTokens               int64
+	EstimatedCostMicros       int64
+	UnknownCostEvents         int64
+	PartialCostEvents         int64
+	EstimatedCostEventCount   int64
+	ReportedCostUSDTicks      int64
+	UnknownReportedCostEvents int64
+	PartialReportedCostEvents int64
+	ReportedCostEventCount    int64
 }
 
 type UsageReportQuery struct {
@@ -35,19 +39,24 @@ type UsageTimeBucket struct {
 }
 
 type UsageAggregate struct {
-	EventCount              int64
-	SessionCount            int64
-	FreshInputTokens        int64
-	InputTokens             int64
-	CachedInputTokens       int64
-	OutputTokens            int64
-	TotalTokens             int64
-	EstimatedCostMicros     int64
-	EstimatedTokenCount     int64
-	UnknownCostEvents       int64
-	EstimatedCostEventCount int64
-	PartialCostEventCount   int64
-	UndatedEventCount       int64
+	EventCount                    int64
+	SessionCount                  int64
+	FreshInputTokens              int64
+	InputTokens                   int64
+	CachedInputTokens             int64
+	OutputTokens                  int64
+	TotalTokens                   int64
+	EstimatedCostMicros           int64
+	EstimatedTokenCount           int64
+	UnknownCostEvents             int64
+	EstimatedCostEventCount       int64
+	PartialCostEventCount         int64
+	ReportedCostUSDTicks          int64
+	ReportedCostTokenCount        int64
+	UnknownReportedCostEvents     int64
+	ReportedCostEventCount        int64
+	PartialReportedCostEventCount int64
+	UndatedEventCount             int64
 }
 
 type UsageTrendAggregate struct {
@@ -114,6 +123,10 @@ func (s *Store) usageSummary(ctx context.Context, providerID string) (UsageSumma
 	summary.UnknownCostEvents = aggregate.UnknownCostEvents
 	summary.PartialCostEvents = aggregate.PartialCostEventCount
 	summary.EstimatedCostEventCount = aggregate.EstimatedCostEventCount
+	summary.ReportedCostUSDTicks = aggregate.ReportedCostUSDTicks
+	summary.UnknownReportedCostEvents = aggregate.UnknownReportedCostEvents
+	summary.PartialReportedCostEvents = aggregate.PartialReportedCostEventCount
+	summary.ReportedCostEventCount = aggregate.ReportedCostEventCount
 	return summary, nil
 }
 
@@ -407,11 +420,19 @@ func usageFactAggregateColumns(alias, undatedExpression string) string {
 		COALESCE(SUM(CASE WHEN %[1]s.cost_status = %[4]d THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN %[1]s.cost_status = %[2]d THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN %[1]s.cost_status = %[3]d THEN 1 ELSE 0 END), 0),
-		%[5]s`,
+		COALESCE(SUM(COALESCE(%[1]s.reported_cost_usd_ticks, 0)), 0),
+		COALESCE(SUM(CASE WHEN %[1]s.reported_cost_status IN (%[5]d, %[6]d) THEN %[1]s.total_tokens ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN %[1]s.reported_cost_status = %[7]d THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN %[1]s.reported_cost_status = %[5]d THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN %[1]s.reported_cost_status = %[6]d THEN 1 ELSE 0 END), 0),
+		%[8]s`,
 		alias,
 		UsageCostStatusEstimated,
 		UsageCostStatusPartial,
 		UsageCostStatusUnknown,
+		UsageReportedCostStatusReported,
+		UsageReportedCostStatusPartial,
+		UsageReportedCostStatusUnknown,
 		undatedExpression,
 	)
 }
@@ -436,6 +457,11 @@ func usageAggregateScanTargets(aggregate *UsageAggregate) []any {
 		&aggregate.UnknownCostEvents,
 		&aggregate.EstimatedCostEventCount,
 		&aggregate.PartialCostEventCount,
+		&aggregate.ReportedCostUSDTicks,
+		&aggregate.ReportedCostTokenCount,
+		&aggregate.UnknownReportedCostEvents,
+		&aggregate.ReportedCostEventCount,
+		&aggregate.PartialReportedCostEventCount,
 		&aggregate.UndatedEventCount,
 	}
 }

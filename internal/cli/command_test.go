@@ -711,6 +711,9 @@ func TestUsageSyncCodexAndSummaryJSON(t *testing.T) {
 			t.Fatalf("expected human report to contain %q, got %q", expected, humanReport)
 		}
 	}
+	if strings.Contains(humanReport, "Grok-reported cost") {
+		t.Fatalf("Codex report unexpectedly included provider-reported cost: %q", humanReport)
+	}
 	if _, err := runCLI(t, "--config-dir", configDir, "usage", "report", "--range", "14d"); err == nil {
 		t.Fatalf("expected invalid usage report range to fail")
 	}
@@ -771,8 +774,15 @@ func TestUsageSyncGrokBuildUsesGlobalHomeAndOmitsFileIdentifiers(t *testing.T) {
 	if summary.ProviderID != grokconfig.ProviderID ||
 		summary.EventCount != 1 ||
 		summary.TotalTokens != 120 ||
-		summary.CostStatus != "estimated" {
+		summary.CostStatus != "estimated" ||
+		summary.ReportedCostUSD == nil ||
+		*summary.ReportedCostUSD != "0.0000000999" ||
+		summary.ReportedCostStatus != "reported" {
 		t.Fatalf("Grok summary = %#v", summary)
+	}
+	humanSummary, err := runCLI(t, append(base, "usage", "summary", "--provider", grokconfig.ProviderID)...)
+	if err != nil || !strings.Contains(humanSummary, "Grok-reported cost usd: 0.0000000999") {
+		t.Fatalf("human Grok summary = %q, err = %v", humanSummary, err)
 	}
 	reportOut, err := runCLI(t, append(base, "usage", "report", "--provider", grokconfig.ProviderID, "--range", "all", "--json")...)
 	if err != nil {
@@ -782,9 +792,15 @@ func TestUsageSyncGrokBuildUsesGlobalHomeAndOmitsFileIdentifiers(t *testing.T) {
 	decodeCLIJSON(t, []byte(reportOut), &report)
 	if report.ProviderID != grokconfig.ProviderID ||
 		report.Summary.EventCount != 1 ||
+		report.Summary.KnownReportedCostUSD != "0.0000000999" ||
+		report.Summary.ReportedCostStatus != "reported" ||
 		len(report.Models) != 1 ||
 		report.Models[0].Model != "grok-build-latest" {
 		t.Fatalf("Grok report = %#v", report)
+	}
+	humanReport, err := runCLI(t, append(base, "usage", "report", "--provider", grokconfig.ProviderID, "--range", "all")...)
+	if err != nil || !strings.Contains(humanReport, "known Grok-reported cost usd: 0.0000000999") {
+		t.Fatalf("human Grok report = %q, err = %v", humanReport, err)
 	}
 }
 

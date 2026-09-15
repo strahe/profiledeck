@@ -94,6 +94,28 @@ func (status UsageCostStatus) valid() bool {
 	return status >= UsageCostStatusUnknown && status <= UsageCostStatusPartial
 }
 
+type UsageReportedCostStatus int64
+
+const (
+	// These values are persisted in usage_facts and require a migration to change.
+	UsageReportedCostStatusUnknown  UsageReportedCostStatus = 0
+	UsageReportedCostStatusReported UsageReportedCostStatus = 1
+	UsageReportedCostStatusPartial  UsageReportedCostStatus = 2
+)
+
+func (status UsageReportedCostStatus) String() string {
+	switch status {
+	case UsageReportedCostStatusUnknown:
+		return "unknown"
+	case UsageReportedCostStatusReported:
+		return "reported"
+	case UsageReportedCostStatusPartial:
+		return "partial"
+	default:
+		return ""
+	}
+}
+
 type UsageSource struct {
 	ID                    int64
 	ProviderID            string
@@ -108,17 +130,19 @@ type UsageSource struct {
 }
 
 type CreateUsageFactParams struct {
-	EventKey            UsageKey
-	SourceID            int64
-	SessionKey          string
-	ModelKey            string
-	OccurredAtUnixMS    int64
-	InputTokens         int64
-	CachedInputTokens   int64
-	OutputTokens        int64
-	TotalTokens         int64
-	EstimatedCostMicros *int64
-	CostStatus          UsageCostStatus
+	EventKey             UsageKey
+	SourceID             int64
+	SessionKey           string
+	ModelKey             string
+	OccurredAtUnixMS     int64
+	InputTokens          int64
+	CachedInputTokens    int64
+	OutputTokens         int64
+	TotalTokens          int64
+	EstimatedCostMicros  *int64
+	CostStatus           UsageCostStatus
+	ReportedCostUSDTicks *int64
+	ReportedCostStatus   UsageReportedCostStatus
 }
 
 type UsageInsertResult struct {
@@ -414,8 +438,8 @@ func (s *Store) insertUsageFactsWithSessionPolicy(
 		INSERT INTO usage_facts (
 			event_key, source_id, session_id, model_id, occurred_at_unix_ms,
 			input_tokens, cached_input_tokens, output_tokens, total_tokens,
-			estimated_cost_micros, cost_status
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			estimated_cost_micros, cost_status, reported_cost_usd_ticks, reported_cost_status
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(event_key) DO NOTHING
 	`)
 	if err != nil {
@@ -443,6 +467,16 @@ func (s *Store) insertUsageFactsWithSessionPolicy(
 	}
 	defer costUpgradeStmt.Close()
 
+	reportedCostUpgradeStmt, err := s.executor().PrepareContext(ctx, `
+		UPDATE usage_facts
+		SET reported_cost_usd_ticks = ?, reported_cost_status = ?
+		WHERE id = ? AND reported_cost_status = ?
+	`)
+	if err != nil {
+		return UsageInsertResult{}, err
+	}
+	defer reportedCostUpgradeStmt.Close()
+
 	sessionIDs := make(map[string]int64)
 	modelIDs := make(map[string]int64)
 	result := UsageInsertResult{}
@@ -463,6 +497,13 @@ func (s *Store) insertUsageFactsWithSessionPolicy(
 		if err != nil {
 			return UsageInsertResult{}, err
 		}
+		reportedStatus, reportedCost, err := usageReportedCostStorageValues(
+			fact.ReportedCostStatus,
+			fact.ReportedCostUSDTicks,
+		)
+		if err != nil {
+			return UsageInsertResult{}, err
+		}
 
 		insert, err := insertStmt.ExecContext(
 			ctx,
@@ -477,6 +518,8 @@ func (s *Store) insertUsageFactsWithSessionPolicy(
 			fact.TotalTokens,
 			cost,
 			status,
+			reportedCost,
+			reportedStatus,
 		)
 		if err != nil {
 			return UsageInsertResult{}, err
@@ -491,13 +534,14 @@ func (s *Store) insertUsageFactsWithSessionPolicy(
 		}
 
 		var existingID, existingSourceID, existingOccurredAtUnixMS int64
-		var existingSessionID sql.NullInt64
+		var existingSessionID, existingReportedCost sql.NullInt64
 		var existingSessionKey string
-		var inputTokens, cachedInputTokens, outputTokens, totalTokens int64
+		var inputTokens, cachedInputTokens, outputTokens, totalTokens, existingReportedStatus int64
 		if err := s.executor().QueryRowContext(ctx, `
 			SELECT facts.id, facts.source_id, facts.session_id,
 				COALESCE(sessions.session_key, ''), facts.occurred_at_unix_ms,
-				facts.input_tokens, facts.cached_input_tokens, facts.output_tokens, facts.total_tokens
+				facts.input_tokens, facts.cached_input_tokens, facts.output_tokens, facts.total_tokens,
+				facts.reported_cost_usd_ticks, facts.reported_cost_status
 			FROM usage_facts AS facts
 			LEFT JOIN usage_sessions AS sessions
 				ON sessions.source_id = facts.source_id AND sessions.id = facts.session_id
@@ -512,6 +556,8 @@ func (s *Store) insertUsageFactsWithSessionPolicy(
 			&cachedInputTokens,
 			&outputTokens,
 			&totalTokens,
+			&existingReportedCost,
+			&existingReportedStatus,
 		); err != nil {
 			return UsageInsertResult{}, err
 		}
@@ -520,6 +566,13 @@ func (s *Store) insertUsageFactsWithSessionPolicy(
 			(sessionPolicy == usageFactSessionStrict && !sessionMatches) ||
 			inputTokens != fact.InputTokens || cachedInputTokens != fact.CachedInputTokens ||
 			outputTokens != fact.OutputTokens || totalTokens != fact.TotalTokens {
+			return UsageInsertResult{}, ErrUsageFactConflict
+		}
+		if existingReportedStatus != int64(UsageReportedCostStatusUnknown) &&
+			reportedStatus != UsageReportedCostStatusUnknown &&
+			(!existingReportedCost.Valid || fact.ReportedCostUSDTicks == nil ||
+				existingReportedCost.Int64 != *fact.ReportedCostUSDTicks ||
+				existingReportedStatus != int64(reportedStatus)) {
 			return UsageInsertResult{}, ErrUsageFactConflict
 		}
 
@@ -557,6 +610,17 @@ func (s *Store) insertUsageFactsWithSessionPolicy(
 				status,
 				existingID,
 				UsageCostStatusUnknown,
+			); err != nil {
+				return UsageInsertResult{}, err
+			}
+		}
+		if reportedStatus != UsageReportedCostStatusUnknown {
+			if _, err := reportedCostUpgradeStmt.ExecContext(
+				ctx,
+				reportedCost,
+				reportedStatus,
+				existingID,
+				UsageReportedCostStatusUnknown,
 			); err != nil {
 				return UsageInsertResult{}, err
 			}
@@ -711,6 +775,26 @@ func usageCostStorageValues(status UsageCostStatus, estimatedCostMicros *int64) 
 		return UsageCostStatusPartial, *estimatedCostMicros, nil
 	default:
 		return 0, nil, errors.New("usage cost status is invalid")
+	}
+}
+
+func usageReportedCostStorageValues(
+	status UsageReportedCostStatus,
+	reportedCostUSDTicks *int64,
+) (UsageReportedCostStatus, any, error) {
+	switch status {
+	case UsageReportedCostStatusUnknown:
+		if reportedCostUSDTicks != nil {
+			return 0, nil, errors.New("unknown reported usage cost must not include ticks")
+		}
+		return UsageReportedCostStatusUnknown, nil, nil
+	case UsageReportedCostStatusReported, UsageReportedCostStatusPartial:
+		if reportedCostUSDTicks == nil || *reportedCostUSDTicks <= 0 {
+			return 0, nil, errors.New("reported usage cost is invalid")
+		}
+		return status, *reportedCostUSDTicks, nil
+	default:
+		return 0, nil, errors.New("reported usage cost status is invalid")
 	}
 }
 

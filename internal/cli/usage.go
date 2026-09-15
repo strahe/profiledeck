@@ -10,6 +10,7 @@ import (
 
 	urfavecli "github.com/urfave/cli/v3"
 
+	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
 	"github.com/strahe/profiledeck/internal/usage"
 )
 
@@ -207,9 +208,9 @@ func writeUsageSummary(w io.Writer, result usage.UsageSummaryResult) error {
 		cost = *result.EstimatedCostUSD
 	}
 	sources := strings.Join(result.Sources, ",")
-	_, err := fmt.Fprintf(
+	if _, err := fmt.Fprintf(
 		w,
-		"Usage summary\nprovider: %s\nsource: %s\nsources: %s\nevents: %d\ninput tokens: %d\ncached input tokens: %d\noutput tokens: %d\ntotal tokens: %d\ncost status: %s\nestimated cost usd: %s\nunknown cost events: %d\n",
+		"Usage summary\nprovider: %s\nsource: %s\nsources: %s\nevents: %d\ninput tokens: %d\ncached input tokens: %d\noutput tokens: %d\ntotal tokens: %d\nAPI-equivalent cost status: %s\nAPI-equivalent estimated cost usd: %s\nunknown API-equivalent cost events: %d\n",
 		result.ProviderID,
 		result.Source,
 		sources,
@@ -221,6 +222,22 @@ func writeUsageSummary(w io.Writer, result usage.UsageSummaryResult) error {
 		result.CostStatus,
 		cost,
 		result.UnknownCostEventCount,
+	); err != nil {
+		return err
+	}
+	if result.ProviderID != grokconfig.ProviderID {
+		return nil
+	}
+	reportedCost := "unknown"
+	if result.ReportedCostUSD != nil {
+		reportedCost = *result.ReportedCostUSD
+	}
+	_, err := fmt.Fprintf(
+		w,
+		"Grok-reported cost status: %s\nGrok-reported cost usd: %s\nunknown Grok-reported cost events: %d\n",
+		result.ReportedCostStatus,
+		reportedCost,
+		result.UnknownReportedCostEventCount,
 	)
 	return err
 }
@@ -230,9 +247,18 @@ func writeUsageReport(w io.Writer, result usage.UsageReportResult) error {
 	if result.Import.LastSyncedAtUnixMS > 0 {
 		lastSync = time.UnixMilli(result.Import.LastSyncedAtUnixMS).Format(time.RFC3339)
 	}
+	reportedCostSummary := ""
+	if result.ProviderID == grokconfig.ProviderID {
+		reportedCostSummary = fmt.Sprintf(
+			"known Grok-reported cost usd: %s\nGrok-reported cost status: %s\nGrok-reported cost coverage: %.1f%%\n",
+			result.Summary.KnownReportedCostUSD,
+			result.Summary.ReportedCostStatus,
+			result.Summary.ReportedCostCoverage*100,
+		)
+	}
 	if _, err := fmt.Fprintf(
 		w,
-		"Usage report\nprovider: %s\nrange: %s\ntime zone: %s\nevents: %d\nsessions: %d\nfresh input tokens: %d\ncached input tokens: %d\noutput tokens: %d\ntotal tokens: %d\ncache hit rate: %.1f%%\nknown API-equivalent estimated cost usd: %s\ncost status: %s\npricing coverage: %.1f%%\nundated events: %d\ntracked files: %d\nlast sync: %s\ninvalid lines: %d\nunsupported lines: %d\npricing basis: %s\n\nTrend\n",
+		"Usage report\nprovider: %s\nrange: %s\ntime zone: %s\nevents: %d\nsessions: %d\nfresh input tokens: %d\ncached input tokens: %d\noutput tokens: %d\ntotal tokens: %d\ncache hit rate: %.1f%%\nknown API-equivalent estimated cost usd: %s\nAPI-equivalent cost status: %s\npricing coverage: %.1f%%\n%sundated events: %d\ntracked files: %d\nlast sync: %s\ninvalid lines: %d\nunsupported lines: %d\npricing basis: %s\n\nTrend\n",
 		result.ProviderID,
 		result.Range.Preset,
 		result.Range.TimeZone,
@@ -246,6 +272,7 @@ func writeUsageReport(w io.Writer, result usage.UsageReportResult) error {
 		result.Summary.KnownEstimatedCostUSD,
 		result.Summary.CostStatus,
 		result.Summary.PricingCoverage*100,
+		reportedCostSummary,
 		result.Summary.UndatedEventCount,
 		result.Import.TrackedFiles,
 		lastSync,
@@ -257,19 +284,26 @@ func writeUsageReport(w io.Writer, result usage.UsageReportResult) error {
 	}
 
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "bucket\tfresh input\tcached input\toutput\ttotal"); err != nil {
+	showReportedCost := result.ProviderID == grokconfig.ProviderID
+	if showReportedCost {
+		if _, err := fmt.Fprintln(table, "bucket\tfresh input\tcached input\toutput\ttotal\tAPI-equivalent cost usd\tGrok-reported cost usd"); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprintln(table, "bucket\tfresh input\tcached input\toutput\ttotal\tAPI-equivalent cost usd"); err != nil {
 		return err
 	}
 	for _, point := range result.Trend {
-		if _, err := fmt.Fprintf(
-			table,
-			"%s\t%d\t%d\t%d\t%d\n",
-			usageBucketLabel(result.Range, point.StartUnixMS),
-			point.Summary.FreshInputTokens,
-			point.Summary.CachedInputTokens,
-			point.Summary.OutputTokens,
-			point.Summary.TotalTokens,
-		); err != nil {
+		if showReportedCost {
+			if _, err := fmt.Fprintf(table, "%s\t%d\t%d\t%d\t%d\t%s\t%s\n",
+				usageBucketLabel(result.Range, point.StartUnixMS), point.Summary.FreshInputTokens,
+				point.Summary.CachedInputTokens, point.Summary.OutputTokens, point.Summary.TotalTokens,
+				point.Summary.KnownEstimatedCostUSD, point.Summary.KnownReportedCostUSD); err != nil {
+				return err
+			}
+		} else if _, err := fmt.Fprintf(table, "%s\t%d\t%d\t%d\t%d\t%s\n",
+			usageBucketLabel(result.Range, point.StartUnixMS), point.Summary.FreshInputTokens,
+			point.Summary.CachedInputTokens, point.Summary.OutputTokens, point.Summary.TotalTokens,
+			point.Summary.KnownEstimatedCostUSD); err != nil {
 			return err
 		}
 	}
@@ -280,20 +314,26 @@ func writeUsageReport(w io.Writer, result usage.UsageReportResult) error {
 		return err
 	}
 	table = tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(table, "model\tsessions\ttokens\tcache hit\tknown cost usd\tstatus"); err != nil {
+	if showReportedCost {
+		if _, err := fmt.Fprintln(table, "model\tsessions\ttokens\tcache hit\tAPI-equivalent cost usd\tAPI cost status\tGrok-reported cost usd\tGrok-reported cost status"); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprintln(table, "model\tsessions\ttokens\tcache hit\tAPI-equivalent cost usd\tAPI cost status"); err != nil {
 		return err
 	}
 	for _, model := range result.Models {
-		if _, err := fmt.Fprintf(
-			table,
-			"%s\t%d\t%d\t%.1f%%\t%s\t%s\n",
-			model.Model,
-			model.Summary.SessionCount,
-			model.Summary.TotalTokens,
-			model.Summary.CacheHitRate*100,
-			model.Summary.KnownEstimatedCostUSD,
-			model.Summary.CostStatus,
-		); err != nil {
+		if showReportedCost {
+			if _, err := fmt.Fprintf(table, "%s\t%d\t%d\t%.1f%%\t%s\t%s\t%s\t%s\n",
+				model.Model, model.Summary.SessionCount, model.Summary.TotalTokens,
+				model.Summary.CacheHitRate*100, model.Summary.KnownEstimatedCostUSD,
+				model.Summary.CostStatus, model.Summary.KnownReportedCostUSD,
+				model.Summary.ReportedCostStatus); err != nil {
+				return err
+			}
+		} else if _, err := fmt.Fprintf(table, "%s\t%d\t%d\t%.1f%%\t%s\t%s\n",
+			model.Model, model.Summary.SessionCount, model.Summary.TotalTokens,
+			model.Summary.CacheHitRate*100, model.Summary.KnownEstimatedCostUSD,
+			model.Summary.CostStatus); err != nil {
 			return err
 		}
 	}

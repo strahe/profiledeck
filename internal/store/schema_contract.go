@@ -469,6 +469,20 @@ var usageImportObservationParserRevisionTableSpec = func() tableSpec {
 	return spec
 }()
 
+var grokBuildReportedCostFactTableSpec = func() tableSpec {
+	spec := copyTableSpec(stableBaselineTableSpec("usage_facts"))
+	spec.columns = append(spec.columns,
+		columnSpec{name: "reported_cost_usd_ticks", columnType: "INTEGER"},
+		columnSpec{name: "reported_cost_status", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"},
+	)
+	spec.checks = append(spec.checks,
+		"CHECK (reported_cost_usd_ticks IS NULL OR reported_cost_usd_ticks > 0)",
+		"CHECK (reported_cost_status IN (0, 1, 2))",
+		"CHECK ((reported_cost_status IN (1, 2) AND reported_cost_usd_ticks IS NOT NULL) OR (reported_cost_status = 0 AND reported_cost_usd_ticks IS NULL))",
+	)
+	return spec
+}()
+
 func stableBaselineTableSpec(name string) tableSpec {
 	for _, spec := range stableBaselineTableSpecs {
 		if spec.name == name {

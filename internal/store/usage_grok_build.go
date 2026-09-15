@@ -32,11 +32,12 @@ type GrokBuildUsageImportFile struct {
 }
 
 type CommitGrokBuildUsageImportParams struct {
-	ProviderID string
-	Generation int64
-	Facts      []CreateUsageFactParams
-	File       GrokBuildUsageImportFile
-	Expected   *GrokBuildUsageImportFile
+	ProviderID          string
+	Generation          int64
+	Facts               []CreateUsageFactParams
+	File                GrokBuildUsageImportFile
+	Expected            *GrokBuildUsageImportFile
+	ReplayExistingFacts bool
 }
 
 type GrokBuildUsageSyncFinalization struct {
@@ -239,6 +240,13 @@ func validateGrokBuildUsageImportBatch(params CommitGrokBuildUsageImportParams) 
 	}
 	if err := validateGrokBuildUsageImportFile(*params.Expected); err != nil {
 		return err
+	}
+	if params.ReplayExistingFacts {
+		if params.File.ParserRevision <= params.Expected.ParserRevision ||
+			params.File.ImportedFacts != int64(len(params.Facts)) {
+			return errors.New("invalid Grok Build usage parser replay")
+		}
+		return nil
 	}
 	if params.File.ImportedFacts < params.Expected.ImportedFacts ||
 		params.File.ImportedFacts-params.Expected.ImportedFacts != int64(len(params.Facts)) {
