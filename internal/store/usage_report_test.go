@@ -118,7 +118,7 @@ func TestUsageReportAggregatesRangeModelsBucketsAndImportHealth(t *testing.T) {
 	if report.Summary.EstimatedCostMicros != 30 || report.Summary.EstimatedTokenCount != 220 || report.Summary.UnknownCostEvents != 1 || report.Summary.UndatedEventCount != 1 {
 		t.Fatalf("unexpected ranged cost and undated aggregate: %#v", report.Summary)
 	}
-	if report.Summary.ReportedCostUSDTicks != 300 || report.Summary.ReportedCostTokenCount != 220 ||
+	if report.Summary.ReportedCostUSDTicks != 300 || report.Summary.ReportedCostTokenCount != 120 ||
 		report.Summary.ReportedCostEventCount != 1 || report.Summary.PartialReportedCostEventCount != 1 ||
 		report.Summary.UnknownReportedCostEvents != 1 {
 		t.Fatalf("unexpected ranged reported cost aggregate: %#v", report.Summary)

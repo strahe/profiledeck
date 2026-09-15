@@ -421,7 +421,7 @@ func usageFactAggregateColumns(alias, undatedExpression string) string {
 		COALESCE(SUM(CASE WHEN %[1]s.cost_status = %[2]d THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN %[1]s.cost_status = %[3]d THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(COALESCE(%[1]s.reported_cost_usd_ticks, 0)), 0),
-		COALESCE(SUM(CASE WHEN %[1]s.reported_cost_status IN (%[5]d, %[6]d) THEN %[1]s.total_tokens ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN %[1]s.reported_cost_status = %[5]d THEN %[1]s.total_tokens ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN %[1]s.reported_cost_status = %[7]d THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN %[1]s.reported_cost_status = %[5]d THEN 1 ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN %[1]s.reported_cost_status = %[6]d THEN 1 ELSE 0 END), 0),

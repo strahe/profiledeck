@@ -144,12 +144,8 @@ func (integration grokBuildIntegration) Sync(
 				continue
 			}
 			if fullParse {
-				if cursor.ParserRevision == GrokBuildUsageParserRevision {
-					eventsToStore = parsed.Events[cursor.ImportedFacts:]
-				} else {
-					eventsToStore = parsed.Events
-					replayExistingFacts = true
-				}
+				eventsToStore = parsed.Events
+				replayExistingFacts = true
 				importedFacts = int64(len(parsed.Events))
 			} else {
 				importedFacts = cursor.ImportedFacts + int64(len(parsed.Events))

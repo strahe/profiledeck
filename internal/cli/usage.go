@@ -250,7 +250,7 @@ func writeUsageReport(w io.Writer, result usage.UsageReportResult) error {
 	reportedCostSummary := ""
 	if result.ProviderID == grokconfig.ProviderID {
 		reportedCostSummary = fmt.Sprintf(
-			"known Grok-reported cost usd: %s\nGrok-reported cost status: %s\nGrok-reported cost coverage: %.1f%%\n",
+			"known Grok-reported cost usd: %s\nGrok-reported cost status: %s\ncomplete Grok-reported cost coverage: %.1f%%\n",
 			result.Summary.KnownReportedCostUSD,
 			result.Summary.ReportedCostStatus,
 			result.Summary.ReportedCostCoverage*100,

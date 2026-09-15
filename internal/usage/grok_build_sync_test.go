@@ -183,6 +183,46 @@ func TestUsageSyncGrokBuildParserUpgradeBackfillsReportedCost(t *testing.T) {
 	}
 }
 
+func TestUsageSyncGrokBuildSameRevisionBackfillsReportedCost(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	grokHome := t.TempDir()
+	line := syntheticGrokBuildUsageLine(
+		"session-enriched",
+		"prompt-enriched",
+		"grok-4.6-build",
+		1_750_000_000,
+		TokenCounts{InputTokens: 100, CachedInputTokens: 40, OutputTokens: 20, TotalTokens: 120},
+	)
+	path := writeGrokBuildUsageFixture(t, grokHome, "workspace-enriched", "session-enriched", line)
+	environment := newGrokBuildUsageTestEnvironment(t, configDir, grokHome)
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
+		t.Fatalf("initialize runtime: %v", err)
+	}
+	if _, err := environment.service.SyncGrokBuild(ctx); err != nil {
+		t.Fatalf("initial Grok Build sync: %v", err)
+	}
+	before, err := environment.service.Summary(ctx, UsageSummaryRequest{ProviderID: grokconfig.ProviderID})
+	if err != nil || before.ReportedCostUSD != nil || before.ReportedCostStatus != ReportedCostStatusUnknown.String() {
+		t.Fatalf("initial reported cost summary = %#v, err = %v", before, err)
+	}
+
+	enriched := strings.ReplaceAll(line, `"costIsPartial":false`, `"costIsPartial":false,"costUsdTicks":5452000000`)
+	if strings.Count(enriched, `"costUsdTicks"`) != 2 {
+		t.Fatalf("reported cost fixture was not enriched: %s", enriched)
+	}
+	writeAppUsageFile(t, path, enriched)
+	result, err := environment.service.SyncGrokBuild(ctx)
+	if err != nil || result.ImportedEvents != 0 || result.SkippedDuplicateEvents != 1 || len(result.Errors) != 0 {
+		t.Fatalf("same-revision cost backfill = %#v, err = %v", result, err)
+	}
+	after, err := environment.service.Summary(ctx, UsageSummaryRequest{ProviderID: grokconfig.ProviderID})
+	if err != nil || after.ReportedCostUSD == nil || *after.ReportedCostUSD != "0.5452000000" ||
+		after.ReportedCostStatus != ReportedCostStatusReported.String() {
+		t.Fatalf("backfilled reported cost summary = %#v, err = %v", after, err)
+	}
+}
+
 func TestBackgroundGrokBuildSyncRetriesObservationAfterParserUpgrade(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()

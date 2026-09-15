@@ -217,6 +217,10 @@
 		}).format(parsed);
 	}
 
+	function hasKnownReportedCost(summary: UsageReportResult["summary"]): boolean {
+		return summary.reported_cost_event_count + summary.partial_reported_cost_event_count > 0;
+	}
+
 	function formatLastSync(unixMS: number): string {
 		if (unixMS <= 0) return translate("usage.neverSynced");
 		const value = new Date(unixMS);
@@ -312,7 +316,7 @@
 									{#if report.summary.partial_cost_event_count > 0}<li>{$_("usage.dataQuality.partialPricing", { values: { count: formatInteger(report.summary.partial_cost_event_count) } })}</li>{/if}
 									{#if report.summary.event_count > 0 && report.summary.unknown_cost_event_count > 0}<li>{$_("usage.dataQuality.pricing", { values: { count: formatInteger(report.summary.unknown_cost_event_count), coverage: formatPercent(report.summary.pricing_coverage) } })}</li>{/if}
 									{#if providerID === "grok-build" && report.summary.partial_reported_cost_event_count > 0}<li>{$_("usage.dataQuality.partialReportedCost", { values: { count: formatInteger(report.summary.partial_reported_cost_event_count) } })}</li>{/if}
-									{#if providerID === "grok-build" && report.summary.event_count > 0 && report.summary.unknown_reported_cost_event_count > 0}<li>{$_("usage.dataQuality.reportedCost", { values: { count: formatInteger(report.summary.unknown_reported_cost_event_count), coverage: formatPercent(report.summary.reported_cost_coverage) } })}</li>{/if}
+									{#if providerID === "grok-build" && report.summary.event_count > 0 && report.summary.unknown_reported_cost_event_count > 0}<li>{$_("usage.dataQuality.reportedCost", { values: { count: formatInteger(report.summary.unknown_reported_cost_event_count) } })}</li>{/if}
 								</ul>
 							</Accordion.Content>
 						</Accordion.Item>
@@ -353,15 +357,17 @@
 						<Card.Header class="gap-1 py-3">
 							<div class="flex items-center justify-between gap-2">
 								<Card.Description>{$_("usage.reportedCost")}</Card.Description>
-								{#if report.summary.reported_cost_status !== "reported"}<Badge variant="outline">{report.summary.reported_cost_coverage > 0 ? $_("usage.reportedCostStatus.partial") : $_("usage.reportedCostStatus.unavailable")}</Badge>{/if}
+								{#if report.summary.reported_cost_status !== "reported"}<Badge variant="outline">{hasKnownReportedCost(report.summary) ? $_("usage.reportedCostStatus.partial") : $_("usage.reportedCostStatus.unavailable")}</Badge>{/if}
 							</div>
 							<Card.Title class="text-xl tabular-nums">
-								{report.summary.reported_cost_coverage > 0 ? formatReportedCurrency(report.summary.known_reported_cost_usd) : "—"}
+								{hasKnownReportedCost(report.summary) ? formatReportedCurrency(report.summary.known_reported_cost_usd) : "—"}
 							</Card.Title>
 							<p class="text-xs text-muted-foreground">
 								{#if report.summary.reported_cost_status === "reported"}
 									{$_("usage.reportedCostSource")}
-								{:else if report.summary.reported_cost_coverage > 0}
+								{:else if report.summary.partial_reported_cost_event_count > 0}
+									{$_("usage.reportedCostPartial")}
+								{:else if hasKnownReportedCost(report.summary)}
 									{$_("usage.reportedCostCoverage", { values: { coverage: formatPercent(report.summary.reported_cost_coverage) } })}
 								{:else}
 									{$_("usage.reportedCostUnavailable")}

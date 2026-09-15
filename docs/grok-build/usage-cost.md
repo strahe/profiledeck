@@ -81,9 +81,9 @@ The prices come from [xAI pricing](https://docs.x.ai/developers/pricing). [Grok 
 
 When a session record includes cache-creation tokens, ProfileDeck keeps the event and reports a partial estimate because usage facts currently price only input, cached input, and output tokens.
 
-When a completed turn contains `costUsdTicks`, ProfileDeck imports the per-model value as Grok-reported cost; 10,000,000,000 ticks equal US$1. A top-level value is used only when the turn contains exactly one model, so the same amount is never assigned to several models. Missing or nonpositive values remain unknown, and `costIsPartial` is shown as partial.
+ProfileDeck shows the amount Grok recorded for completed local session records. If some calls are missing an amount, ProfileDeck shows the known subtotal as partial. Only records with a complete amount count toward reported-cost coverage; when no selected record contains an amount, the reported cost is unavailable.
 
-API-equivalent estimates and Grok-reported amounts remain separate and are never added together. Reports show the known subtotal and coverage when some completed turns are missing either figure. An unrecognized model keeps its token totals and Grok-reported amount but has unknown API-equivalent cost. Existing estimates are not recalculated when a later ProfileDeck version changes its built-in prices; facts with unknown API-equivalent cost can receive an estimate when their model becomes recognized.
+API-equivalent estimates and Grok-reported amounts remain separate and are never added together. An unrecognized model keeps its token totals and Grok-reported amount but has unknown API-equivalent cost. Existing estimates are not recalculated when a later ProfileDeck version changes its built-in prices; facts with unknown API-equivalent cost can receive an estimate when their model becomes recognized.
 
 The Grok Build Usage Limit panel may cover only activity since the process started or was last resumed, while ProfileDeck reports completed turns found in local session history for the selected dates. Their totals can therefore differ even when both values came from the same local session.
 

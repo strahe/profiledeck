@@ -183,6 +183,22 @@ func TestAggregateReportedCostStatusDistinguishesPartialCoverage(t *testing.T) {
 	}
 }
 
+func TestUsageAggregateSummaryCountsOnlyCompleteReportedCostCoverage(t *testing.T) {
+	summary := usageAggregateSummary(store.UsageAggregate{
+		EventCount:                    2,
+		TotalTokens:                   220,
+		ReportedCostUSDTicks:          300,
+		ReportedCostTokenCount:        120,
+		ReportedCostEventCount:        1,
+		PartialReportedCostEventCount: 1,
+	})
+	if summary.ReportedCostStatus != ReportedCostStatusPartial.String() ||
+		summary.ReportedCostCoverage != float64(120)/float64(220) ||
+		summary.ReportedCostTokenCount != 120 {
+		t.Fatalf("reported cost summary = %#v", summary)
+	}
+}
+
 func reportEvent(id, sessionID, model string, occurredAt, input, cached, output int64, cost *int64, status store.UsageCostStatus) store.CreateUsageFactParams {
 	return store.CreateUsageFactParams{
 		EventKey: usageTestEventKey(id), SessionKey: sessionID, ModelKey: model, OccurredAtUnixMS: occurredAt,

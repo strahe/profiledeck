@@ -60,8 +60,8 @@
 					{#if showReportedCost}
 						<Table.Cell class="text-right tabular-nums">
 							<div class="flex items-center justify-end gap-2">
-								<span>{model.summary.reported_cost_coverage > 0 ? formatReportedCurrency(model.summary.known_reported_cost_usd) : "—"}</span>
-								{#if model.summary.reported_cost_status !== "reported"}<Badge variant="outline">{model.summary.reported_cost_coverage > 0 ? $_("usage.reportedCostStatus.partial") : $_("usage.reportedCostStatus.unavailable")}</Badge>{/if}
+								<span>{model.summary.reported_cost_event_count + model.summary.partial_reported_cost_event_count > 0 ? formatReportedCurrency(model.summary.known_reported_cost_usd) : "—"}</span>
+								{#if model.summary.reported_cost_status !== "reported"}<Badge variant="outline">{model.summary.reported_cost_event_count + model.summary.partial_reported_cost_event_count > 0 ? $_("usage.reportedCostStatus.partial") : $_("usage.reportedCostStatus.unavailable")}</Badge>{/if}
 							</div>
 						</Table.Cell>
 					{/if}

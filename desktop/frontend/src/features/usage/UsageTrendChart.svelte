@@ -204,10 +204,13 @@
 			});
 		}
 		if (metric === "reported") {
-			const key = point.summary.partial_reported_cost_event_count > 0
-				? "usage.chart.partialReportedCostBucketAria"
-				: "usage.chart.reportedCostBucketAria";
-			return translate(key, {
+			if (point.summary.partial_reported_cost_event_count > 0) {
+				return translate("usage.chart.partialReportedCostBucketAria", {
+					bucket: fullBucketLabel(point.start_unix_ms),
+					cost: formatReportedCurrency(point.summary.known_reported_cost_usd),
+				});
+			}
+			return translate("usage.chart.reportedCostBucketAria", {
 				bucket: fullBucketLabel(point.start_unix_ms),
 				cost: formatReportedCurrency(point.summary.known_reported_cost_usd),
 				coverage: formatPercent(point.summary.reported_cost_coverage),
@@ -390,7 +393,7 @@
 					<div class="mt-1 text-muted-foreground">{$_("usage.chart.partialReportedCost")}</div>
 				{/if}
 				{@const coverage = metric === "reported" ? tooltipPoint.summary.reported_cost_coverage : tooltipPoint.summary.pricing_coverage}
-				{#if tooltipPoint.summary.event_count > 0 && coverage < 1}
+				{#if tooltipPoint.summary.event_count > 0 && coverage < 1 && (metric !== "reported" || tooltipPoint.summary.partial_reported_cost_event_count === 0)}
 					<div class="mt-1 flex items-center justify-between gap-4 text-muted-foreground"><span>{$_("usage.chart.coverage")}</span><span class="font-mono tabular-nums">{formatPercent(coverage)}</span></div>
 				{/if}
 			{:else}
