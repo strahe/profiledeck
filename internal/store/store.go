@@ -1210,6 +1210,12 @@ func (s *Store) GetSetting(ctx context.Context, key string) (Setting, error) {
 	return setting, err
 }
 
+func (s *Store) ReserveSettingForWrite(ctx context.Context, key string) error {
+	// Acquire SQLite's writer before reading a setting that will be replaced.
+	_, err := s.executor().ExecContext(ctx, `UPDATE settings SET value_json = value_json WHERE key = ?`, strings.TrimSpace(key))
+	return err
+}
+
 func (s *Store) ListSettingsByPrefix(ctx context.Context, prefix string) ([]Setting, error) {
 	prefix = strings.TrimSpace(prefix)
 	rows, err := s.executor().QueryContext(ctx, `

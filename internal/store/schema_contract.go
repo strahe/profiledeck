@@ -483,6 +483,21 @@ var grokBuildReportedCostFactTableSpec = func() tableSpec {
 	return spec
 }()
 
+var pricingCatalogFactTableSpec = func() tableSpec {
+	spec := copyTableSpec(grokBuildReportedCostFactTableSpec)
+	spec.columns = append(spec.columns,
+		columnSpec{name: "pricing_catalog_version", columnType: "INTEGER"},
+		columnSpec{name: "cache_write_input_tokens", columnType: "INTEGER"},
+		columnSpec{name: "cache_creation_input_tokens", columnType: "INTEGER"},
+	)
+	spec.checks = append(spec.checks,
+		"CHECK (pricing_catalog_version IS NULL OR pricing_catalog_version > 0)",
+		"CHECK (cache_write_input_tokens IS NULL OR cache_write_input_tokens >= 0)",
+		"CHECK (cache_creation_input_tokens IS NULL OR cache_creation_input_tokens >= 0)",
+	)
+	return spec
+}()
+
 func stableBaselineTableSpec(name string) tableSpec {
 	for _, spec := range stableBaselineTableSpecs {
 		if spec.name == name {

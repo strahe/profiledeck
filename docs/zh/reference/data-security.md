@@ -52,6 +52,7 @@ Claude Code 支持与 Claude Desktop 相互独立。ProfileDeck 不会读取或�
 ProfileDeck 的大部分操作只使用本地数据。
 
 - 用量同步和报告读取本地 Codex 或 Grok Build 会话文件，不会请求计费服务。
+- 用量价格检查会从 GitHub 下载公开的 ProfileDeck 价格表。桌面端运行期间每天最多自动检查一次；`usage sync` 在到期时会先检查。不会上传本地用量。可在**设置 → 用量价格**中或通过 `profiledeck-cli usage pricing auto off` 关闭自动检查。
 - ChatGPT Codex 限额查询会使用所选的已保存登录连接 Codex 或 OpenAI。该登录绝不会发送到已保存 Codex 设置中的自定义模型服务地址。
 - API Key 限额查询会把已保存的 API Key 发送到该 Profile 自定义 Base URL 的 `/v1/usage`。ProfileDeck 只发送一次请求且不跟随重定向。HTTP Base URL 不会对传输中的 API Key 或响应加密。限额结果只保留在内存中，不会写入用量报告或应用备份。
 - Grok Build credits 查询会使用当前受管 Profile，并遵循已安装 Grok Build 的网络和登录设置。查询期间，Grok 可能续期当前登录。ProfileDeck 不会查询非当前 Profile，结果只保留在内存中，不会写入数据库、用量报告或应用备份。

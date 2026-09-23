@@ -43,7 +43,6 @@ func TestEstimateCostMicrosCoversCurrentOpenAIAndCodexModels(t *testing.T) {
 		{model: "gpt-5.4", want: 17_275_000},
 		{model: "gpt-5.4-mini", want: 5_182_500},
 		{model: "gpt-5.4-nano", want: 1_432_000},
-		{model: "chat-latest", want: 34_550_000},
 		{model: "gpt-5.3-codex", want: 15_592_500},
 		{model: "gpt-5.2", want: 15_592_500},
 		{model: "gpt-5.1", want: 11_137_500},
@@ -80,9 +79,9 @@ func TestEstimateCostMicrosReportsCacheWriteModelsAsPartial(t *testing.T) {
 		want  int64
 	}{
 		{model: "gpt-6-astra", want: 59_100_000},
-		{model: "gpt-5.6-sol", want: 34_550_000},
-		{model: "gpt-5.6-terra", want: 17_275_000},
-		{model: "gpt-5.6-luna", want: 6_910_000},
+		{model: "gpt-5.6-sol", want: 23_640_000},
+		{model: "gpt-5.6-terra", want: 13_820_000},
+		{model: "gpt-5.6-luna", want: 1_382_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
@@ -96,7 +95,7 @@ func TestEstimateCostMicrosReportsCacheWriteModelsAsPartial(t *testing.T) {
 
 func TestEstimateCostMicrosDoesNotGuessModelAliases(t *testing.T) {
 	tokens := TokenCounts{InputTokens: 10, CachedInputTokens: 2, OutputTokens: 3, TotalTokens: 13}
-	for _, model := range []string{"openai/gpt-5.3-codex", "gpt-5.3-codex-2026-07-06"} {
+	for _, model := range []string{"openai/gpt-5.3-codex", "gpt-5.3-codex-2026-07-06", "chat-latest"} {
 		cost, status := EstimateCostMicros(model, tokens)
 		if cost != nil || status != CostStatusUnknown {
 			t.Fatalf("expected unlisted model %q to remain unknown, status=%q cost=%v", model, status, cost)

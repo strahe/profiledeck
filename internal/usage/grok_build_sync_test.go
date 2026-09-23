@@ -10,11 +10,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/strahe/profiledeck/internal/apperror"
 	"github.com/strahe/profiledeck/internal/bootstrap"
 	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
 	grokpreset "github.com/strahe/profiledeck/internal/grokbuild/preset"
+	"github.com/strahe/profiledeck/internal/pricing"
 	profilesruntime "github.com/strahe/profiledeck/internal/runtime"
 	"github.com/strahe/profiledeck/internal/store"
 )
@@ -87,8 +89,8 @@ func TestUsageSyncGrokBuildImportsIncrementallyAcrossRestart(t *testing.T) {
 		summary.CachedInputTokens != 50 ||
 		summary.OutputTokens != 25 ||
 		summary.TotalTokens != 175 ||
-		summary.CostStatus != CostStatusEstimated.String() ||
-		summary.EstimatedCostUSD == nil {
+		summary.CostStatus != CostStatusUnknown.String() ||
+		summary.EstimatedCostUSD != nil {
 		t.Fatalf("summary = %#v", summary)
 	}
 
@@ -130,8 +132,8 @@ func TestUsageSyncGrokBuildImportsCurrentSessionFormat(t *testing.T) {
 		Range:      UsageRangeAll,
 	})
 	if err != nil || report.Summary.EventCount != 1 || report.Summary.TotalTokens != 1_100 ||
-		report.Summary.CostStatus != CostStatusPartial.String() ||
-		report.Summary.KnownEstimatedCostUSD != "0.002300" || report.Summary.PartialCostEventCount != 1 ||
+		report.Summary.CostStatus != CostStatusUnknown.String() ||
+		report.Summary.KnownEstimatedCostUSD != "0.000000" || report.Summary.UnknownCostEventCount != 1 ||
 		report.Summary.KnownReportedCostUSD != "0.0000012345" ||
 		report.Summary.ReportedCostStatus != ReportedCostStatusReported.String() ||
 		report.Summary.ReportedCostEventCount != 1 || report.Summary.ReportedCostCoverage != 1 {
@@ -435,6 +437,7 @@ func TestBackgroundGrokBuildSyncKeepsCursorCreatedAfterPreflight(t *testing.T) {
 
 func TestUsageSyncGrokBuildBackfillsNewlyRecognizedUnknownModels(t *testing.T) {
 	ctx := context.Background()
+	reportedTicks := int64(20_000_000_000)
 	environment := newGrokBuildUsageTestEnvironment(t, t.TempDir(), t.TempDir())
 	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
 		t.Fatalf("initialize runtime: %v", err)
@@ -461,13 +464,16 @@ func TestUsageSyncGrokBuildBackfillsNewlyRecognizedUnknownModels(t *testing.T) {
 		SourceID:   source.ID,
 		Generation: source.SyncGeneration,
 		Facts: []store.CreateUsageFactParams{{
-			EventKey:     usageTestEventKey("grok-4.6-build-historical"),
-			SourceID:     source.ID,
-			ModelKey:     "grok-4.6-build",
-			InputTokens:  1_000_000,
-			OutputTokens: 1_000_000,
-			TotalTokens:  2_000_000,
-			CostStatus:   store.UsageCostStatusUnknown,
+			EventKey:             usageTestEventKey("grok-4.7-build-historical"),
+			SourceID:             source.ID,
+			ModelKey:             "grok-4.7-build",
+			OccurredAtUnixMS:     time.Date(2026, time.September, 23, 0, 0, 0, 0, time.UTC).UnixMilli(),
+			InputTokens:          1_000_000,
+			OutputTokens:         1_000_000,
+			TotalTokens:          2_000_000,
+			CostStatus:           store.UsageCostStatusUnknown,
+			ReportedCostUSDTicks: &reportedTicks,
+			ReportedCostStatus:   store.UsageReportedCostStatusReported,
 		}},
 	}); err != nil {
 		_ = db.Close()
@@ -480,16 +486,115 @@ func TestUsageSyncGrokBuildBackfillsNewlyRecognizedUnknownModels(t *testing.T) {
 	if _, err := environment.service.SyncGrokBuild(ctx); err != nil {
 		t.Fatalf("backfill Grok Build usage price: %v", err)
 	}
-	summary, err := environment.service.Summary(ctx, UsageSummaryRequest{
-		ProviderID: grokconfig.ProviderID,
-	})
+	report, err := environment.service.Report(ctx, UsageReportRequest{ProviderID: grokconfig.ProviderID, Range: UsageRangeAll})
 	if err != nil {
-		t.Fatalf("read backfilled summary: %v", err)
+		t.Fatalf("read backfilled report: %v", err)
 	}
-	if summary.CostStatus != CostStatusEstimated.String() ||
-		summary.EstimatedCostUSD == nil ||
-		*summary.EstimatedCostUSD != "8.000000" {
-		t.Fatalf("backfilled summary = %#v", summary)
+	if report.Summary.CostStatus != CostStatusPartial.String() ||
+		report.Summary.KnownEstimatedCostUSD != "8.000000" || report.Summary.PartialCostEventCount != 1 ||
+		report.Summary.KnownReportedCostUSD != "2.0000000000" || len(report.Models) != 1 ||
+		report.Models[0].Model != "grok-4.7-build" {
+		t.Fatalf("backfilled report = %#v", report.Summary)
+	}
+}
+
+func TestUsageSyncGrokBuildPricesStandard47Session(t *testing.T) {
+	ctx := context.Background()
+	grokHome := t.TempDir()
+	environment := newGrokBuildUsageTestEnvironment(t, t.TempDir(), grokHome)
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	writeGrokBuildUsageFixture(t, grokHome, "workspace-47", "session-47", syntheticGrokBuildUsageLine(
+		"session-47", "prompt-47", "grok-4.7-build",
+		uint64(time.Date(2026, time.September, 23, 0, 0, 0, 0, time.UTC).Unix()),
+		TokenCounts{InputTokens: 1_000_000, OutputTokens: 1_000_000, TotalTokens: 2_000_000},
+	))
+	if result, err := environment.service.SyncGrokBuild(ctx); err != nil || result.ImportedEvents != 1 {
+		t.Fatalf("sync standard 4.7 session = %+v, err=%v", result, err)
+	}
+	report, err := environment.service.Report(ctx, UsageReportRequest{ProviderID: grokconfig.ProviderID, Range: UsageRangeAll})
+	if err != nil || report.Summary.CostStatus != CostStatusEstimated.String() ||
+		report.Summary.KnownEstimatedCostUSD != "8.000000" || len(report.Models) != 1 ||
+		report.Models[0].Model != "grok-4.7-build" {
+		t.Fatalf("standard 4.7 report = %+v, err=%v", report, err)
+	}
+}
+
+func TestGrokBuildBackfillUsesEachUnknownRecordDate(t *testing.T) {
+	ctx := context.Background()
+	environment := newGrokBuildUsageTestEnvironment(t, t.TempDir(), t.TempDir())
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := environment.service.SyncGrokBuild(ctx); err != nil {
+		t.Fatal(err)
+	}
+	db, err := environment.runtime.StoreFactory().OpenHealthy(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	source, err := db.BeginUsageSync(ctx, grokconfig.ProviderID, SourceGrokBuildSessionJSONL, GrokBuildUsageIdentityRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheCreation := int64(50)
+	makeFact := func(key, day string) store.CreateUsageFactParams {
+		date, parseErr := time.Parse("2006-01-02", day)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		return store.CreateUsageFactParams{
+			EventKey: usageTestEventKey(key), SourceID: source.ID, ModelKey: "grok-4.6",
+			OccurredAtUnixMS: date.UnixMilli(), InputTokens: 1_000_000, OutputTokens: 1_000_000,
+			TotalTokens: 2_000_000, CostStatus: store.UsageCostStatusUnknown,
+			CacheCreationInputTokens: &cacheCreation,
+		}
+	}
+	if _, err := db.InsertUsageFacts(ctx, store.InsertUsageFactsParams{
+		SourceID: source.ID, Generation: source.SyncGeneration,
+		Facts: []store.CreateUsageFactParams{
+			makeFact("priceable-earlier", "2026-09-23"), makeFact("unpriced-later", "2026-09-24"),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	catalog := bundledPricingCatalog
+	catalog.Entries = append([]pricing.Entry(nil), catalog.Entries...)
+	for i := range catalog.Entries {
+		if catalog.Entries[i].Provider == grokconfig.ProviderID && catalog.Entries[i].Model == "grok-4.6" {
+			catalog.Entries[i].EffectiveUntil = "2026-09-24"
+		}
+	}
+	models, err := db.ListUnknownUsageCostModels(ctx, grokconfig.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priceable, err := hasPriceableUnknownUsageModel(ctx, db, models, catalog, grokconfig.ProviderID)
+	if err != nil || !priceable {
+		t.Fatalf("earlier record was skipped: priceable=%t err=%v", priceable, err)
+	}
+	if err := backfillUnknownUsageCosts(ctx, db, grokconfig.ProviderID, catalog,
+		func(model string, candidate store.UsageFactCostCandidate) (*int64, store.UsageCostStatus, *int64) {
+			cost, status, version := estimateCostAt(catalog, grokconfig.ProviderID, model, candidate.OccurredAtUnixMS, TokenCounts{
+				InputTokens: candidate.InputTokens, CachedInputTokens: candidate.CachedInputTokens,
+				OutputTokens: candidate.OutputTokens, TotalTokens: candidate.TotalTokens,
+			}, nil, nil)
+			if cost != nil && candidate.CacheCreationInputTokens != nil && *candidate.CacheCreationInputTokens > 0 {
+				status = CostStatusPartial
+			}
+			return cost, status, version
+		}); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := db.ListUnknownUsageFactCostCandidates(ctx, grokconfig.ProviderID, models[0].SourceID, models[0].ModelID, 0, 10)
+	if err != nil || len(candidates) != 1 || candidates[0].OccurredAtUnixMS != time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC).UnixMilli() {
+		t.Fatalf("remaining unknown records = %+v, err=%v", candidates, err)
+	}
+	report, err := environment.service.Report(ctx, UsageReportRequest{ProviderID: grokconfig.ProviderID, Range: UsageRangeAll})
+	if err != nil || report.Summary.PartialCostEventCount != 1 || report.Summary.UnknownCostEventCount != 1 || report.Summary.KnownEstimatedCostUSD != "8.000000" {
+		t.Fatalf("price boundary report = %+v, err=%v", report.Summary, err)
 	}
 }
 

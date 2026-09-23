@@ -187,7 +187,7 @@ func TestInitializeBacksUpValidatedMarkerGapBeforeReapplyingMarker(t *testing.T)
 			snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
 			if len(snapshot.markers) != 0 ||
 				!snapshot.usageTable || snapshot.grokUsageTable ||
-				snapshot.usageObservationTable || snapshot.reportedCostColumns ||
+				snapshot.usageObservationTable || snapshot.reportedCostColumns || snapshot.pricingColumns ||
 				!snapshot.pathKeyIndex {
 				t.Fatalf("database changed before backup: %#v", snapshot)
 			}
@@ -205,7 +205,7 @@ func TestInitializeBacksUpValidatedMarkerGapBeforeReapplyingMarker(t *testing.T)
 	snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
 	if len(snapshot.markers) != migrationCount ||
 		!snapshot.usageTable || !snapshot.grokUsageTable ||
-		!snapshot.usageObservationTable || !snapshot.reportedCostColumns ||
+		!snapshot.usageObservationTable || !snapshot.reportedCostColumns || !snapshot.pricingColumns ||
 		!snapshot.pathKeyIndex ||
 		snapshot.setting != `{"kept":true}` {
 		t.Fatalf("database after upgrade = %#v", snapshot)
@@ -293,7 +293,7 @@ func TestInitializeRejectsMarkerGapSchemaDriftBeforeBackup(t *testing.T) {
 	}
 }
 
-func TestInitializeBacksUpPreviousBaselineBeforeGrokBuildReportedCostMigration(t *testing.T) {
+func TestInitializeBacksUpPreviousBaselineBeforePricingCatalogMigration(t *testing.T) {
 	ctx := context.Background()
 	runtimeService := newRuntimeService(t)
 	createPreviousBaseline(t, ctx, runtimeService)
@@ -306,7 +306,7 @@ func TestInitializeBacksUpPreviousBaselineBeforeGrokBuildReportedCostMigration(t
 			snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
 			if len(snapshot.markers) != len(storemigrations.Migrations.Sorted())-1 ||
 				!snapshot.usageTable || !snapshot.grokUsageTable ||
-				!snapshot.usageObservationTable || snapshot.reportedCostColumns ||
+				!snapshot.usageObservationTable || !snapshot.reportedCostColumns || snapshot.pricingColumns ||
 				!snapshot.pathKeyIndex ||
 				snapshot.setting != `{"kept":true}` {
 				t.Fatalf("previous usage baseline changed before backup: %#v", snapshot)
@@ -316,7 +316,7 @@ func TestInitializeBacksUpPreviousBaselineBeforeGrokBuildReportedCostMigration(t
 
 	result, err := NewService(runtimeService, backups, nil).Initialize(ctx)
 	if err != nil {
-		t.Fatalf("apply Grok Build reported cost migration: %v", err)
+		t.Fatalf("apply pricing catalog migration: %v", err)
 	}
 	if result.MigrationsApplied != 1 || backups.calls != 1 {
 		t.Fatalf("upgrade result = %#v, backups = %d", result, backups.calls)
@@ -324,7 +324,7 @@ func TestInitializeBacksUpPreviousBaselineBeforeGrokBuildReportedCostMigration(t
 	snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
 	if len(snapshot.markers) != len(storemigrations.Migrations.Sorted()) ||
 		!snapshot.usageTable || !snapshot.grokUsageTable ||
-		!snapshot.usageObservationTable || !snapshot.reportedCostColumns ||
+		!snapshot.usageObservationTable || !snapshot.reportedCostColumns || !snapshot.pricingColumns ||
 		!snapshot.pathKeyIndex ||
 		snapshot.setting != `{"kept":true}` {
 		t.Fatalf("database after upgrade = %#v", snapshot)
@@ -391,6 +391,7 @@ type databaseSnapshot struct {
 	grokUsageTable        bool
 	usageObservationTable bool
 	reportedCostColumns   bool
+	pricingColumns        bool
 	pathKeyIndex          bool
 	setting               string
 }
@@ -433,8 +434,9 @@ func createPreviousBaseline(t *testing.T, ctx context.Context, runtimeService *r
 		t.Fatalf("registered migrations = %d, want at least 2", len(registered))
 	}
 	execDatabaseStatements(t, runtimeService.Paths().Database,
-		`ALTER TABLE usage_facts DROP COLUMN reported_cost_status`,
-		`ALTER TABLE usage_facts DROP COLUMN reported_cost_usd_ticks`,
+		`ALTER TABLE usage_facts DROP COLUMN cache_creation_input_tokens`,
+		`ALTER TABLE usage_facts DROP COLUMN cache_write_input_tokens`,
+		`ALTER TABLE usage_facts DROP COLUMN pricing_catalog_version`,
 	)
 	execDatabaseStatements(t, runtimeService.Paths().Database,
 		`DELETE FROM bun_migrations WHERE name = '`+registered[len(registered)-1].Name+`'`,
@@ -444,6 +446,9 @@ func createPreviousBaseline(t *testing.T, ctx context.Context, runtimeService *r
 func dropIncrementalUsageSchema(t *testing.T, path string) {
 	t.Helper()
 	execDatabaseStatements(t, path,
+		`ALTER TABLE usage_facts DROP COLUMN cache_creation_input_tokens`,
+		`ALTER TABLE usage_facts DROP COLUMN cache_write_input_tokens`,
+		`ALTER TABLE usage_facts DROP COLUMN pricing_catalog_version`,
 		`ALTER TABLE usage_facts DROP COLUMN reported_cost_status`,
 		`ALTER TABLE usage_facts DROP COLUMN reported_cost_usd_ticks`,
 		`DROP TABLE usage_import_observations`,
@@ -533,6 +538,14 @@ func inspectDatabaseSnapshot(t *testing.T, path string) databaseSnapshot {
 		t.Fatal(err)
 	}
 	snapshot.reportedCostColumns = reportedCostColumnCount == 2
+	var pricingColumnCount int
+	if err := db.QueryRow(`
+		SELECT COUNT(1) FROM pragma_table_info('usage_facts')
+		WHERE name IN ('pricing_catalog_version', 'cache_write_input_tokens', 'cache_creation_input_tokens')
+	`).Scan(&pricingColumnCount); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.pricingColumns = pricingColumnCount == 3
 	var pathKeyIndexCount int
 	if err := db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'index' AND name = 'idx_profile_targets_path_key'`).Scan(&pathKeyIndexCount); err != nil {
 		t.Fatal(err)

@@ -44,6 +44,8 @@ export interface UsagePricingInfo {
     "source_url": string;
     "verified_at": string;
     "historical_repricing": boolean;
+    "catalog_version": number;
+    "multiple_versions": boolean;
 }
 
 export enum UsageRangePreset {

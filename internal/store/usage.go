@@ -130,19 +130,22 @@ type UsageSource struct {
 }
 
 type CreateUsageFactParams struct {
-	EventKey             UsageKey
-	SourceID             int64
-	SessionKey           string
-	ModelKey             string
-	OccurredAtUnixMS     int64
-	InputTokens          int64
-	CachedInputTokens    int64
-	OutputTokens         int64
-	TotalTokens          int64
-	EstimatedCostMicros  *int64
-	CostStatus           UsageCostStatus
-	ReportedCostUSDTicks *int64
-	ReportedCostStatus   UsageReportedCostStatus
+	EventKey                 UsageKey
+	SourceID                 int64
+	SessionKey               string
+	ModelKey                 string
+	OccurredAtUnixMS         int64
+	InputTokens              int64
+	CachedInputTokens        int64
+	OutputTokens             int64
+	TotalTokens              int64
+	EstimatedCostMicros      *int64
+	CostStatus               UsageCostStatus
+	ReportedCostUSDTicks     *int64
+	ReportedCostStatus       UsageReportedCostStatus
+	PricingCatalogVersion    *int64
+	CacheWriteInputTokens    *int64
+	CacheCreationInputTokens *int64
 }
 
 type UsageInsertResult struct {
@@ -231,17 +234,21 @@ type UsageUnknownCostModel struct {
 }
 
 type UsageFactCostCandidate struct {
-	ID                int64
-	InputTokens       int64
-	CachedInputTokens int64
-	OutputTokens      int64
-	TotalTokens       int64
+	ID                       int64
+	OccurredAtUnixMS         int64
+	InputTokens              int64
+	CachedInputTokens        int64
+	CacheWriteInputTokens    *int64
+	CacheCreationInputTokens *int64
+	OutputTokens             int64
+	TotalTokens              int64
 }
 
 type UpdateUsageFactCostParams struct {
-	ID                  int64
-	EstimatedCostMicros int64
-	CostStatus          UsageCostStatus
+	ID                    int64
+	EstimatedCostMicros   int64
+	CostStatus            UsageCostStatus
+	PricingCatalogVersion *int64
 }
 
 type usageFactSessionPolicy int
@@ -438,8 +445,9 @@ func (s *Store) insertUsageFactsWithSessionPolicy(
 		INSERT INTO usage_facts (
 			event_key, source_id, session_id, model_id, occurred_at_unix_ms,
 			input_tokens, cached_input_tokens, output_tokens, total_tokens,
-			estimated_cost_micros, cost_status, reported_cost_usd_ticks, reported_cost_status
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			estimated_cost_micros, cost_status, reported_cost_usd_ticks, reported_cost_status,
+			pricing_catalog_version, cache_write_input_tokens, cache_creation_input_tokens
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(event_key) DO NOTHING
 	`)
 	if err != nil {
@@ -459,7 +467,7 @@ func (s *Store) insertUsageFactsWithSessionPolicy(
 
 	costUpgradeStmt, err := s.executor().PrepareContext(ctx, `
 		UPDATE usage_facts
-		SET estimated_cost_micros = ?, cost_status = ?
+		SET estimated_cost_micros = ?, cost_status = ?, pricing_catalog_version = ?
 		WHERE id = ? AND cost_status = ?
 	`)
 	if err != nil {
@@ -520,6 +528,9 @@ func (s *Store) insertUsageFactsWithSessionPolicy(
 			status,
 			reportedCost,
 			reportedStatus,
+			fact.PricingCatalogVersion,
+			fact.CacheWriteInputTokens,
+			fact.CacheCreationInputTokens,
 		)
 		if err != nil {
 			return UsageInsertResult{}, err
@@ -608,6 +619,7 @@ func (s *Store) insertUsageFactsWithSessionPolicy(
 				ctx,
 				cost,
 				status,
+				fact.PricingCatalogVersion,
 				existingID,
 				UsageCostStatusUnknown,
 			); err != nil {
@@ -653,6 +665,11 @@ func validateUsageFact(fact CreateUsageFactParams) error {
 		fact.CachedInputTokens < 0 || fact.CachedInputTokens > fact.InputTokens ||
 		fact.OutputTokens < 0 || fact.TotalTokens < 0 {
 		return errors.New("usage fact is invalid")
+	}
+	if fact.PricingCatalogVersion != nil && *fact.PricingCatalogVersion <= 0 ||
+		fact.CacheWriteInputTokens != nil && (*fact.CacheWriteInputTokens < 0 || *fact.CacheWriteInputTokens > fact.InputTokens) ||
+		fact.CacheCreationInputTokens != nil && (*fact.CacheCreationInputTokens < 0 || *fact.CacheCreationInputTokens > fact.InputTokens) {
+		return errors.New("usage fact pricing is invalid")
 	}
 	if fact.SessionKey != "" && !validUsageSessionKey(fact.SessionKey) {
 		return errors.New("usage session key is invalid")
@@ -1063,6 +1080,22 @@ func (s *Store) ListUnknownUsageCostModels(ctx context.Context, providerID strin
 	return models, rows.Err()
 }
 
+func (s *Store) HasUnknownUsageFactCostInPeriod(ctx context.Context, sourceID, modelID, fromUnixMS, untilUnixMS int64) (bool, error) {
+	if sourceID <= 0 || modelID <= 0 || untilUnixMS <= fromUnixMS {
+		return false, errors.New("usage cost period query is invalid")
+	}
+	var found int
+	err := s.executor().QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM usage_facts INDEXED BY idx_usage_facts_source_cost_model_id
+			WHERE source_id = ? AND cost_status = ? AND model_id = ?
+				AND occurred_at_unix_ms >= ? AND occurred_at_unix_ms < ?
+			LIMIT 1
+		)
+	`, sourceID, UsageCostStatusUnknown, modelID, fromUnixMS, untilUnixMS).Scan(&found)
+	return found != 0, err
+}
+
 // ListUnknownUsageFactCostCandidates pages facts for one model dimension so
 // unsupported models never cause every historical fact to be read again.
 func (s *Store) ListUnknownUsageFactCostCandidates(
@@ -1079,7 +1112,8 @@ func (s *Store) ListUnknownUsageFactCostCandidates(
 	}
 
 	rows, err := s.executor().QueryContext(ctx, `
-		SELECT f.id, f.input_tokens, f.cached_input_tokens, f.output_tokens, f.total_tokens
+		SELECT f.id, f.occurred_at_unix_ms, f.input_tokens, f.cached_input_tokens,
+			f.cache_write_input_tokens, f.cache_creation_input_tokens, f.output_tokens, f.total_tokens
 		FROM usage_facts f INDEXED BY idx_usage_facts_source_cost_model_id
 		JOIN usage_sources s ON s.id = f.source_id
 		WHERE s.provider_id = ? AND f.source_id = ? AND f.cost_status = ?
@@ -1097,8 +1131,11 @@ func (s *Store) ListUnknownUsageFactCostCandidates(
 		var candidate UsageFactCostCandidate
 		if err := rows.Scan(
 			&candidate.ID,
+			&candidate.OccurredAtUnixMS,
 			&candidate.InputTokens,
 			&candidate.CachedInputTokens,
+			&candidate.CacheWriteInputTokens,
+			&candidate.CacheCreationInputTokens,
 			&candidate.OutputTokens,
 			&candidate.TotalTokens,
 		); err != nil {
@@ -1128,7 +1165,7 @@ func (s *Store) updateUnknownUsageFactCosts(ctx context.Context, providerID stri
 	}
 	stmt, err := s.executor().PrepareContext(ctx, `
 		UPDATE usage_facts
-		SET estimated_cost_micros = ?, cost_status = ?
+		SET estimated_cost_micros = ?, cost_status = ?, pricing_catalog_version = ?
 		WHERE id = ? AND cost_status = ? AND source_id IN (
 			SELECT id FROM usage_sources WHERE provider_id = ?
 		)
@@ -1143,7 +1180,7 @@ func (s *Store) updateUnknownUsageFactCosts(ctx context.Context, providerID stri
 		if item.ID <= 0 || item.EstimatedCostMicros < 0 || !item.CostStatus.valid() || item.CostStatus == UsageCostStatusUnknown {
 			return 0, errors.New("usage fact cost update is invalid")
 		}
-		result, err := stmt.ExecContext(ctx, item.EstimatedCostMicros, item.CostStatus, item.ID, UsageCostStatusUnknown, providerID)
+		result, err := stmt.ExecContext(ctx, item.EstimatedCostMicros, item.CostStatus, item.PricingCatalogVersion, item.ID, UsageCostStatusUnknown, providerID)
 		if err != nil {
 			return 0, err
 		}

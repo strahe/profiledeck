@@ -63,7 +63,7 @@ func TestAppContainsOnlyCompositionAndBuildInfoAPI(t *testing.T) {
 	}
 	allowedApplicationMethods := map[string]struct{}{
 		"Runtime": {}, "Backups": {}, "Agents": {}, "Providers": {}, "Profiles": {}, "Targets": {}, "Switching": {},
-		"Doctor": {}, "Usage": {}, "Settings": {}, "Codex": {}, "GrokBuild": {}, "Antigravity": {}, "ClaudeCode": {},
+		"Doctor": {}, "Usage": {}, "Pricing": {}, "Settings": {}, "Codex": {}, "GrokBuild": {}, "Antigravity": {}, "ClaudeCode": {},
 		"Initialize": {}, "Close": {},
 	}
 	err := walkProductionGo(root, func(path string, file *ast.File) error {

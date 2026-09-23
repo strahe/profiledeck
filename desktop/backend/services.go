@@ -20,6 +20,7 @@ import (
 	"github.com/strahe/profiledeck/internal/doctor"
 	"github.com/strahe/profiledeck/internal/grokbuild"
 	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
+	"github.com/strahe/profiledeck/internal/pricing"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/provider"
@@ -1110,6 +1111,18 @@ func (s *UsageService) Summary(ctx context.Context, providerID string) (usage.Us
 		providerID = codexconfig.ProviderID
 	}
 	return s.application.Usage().Summary(ctx, usage.UsageSummaryRequest{ProviderID: providerID})
+}
+
+func (s *UsageService) PricingStatus(ctx context.Context) (pricing.Status, error) {
+	return s.application.Pricing().Status(ctx)
+}
+
+func (s *UsageService) CheckPricing(ctx context.Context) (pricing.Status, error) {
+	return s.application.Pricing().Check(ctx, true)
+}
+
+func (s *UsageService) SetAutomaticPricing(ctx context.Context, enabled bool) (pricing.Status, error) {
+	return s.application.Pricing().SetAutomatic(ctx, enabled)
 }
 
 func (s *UsageService) AutoSyncStatus(

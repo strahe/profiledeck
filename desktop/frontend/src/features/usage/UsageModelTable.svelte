@@ -53,7 +53,7 @@
 					<Table.Cell class="font-mono text-xs font-medium">{model.model}</Table.Cell>
 					<Table.Cell class="text-right tabular-nums">
 						<div class="flex items-center justify-end gap-2">
-							<span>{formatCurrency(model.summary.known_estimated_cost_usd)}</span>
+							<span>{model.summary.estimated_cost_event_count + model.summary.partial_cost_event_count > 0 ? formatCurrency(model.summary.known_estimated_cost_usd) : "—"}</span>
 							{#if model.summary.cost_status !== "estimated"}<Badge variant="outline">{model.summary.pricing_coverage > 0 ? $_("usage.pricing.partial") : $_("usage.pricing.unknown")}</Badge>{/if}
 						</div>
 					</Table.Cell>

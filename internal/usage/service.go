@@ -8,6 +8,7 @@ import (
 
 	"github.com/strahe/profiledeck/internal/apperror"
 	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
+	"github.com/strahe/profiledeck/internal/pricing"
 	"github.com/strahe/profiledeck/internal/store"
 	"github.com/strahe/profiledeck/internal/validate"
 )
@@ -15,11 +16,16 @@ import (
 type Service struct {
 	stores   store.Factory
 	registry Registry
+	pricing  *pricing.Service
 	syncMu   sync.Mutex
 }
 
-func NewService(stores store.Factory, registry Registry) *Service {
-	return &Service{stores: stores, registry: registry}
+func NewService(stores store.Factory, registry Registry, priceServices ...*pricing.Service) *Service {
+	service := &Service{stores: stores, registry: registry}
+	if len(priceServices) > 0 {
+		service.pricing = priceServices[0]
+	}
+	return service
 }
 
 type UsageImportError struct {
@@ -91,6 +97,13 @@ func (service *Service) sync(
 		return SyncOutcome{}, usageSyncError(providerID, err)
 	}
 	defer releaseWork()
+	if service.pricing != nil {
+		catalog, err := service.pricing.Snapshot(workCtx)
+		if err != nil {
+			return SyncOutcome{}, usageSyncError(providerID, err)
+		}
+		workCtx = withPricingSnapshot(workCtx, catalog)
+	}
 
 	outcome, err := integration.Sync(workCtx, service.stores, options)
 	if options.ProvisionMode == SyncExistingProvider && errors.Is(err, store.ErrUsageProviderMissing) {

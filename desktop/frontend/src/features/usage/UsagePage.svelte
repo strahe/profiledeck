@@ -340,7 +340,7 @@
 							<Card.Description>{$_("usage.apiEquivalentCost")}</Card.Description>
 							{#if report.summary.cost_status !== "estimated"}<Badge variant="outline">{report.summary.pricing_coverage > 0 ? $_("usage.pricing.partial") : $_("usage.pricing.unknown")}</Badge>{/if}
 						</div>
-						<Card.Title class="text-xl tabular-nums">{formatCurrency(report.summary.known_estimated_cost_usd)}</Card.Title>
+						<Card.Title class="text-xl tabular-nums">{report.summary.estimated_cost_event_count + report.summary.partial_cost_event_count > 0 ? formatCurrency(report.summary.known_estimated_cost_usd) : "—"}</Card.Title>
 						<p class="text-xs text-muted-foreground">
 							{#if report.summary.cost_status === "estimated"}
 								{$_("usage.pricing.apiEstimate")}
@@ -350,6 +350,9 @@
 								{$_("usage.pricing.coverage", { values: { coverage: formatPercent(report.summary.pricing_coverage) } })}
 							{/if}
 						</p>
+						{#if report.pricing.multiple_versions}
+							<p class="text-xs text-muted-foreground">{$_("usage.pricing.multipleVersions")}</p>
+						{/if}
 					</Card.Header>
 				</Card.Root>
 				{#if providerID === "grok-build"}

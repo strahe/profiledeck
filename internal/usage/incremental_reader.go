@@ -134,7 +134,7 @@ func parseCodexCheckpointFile(
 			boundary.appendSuffix(boundarySuffix, consumed)
 			continue
 		}
-		event, invalid, unsupported := state.parseLine(line)
+		event, invalid, unsupported := state.parseLineAt(ctx, line)
 		if invalid && !terminated {
 			break
 		}
@@ -228,7 +228,7 @@ func parseGrokBuildCheckpointFile(
 			boundary.appendSuffix(boundarySuffix, consumed)
 			continue
 		}
-		events, unsupported, parseErr := parseGrokBuildSessionLine(line)
+		events, unsupported, parseErr := parseGrokBuildSessionLineAt(ctx, line)
 		if parseErr != nil && !terminated {
 			break
 		}

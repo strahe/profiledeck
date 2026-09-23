@@ -14,6 +14,7 @@
 	import type { State as AgentState } from "../../../bindings/github.com/strahe/profiledeck/internal/agent/models";
 	import { currentDesktopLocale, type DesktopLanguage } from "$lib/i18n";
 	import AppBackupSettings from "./AppBackupSettings.svelte";
+	import PricingSettings from "./PricingSettings.svelte";
 
 	let {
 		section,
@@ -272,6 +273,7 @@
 				</Field.FieldGroup>
 			{/if}
 		</SectionCard>
+		<PricingSettings />
 	{:else}
 		<AppBackupSettings {automaticBackups} {databaseHealthy} {onAutomaticBackupsChange} />
 	{/if}

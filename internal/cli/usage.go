@@ -27,6 +27,7 @@ func newUsageCommand() *urfavecli.Command {
 			newUsageSyncCommand(),
 			newUsageSummaryCommand(),
 			newUsageReportCommand(),
+			newUsagePricingCommand(),
 		},
 	}
 }
@@ -85,6 +86,7 @@ func newUsageSyncCodexCommand() *urfavecli.Command {
 			if err != nil {
 				return err
 			}
+			_, _ = application.Pricing().Check(ctx, false)
 			result, err := application.Usage().SyncCodex(ctx)
 			if err != nil {
 				return err
@@ -110,6 +112,7 @@ func newUsageSyncGrokBuildCommand() *urfavecli.Command {
 			if err != nil {
 				return err
 			}
+			_, _ = application.Pricing().Check(ctx, false)
 			result, err := application.Usage().SyncGrokBuild(ctx)
 			if err != nil {
 				return err
