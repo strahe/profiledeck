@@ -375,6 +375,14 @@ func (service *Service) UpdateProfileConfigSet(ctx context.Context, req UpdatePr
 }
 
 func (service *Service) SaveActiveProfileState(ctx context.Context) (ProfileStateSaveResult, error) {
+	return service.saveActiveProfileState(ctx, "", 0, 0)
+}
+
+func (service *Service) SaveActiveProfileStateFor(ctx context.Context, expectedProfileID string, expectedCredentialReferences, expectedConfigReferences int) (ProfileStateSaveResult, error) {
+	return service.saveActiveProfileState(ctx, expectedProfileID, expectedCredentialReferences, expectedConfigReferences)
+}
+
+func (service *Service) saveActiveProfileState(ctx context.Context, expectedProfileID string, expectedCredentialReferences, expectedConfigReferences int) (ProfileStateSaveResult, error) {
 	if err := service.requireAccess(ctx); err != nil {
 		return ProfileStateSaveResult{}, err
 	}
@@ -406,7 +414,13 @@ func (service *Service) SaveActiveProfileState(ctx context.Context) (ProfileStat
 			return err
 		}
 		if !exists {
+			if expectedProfileID != "" {
+				return apperror.New(apperror.ProfileChanged, "active Grok Build Profile changed")
+			}
 			return apperror.New(apperror.ProfileNotFound, "no active Grok Build Profile")
+		}
+		if expectedProfileID != "" && active.ProfileID != expectedProfileID {
+			return apperror.New(apperror.ProfileChanged, "active Grok Build Profile changed")
 		}
 		profileID = active.ProfileID
 		targets, err := grokprofile.BindingTargets(ctx, tx, profileID, home)
@@ -425,6 +439,27 @@ func (service *Service) SaveActiveProfileState(ctx context.Context) (ProfileStat
 		if err != nil {
 			return err
 		}
+		credentialID, err = grokprofile.CredentialIDFromTarget(authTarget)
+		if err != nil {
+			return err
+		}
+		credential, err := grokprofile.RequireAuthCredential(ctx, tx, credentialID)
+		if err != nil {
+			return err
+		}
+		if expectedProfileID != "" {
+			credentialReferences, err := grokprofile.CredentialBindingCount(ctx, tx, credentialID)
+			if err != nil {
+				return err
+			}
+			configReferences, err := grokprofile.ConfigSetBindingCount(ctx, tx, configSet.ID)
+			if err != nil {
+				return err
+			}
+			if credentialReferences != expectedCredentialReferences || configReferences != expectedConfigReferences {
+				return apperror.New(apperror.ProfileSharingChanged, "Grok Build Profile sharing changed before save")
+			}
+		}
 		// A missing working file must never erase the database-owned Config Set
 		// or allow the login to be updated without its settings.
 		if working.ConfigMissing {
@@ -436,14 +471,6 @@ func (service *Service) SaveActiveProfileState(ctx context.Context) (ProfileStat
 		configSet, err = grokprofile.UpsertConfigSet(
 			ctx, tx, configSet.ID, configSet.Name, configSet.Description, working.ConfigContent,
 		)
-		if err != nil {
-			return err
-		}
-		credentialID, err = grokprofile.CredentialIDFromTarget(authTarget)
-		if err != nil {
-			return err
-		}
-		credential, err := grokprofile.RequireAuthCredential(ctx, tx, credentialID)
 		if err != nil {
 			return err
 		}

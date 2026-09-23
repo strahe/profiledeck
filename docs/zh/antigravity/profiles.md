@@ -12,7 +12,7 @@ ProfileDeck 不支持旧版 Antigravity 存储方式。
 ## 在桌面端保存 Profile
 
 1. 在 ProfileDeck 侧边栏中打开 **Antigravity**。
-2. 选择**保存当前登录**。
+2. 选择**新建 Profile**。
 3. 输入创建后不会改变的 Profile ID 和用于显示的名称，然后选择**保存 Profile**。
 
 新 Profile 会成为 Antigravity 的当前 Profile。ProfileDeck 不会显示其中的访问令牌或刷新令牌。
@@ -59,7 +59,7 @@ Antigravity 运行时可能刷新登录。短期访问令牌的到期时间不�
 profiledeck-cli antigravity profile save-current
 ```
 
-在桌面端打开当前 Profile，然后选择**从当前 Antigravity 更新**。
+在桌面端打开当前 Profile 的 **…** 菜单，然后选择**保存当前登录**。
 
 ## 删除 Profile
 

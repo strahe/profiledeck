@@ -23,7 +23,7 @@ CLI 命令按以下顺序查找 Grok Home：
 ## 在桌面端保存 Profile
 
 1. 选择 **Grok Build → Profiles**。
-2. 选择**保存当前**。
+2. 选择**新建 Profile**。
 3. 输入创建后不会改变的 Profile ID，以及用于显示的名称。
 4. 保存第一个 Profile 时使用默认的 `shared` 配置集；只有它尚不存在时，ProfileDeck 才会根据当前设置创建。
 
@@ -99,7 +99,7 @@ profiledeck-cli grok-build profile fork work client-config \
 
 ## 保存更改并切换
 
-Grok Build 继续使用普通的 `auth.json` 和 `config.toml` 文件。离开当前 Profile 前，ProfileDeck 会保留当前登录或设置中的有效更改。请在桌面端使用**从当前 Grok Build 更新**，或运行：
+Grok Build 继续使用普通的 `auth.json` 和 `config.toml` 文件。离开当前 Profile 前，ProfileDeck 会保留当前登录或设置中的有效更改。请打开当前 Profile 的 **…** 菜单，选择**保存当前登录与设置**，或运行：
 
 ```bash
 profiledeck-cli grok-build profile save-current

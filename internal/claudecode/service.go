@@ -69,7 +69,8 @@ type UpdateClaudeCodeProfileRequest struct {
 	Description *string `json:"description,omitempty"`
 }
 type SaveActiveClaudeCodeProfileRequest struct {
-	ConfirmShared bool `json:"confirm_shared"`
+	ExpectedProfileID string `json:"expected_profile_id,omitempty"`
+	ConfirmShared     bool   `json:"confirm_shared"`
 }
 type ClaudeCodeProfileSaveResult struct {
 	OperationID string                   `json:"operation_id"`
@@ -323,10 +324,16 @@ func (service *Service) SaveActiveProfile(ctx context.Context, req SaveActiveCla
 		}
 		active, err := tx.GetActiveState(ctx, claudecodeconfig.ProviderID)
 		if errors.Is(err, store.ErrNotFound) {
+			if req.ExpectedProfileID != "" {
+				return apperror.New(apperror.ProfileChanged, "active Claude Code Profile changed")
+			}
 			return apperror.New(apperror.ProfileNotFound, "no active Claude Code Profile")
 		}
 		if err != nil {
 			return apperror.Wrap(apperror.StoreStatusFailed, "failed to read active Claude Code Profile", err)
+		}
+		if req.ExpectedProfileID != "" && active.ProfileID != req.ExpectedProfileID {
+			return apperror.New(apperror.ProfileChanged, "active Claude Code Profile changed")
 		}
 		profileID = active.ProfileID
 		if _, err := claudeCodeProfileSummary(ctx, tx, profileID); err != nil {

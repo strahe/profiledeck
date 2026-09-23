@@ -296,6 +296,14 @@ func (service *Service) UpdateProfile(ctx context.Context, req UpdateAntigravity
 }
 
 func (service *Service) SaveActiveProfile(ctx context.Context) (AntigravityProfileSaveResult, error) {
+	return service.saveActiveProfile(ctx, "")
+}
+
+func (service *Service) SaveActiveProfileFor(ctx context.Context, expectedProfileID string) (AntigravityProfileSaveResult, error) {
+	return service.saveActiveProfile(ctx, expectedProfileID)
+}
+
+func (service *Service) saveActiveProfile(ctx context.Context, expectedProfileID string) (AntigravityProfileSaveResult, error) {
 	if err := service.requireAccess(ctx); err != nil {
 		return AntigravityProfileSaveResult{}, err
 	}
@@ -325,10 +333,16 @@ func (service *Service) SaveActiveProfile(ctx context.Context) (AntigravityProfi
 		}
 		active, err := tx.GetActiveState(ctx, agyconfig.ProviderID)
 		if errors.Is(err, store.ErrNotFound) {
+			if expectedProfileID != "" {
+				return apperror.New(apperror.ProfileChanged, "active Antigravity profile changed")
+			}
 			return apperror.New(apperror.ProfileNotFound, "no active Antigravity profile")
 		}
 		if err != nil {
 			return apperror.Wrap(apperror.StoreStatusFailed, "failed to read active Antigravity profile", err)
+		}
+		if expectedProfileID != "" && active.ProfileID != expectedProfileID {
+			return apperror.New(apperror.ProfileChanged, "active Antigravity profile changed")
 		}
 		profileID = active.ProfileID
 		binding, err := tx.GetProfileCredentialBinding(ctx, profileID, agyconfig.ProviderID, agyconfig.CredentialSlot)

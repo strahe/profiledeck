@@ -355,6 +355,24 @@ func assertDesktopServiceErrorCode(t *testing.T, err error, code apperror.Code) 
 	}
 }
 
+func TestDesktopSaveCurrentRejectsMissingSelectedProfile(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name string
+		save func() error
+	}{
+		{"Antigravity", func() error { _, err := (&AntigravityService{}).SaveCurrent(ctx, ""); return err }},
+		{"Claude Code", func() error { _, err := (&ClaudeCodeService{}).SaveCurrent(ctx, "", false); return err }},
+		{"Codex", func() error { _, err := (&CodexService{}).SaveActiveProfileState(ctx, "", 0, 0); return err }},
+		{"Grok Build", func() error { _, err := (&GrokBuildService{}).SaveActiveProfileState(ctx, "", 0, 0); return err }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assertDesktopServiceErrorCode(t, test.save(), apperror.ProfileChanged)
+		})
+	}
+}
+
 func TestAntigravityServiceCreatesSafeDashboardProfile(t *testing.T) {
 	keyring.MockInit()
 	t.Cleanup(keyring.MockInit)
@@ -1030,7 +1048,7 @@ func TestCodexSaveActiveProfileStateReadsCurrentFilesBehindDesktopBoundary(t *te
 	}
 
 	writeDesktopCodexFiles(t, codexDir, `model = "gpt-5.1-codex"`+"\n", `{"tokens":{"account_id":"updated","access_token":"changed"}}`)
-	if _, err := services.Codex.SaveActiveProfileState(ctx); err != nil {
+	if _, err := services.Codex.SaveActiveProfileState(ctx, "work", 1, 1); err != nil {
 		t.Fatalf("expected save-current to read current Codex files, got %v", err)
 	}
 

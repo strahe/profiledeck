@@ -29,8 +29,8 @@ export function ListProfiles(): $CancellablePromise<claudecode$0.ClaudeCodeProfi
     return $Call.ByID(2487267564);
 }
 
-export function SaveCurrent(confirmShared: boolean): $CancellablePromise<claudecode$0.ClaudeCodeProfileSaveResult> {
-    return $Call.ByID(1016544372, confirmShared);
+export function SaveCurrent(expectedProfileID: string, confirmShared: boolean): $CancellablePromise<claudecode$0.ClaudeCodeProfileSaveResult> {
+    return $Call.ByID(1016544372, expectedProfileID, confirmShared);
 }
 
 export function ShowProfile(profileID: string): $CancellablePromise<claudecode$0.ClaudeCodeProfileDetail> {

@@ -31,8 +31,8 @@ const messages = {
 			refreshQuota: "Refresh limits",
 			refreshProfileQuota: "Refresh limits for {profile}",
 			saveAsNewProfile: "Save Current Codex as a New Profile",
-			saveCurrentShort: "Save Current",
-			updateFromCurrent: "Update from Current Codex",
+			newProfile: "New Profile",
+			updateFromCurrent: "Save Current Login and Settings",
 			fork: "Fork",
 			details: "Details",
 			cancel: "Cancel",
@@ -218,8 +218,8 @@ const messages = {
 		grokBuild: {
 			actions: {
 				saveAsNewProfile: "Save Current Grok Build as a New Profile",
-				saveCurrentShort: "Save Current",
-				updateFromCurrent: "Update from Current Grok Build",
+				newProfile: "New Profile",
+				updateFromCurrent: "Save Current Login and Settings",
 			},
 			profilePages: {
 				new: {
@@ -254,9 +254,9 @@ const messages = {
 					changeConfigDescription: "Choose which saved Grok Build settings this inactive Profile will use.",
 				},
 				saveCurrent: {
-					title: "Update from Current Grok Build?",
-					description: "Update this Profile with the active login and settings in Grok Build.",
-					configMissing: "Grok Build config.toml is missing. Restore or recreate it before updating this Profile. ProfileDeck did not change the saved login or settings.",
+					title: "Save Current Grok Build Login and Settings?",
+					description: "Save the login and settings currently used by Grok Build to the active Profile.",
+					configMissing: "Grok Build config.toml is missing. Restore or recreate it before saving. ProfileDeck did not change the saved login or settings.",
 				},
 			},
 			quota: {
@@ -354,9 +354,9 @@ const messages = {
 		},
 		antigravity: {
 			actions: {
-				newProfile: "Save Current Login",
+				newProfile: "New Profile",
 				saveProfile: "Save Profile",
-				updateCurrent: "Update from Current Antigravity",
+				updateCurrent: "Save Current Login",
 			},
 			list: {
 				title: "Antigravity Profiles",
@@ -415,10 +415,10 @@ const messages = {
 				description: "Change this Profile's name or description. Its saved Antigravity login will not change.",
 			},
 			saveCurrent: {
-				title: "Update from Current Antigravity?",
-				description: "Update this Profile with the active login in Antigravity.",
-				sharedTitle: "Update Shared Login?",
-				sharedDescription: "This login is shared with {count} other Profiles. Updating it will change it for all of them.",
+					title: "Save Current Antigravity Login?",
+					description: "Save the login currently used by Antigravity to the active Profile.",
+					sharedTitle: "Save Shared Login?",
+					sharedDescription: "This login is used by {count} Profiles. Saving it will change it for all of them.",
 			},
 			use: {
 				description: "Review the Antigravity login change. ProfileDeck creates a private recovery point before continuing.",
@@ -447,7 +447,7 @@ const messages = {
 			},
 		},
 		claudeCode: {
-			actions: { newProfile: "Save Current Login", saveProfile: "Save Profile", updateCurrent: "Save Current Claude Code Login" },
+			actions: { newProfile: "New Profile", saveProfile: "Save Profile", updateCurrent: "Save Current Login" },
 			list: {
 				title: "Claude Code Profiles",
 				description: "Save and switch Claude Code logins. Claude Desktop is not affected.",
@@ -476,8 +476,8 @@ const messages = {
 			},
 			edit: { description: "Change this Profile's name or description. Its saved Claude Code login will not change." },
 			saveCurrent: {
-				title: "Save Current Claude Code Login?", description: "Update the active Profile with the login currently used by Claude Code.",
-				sharedTitle: "Update Shared Claude Code Login?", sharedDescription: "This saved login is used by {count} Profiles. Updating it changes all of them.",
+				title: "Save Current Claude Code Login?", description: "Save the login currently used by Claude Code to the active Profile.",
+				sharedTitle: "Save Shared Claude Code Login?", sharedDescription: "This saved login is used by {count} Profiles. Saving it changes all of them.",
 			},
 			use: {
 				description: "Review the Claude Code login change. ProfileDeck creates a private recovery point before continuing.",
@@ -553,12 +553,12 @@ const messages = {
 				newDescription: "Save a separate copy so this Profile's Codex settings can change independently.",
 			},
 			saveCurrent: {
-				title: "Update from Current Codex?",
-				description: "Update this Profile with the active login and settings in Codex.",
-				sharedTitle: "Update Shared Settings or Login?",
-				sharedLoginDescription: "This login is shared with {count} other Profiles. Updating it will change it for all of them.",
-				sharedConfigDescription: "These settings are shared with {count} other Profiles. Updating them will change them for all of them.",
-				sharedBothDescription: "The login (shared by {loginCount} Profiles) and settings (shared by {configCount} Profiles) are shared. Updating them will change them for all associated Profiles.",
+				title: "Save Current Codex Login and Settings?",
+				description: "Save the login and settings currently used by Codex to the active Profile.",
+				sharedTitle: "Save Shared Login or Settings?",
+				sharedLoginDescription: "This login is used by {count} Profiles. Saving it will change it for all of them.",
+				sharedConfigDescription: "These settings are used by {count} Profiles. Saving them will change them for all of them.",
+				sharedBothDescription: "The login is used by {loginCount} Profiles and the settings by {configCount} Profiles. Saving them will change them for all associated Profiles.",
 			},
 			form: {
 				profile: "Profile",
@@ -605,7 +605,7 @@ const messages = {
 			notLoadedTitle: "Usage limits not checked",
 			notLoadedDescription: "Refresh to check the current limits for this Profile.",
 			authRequired: "Login refresh required",
-			authRequiredDescription: "Use this Profile in Codex and sign in again, then choose Update from Current Codex and retry.",
+			authRequiredDescription: "Use this Profile in Codex and sign in again, then save the current login and settings and retry.",
 			unsupported: "Unsupported login",
 			unsupportedDescription: "Limits are available for ChatGPT sign-ins and compatible API Key services.",
 			unavailable: "Limits unavailable",
@@ -1133,6 +1133,8 @@ const messages = {
 			profileInUse: "This Profile is still in use and cannot be removed.",
 			profileInvalid: "Check the Profile details and try again.",
 			profileNotFound: "The selected Profile no longer exists.",
+			profileChanged: "The current Profile changed, so nothing was saved. Check the Profile list and try again.",
+			profileSharingChanged: "Sharing changed, so nothing was saved. Reopen the save confirmation to review the updated warning.",
 			switchPreviewFailed: "ProfileDeck could not prepare this switch. Check the Profile and the tool's login or settings, then try again.",
 			switchUnsupported: "This Profile includes a change that ProfileDeck cannot apply.",
 			fileAlreadyManaged: "This file is already managed by another ProfileDeck item.",
@@ -1193,8 +1195,8 @@ const messages = {
 			refreshQuota: "刷新限额",
 			refreshProfileQuota: "刷新 {profile} 的限额",
 			saveAsNewProfile: "将当前 Codex 配置保存为新 Profile",
-			saveCurrentShort: "保存当前",
-			updateFromCurrent: "从当前 Codex 更新",
+			newProfile: "新建 Profile",
+			updateFromCurrent: "保存当前登录与设置",
 			fork: "Fork",
 			details: "详情",
 			cancel: "取消",
@@ -1380,8 +1382,8 @@ const messages = {
 		grokBuild: {
 			actions: {
 				saveAsNewProfile: "将当前 Grok Build 保存为新 Profile",
-				saveCurrentShort: "保存当前状态",
-				updateFromCurrent: "从当前 Grok Build 更新",
+				newProfile: "新建 Profile",
+				updateFromCurrent: "保存当前登录与设置",
 			},
 			profilePages: {
 				new: {
@@ -1416,9 +1418,9 @@ const messages = {
 					changeConfigDescription: "选择此非活动 Profile 要使用的 Grok Build 设置。",
 				},
 				saveCurrent: {
-					title: "从当前 Grok Build 更新？",
-					description: "使用 Grok Build 当前的登录和设置更新此 Profile。",
-					configMissing: "找不到 Grok Build config.toml。请先恢复或重新创建该文件，再更新此 Profile。ProfileDeck 未更改已保存的登录或设置。",
+					title: "保存当前 Grok Build 登录与设置？",
+					description: "将 Grok Build 当前使用的登录与设置保存到活动 Profile。",
+					configMissing: "找不到 Grok Build config.toml。请先恢复或重新创建该文件，再保存当前状态。ProfileDeck 未更改已保存的登录或设置。",
 				},
 			},
 			quota: {
@@ -1516,9 +1518,9 @@ const messages = {
 		},
 		antigravity: {
 			actions: {
-				newProfile: "保存当前登录",
+				newProfile: "新建 Profile",
 				saveProfile: "保存 Profile",
-				updateCurrent: "从当前 Antigravity 更新",
+				updateCurrent: "保存当前登录",
 			},
 			list: {
 				title: "Antigravity Profiles",
@@ -1577,10 +1579,10 @@ const messages = {
 				description: "更改此 Profile 的名称或描述，不会改变已保存的 Antigravity 登录。",
 			},
 			saveCurrent: {
-				title: "从当前 Antigravity 更新？",
-				description: "使用 Antigravity 当前的登录账号更新此 Profile。",
-				sharedTitle: "更新共享的登录？",
-				sharedDescription: "此 Profile 的登录账号与其他 {count} 个 Profile 共享。更新将同步应用到所有这些 Profile。",
+					title: "保存当前 Antigravity 登录？",
+					description: "将 Antigravity 当前使用的登录保存到活动 Profile。",
+					sharedTitle: "保存共享的登录？",
+					sharedDescription: "此登录由 {count} 个 Profile 共用，保存后会影响所有这些 Profile。",
 			},
 			use: {
 				description: "请审核 Antigravity 登录更改。ProfileDeck 会先创建私有恢复点，再继续操作。",
@@ -1609,7 +1611,7 @@ const messages = {
 			},
 		},
 		claudeCode: {
-			actions: { newProfile: "保存当前登录", saveProfile: "保存 Profile", updateCurrent: "保存当前 Claude Code 登录" },
+			actions: { newProfile: "新建 Profile", saveProfile: "保存 Profile", updateCurrent: "保存当前登录" },
 			list: {
 				title: "Claude Code Profiles",
 				description: "保存并切换 Claude Code 登录，不会影响 Claude Desktop。",
@@ -1638,8 +1640,8 @@ const messages = {
 			},
 			edit: { description: "更改此 Profile 的名称或描述，不会改变已保存的 Claude Code 登录。" },
 			saveCurrent: {
-				title: "保存当前 Claude Code 登录？", description: "使用 Claude Code 当前登录更新活动 Profile。",
-				sharedTitle: "更新共享的 Claude Code 登录？", sharedDescription: "此登录由 {count} 个 Profile 共用，更新会同时影响它们。",
+				title: "保存当前 Claude Code 登录？", description: "将 Claude Code 当前使用的登录保存到活动 Profile。",
+				sharedTitle: "保存共享的 Claude Code 登录？", sharedDescription: "此登录由 {count} 个 Profile 共用，保存后会影响所有这些 Profile。",
 			},
 			use: {
 				description: "请审核 Claude Code 登录更改。ProfileDeck 会先创建私有恢复点，再继续操作。",
@@ -1715,12 +1717,12 @@ const messages = {
 				newDescription: "保存独立副本，让此 Profile 的 Codex 设置可以单独修改。",
 			},
 			saveCurrent: {
-				title: "从当前 Codex 更新？",
-				description: "使用 Codex 当前的登录账号与设置更新此 Profile。",
-				sharedTitle: "确认更新共享的资源？",
-				sharedLoginDescription: "此 Profile 的登录账号与其他 {count} 个 Profile 共享。更新将同步应用到所有这些 Profile。",
-				sharedConfigDescription: "此 Profile 的设置与其他 {count} 个 Profile 共享。更新将同步应用到所有这些 Profile。",
-				sharedBothDescription: "此 Profile 的登录账号（{loginCount} 个引用）和设置（{configCount} 个引用）与其他 Profile 共享，更新将同步应用到所有关联的 Profile。",
+				title: "保存当前 Codex 登录与设置？",
+				description: "将 Codex 当前使用的登录与设置保存到活动 Profile。",
+				sharedTitle: "保存共享的登录或设置？",
+				sharedLoginDescription: "此登录由 {count} 个 Profile 共用，保存后会影响所有这些 Profile。",
+				sharedConfigDescription: "此设置由 {count} 个 Profile 共用，保存后会影响所有这些 Profile。",
+				sharedBothDescription: "此登录由 {loginCount} 个 Profile 共用，设置由 {configCount} 个 Profile 共用；保存后会影响所有相关 Profile。",
 			},
 			form: {
 				profile: "Profile",
@@ -1767,7 +1769,7 @@ const messages = {
 			notLoadedTitle: "尚未检查使用限额",
 			notLoadedDescription: "点击刷新，检查此 Profile 当前的使用限额。",
 			authRequired: "需要刷新登录状态",
-			authRequiredDescription: "请在 Codex 中使用此 Profile 并重新登录，然后选择“从当前 Codex 更新”并重试。",
+			authRequiredDescription: "请在 Codex 中使用此 Profile 并重新登录，然后保存当前登录与设置，再重试。",
 			unsupported: "此登录方式不支持",
 			unsupportedDescription: "通过 ChatGPT 登录或使用兼容 API Key 服务的 Profile 可以读取限额。",
 			unavailable: "暂时无法读取限额",
@@ -2295,6 +2297,8 @@ const messages = {
 			profileInUse: "此 Profile 仍在使用，无法删除。",
 			profileInvalid: "请检查 Profile 详情后重试。",
 			profileNotFound: "所选 Profile 已不存在。",
+			profileChanged: "当前 Profile 已变更，未保存任何内容。请查看 Profile 列表后重试。",
+			profileSharingChanged: "共享情况已变化，未保存任何内容。请重新打开保存确认提示后重试。",
 			switchPreviewFailed: "ProfileDeck 无法准备此次切换。请检查 Profile 以及工具登录或设置后重试。",
 			switchUnsupported: "此 Profile 包含 ProfileDeck 无法应用的更改。",
 			fileAlreadyManaged: "此文件已由另一个 ProfileDeck 项目管理。",

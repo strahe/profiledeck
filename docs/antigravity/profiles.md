@@ -12,7 +12,7 @@ Legacy Antigravity storage is not supported.
 ## Save a Profile in the Desktop app
 
 1. Open **Antigravity** in the ProfileDeck sidebar.
-2. Select **Save Current Login**.
+2. Select **New Profile**.
 3. Enter a permanent Profile ID and a display name, then select **Save Profile**.
 
 The new Profile becomes the current Antigravity Profile. ProfileDeck never displays its access or refresh tokens.
@@ -59,7 +59,7 @@ Antigravity may refresh its login while it runs. The short-lived access-token ex
 profiledeck-cli antigravity profile save-current
 ```
 
-In the Desktop app, open the current Profile and select **Update from Current Antigravity**.
+In the Desktop app, open the current Profile's **…** menu and select **Save Current Login**.
 
 ## Delete a Profile
 

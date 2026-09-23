@@ -29,8 +29,8 @@ export function ReadProfileQuota(profileID: string): $CancellablePromise<antigra
     return $Call.ByID(2657873016, profileID);
 }
 
-export function SaveCurrent(): $CancellablePromise<antigravity$0.AntigravityProfileSaveResult> {
-    return $Call.ByID(1314540511);
+export function SaveCurrent(expectedProfileID: string): $CancellablePromise<antigravity$0.AntigravityProfileSaveResult> {
+    return $Call.ByID(1314540511, expectedProfileID);
 }
 
 export function ShowProfile(profileID: string): $CancellablePromise<antigravity$0.AntigravityProfileDetail> {

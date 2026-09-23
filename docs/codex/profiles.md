@@ -36,7 +36,7 @@ ProfileDeck also requires a valid `config.toml`. CLI commands resolve the Codex 
 ## Save a Profile in Desktop
 
 1. Select **Codex → Profiles**.
-2. Choose **Save Current**.
+2. Choose **New Profile**.
 3. Enter a permanent Profile ID and a display name.
 4. For the first Profile, save the current Codex settings in the default `shared` Config Set.
 
@@ -107,7 +107,7 @@ profiledeck-cli codex profile fork work client-config \
 
 Codex continues to use normal `auth.json` and `config.toml` files. Before switching away, ProfileDeck preserves valid changes made to the current login or settings.
 
-Use **Update from Current Codex** in Desktop, or run the following command, before signing in to a different account or replacing the current files when you want to save explicitly:
+To save before signing in to a different account or replacing these files, open the current Profile's **…** menu and choose **Save Current Login and Settings**, or run:
 
 ```bash
 profiledeck-cli codex profile save-current

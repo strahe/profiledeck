@@ -178,6 +178,52 @@ func TestManagedProfilesSwitchExactWorkingCopiesWithoutPublicBodies(t *testing.T
 	}
 }
 
+func TestSaveActiveProfileStateRejectsChangedActiveProfile(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	originalAuth := syntheticAuth("work", "ORIGINAL_AUTH")
+	writePrivateFile(t, filepath.Join(home, grokconfig.AuthFileName), originalAuth)
+	application := newApplication(t, home)
+	created, err := application.GrokBuild().CreateProfile(ctx, grokbuild.CreateProfileRequest{ProfileID: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePrivateFile(t, filepath.Join(home, grokconfig.AuthFileName), syntheticAuth("work", "CHANGED_AUTH"))
+	writePrivateFile(t, filepath.Join(home, grokconfig.ConfigFileName), "# changed\n")
+	_, err = application.GrokBuild().SaveActiveProfileStateFor(ctx, "other", 1, 1)
+	assertErrorCode(t, err, apperror.ProfileChanged)
+	assertStoredCredential(t, ctx, application, created.Summary.CredentialID, originalAuth)
+	assertStoredConfig(t, ctx, application, created.ConfigSet.ID, "")
+}
+
+func TestSaveActiveProfileStateRejectsChangedSharing(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	originalAuth := syntheticAuth("work", "ORIGINAL_AUTH")
+	writePrivateFile(t, filepath.Join(home, grokconfig.AuthFileName), originalAuth)
+	application := newApplication(t, home)
+	created, err := application.GrokBuild().CreateProfile(ctx, grokbuild.CreateProfileRequest{ProfileID: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.GrokBuild().ForkProfile(ctx, grokbuild.ForkProfileRequest{
+		SourceProfileID: "work", ProfileID: "shared",
+		CredentialBinding: grokbuild.ForkBindingShareParent, ConfigBinding: grokbuild.ForkBindingCopyNew,
+		NewConfigSetID: "shared-settings",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writePrivateFile(t, filepath.Join(home, grokconfig.AuthFileName), syntheticAuth("work", "CHANGED_AUTH"))
+	writePrivateFile(t, filepath.Join(home, grokconfig.ConfigFileName), "# changed\n")
+	_, err = application.GrokBuild().SaveActiveProfileStateFor(ctx, "work", 1, 1)
+	assertErrorCode(t, err, apperror.ProfileSharingChanged)
+	assertStoredCredential(t, ctx, application, created.Summary.CredentialID, originalAuth)
+	assertStoredConfig(t, ctx, application, created.ConfigSet.ID, "")
+	if _, err := application.GrokBuild().SaveActiveProfileStateFor(ctx, "work", 2, 1); err != nil {
+		t.Fatalf("save with current sharing failed: %v", err)
+	}
+}
+
 func TestValidationErrorsDoNotExposeManagedFileBodies(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()

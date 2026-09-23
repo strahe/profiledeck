@@ -384,6 +384,14 @@ func (service *Service) UpdateProfileConfigSet(ctx context.Context, req UpdateCo
 }
 
 func (service *Service) SaveActiveProfileState(ctx context.Context) (CodexProfileStateSaveResult, error) {
+	return service.saveActiveProfileState(ctx, "", 0, 0)
+}
+
+func (service *Service) SaveActiveProfileStateFor(ctx context.Context, expectedProfileID string, expectedCredentialReferences, expectedConfigReferences int) (CodexProfileStateSaveResult, error) {
+	return service.saveActiveProfileState(ctx, expectedProfileID, expectedCredentialReferences, expectedConfigReferences)
+}
+
+func (service *Service) saveActiveProfileState(ctx context.Context, expectedProfileID string, expectedCredentialReferences, expectedConfigReferences int) (CodexProfileStateSaveResult, error) {
 	if err := service.requireAccess(ctx); err != nil {
 		return CodexProfileStateSaveResult{}, err
 	}
@@ -416,7 +424,13 @@ func (service *Service) SaveActiveProfileState(ctx context.Context) (CodexProfil
 			return err
 		}
 		if !exists {
+			if expectedProfileID != "" {
+				return apperror.New(apperror.ProfileChanged, "active Codex profile changed")
+			}
 			return apperror.New(apperror.ProfileNotFound, "no active Codex profile")
+		}
+		if expectedProfileID != "" && active.ProfileID != expectedProfileID {
+			return apperror.New(apperror.ProfileChanged, "active Codex profile changed")
 		}
 		profileID = active.ProfileID
 		targets, err := codexBindingTargets(ctx, txStore, profileID, home)
@@ -442,6 +456,19 @@ func (service *Service) SaveActiveProfileState(ctx context.Context) (CodexProfil
 		credential, err := requireCodexAuthCredential(ctx, txStore, credentialID)
 		if err != nil {
 			return err
+		}
+		if expectedProfileID != "" {
+			credentialReferences, err := codexCredentialBindingCount(ctx, txStore, credentialID)
+			if err != nil {
+				return err
+			}
+			configReferences, err := codexConfigSetBindingCount(ctx, txStore, configSet.ID)
+			if err != nil {
+				return err
+			}
+			if credentialReferences != expectedCredentialReferences || configReferences != expectedConfigReferences {
+				return apperror.New(apperror.ProfileSharingChanged, "Codex profile sharing changed before save")
+			}
 		}
 		configSet, err = upsertCodexConfigSet(ctx, txStore, configSet.ID, configSet.Name, configSet.Description, payload.ConfigContent)
 		if err != nil {

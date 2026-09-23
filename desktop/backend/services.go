@@ -560,8 +560,11 @@ func (s *AntigravityService) UpdateProfile(ctx context.Context, req UpdateAntigr
 	return result, err
 }
 
-func (s *AntigravityService) SaveCurrent(ctx context.Context) (antigravity.AntigravityProfileSaveResult, error) {
-	result, err := s.application.Antigravity().SaveActiveProfile(ctx)
+func (s *AntigravityService) SaveCurrent(ctx context.Context, expectedProfileID string) (antigravity.AntigravityProfileSaveResult, error) {
+	if expectedProfileID == "" {
+		return antigravity.AntigravityProfileSaveResult{}, apperror.New(apperror.ProfileChanged, "selected Profile is missing")
+	}
+	result, err := s.application.Antigravity().SaveActiveProfileFor(ctx, expectedProfileID)
 	s.notifyMutationResult(DesktopChangeAntigravityProfileChanged, "antigravity.saveCurrent", agyconfig.ProviderID, result.Summary.Profile.ID, result.OperationID, err)
 	return result, err
 }
@@ -606,8 +609,11 @@ func (s *ClaudeCodeService) UpdateProfile(ctx context.Context, req UpdateClaudeC
 	return result, err
 }
 
-func (s *ClaudeCodeService) SaveCurrent(ctx context.Context, confirmShared bool) (claudecode.ClaudeCodeProfileSaveResult, error) {
-	result, err := s.application.ClaudeCode().SaveActiveProfile(ctx, claudecode.SaveActiveClaudeCodeProfileRequest{ConfirmShared: confirmShared})
+func (s *ClaudeCodeService) SaveCurrent(ctx context.Context, expectedProfileID string, confirmShared bool) (claudecode.ClaudeCodeProfileSaveResult, error) {
+	if expectedProfileID == "" {
+		return claudecode.ClaudeCodeProfileSaveResult{}, apperror.New(apperror.ProfileChanged, "selected Profile is missing")
+	}
+	result, err := s.application.ClaudeCode().SaveActiveProfile(ctx, claudecode.SaveActiveClaudeCodeProfileRequest{ExpectedProfileID: expectedProfileID, ConfirmShared: confirmShared})
 	s.notifyMutationResult(DesktopChangeClaudeCodeProfileChanged, "claude-code.saveCurrent", claudecodeconfig.ProviderID, result.Summary.Profile.ID, result.OperationID, err)
 	return result, err
 }
@@ -697,8 +703,11 @@ func (s *CodexService) ForkProfile(ctx context.Context, req ForkCodexProfileRequ
 	return result, err
 }
 
-func (s *CodexService) SaveActiveProfileState(ctx context.Context) (codex.CodexProfileStateSaveResult, error) {
-	result, err := s.application.Codex().SaveActiveProfileState(ctx)
+func (s *CodexService) SaveActiveProfileState(ctx context.Context, expectedProfileID string, expectedCredentialReferences, expectedConfigReferences int) (codex.CodexProfileStateSaveResult, error) {
+	if expectedProfileID == "" {
+		return codex.CodexProfileStateSaveResult{}, apperror.New(apperror.ProfileChanged, "selected Profile is missing")
+	}
+	result, err := s.application.Codex().SaveActiveProfileStateFor(ctx, expectedProfileID, expectedCredentialReferences, expectedConfigReferences)
 	s.notifyMutationResult(DesktopChangeCodexProfileChanged, "codex.saveActiveProfileState", codexconfig.ProviderID, result.ProfileID, result.OperationID, err)
 	return result, err
 }
@@ -832,8 +841,11 @@ func (s *GrokBuildService) ForkProfile(ctx context.Context, req ForkGrokBuildPro
 	return result, err
 }
 
-func (s *GrokBuildService) SaveActiveProfileState(ctx context.Context) (grokbuild.ProfileStateSaveResult, error) {
-	result, err := s.application.GrokBuild().SaveActiveProfileState(ctx)
+func (s *GrokBuildService) SaveActiveProfileState(ctx context.Context, expectedProfileID string, expectedCredentialReferences, expectedConfigReferences int) (grokbuild.ProfileStateSaveResult, error) {
+	if expectedProfileID == "" {
+		return grokbuild.ProfileStateSaveResult{}, apperror.New(apperror.ProfileChanged, "selected Profile is missing")
+	}
+	result, err := s.application.GrokBuild().SaveActiveProfileStateFor(ctx, expectedProfileID, expectedCredentialReferences, expectedConfigReferences)
 	s.notifyMutationResult(DesktopChangeGrokBuildProfileChanged, "grok-build.saveActiveProfileState", grokconfig.ProviderID, result.ProfileID, result.OperationID, err)
 	return result, err
 }

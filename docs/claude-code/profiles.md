@@ -13,7 +13,7 @@ ProfileDeck only saves the account login from `/login`. It does not save API key
 
 1. Select **Claude Code → Profiles**.
 2. If macOS permission is required, choose **Authorize** and allow ProfileDeck to read the Claude Code login from Keychain.
-3. Choose **Save Current Login**, then enter a permanent Profile ID and a display name.
+3. Choose **New Profile**, then enter a permanent Profile ID and a display name.
 4. Run `/login` in Claude Code for another account, return to ProfileDeck, and save another Profile.
 
 The first saved Profile becomes current. Saving another Profile does not change Claude Code settings.
@@ -53,7 +53,7 @@ If Claude Code refreshed the current login, ProfileDeck saves a valid update bef
 
 ## Save a refreshed login
 
-Use **Save Current Claude Code Login** on the current Profile in Desktop, or run:
+Open the current Profile's **…** menu and choose **Save Current Login** in Desktop, or run:
 
 ```bash
 profiledeck-cli claude-code profile save-current

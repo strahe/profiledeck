@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/svelte";
+import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "svelte";
 import { tick } from "svelte";
 import { locale } from "svelte-i18n";
@@ -54,6 +55,36 @@ function renderList(overrides: Partial<ComponentProps<typeof ProfileList>> = {})
 }
 
 describe("Grok Build managed Profile components", () => {
+	it("saves from the current Profile menu", async () => {
+		const user = userEvent.setup();
+		const onSaveCurrent = vi.fn();
+		const current = {
+			...profile,
+			id: "current",
+			name: "Current",
+			summary: { ...profile.summary, profile: { ...profile.summary.profile, id: "current", name: "Current" }, active: true },
+		};
+		renderList({ profiles: [current, profile], onSaveCurrent, saveCurrentLabel: "Save Current Login and Settings" });
+		const menus = screen.getAllByRole("button", { name: "More actions" });
+		await user.click(menus[0]);
+		await user.click(await screen.findByText("Save Current Login and Settings"));
+		expect(onSaveCurrent).toHaveBeenCalledWith(current);
+	});
+
+	it("hides save in an inactive Profile menu", async () => {
+		const user = userEvent.setup();
+		renderList({ profiles: [profile], onSaveCurrent: vi.fn(), saveCurrentLabel: "Save Current Login and Settings" });
+		await user.click(screen.getByRole("button", { name: "More actions" }));
+		expect(screen.queryByRole("menuitem", { name: "Save Current Login and Settings" })).not.toBeInTheDocument();
+	});
+
+	it("disables current Profile save while busy", async () => {
+		const user = userEvent.setup();
+		renderList({ profiles: [{ ...profile, summary: { ...profile.summary, active: true } }], busy: true, onSaveCurrent: vi.fn(), saveCurrentLabel: "Save Current Login and Settings" });
+		await user.click(screen.getByRole("button", { name: "More actions" }));
+		expect(await screen.findByText("Save Current Login and Settings")).toHaveAttribute("data-disabled");
+	});
+
 	it("covers loading, empty, error, warning, and populated list states", () => {
 		let view = render(ProfileList, {
 			profiles: [],
