@@ -1,57 +1,23 @@
 # Profiles, Logins, and Settings
 
-A Profile names the login and settings you want to use for one supported tool. Saving a Profile does not immediately change that tool; files and system logins change only when you confirm a switch or recovery of an unfinished switch.
+A Profile names saved logins and settings. One Profile can contain data for several tools, but each tool has its own current Profile. Creating or editing a Profile changes only ProfileDeck's saved data; [switching](../operations/switching.md) changes the selected tool's working login or files.
 
-## What a Profile saves
-
-| Tool | Saved login | Saved settings |
-| --- | --- | --- |
-| Codex | One Codex login | Saved Codex settings, called a Config Set |
-| Claude Code | One account login | Not included |
-| Antigravity | One consumer OAuth login | Not included |
-| Grok Build | One file-based login | Saved Grok Build settings, called a Config Set |
-
-Each Profile has a permanent ID used by CLI commands and links. Profile IDs share one namespace across tools, and one Profile can contain saved data for more than one tool.
-
-## Current Profile
-
-ProfileDeck records one current Profile for each supported tool. The current Profile is the one represented by that tool's working login or files:
-
-- Codex uses `auth.json` and `config.toml` in the active Codex home.
-- Claude Code stores its account login in Keychain on macOS or a credential file on Linux and Windows.
-- Antigravity uses its current login in the system credential store.
-- Grok Build uses `auth.json` and `config.toml` in the bound Grok Home.
-
-Before leaving the current Profile, ProfileDeck preserves a valid refreshed login or valid Codex or Grok Build settings when it can do so safely. Missing, invalid, or unsupported content is reported instead of being saved silently.
-
-## Saved logins
-
-A saved login can be shared by more than one Profile. Updating a shared login changes every Profile that uses it, so Desktop shows the affected Profile count before saving.
-
-ProfileDeck may show the final characters of a Codex Account ID to help distinguish logins. This value is display information only; it does not decide which login is updated or shared.
+Profile IDs are permanent and shared across tools. Saved logins can be shared by several Profiles. Updating one changes every Profile that uses it; ProfileDeck shows the affected count before saving.
 
 ## Config Sets
 
-A Config Set is a reusable copy of the user-level `config.toml` for Codex or Grok Build. Each tool owns separate Config Sets. The first Profile for that tool uses one named `shared`, creating it from the current settings when needed; later Profiles can reuse it or save a separate copy.
+Codex and Grok Build also save user-level `config.toml` settings as Config Sets. Their Config Sets are separate. The first Profile uses `shared`, creating it from current settings when needed; later Profiles can reuse it or save a separate copy.
 
-When Profiles share a Config Set, saving changed settings updates all of them. Copy the Config Set when one Profile needs settings that can change independently. A Config Set can be deleted only when no Profile uses it.
-
-Config Sets do not include sessions, logs, plugins, skills, project settings, managed configuration, or system policy.
+Changes to a shared Config Set affect every Profile using it. Copy it when settings must change independently. Config Sets do not include sessions, logs, plugins, project settings, or system policy.
 
 ## Delete a Profile
 
-Deleting removes the complete Profile from every Agent. ProfileDeck also deletes saved logins and Config Sets used only by that Profile, but keeps shared saved data and unrelated unbound data. The Profile cannot be deleted while it is current in any Agent or while an unfinished operation still refers to it.
+```bash
+profiledeck-cli profile delete <profile-id> --yes
+```
 
-Deletion changes only ProfileDeck's saved data. It removes completed operation records that refer to the Profile, but does not sign out a tool, replace its current settings, or remove its working files.
-
-## What ProfileDeck changes
-
-Creating, editing, or forking a Profile changes only saved ProfileDeck data. Confirming a switch or unfinished-switch recovery may change the selected tool's working login or files.
-
-Every such change is reviewed against the current tool state and gets a temporary operation recovery point first. See [Review and Switch](../operations/switching.md) for the normal flow and [Diagnostics and Recovery](../operations/recovery.md) when a change does not finish. Successful switches cannot be undone.
+Deletion removes the complete Profile from every tool, including saved logins and Config Sets used only by that Profile. Shared saved data stays. A current Profile or one referenced by an unfinished switch cannot be deleted. Deletion does not sign out tools or change their working files.
 
 ## Local data
 
-Profiles, Config Sets, saved logins, preferences, usage reports, and operation history are stored in ProfileDeck's local data directory. Supported tools continue to own their working files and system credential entries.
-
-Saved data, operation recovery points, and encrypted application backups may contain complete sign-in data. Read [Data and Security](../reference/data-security.md) before copying, exporting, or deleting ProfileDeck data.
+ProfileDeck stores Profiles, saved logins, settings, usage reports, and backups locally. Its live database and unfinished-switch recovery data may contain complete sign-in data. See [Local Data and Security](../reference/data-security.md) before copying or sharing these files.

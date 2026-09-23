@@ -1,27 +1,15 @@
 # Switch Other Configuration Files
 
-Generic targets are an advanced CLI feature for switching explicitly selected local configuration files. Use the dedicated Profile commands for Codex, Claude Code, Antigravity, and Grok Build; generic target commands cannot change their managed logins or settings.
+Generic targets are an advanced CLI feature for local configuration files you select. They cannot manage Codex, Claude Code, Antigravity, or Grok Build logins and settings; use those tools' dedicated Profile commands.
 
-## Before you start
+Use an absolute path to a regular file. Symbolic links are not supported. Decide whether to replace the entire file or merge selected values; review the preview when it may contain secrets.
 
-- Initialize ProfileDeck with `profiledeck-cli init`.
-- Use an absolute path to a regular local file.
-- Decide whether ProfileDeck should replace the whole file or merge selected values.
-
-ProfileDeck refuses to change files reached through symbolic links. Review the preview carefully when a target file contains secrets.
-
-## Create a tool and Profile
+## Save a file target
 
 ```bash
+profiledeck-cli init
 profiledeck-cli provider create my-tool --adapter generic --name "My Tool"
 profiledeck-cli profile create work --name "Work"
-```
-
-The Provider ID identifies the tool in later commands. The Profile ID identifies the saved setup you want to switch to.
-
-## Add a configuration file
-
-```bash
 profiledeck-cli profile target add work settings \
   --provider my-tool \
   --path /absolute/path/to/settings.json \
@@ -30,37 +18,20 @@ profiledeck-cli profile target add work settings \
   --value-json '{"model":"example-model"}'
 ```
 
-## Choose how the file changes
-
-| Strategy | Formats | Value supplied with `--value-json` |
+| Strategy | Format | `--value-json` |
 | --- | --- | --- |
-| `replace-file` | `text`, `json`, `toml`, `env` | `{"content":"..."}` replaces the complete file. |
-| `json-merge` | `json` | A JSON object merged into the current JSON file. |
-| `toml-merge` | `toml` | A JSON object converted to TOML and merged. |
-| `env-merge` | `env` | A JSON object with string values converted to environment assignments. |
+| `replace-file` | `text`, `json`, `toml`, `env` | `{"content":"..."}` replaces the whole file. |
+| `json-merge` | `json` | JSON object merged into the file. |
+| `toml-merge` | `toml` | JSON object converted to TOML and merged. |
+| `env-merge` | `env` | JSON object with string values converted to assignments. |
 
-Merge strategies require the current file to contain valid JSON, TOML, or env data. Fix invalid content before switching.
+Merge requires valid existing content. Adding or editing a target changes only ProfileDeck's saved rule; the external file changes after a successful switch.
 
-## Review and switch
-
-Previewing is optional:
+## Switch the file
 
 ```bash
 profiledeck-cli switch my-tool work --dry-run
 profiledeck-cli switch my-tool work --yes
 ```
 
-The preview shows the selected file and hides sensitive-looking values. ProfileDeck checks the file again and creates an operation recovery point before applying the change.
-
-## Inspect or recover
-
-```bash
-profiledeck-cli provider list
-profiledeck-cli profile list
-profiledeck-cli profile target list work
-profiledeck-cli profile target show work my-tool settings
-```
-
-Adding or editing a target changes only the saved rule. The external file changes only after `profiledeck-cli switch` succeeds.
-
-If a switch does not finish, run `profiledeck-cli doctor` before trying again. Use [Diagnostics and Recovery](../operations/recovery.md) to restore its pre-switch state. A successful switch cannot be undone; switch to the intended Profile instead.
+The optional preview hides sensitive-looking values. See [Review and Switch](../operations/switching.md) for switching and recovery.

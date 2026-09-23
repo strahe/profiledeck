@@ -1,72 +1,16 @@
 # Review and Switch Profiles
 
-Switching changes the login or settings used by Codex, Claude Code, Antigravity, or Grok Build. ProfileDeck lets you review the change and creates a temporary recovery point before applying it.
+A switch changes the selected tool's working login or settings. ProfileDeck checks their current state before writing, saves valid updates from the Profile you are leaving when supported, and makes the new Profile current only after the switch succeeds. Sensitive values remain hidden in the preview.
 
-## Switch in the Desktop app
-
-1. Open **Codex**, **Claude Code**, **Antigravity**, or **Grok Build**.
-2. Select the Profile you want to use.
-3. Select **Use Profile**.
-4. Review the files or login that will change and any warnings.
-5. Confirm the switch.
-
-ProfileDeck marks the Profile as current only after the change succeeds. Restart the selected tool or open a new session if it does not pick up the new login immediately.
-
-## Preview from the CLI
-
-Previewing is optional. Run `switch --dry-run` when you want to review a switch before applying it:
+## Switch from the CLI
 
 ```bash
 profiledeck-cli switch codex work --dry-run
-profiledeck-cli switch claude-code personal --dry-run
-profiledeck-cli switch antigravity work --dry-run
-profiledeck-cli switch grok-build work --dry-run
-```
-
-Add `--json` if you need structured output:
-
-```bash
-profiledeck-cli switch codex work --dry-run --json
-```
-
-For ordinary files, the preview shows which path will be created, updated, or left unchanged. Grok Build treats both its login and settings as sensitive: its preview shows only the action, target, path, and warnings. Sensitive values and complete Grok Build file contents remain hidden in all previews.
-
-Warnings tell you when a file or login is missing, invalid, unsupported, or unsafe to change. Resolve blocking warnings before applying the switch.
-
-## Apply from the CLI
-
-```bash
 profiledeck-cli switch codex work --yes
-profiledeck-cli switch claude-code personal --yes
-profiledeck-cli switch antigravity work --yes
-profiledeck-cli switch grok-build work --yes
 ```
 
-To apply only the exact state you previously reviewed, copy the fingerprint from `switch --dry-run`:
+The preview is optional. For another tool, replace `codex` and `work` with its tool and Profile IDs. Use `--plan-fingerprint <fingerprint>` with `--yes` to require the state to match a previous preview. If it has changed, preview again.
 
-```bash
-profiledeck-cli switch codex work \
-  --plan-fingerprint <fingerprint> \
-  --yes
-```
+ProfileDeck stops before writing if it cannot check the current state or create a recovery point. If a switch is interrupted or blocked, run `profiledeck-cli doctor` and follow [Diagnostics and Recovery](./recovery.md). Keep the [local data directory](../reference/data-security.md) private because unfinished-switch recovery files may contain logins.
 
-If the Profile or selected tool changes after the preview, ProfileDeck rejects the fingerprint without writing anything. Run `switch --dry-run` again and review the new result.
-
-## What happens during a switch
-
-Before changing the selected tool, ProfileDeck:
-
-1. checks that another ProfileDeck change is not still running;
-2. checks the current files or login again;
-3. saves valid updates from the Profile you are leaving when supported;
-4. creates a private operation recovery point;
-5. changes only the required files or login;
-6. marks the new Profile as current after every change succeeds.
-
-ProfileDeck stops without applying the switch if it cannot verify the current state or create a usable recovery point. An interrupted or failed operation stays visible in Diagnostics so it can be recovered safely. After a successful switch, ProfileDeck deletes the recovery point.
-
-## Keep recovery data private
-
-An unfinished switch recovery point may contain previous Codex or Grok Build files, a Claude Code account login, or an Antigravity login. Keep the ProfileDeck data directory private and do not commit, upload, or share recovery files.
-
-Recovery returns targets affected by an unfinished switch to their pre-switch state without changing the current Profile. If the current Profile changed after the unfinished switch, ProfileDeck refuses recovery before writing. Updates that were already saved into a Profile remain saved. A successful switch cannot be undone; switch to the intended Profile instead. See [Diagnostics, backups, and recovery](./recovery.md) for the available actions.
+A successful switch has no undo. Switch to another Profile if you need a different setup. A tool already running may need a new session to use its changed login.
