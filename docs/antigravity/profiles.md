@@ -4,7 +4,7 @@ ProfileDeck saves and switches Antigravity's consumer OAuth login from the opera
 
 ## Before you start
 
-Sign in to Antigravity and confirm it works. CLI users run `profiledeck-cli init` once. Only the current supported login can be saved:
+Sign in to Antigravity and confirm it works. CLI users run `profiledeck-cli init` once. Use `detect` to check whether the current login is supported before creating a Profile:
 
 ```bash
 profiledeck-cli antigravity detect

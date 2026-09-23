@@ -1,6 +1,6 @@
 # 诊断、备份与恢复
 
-切换被阻止或中断时，运行 `profiledeck-cli doctor`。未完成切换得到处理前，不能开始新切换或恢复应用数据。
+桌面端的“诊断”会显示切换被阻止或中断时可用的恢复操作。未完成切换得到处理前，不能开始新切换或恢复应用数据。
 
 ## 处理未完成切换
 
@@ -13,11 +13,11 @@ profiledeck-cli recover <operation-id> --yes
 
 只有“诊断”确认没有切换正在运行并提供修复操作时，才运行 `profiledeck-cli doctor repair-lock --yes`。如果显示**临时恢复文件需要清理**，运行 `profiledeck-cli doctor retry-cleanup --yes`。清理不会更改工具登录或设置；成功清理前，切换和应用恢复仍不可用。
 
-成功切换不能恢复或撤销。
-
 ## 备份 ProfileDeck 数据
 
 应用备份是完整 ProfileDeck 数据库的加密副本，包含已保存的 Profile、设置、用量和数据库中的凭据，不包含工具正在使用的文件或系统凭据存储条目。
+
+桌面端也可在**设置 → 备份**中管理和恢复应用备份。
 
 ```bash
 profiledeck-cli backup create
@@ -45,7 +45,7 @@ profiledeck-cli backup restore --file <私有文件> --yes
 
 恢复前会验证备份；当前数据库健康时，还会先创建安全备份；数据库损坏时，经确认可跳过该备份继续恢复。
 
-恢复会清除当前 Profile 标记并关闭未完成操作，不会修改工具正在使用的文件或系统登录，也不会自动应用已保存 Profile。
+恢复后没有当前 Profile，备份中的未完成切换会被关闭。工具正在使用的文件和系统登录保持不变。
 
 CLI 恢复后请重启 ProfileDeck，再明确切换到需要的 Profile。通过 CLI 恢复前，先关闭其他 ProfileDeck 进程。
 

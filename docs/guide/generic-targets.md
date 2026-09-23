@@ -34,4 +34,4 @@ profiledeck-cli switch my-tool work --dry-run
 profiledeck-cli switch my-tool work --yes
 ```
 
-The preview is optional and hides sensitive-looking values. If switching fails, run `profiledeck-cli doctor` and follow [recovery guidance](../operations/recovery.md). A successful switch cannot be undone.
+The optional preview hides sensitive-looking values. See [Review and Switch](../operations/switching.md) for switching and recovery.

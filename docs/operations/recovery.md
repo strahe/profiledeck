@@ -1,6 +1,6 @@
 # Diagnostics, Backups, and Recovery
 
-Use `profiledeck-cli doctor` when a switch is blocked or interrupted. An unfinished switch blocks new switches and application restore until it is resolved.
+Desktop shows available recovery actions for blocked or interrupted switches in **Diagnostics**. An unfinished switch blocks new switches and application restore until it is resolved.
 
 ## Resolve an unfinished switch
 
@@ -13,11 +13,11 @@ Use the operation ID and action offered by Diagnostics. Recovery may restore a t
 
 Use `profiledeck-cli doctor repair-lock --yes` only when Diagnostics confirms that no switch is running and offers lock repair. If it reports **Temporary recovery files need cleanup**, run `profiledeck-cli doctor retry-cleanup --yes`. Cleanup does not change tool logins or settings; switching and application restore remain blocked until it succeeds.
 
-Successful switches cannot be recovered or undone.
-
 ## Back up ProfileDeck data
 
 An application backup is an encrypted copy of the complete ProfileDeck database. It includes saved Profiles, settings, usage, and credentials held in that database, but excludes tool-owned working files and system credential-store entries.
+
+Desktop can manage and restore backups in **Settings → Backups**.
 
 ```bash
 profiledeck-cli backup create
@@ -45,7 +45,7 @@ profiledeck-cli backup restore --file <private-file> --yes
 
 Restore verifies the backup before replacing ProfileDeck data. When the current database is healthy, ProfileDeck first makes a safety backup. A damaged database may be restored after confirmation without that backup.
 
-Restore clears current-Profile markers and unresolved operations; it does not change any tool's working files or system login, or apply a saved Profile.
+After restore, no Profile is current and any unfinished switches in the backup are closed. Tool working files and system logins remain unchanged.
 
 Restart ProfileDeck after a CLI restore, then explicitly switch to the Profile you need. Close other ProfileDeck processes before restoring from the CLI.
 

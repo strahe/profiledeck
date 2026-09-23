@@ -77,4 +77,4 @@ profiledeck-cli switch codex work --dry-run
 profiledeck-cli switch codex work --yes
 ```
 
-`--dry-run` 是可选预览。成功切换不能撤销；影响见[切换说明](../operations/switching.md)。如果切换被阻止或中断，运行 `profiledeck-cli doctor`，并按[恢复说明](../operations/recovery.md)处理。
+`--dry-run` 是可选预览。切换影响及故障恢复见[切换说明](../operations/switching.md)。

@@ -54,7 +54,7 @@ Codex keeps using its normal `auth.json` and `config.toml`. ProfileDeck saves va
 profiledeck-cli codex profile save-current
 ```
 
-If either working file is missing or invalid, ProfileDeck warns that it will not capture that file. A switch can still restore valid files from the selected Profile. See [Review and Switch](../operations/switching.md) for the CLI command and recovery behavior.
+If either working file is missing or invalid, ProfileDeck warns that it will not save that file. A switch can still restore valid files from the selected Profile. See [Review and Switch](../operations/switching.md) for the CLI command and recovery behavior.
 
 ## Check limits and keep a login active
 

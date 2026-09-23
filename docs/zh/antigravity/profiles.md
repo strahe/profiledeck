@@ -4,7 +4,7 @@ ProfileDeck 保存并切换操作系统凭据存储中的 Antigravity 个人 OAu
 
 ## 开始前准备
 
-登录 Antigravity，并确认可以正常使用。CLI 用户需要运行一次 `profiledeck-cli init`。只能保存当前受支持的登录：
+登录 Antigravity，并确认可以正常使用。CLI 用户需要运行一次 `profiledeck-cli init`。用 `detect` 检查当前登录是否受支持，再创建 Profile：
 
 ```bash
 profiledeck-cli antigravity detect

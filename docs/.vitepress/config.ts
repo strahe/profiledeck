@@ -34,7 +34,7 @@ const enGrokBuild = [
 
 const enSafety = [
   { text: 'Review and Switch', link: '/operations/switching' },
-  { text: 'Recovery', link: '/operations/recovery' },
+  { text: 'Diagnostics and Recovery', link: '/operations/recovery' },
   { text: 'Data and Security', link: '/reference/data-security' }
 ]
 

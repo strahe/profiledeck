@@ -16,7 +16,7 @@ ProfileDeck stores Profiles, logins, settings, usage reports, and backups on you
 
 Application backups are encrypted with age X25519. The live database and unfinished-switch recovery files are not separately encrypted and may contain complete logins or settings. Do not sync, commit, upload, or share the data directory. Use full-disk encryption and a screen lock. `profiledeck-cli doctor` can report file permissions that allow other local users access.
 
-The private backup recovery key is stored in your system credential store, not in a backup. Export it separately before moving backups to another computer, and keep exported key files out of shared folders. See [Backups and Recovery](../operations/recovery.md) for commands. A successful switch has no recovery point or undo.
+The private backup recovery key is stored in your system credential store, not in a backup. Export it separately before moving backups to another computer, and keep exported key files out of shared folders. See [Backups and Recovery](../operations/recovery.md) for commands.
 
 ## Network access
 

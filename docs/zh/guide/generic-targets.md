@@ -34,4 +34,4 @@ profiledeck-cli switch my-tool work --dry-run
 profiledeck-cli switch my-tool work --yes
 ```
 
-预览可选，会隐藏疑似敏感值。切换失败时，运行 `profiledeck-cli doctor` 并按[恢复说明](../operations/recovery.md)处理。成功切换不能撤销。
+可选的预览会隐藏疑似敏感值。切换及故障恢复见[切换说明](../operations/switching.md)。

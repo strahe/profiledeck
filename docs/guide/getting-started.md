@@ -77,4 +77,4 @@ profiledeck-cli switch codex work --dry-run
 profiledeck-cli switch codex work --yes
 ```
 
-`--dry-run` is optional. A successful switch cannot be undone; see [switching](../operations/switching.md) for its effects. If a switch is blocked or interrupted, run `profiledeck-cli doctor` and follow [recovery guidance](../operations/recovery.md).
+`--dry-run` is optional. See [Review and Switch](../operations/switching.md) for switching effects and recovery.

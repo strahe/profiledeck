@@ -21,7 +21,7 @@ profiledeck-cli switch codex work --dry-run
 profiledeck-cli switch codex work --yes
 ```
 
-Replace `codex` with `claude-code`, `antigravity`, or `grok-build` for that tool's Profile commands. Each tool also offers `profile show`, `profile save-current`, and `profile delete`. Profile deletion removes the complete global Profile across tools; see [Profiles and settings](../guide/concepts.md). A switch preview is optional; successful switches cannot be undone.
+Replace `codex` with `claude-code`, `antigravity`, or `grok-build` for that tool's Profile commands. Each tool also offers `profile show`, `profile save-current`, and `profile delete`. Deleting a Profile removes it from every tool; see [Profiles and settings](../guide/concepts.md). A switch preview is optional.
 
 Codex and Grok Build additionally offer `config-set` management, `profile set-config`, and `profile fork` for sharing or copying logins and settings. Their [Codex](../codex/profiles.md) and [Grok Build](../grok-build/profiles.md) pages show practical examples.
 

@@ -21,7 +21,7 @@ profiledeck-cli switch codex work --dry-run
 profiledeck-cli switch codex work --yes
 ```
 
-把 `codex` 换成 `claude-code`、`antigravity` 或 `grok-build`，即可使用对应工具的 Profile 命令。每种工具还提供 `profile show`、`profile save-current` 和 `profile delete`。删除会移除跨工具的完整全局 Profile；见[Profile 与设置](../guide/concepts.md)。切换预览可选，成功切换不能撤销。
+把 `codex` 换成 `claude-code`、`antigravity` 或 `grok-build`，即可使用对应工具的 Profile 命令。每种工具还提供 `profile show`、`profile save-current` 和 `profile delete`。删除 Profile 会将其从所有工具中移除；见[Profile 与设置](../guide/concepts.md)。切换预览可选。
 
 Codex 和 Grok Build 还提供 `config-set` 管理、`profile set-config` 和 `profile fork`，用于共享或复制登录与设置。实用示例见 [Codex](../codex/profiles.md) 和 [Grok Build](../grok-build/profiles.md)。
 

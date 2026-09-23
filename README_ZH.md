@@ -29,7 +29,7 @@ ProfileDeck 支持 Codex、Claude Code、Antigravity 和 Grok Build。各工具�
 
 ## CLI 示例
 
-以名为 `work` 的 Codex Profile 为例：
+以 ID 为 `work` 的 Codex Profile 为例：
 
 ```bash
 profiledeck-cli codex profile list
