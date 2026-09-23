@@ -99,7 +99,7 @@ profiledeck-cli grok-build profile fork work client-config \
 
 ## Save changes and switch
 
-Grok Build continues to use normal `auth.json` and `config.toml` files. Before switching away, ProfileDeck preserves valid changes made to the current login or settings. On the current Profile, open **More actions** and choose **Save Current Login and Settings** in Desktop, or run:
+Grok Build continues to use normal `auth.json` and `config.toml` files. Before switching away, ProfileDeck preserves valid changes made to the current login or settings. Open the current Profile's **…** menu and choose **Save Current Login and Settings** in Desktop, or run:
 
 ```bash
 profiledeck-cli grok-build profile save-current

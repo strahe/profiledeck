@@ -357,7 +357,7 @@ func TestSaveActiveCodexProfileStateRejectsChangedActiveProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeCodexProfileFixture(t, codexDir, "model = \"changed\"\n", `{"tokens":{"access_token":"changed"}}`)
-	_, err = newCodexTestEnvironment(t, configDir, codexDir).codex.SaveActiveProfileStateFor(ctx, "other")
+	_, err = newCodexTestEnvironment(t, configDir, codexDir).codex.SaveActiveProfileStateFor(ctx, "other", 1, 1)
 	assertErrorCode(t, err, apperror.ProfileChanged)
 	detail, err := newCodexTestEnvironment(t, configDir, codexDir).codex.GetProfile(ctx, "work")
 	if err != nil || detail.Summary.Model != "original" {
@@ -371,6 +371,46 @@ func TestSaveActiveCodexProfileStateRejectsChangedActiveProfile(t *testing.T) {
 	credential, err := db.GetProviderCredential(ctx, created.Summary.CredentialID)
 	if err != nil || credential.PayloadJSON != originalAuth {
 		t.Fatalf("saved login changed after rejected save: credential=%#v err=%v", credential, err)
+	}
+}
+
+func TestSaveActiveCodexProfileStateRejectsChangedSharing(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	codexDir := t.TempDir()
+	if _, err := initCodexTestRuntime(ctx, configDir); err != nil {
+		t.Fatal(err)
+	}
+	originalAuth := `{"tokens":{"access_token":"original"}}`
+	writeCodexProfileFixture(t, codexDir, "model = \"original\"\n", originalAuth)
+	created, err := newCodexTestEnvironment(t, configDir, codexDir).codex.CreateProfile(ctx, CreateCodexProfileRequest{ProfileID: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newCodexTestEnvironment(t, configDir, codexDir).codex.ForkProfile(ctx, ForkCodexProfileRequest{
+		SourceProfileID: "work", ProfileID: "shared",
+		CredentialBinding: CodexForkBindingCopyNew, ConfigBinding: CodexForkBindingShareParent,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writeCodexProfileFixture(t, codexDir, "model = \"changed\"\n", `{"tokens":{"access_token":"changed"}}`)
+	_, err = newCodexTestEnvironment(t, configDir, codexDir).codex.SaveActiveProfileStateFor(ctx, "work", 1, 1)
+	assertErrorCode(t, err, apperror.ProfileSharingChanged)
+	detail, err := newCodexTestEnvironment(t, configDir, codexDir).codex.GetProfile(ctx, "work")
+	if err != nil || detail.Summary.Model != "original" {
+		t.Fatalf("saved settings changed after rejected save: detail=%#v err=%v", detail, err)
+	}
+	db, err := openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	credential, err := db.GetProviderCredential(ctx, created.Summary.CredentialID)
+	if err != nil || credential.PayloadJSON != originalAuth {
+		t.Fatalf("saved login changed after rejected save: credential=%#v err=%v", credential, err)
+	}
+	if _, err := newCodexTestEnvironment(t, configDir, codexDir).codex.SaveActiveProfileStateFor(ctx, "work", 1, 2); err != nil {
+		t.Fatalf("save with current sharing failed: %v", err)
 	}
 }
 

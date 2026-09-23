@@ -107,7 +107,7 @@ profiledeck-cli codex profile fork work client-config \
 
 Codex 继续使用普通的 `auth.json` 和 `config.toml` 文件。离开当前 Profile 前，ProfileDeck 会保留当前登录或设置中的有效更改。
 
-如果准备登录其他账号或替换当前文件，并希望先明确保存当前内容，请打开当前 Profile 的**更多操作**菜单，选择**保存当前登录与设置**，或运行：
+如果要在登录其他账号或替换当前文件前保存，请打开当前 Profile 的 **…** 菜单，选择**保存当前登录与设置**，或运行：
 
 ```bash
 profiledeck-cli codex profile save-current

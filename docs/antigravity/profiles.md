@@ -59,7 +59,7 @@ Antigravity may refresh its login while it runs. The short-lived access-token ex
 profiledeck-cli antigravity profile save-current
 ```
 
-In the Desktop app, open **More actions** on the current Profile and select **Save Current Login**.
+In the Desktop app, open the current Profile's **…** menu and select **Save Current Login**.
 
 ## Delete a Profile
 

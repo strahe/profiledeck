@@ -99,7 +99,7 @@ profiledeck-cli grok-build profile fork work client-config \
 
 ## 保存更改并切换
 
-Grok Build 继续使用普通的 `auth.json` 和 `config.toml` 文件。离开当前 Profile 前，ProfileDeck 会保留当前登录或设置中的有效更改。请打开当前 Profile 的**更多操作**菜单，选择**保存当前登录与设置**，或运行：
+Grok Build 继续使用普通的 `auth.json` 和 `config.toml` 文件。离开当前 Profile 前，ProfileDeck 会保留当前登录或设置中的有效更改。请打开当前 Profile 的 **…** 菜单，选择**保存当前登录与设置**，或运行：
 
 ```bash
 profiledeck-cli grok-build profile save-current

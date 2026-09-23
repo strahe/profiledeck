@@ -155,6 +155,7 @@
 	let editDescription = $state("");
 	let saveCurrentOpen = $state(false);
 	let saveCurrentProfileID = $state("");
+	let saveCurrentSummary = $state<ProfileSummary | null>(null);
 	let saveCurrentSourceError = $state("");
 	let setConfigOpen = $state(false);
 	let selectedConfigSetID = $state("");
@@ -184,7 +185,6 @@
 		isSourceReady(detectResult, !activeProfileID && !sharedConfigSetExists),
 	);
 	let sourceReady = $derived(isSourceReady(detectResult));
-	let saveCurrentSummary = $derived(profiles.find((value) => value.profile.id === saveCurrentProfileID) ?? (detail?.summary.profile.id === saveCurrentProfileID ? detail.summary : null));
 	let forkDestination = $derived.by(() => {
 		if (route.kind !== "fork" || !forkProfilesLoaded) return null;
 		return forkProfiles.find((value) => value.id === profileID.trim()) ?? null;
@@ -467,6 +467,8 @@
 	}
 
 	async function saveCurrent() {
+		const summary = saveCurrentSummary;
+		if (!summary) return;
 		await runAction("profile-save-current", async () => {
 			const source = await refreshDetect();
 			if (!isSaveCurrentSourceReady(source)) {
@@ -476,11 +478,11 @@
 			saveCurrentSourceError = "";
 			let result;
 			try {
-				result = await track("profile-save-current", GrokBuildService.SaveActiveProfileState(saveCurrentProfileID));
+				result = await track("profile-save-current", GrokBuildService.SaveActiveProfileState(saveCurrentProfileID, summary.credential_reference_count, summary.config_set_reference_count));
 			} catch (error) {
-				if (isDesktopErrorCode(error, "PROFILE_CHANGED")) {
+				if (isDesktopErrorCode(error, "PROFILE_CHANGED") || isDesktopErrorCode(error, "PROFILE_SHARING_CHANGED")) {
 					saveCurrentOpen = false;
-					await refreshProfiles();
+					await Promise.all([refreshProfiles(), detail ? loadDetail(detail.summary.profile.id) : Promise.resolve()]);
 				}
 				throw error;
 			}
@@ -499,12 +501,22 @@
 		});
 	}
 
-	function openSaveCurrent(profileID: string) {
-		saveCurrentProfileID = profileID;
-		saveCurrentSourceError = isSaveCurrentSourceReady(detectResult)
-			? ""
-			: saveCurrentSourceDescription(detectResult);
-		saveCurrentOpen = true;
+	async function openSaveCurrent(profileID: string) {
+		await runAction("profile-save-prepare", async () => {
+			saveCurrentSummary = null;
+			const current = await track("profile-save-prepare", GrokBuildService.ShowProfile(profileID));
+			if (!current.summary.active) {
+				await refreshProfiles();
+				showError({ code: "PROFILE_CHANGED" });
+				return;
+			}
+			saveCurrentProfileID = profileID;
+			saveCurrentSummary = current.summary;
+			saveCurrentSourceError = isSaveCurrentSourceReady(detectResult)
+				? ""
+				: saveCurrentSourceDescription(detectResult);
+			saveCurrentOpen = true;
+		});
 	}
 
 	async function retryCreateSource() {

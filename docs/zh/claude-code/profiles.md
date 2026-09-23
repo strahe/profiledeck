@@ -53,7 +53,7 @@ profiledeck-cli switch claude-code personal --yes
 
 ## 保存刷新后的登录
 
-在桌面端打开当前 Profile 的**更多操作**菜单，选择**保存当前登录**，或运行：
+在桌面端打开当前 Profile 的 **…** 菜单，选择**保存当前登录**，或运行：
 
 ```bash
 profiledeck-cli claude-code profile save-current

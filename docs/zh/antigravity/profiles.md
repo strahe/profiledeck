@@ -59,7 +59,7 @@ Antigravity 运行时可能刷新登录。短期访问令牌的到期时间不�
 profiledeck-cli antigravity profile save-current
 ```
 
-在桌面端打开当前 Profile 的**更多操作**菜单，然后选择**保存当前登录**。
+在桌面端打开当前 Profile 的 **…** 菜单，然后选择**保存当前登录**。
 
 ## 删除 Profile
 

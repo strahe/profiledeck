@@ -107,7 +107,7 @@ profiledeck-cli codex profile fork work client-config \
 
 Codex continues to use normal `auth.json` and `config.toml` files. Before switching away, ProfileDeck preserves valid changes made to the current login or settings.
 
-On the current Profile, open **More actions** and choose **Save Current Login and Settings** in Desktop, or run the following command, before signing in to a different account or replacing the current files when you want to save explicitly:
+To save before signing in to a different account or replacing these files, open the current Profile's **…** menu and choose **Save Current Login and Settings**, or run:
 
 ```bash
 profiledeck-cli codex profile save-current

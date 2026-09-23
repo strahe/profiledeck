@@ -703,11 +703,11 @@ func (s *CodexService) ForkProfile(ctx context.Context, req ForkCodexProfileRequ
 	return result, err
 }
 
-func (s *CodexService) SaveActiveProfileState(ctx context.Context, expectedProfileID string) (codex.CodexProfileStateSaveResult, error) {
+func (s *CodexService) SaveActiveProfileState(ctx context.Context, expectedProfileID string, expectedCredentialReferences, expectedConfigReferences int) (codex.CodexProfileStateSaveResult, error) {
 	if expectedProfileID == "" {
 		return codex.CodexProfileStateSaveResult{}, apperror.New(apperror.ProfileChanged, "selected Profile is missing")
 	}
-	result, err := s.application.Codex().SaveActiveProfileStateFor(ctx, expectedProfileID)
+	result, err := s.application.Codex().SaveActiveProfileStateFor(ctx, expectedProfileID, expectedCredentialReferences, expectedConfigReferences)
 	s.notifyMutationResult(DesktopChangeCodexProfileChanged, "codex.saveActiveProfileState", codexconfig.ProviderID, result.ProfileID, result.OperationID, err)
 	return result, err
 }
@@ -841,11 +841,11 @@ func (s *GrokBuildService) ForkProfile(ctx context.Context, req ForkGrokBuildPro
 	return result, err
 }
 
-func (s *GrokBuildService) SaveActiveProfileState(ctx context.Context, expectedProfileID string) (grokbuild.ProfileStateSaveResult, error) {
+func (s *GrokBuildService) SaveActiveProfileState(ctx context.Context, expectedProfileID string, expectedCredentialReferences, expectedConfigReferences int) (grokbuild.ProfileStateSaveResult, error) {
 	if expectedProfileID == "" {
 		return grokbuild.ProfileStateSaveResult{}, apperror.New(apperror.ProfileChanged, "selected Profile is missing")
 	}
-	result, err := s.application.GrokBuild().SaveActiveProfileStateFor(ctx, expectedProfileID)
+	result, err := s.application.GrokBuild().SaveActiveProfileStateFor(ctx, expectedProfileID, expectedCredentialReferences, expectedConfigReferences)
 	s.notifyMutationResult(DesktopChangeGrokBuildProfileChanged, "grok-build.saveActiveProfileState", grokconfig.ProviderID, result.ProfileID, result.OperationID, err)
 	return result, err
 }

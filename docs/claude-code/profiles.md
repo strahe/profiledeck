@@ -53,7 +53,7 @@ If Claude Code refreshed the current login, ProfileDeck saves a valid update bef
 
 ## Save a refreshed login
 
-Open **More actions** on the current Profile and choose **Save Current Login** in Desktop, or run:
+Open the current Profile's **…** menu and choose **Save Current Login** in Desktop, or run:
 
 ```bash
 profiledeck-cli claude-code profile save-current
