@@ -13,7 +13,7 @@ ProfileDeck 只保存 `/login` 得到的账号登录，不保存 API Key 或 Con
 
 1. 选择 **Claude Code → Profiles**。
 2. 如果 macOS 要求权限，请选择**授权读取**，允许 ProfileDeck 从 Keychain 读取 Claude Code 登录。
-3. 选择**保存当前登录**，然后输入创建后不会改变的 Profile ID 和用于显示的名称。
+3. 选择**新建 Profile**，然后输入创建后不会改变的 Profile ID 和用于显示的名称。
 4. 在 Claude Code 中为另一个账号运行 `/login`，返回 ProfileDeck，再保存一个 Profile。
 
 第一个保存的 Profile 会成为当前 Profile。保存其他 Profile 不会修改 Claude Code 设置。
@@ -53,7 +53,7 @@ profiledeck-cli switch claude-code personal --yes
 
 ## 保存刷新后的登录
 
-在桌面端当前 Profile 中使用**保存当前 Claude Code 登录**，或运行：
+在桌面端打开当前 Profile 的**更多操作**菜单，选择**保存当前登录**，或运行：
 
 ```bash
 profiledeck-cli claude-code profile save-current

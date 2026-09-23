@@ -375,6 +375,14 @@ func (service *Service) UpdateProfileConfigSet(ctx context.Context, req UpdatePr
 }
 
 func (service *Service) SaveActiveProfileState(ctx context.Context) (ProfileStateSaveResult, error) {
+	return service.saveActiveProfileState(ctx, "")
+}
+
+func (service *Service) SaveActiveProfileStateFor(ctx context.Context, expectedProfileID string) (ProfileStateSaveResult, error) {
+	return service.saveActiveProfileState(ctx, expectedProfileID)
+}
+
+func (service *Service) saveActiveProfileState(ctx context.Context, expectedProfileID string) (ProfileStateSaveResult, error) {
 	if err := service.requireAccess(ctx); err != nil {
 		return ProfileStateSaveResult{}, err
 	}
@@ -406,7 +414,13 @@ func (service *Service) SaveActiveProfileState(ctx context.Context) (ProfileStat
 			return err
 		}
 		if !exists {
+			if expectedProfileID != "" {
+				return apperror.New(apperror.ProfileChanged, "active Grok Build Profile changed")
+			}
 			return apperror.New(apperror.ProfileNotFound, "no active Grok Build Profile")
+		}
+		if expectedProfileID != "" && active.ProfileID != expectedProfileID {
+			return apperror.New(apperror.ProfileChanged, "active Grok Build Profile changed")
 		}
 		profileID = active.ProfileID
 		targets, err := grokprofile.BindingTargets(ctx, tx, profileID, home)

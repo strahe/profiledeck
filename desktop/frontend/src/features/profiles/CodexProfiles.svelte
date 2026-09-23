@@ -118,6 +118,7 @@
 	let editName = $state("");
 	let editDescription = $state("");
 	let saveCurrentOpen = $state(false);
+	let saveCurrentProfileID = $state("");
 	let saveCurrentSourceError = $state("");
 	let setConfigOpen = $state(false);
 	let selectedConfigSetID = $state("");
@@ -140,6 +141,7 @@
 			.map(profileListItem);
 	});
 	let sourceReady = $derived(isSourceReady(detectResult));
+	let saveCurrentSummary = $derived(profiles.find((value) => value.profile.id === saveCurrentProfileID) ?? (detail?.summary.profile.id === saveCurrentProfileID ? detail.summary : null));
 	let forkDestination = $derived.by(() => {
 		if (route.kind !== "fork" || !forkProfilesLoaded) return null;
 		return forkProfiles.find((value) => value.id === profileID.trim()) ?? null;
@@ -402,7 +404,16 @@
 				return;
 			}
 			saveCurrentSourceError = "";
-			const result = await track("profile-save-current", CodexService.SaveActiveProfileState());
+			let result;
+			try {
+				result = await track("profile-save-current", CodexService.SaveActiveProfileState(saveCurrentProfileID));
+			} catch (error) {
+				if (isDesktopErrorCode(error, "PROFILE_CHANGED")) {
+					saveCurrentOpen = false;
+					await refreshProfiles();
+				}
+				throw error;
+			}
 			saveCurrentOpen = false;
 			await Promise.all([refreshProfiles(), refreshConfigSets(), detail ? loadDetail(detail.summary.profile.id) : Promise.resolve()]);
 			if (result.warnings?.length) toast.warning(translate("notice.profileWarnings.title"), { description: joinUserMessages(result.warnings, profileChangeWarningMessage) });
@@ -410,7 +421,8 @@
 		});
 	}
 
-	function openSaveCurrent() {
+	function openSaveCurrent(profileID: string) {
+		saveCurrentProfileID = profileID;
 		saveCurrentSourceError = "";
 		saveCurrentOpen = true;
 	}
@@ -704,10 +716,10 @@
 										}
 										push("/codex/profiles/new");
 									}}
-									aria-label={$_("actions.saveAsNewProfile")}
+									aria-label={$_("actions.newProfile")}
 								>
 									<PlusIcon data-icon="inline-start" />
-									{$_("actions.saveCurrentShort")}
+									{$_("actions.newProfile")}
 								</Button>
 							{/snippet}
 						</Tooltip.Trigger>
@@ -737,10 +749,13 @@
 			error={profileError}
 			busy={!!busyAction || useBuilding || useApplying}
 			canCreate={sourceReady}
+			createLabel={$_("actions.newProfile")}
+			saveCurrentLabel={$_("actions.updateFromCurrent")}
 			onNew={() => push("/codex/profiles/new")}
 			onDelete={openProfileDelete}
 			onRefreshQuota={(profile) => runtime.readQuota(profile.id)}
 			onUse={openUse}
+			onSaveCurrent={(profile) => openSaveCurrent(profile.id)}
 			onDetails={(profile) => push(`/codex/profiles/${encodeURIComponent(profile.id)}`)}
 			onFork={(profile) => push(`/codex/profiles/${encodeURIComponent(profile.id)}/fork`)}
 			onRetrySource={() => { void Promise.all([refreshDetect(), refreshProfiles()]); }}
@@ -765,7 +780,7 @@
 		onUse={() => openUse(profileListItem(detail!.summary))}
 		onFork={() => push(`/codex/profiles/${encodeURIComponent(detail!.summary.profile.id)}/fork`)}
 		onEdit={openEdit}
-		onSaveCurrent={openSaveCurrent}
+		onSaveCurrent={() => openSaveCurrent(detail!.summary.profile.id)}
 		onSetConfig={openSetConfig}
 		onDelete={() => openProfileDelete({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || translate("profile.unnamed") })}
 	/>
@@ -808,17 +823,17 @@
 				<Alert.Description>{saveCurrentSourceError}</Alert.Description>
 			</Alert.Root>
 		{/if}
-		{#if (detail?.login?.reference_count ?? 0) > 1 || (detail?.config_set?.reference_count ?? 0) > 1}
+		{#if (saveCurrentSummary?.credential_reference_count ?? 0) > 1 || (saveCurrentSummary?.config_set_reference_count ?? 0) > 1}
 			<Alert.Root>
 				<AlertTriangleIcon data-icon="inline-start" />
 				<Alert.Title>{$_("profilePages.saveCurrent.sharedTitle")}</Alert.Title>
 				<Alert.Description>
-					{#if (detail?.login?.reference_count ?? 0) > 1 && (detail?.config_set?.reference_count ?? 0) > 1}
-						{$_("profilePages.saveCurrent.sharedBothDescription", { values: { loginCount: detail?.login?.reference_count ?? 0, configCount: detail?.config_set?.reference_count ?? 0 } })}
-					{:else if (detail?.login?.reference_count ?? 0) > 1}
-						{$_("profilePages.saveCurrent.sharedLoginDescription", { values: { count: detail?.login?.reference_count ?? 0 } })}
+					{#if (saveCurrentSummary?.credential_reference_count ?? 0) > 1 && (saveCurrentSummary?.config_set_reference_count ?? 0) > 1}
+						{$_("profilePages.saveCurrent.sharedBothDescription", { values: { loginCount: saveCurrentSummary?.credential_reference_count ?? 0, configCount: saveCurrentSummary?.config_set_reference_count ?? 0 } })}
+					{:else if (saveCurrentSummary?.credential_reference_count ?? 0) > 1}
+						{$_("profilePages.saveCurrent.sharedLoginDescription", { values: { count: saveCurrentSummary?.credential_reference_count ?? 0 } })}
 					{:else}
-						{$_("profilePages.saveCurrent.sharedConfigDescription", { values: { count: detail?.config_set?.reference_count ?? 0 } })}
+						{$_("profilePages.saveCurrent.sharedConfigDescription", { values: { count: saveCurrentSummary?.config_set_reference_count ?? 0 } })}
 					{/if}
 				</Alert.Description>
 			</Alert.Root>

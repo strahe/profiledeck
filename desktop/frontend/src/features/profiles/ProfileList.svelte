@@ -7,6 +7,7 @@
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+	import SaveIcon from "@lucide/svelte/icons/save";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 
@@ -36,10 +37,12 @@
 		canCreate = false,
 		emptyDescription = "",
 		createLabel = "",
+		saveCurrentLabel = "",
 		onNew,
 		onUse,
 		onDetails,
 		onFork,
+		onSaveCurrent,
 		onDelete,
 		onRefreshQuota,
 		onRetrySource,
@@ -53,10 +56,12 @@
 		canCreate?: boolean;
 		emptyDescription?: string;
 		createLabel?: string;
+		saveCurrentLabel?: string;
 		onNew?: () => void;
 		onUse: (profile: ManagedProfileListItem) => void;
 		onDetails: (profile: ManagedProfileListItem) => void;
 		onFork: (profile: ManagedProfileListItem) => void;
+		onSaveCurrent?: (profile: ManagedProfileListItem) => void;
 		onDelete: (profile: ManagedProfileListItem) => void;
 		onRefreshQuota?: (profile: ManagedProfileListItem) => void;
 		onRetrySource?: () => void;
@@ -160,7 +165,8 @@
 									<DropdownMenu.Content align="end">
 										<DropdownMenu.Group>
 											<DropdownMenu.Item onSelect={() => onDetails(profile)}><EyeIcon />{$_("actions.details")}</DropdownMenu.Item>
-											<DropdownMenu.Item onSelect={() => onFork(profile)}><GitForkIcon />{$_("actions.fork")}</DropdownMenu.Item>
+										<DropdownMenu.Item onSelect={() => onFork(profile)}><GitForkIcon />{$_("actions.fork")}</DropdownMenu.Item>
+										{#if profile.summary.active && onSaveCurrent}<DropdownMenu.Item disabled={busy} onSelect={() => onSaveCurrent(profile)}><SaveIcon />{saveCurrentLabel}</DropdownMenu.Item>{/if}
 											<DropdownMenu.Item variant="destructive" disabled={busy} onSelect={() => onDelete(profile)}><Trash2Icon />{$_("actions.deleteProfile")}</DropdownMenu.Item>
 										</DropdownMenu.Group>
 									</DropdownMenu.Content>

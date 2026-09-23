@@ -154,6 +154,7 @@
 	let editName = $state("");
 	let editDescription = $state("");
 	let saveCurrentOpen = $state(false);
+	let saveCurrentProfileID = $state("");
 	let saveCurrentSourceError = $state("");
 	let setConfigOpen = $state(false);
 	let selectedConfigSetID = $state("");
@@ -183,6 +184,7 @@
 		isSourceReady(detectResult, !activeProfileID && !sharedConfigSetExists),
 	);
 	let sourceReady = $derived(isSourceReady(detectResult));
+	let saveCurrentSummary = $derived(profiles.find((value) => value.profile.id === saveCurrentProfileID) ?? (detail?.summary.profile.id === saveCurrentProfileID ? detail.summary : null));
 	let forkDestination = $derived.by(() => {
 		if (route.kind !== "fork" || !forkProfilesLoaded) return null;
 		return forkProfiles.find((value) => value.id === profileID.trim()) ?? null;
@@ -472,7 +474,16 @@
 				return;
 			}
 			saveCurrentSourceError = "";
-			const result = await track("profile-save-current", GrokBuildService.SaveActiveProfileState());
+			let result;
+			try {
+				result = await track("profile-save-current", GrokBuildService.SaveActiveProfileState(saveCurrentProfileID));
+			} catch (error) {
+				if (isDesktopErrorCode(error, "PROFILE_CHANGED")) {
+					saveCurrentOpen = false;
+					await refreshProfiles();
+				}
+				throw error;
+			}
 			saveCurrentOpen = false;
 			await Promise.all([
 				refreshProfiles(),
@@ -488,7 +499,8 @@
 		});
 	}
 
-	function openSaveCurrent() {
+	function openSaveCurrent(profileID: string) {
+		saveCurrentProfileID = profileID;
 		saveCurrentSourceError = isSaveCurrentSourceReady(detectResult)
 			? ""
 			: saveCurrentSourceDescription(detectResult);
@@ -882,10 +894,10 @@
 										}
 										push("/grok-build/profiles/new");
 									}}
-									aria-label={$_("grokBuild.actions.saveAsNewProfile")}
+									aria-label={$_("grokBuild.actions.newProfile")}
 								>
 									<PlusIcon data-icon="inline-start" />
-									{$_("grokBuild.actions.saveCurrentShort")}
+									{$_("grokBuild.actions.newProfile")}
 								</Button>
 							{/snippet}
 						</Tooltip.Trigger>
@@ -931,11 +943,13 @@
 			error={profileError}
 			busy={!!busyAction || useBuilding || useApplying}
 			canCreate={defaultCreateSourceReady}
+			saveCurrentLabel={$_("grokBuild.actions.updateFromCurrent")}
 			emptyDescription={$_("grokBuild.profilePages.list.emptyDescription")}
-			createLabel={$_("grokBuild.actions.saveAsNewProfile")}
+			createLabel={$_("grokBuild.actions.newProfile")}
 			onNew={() => push("/grok-build/profiles/new")}
 			onDelete={openProfileDelete}
 			onUse={openUse}
+			onSaveCurrent={(profile) => openSaveCurrent(profile.id)}
 			onDetails={(profile) => push(`${basePath}/${encodeURIComponent(profile.id)}`)}
 			onFork={(profile) => push(`${basePath}/${encodeURIComponent(profile.id)}/fork`)}
 			onRetrySource={() => { void Promise.all([refreshDetect(), refreshProfiles()]); }}
@@ -1026,7 +1040,7 @@
 		onUse={() => openUse(profileListItem(detail!.summary))}
 		onFork={() => push(`${basePath}/${encodeURIComponent(detail!.summary.profile.id)}/fork`)}
 		onEdit={openEdit}
-		onSaveCurrent={openSaveCurrent}
+		onSaveCurrent={() => openSaveCurrent(detail!.summary.profile.id)}
 		onSetConfig={openSetConfig}
 		onDelete={() => openProfileDelete({
 			id: detail!.summary.profile.id,
@@ -1167,25 +1181,25 @@
 				<Alert.Description>{saveCurrentSourceError}</Alert.Description>
 			</Alert.Root>
 		{/if}
-		{#if (detail?.login?.reference_count ?? 0) > 1 || (detail?.config_set?.reference_count ?? 0) > 1}
+		{#if (saveCurrentSummary?.credential_reference_count ?? 0) > 1 || (saveCurrentSummary?.config_set_reference_count ?? 0) > 1}
 			<Alert.Root>
 				<AlertTriangleIcon data-icon="inline-start" />
 				<Alert.Title>{$_("profilePages.saveCurrent.sharedTitle")}</Alert.Title>
 				<Alert.Description>
-					{#if (detail?.login?.reference_count ?? 0) > 1 && (detail?.config_set?.reference_count ?? 0) > 1}
+					{#if (saveCurrentSummary?.credential_reference_count ?? 0) > 1 && (saveCurrentSummary?.config_set_reference_count ?? 0) > 1}
 						{$_("profilePages.saveCurrent.sharedBothDescription", {
 							values: {
-								loginCount: detail?.login?.reference_count ?? 0,
-								configCount: detail?.config_set?.reference_count ?? 0,
+								loginCount: saveCurrentSummary?.credential_reference_count ?? 0,
+								configCount: saveCurrentSummary?.config_set_reference_count ?? 0,
 							},
 						})}
-					{:else if (detail?.login?.reference_count ?? 0) > 1}
+					{:else if (saveCurrentSummary?.credential_reference_count ?? 0) > 1}
 						{$_("profilePages.saveCurrent.sharedLoginDescription", {
-							values: { count: detail?.login?.reference_count ?? 0 },
+							values: { count: saveCurrentSummary?.credential_reference_count ?? 0 },
 						})}
 					{:else}
 						{$_("profilePages.saveCurrent.sharedConfigDescription", {
-							values: { count: detail?.config_set?.reference_count ?? 0 },
+							values: { count: saveCurrentSummary?.config_set_reference_count ?? 0 },
 						})}
 					{/if}
 				</Alert.Description>

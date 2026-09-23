@@ -12,6 +12,7 @@
 	import PencilIcon from "@lucide/svelte/icons/pencil";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+	import SaveIcon from "@lucide/svelte/icons/save";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 
@@ -82,6 +83,7 @@
 	let editName = $state("");
 	let editDescription = $state("");
 	let saveCurrentOpen = $state(false);
+	let saveCurrentProfileID = $state("");
 	let saveCurrentReferenceCount = $state(1);
 	let deleteOpen = $state(false);
 	let deleteTarget = $state<ProfileDeleteTarget | null>(null);
@@ -206,7 +208,8 @@
 		});
 	}
 
-	function openSaveCurrent(referenceCount: number) {
+	function openSaveCurrent(profileID: string, referenceCount: number) {
+		saveCurrentProfileID = profileID;
 		saveCurrentReferenceCount = Math.max(1, referenceCount);
 		saveCurrentOpen = true;
 	}
@@ -214,7 +217,15 @@
 	async function saveCurrent() {
 		await runAction("claude-code-save-current", async () => {
 			if (!isSourceReady(await refreshDetect())) return;
-			await track("claude-code-save-current", ClaudeCodeService.SaveCurrent(saveCurrentReferenceCount > 1));
+			try {
+				await track("claude-code-save-current", ClaudeCodeService.SaveCurrent(saveCurrentProfileID, saveCurrentReferenceCount > 1));
+			} catch (error) {
+				if (isDesktopErrorCode(error, "PROFILE_CHANGED")) {
+					saveCurrentOpen = false;
+					await refreshProfiles();
+				}
+				throw error;
+			}
 			saveCurrentOpen = false;
 			await Promise.all([refreshProfiles(), detail ? loadDetail(detail.summary.profile.id) : Promise.resolve()]);
 			showNotice(translate("claudeCode.notice.savedTitle"), translate("claudeCode.notice.savedDescription"));
@@ -344,7 +355,7 @@
 					<div class="flex items-center gap-3"><button class="min-w-0 flex-1 truncate text-left font-medium hover:underline" onclick={() => push(`/claude-code/profiles/${encodeURIComponent(summary.profile.id)}`)}>{summary.profile.name || summary.profile.id}</button>
 						{#if summary.active}<StatusBadge tone="current"><CheckIcon />{$_("status.current")}</StatusBadge>{/if}<StatusBadge tone={summary.credential_status === "valid" ? "success" : "warning"}>{$_(`claudeCode.status.${summary.credential_status}`)}</StatusBadge>
 						{#if !summary.active}<Button size="sm" disabled={!providerReady || !!busyAction} onclick={() => openUse({ id: summary.profile.id, name: summary.profile.name || summary.profile.id })}>{$_("actions.useProfile")}</Button>{/if}
-						<DropdownMenu.Root><DropdownMenu.Trigger>{#snippet child({ props })}<Button {...props} variant="outline" size="icon-sm" disabled={!!busyAction} aria-label={$_("actions.more")}><MoreHorizontalIcon /></Button>{/snippet}</DropdownMenu.Trigger><DropdownMenu.Content align="end"><DropdownMenu.Group><DropdownMenu.Item onSelect={() => push(`/claude-code/profiles/${encodeURIComponent(summary.profile.id)}`)}><EyeIcon />{$_("actions.details")}</DropdownMenu.Item><DropdownMenu.Item variant="destructive" onSelect={() => openProfileDelete({ id: summary.profile.id, name: summary.profile.name || summary.profile.id })}><Trash2Icon />{$_("actions.deleteProfile")}</DropdownMenu.Item></DropdownMenu.Group></DropdownMenu.Content></DropdownMenu.Root>
+						<DropdownMenu.Root><DropdownMenu.Trigger>{#snippet child({ props })}<Button {...props} variant="outline" size="icon-sm" disabled={!!busyAction} aria-label={$_("actions.more")}><MoreHorizontalIcon /></Button>{/snippet}</DropdownMenu.Trigger><DropdownMenu.Content align="end"><DropdownMenu.Group><DropdownMenu.Item onSelect={() => push(`/claude-code/profiles/${encodeURIComponent(summary.profile.id)}`)}><EyeIcon />{$_("actions.details")}</DropdownMenu.Item>{#if summary.active}<DropdownMenu.Item disabled={!sourceReady || !!busyAction} onSelect={() => openSaveCurrent(summary.profile.id, summary.credential_reference_count)}><SaveIcon />{$_("claudeCode.actions.updateCurrent")}</DropdownMenu.Item>{/if}<DropdownMenu.Item variant="destructive" onSelect={() => openProfileDelete({ id: summary.profile.id, name: summary.profile.name || summary.profile.id })}><Trash2Icon />{$_("actions.deleteProfile")}</DropdownMenu.Item></DropdownMenu.Group></DropdownMenu.Content></DropdownMenu.Root>
 					</div><div class="text-sm text-muted-foreground">{$_("claudeCode.detail.expiry")}: {formatExpiry(summary.expires_at_unix_ms)}</div>
 					{#if summary.warnings?.length}<Alert.Root><TriangleAlertIcon /><Alert.Description>{$_("claudeCode.notice.profileWarning")}</Alert.Description></Alert.Root>{/if}
 				</div>{#if index < profiles.length - 1}<Separator />{/if}
@@ -369,7 +380,7 @@
 		<Card.Root><Card.Header><Card.Title>{detail.summary.profile.name || detail.summary.profile.id}</Card.Title><Card.Description>{detail.summary.profile.description || $_("profile.noDescription")}</Card.Description>{#if detail.summary.active}<Card.Action><Badge>{$_("status.current")}</Badge></Card.Action>{/if}</Card.Header>
 			<Card.Content><dl class="grid gap-4 text-sm sm:grid-cols-2"><div><dt class="text-muted-foreground">{$_("profilePages.form.profileID")}</dt><dd class="font-mono">{detail.summary.profile.id}</dd></div><div><dt class="text-muted-foreground">{$_("claudeCode.detail.status")}</dt><dd>{$_(`claudeCode.status.${detail.summary.credential_status}`)}</dd></div><div><dt class="text-muted-foreground">{$_("claudeCode.detail.expiry")}</dt><dd>{formatExpiry(detail.summary.expires_at_unix_ms)}</dd></div><div><dt class="text-muted-foreground">{$_("claudeCode.detail.references")}</dt><dd>{detail.summary.credential_reference_count}</dd></div></dl>
 			{#if detail.summary.warnings?.length}<Alert.Root class="mt-4"><TriangleAlertIcon /><Alert.Description>{$_("claudeCode.notice.profileWarning")}</Alert.Description></Alert.Root>{/if}</Card.Content>
-			<Card.Footer class="justify-end gap-2"><DropdownMenu.Root><DropdownMenu.Trigger>{#snippet child({ props })}<Button {...props} variant="outline" size="icon-sm" disabled={!!busyAction} aria-label={$_("actions.more")}><MoreHorizontalIcon /></Button>{/snippet}</DropdownMenu.Trigger><DropdownMenu.Content align="end"><DropdownMenu.Group><DropdownMenu.Item onSelect={openEdit}><PencilIcon />{$_("actions.editDetails")}</DropdownMenu.Item><DropdownMenu.Item variant="destructive" onSelect={() => openProfileDelete({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || detail!.summary.profile.id })}><Trash2Icon />{$_("actions.deleteProfile")}</DropdownMenu.Item></DropdownMenu.Group></DropdownMenu.Content></DropdownMenu.Root>{#if detail.summary.active}<Button variant="outline" disabled={!sourceReady || !!busyAction} onclick={() => openSaveCurrent(detail!.summary.credential_reference_count)}><RefreshCwIcon />{$_("claudeCode.actions.updateCurrent")}</Button>{/if}<Button disabled={!providerReady || detail.summary.active || !!busyAction} onclick={() => openUse({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || detail!.summary.profile.id })}>{$_("actions.useProfile")}</Button></Card.Footer>
+			<Card.Footer class="justify-end gap-2"><DropdownMenu.Root><DropdownMenu.Trigger>{#snippet child({ props })}<Button {...props} variant="outline" size="icon-sm" disabled={!!busyAction} aria-label={$_("actions.more")}><MoreHorizontalIcon /></Button>{/snippet}</DropdownMenu.Trigger><DropdownMenu.Content align="end"><DropdownMenu.Group><DropdownMenu.Item onSelect={openEdit}><PencilIcon />{$_("actions.editDetails")}</DropdownMenu.Item><DropdownMenu.Item variant="destructive" onSelect={() => openProfileDelete({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || detail!.summary.profile.id })}><Trash2Icon />{$_("actions.deleteProfile")}</DropdownMenu.Item></DropdownMenu.Group></DropdownMenu.Content></DropdownMenu.Root>{#if detail.summary.active}<Button variant="outline" disabled={!sourceReady || !!busyAction} onclick={() => openSaveCurrent(detail!.summary.profile.id, detail!.summary.credential_reference_count)}><RefreshCwIcon />{$_("claudeCode.actions.updateCurrent")}</Button>{/if}<Button disabled={!providerReady || detail.summary.active || !!busyAction} onclick={() => openUse({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || detail!.summary.profile.id })}>{$_("actions.useProfile")}</Button></Card.Footer>
 		</Card.Root>
 	</div>
 {/if}

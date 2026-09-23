@@ -31,6 +31,7 @@ const userErrorKeys: Record<string, string> = {
 	PROFILE_IN_USE: "errors.profileInUse",
 	PROFILE_INVALID: "errors.profileInvalid",
 	PROFILE_NOT_FOUND: "errors.profileNotFound",
+	PROFILE_CHANGED: "errors.profileChanged",
 	PLAN_BUILD_FAILED: "errors.switchPreviewFailed",
 	ADAPTER_NOT_FOUND: "errors.providerInvalid",
 	TARGET_INVALID: "errors.switchUnsupported",

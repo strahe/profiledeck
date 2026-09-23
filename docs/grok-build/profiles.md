@@ -23,7 +23,7 @@ End active Grok sessions before an operation that changes files, then start a ne
 ## Save a Profile in Desktop
 
 1. Select **Grok Build → Profiles**.
-2. Choose **Save Current**.
+2. Choose **New Profile**.
 3. Enter a permanent Profile ID and a display name.
 4. For the first Profile, use the default `shared` Config Set. ProfileDeck creates it from the current settings only if it does not already exist.
 
@@ -99,7 +99,7 @@ profiledeck-cli grok-build profile fork work client-config \
 
 ## Save changes and switch
 
-Grok Build continues to use normal `auth.json` and `config.toml` files. Before switching away, ProfileDeck preserves valid changes made to the current login or settings. Use **Update from Current Grok Build** in Desktop, or run:
+Grok Build continues to use normal `auth.json` and `config.toml` files. Before switching away, ProfileDeck preserves valid changes made to the current login or settings. On the current Profile, open **More actions** and choose **Save Current Login and Settings** in Desktop, or run:
 
 ```bash
 profiledeck-cli grok-build profile save-current

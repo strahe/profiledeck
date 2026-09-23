@@ -60,8 +60,8 @@ export function ReadProfileQuota(profileID: string): $CancellablePromise<codex$0
     return $Call.ByID(2588960257, profileID);
 }
 
-export function SaveActiveProfileState(): $CancellablePromise<codex$0.CodexProfileStateSaveResult> {
-    return $Call.ByID(2732837523);
+export function SaveActiveProfileState(expectedProfileID: string): $CancellablePromise<codex$0.CodexProfileStateSaveResult> {
+    return $Call.ByID(2732837523, expectedProfileID);
 }
 
 export function SetProfileConfig(req: $models.UpdateCodexProfileConfigSetRequest): $CancellablePromise<codex$0.CodexProfileDetail> {

@@ -12,6 +12,7 @@
 	import PencilIcon from "@lucide/svelte/icons/pencil";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+	import SaveIcon from "@lucide/svelte/icons/save";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 
@@ -109,6 +110,7 @@
 	let editName = $state("");
 	let editDescription = $state("");
 	let saveCurrentOpen = $state(false);
+	let saveCurrentProfileID = $state("");
 	let saveCurrentReferenceCount = $state(1);
 	let deleteOpen = $state(false);
 	let deleteTarget = $state<ProfileDeleteTarget | null>(null);
@@ -244,7 +246,8 @@
 		showNotice(translate("profileDelete.deletedTitle"), translate("profileDelete.deletedDescription"));
 	}
 
-	function openSaveCurrent(referenceCount: number) {
+	function openSaveCurrent(profileID: string, referenceCount: number) {
+		saveCurrentProfileID = profileID;
 		saveCurrentReferenceCount = Math.max(1, referenceCount);
 		saveCurrentOpen = true;
 	}
@@ -270,7 +273,16 @@
 	async function saveCurrent() {
 		await runAction("antigravity-save-current", async () => {
 			if (!isSourceReady(await refreshDetect())) return;
-			const result = await track("antigravity-save-current", AntigravityService.SaveCurrent());
+			let result;
+			try {
+				result = await track("antigravity-save-current", AntigravityService.SaveCurrent(saveCurrentProfileID));
+			} catch (error) {
+				if (isDesktopErrorCode(error, "PROFILE_CHANGED")) {
+					saveCurrentOpen = false;
+					await refreshProfiles();
+				}
+				throw error;
+			}
 			saveCurrentOpen = false;
 			await Promise.all([refreshProfiles(), detail ? loadDetail(detail.summary.profile.id) : Promise.resolve()]);
 			showWarnings(result.warnings);
@@ -533,7 +545,7 @@
 										<DropdownMenu.Content align="end">
 											<DropdownMenu.Group>
 												<DropdownMenu.Item onSelect={() => push(`/antigravity/profiles/${encodeURIComponent(summary.profile.id)}`)}><EyeIcon />{$_("actions.details")}</DropdownMenu.Item>
-												{#if summary.active}<DropdownMenu.Item disabled={!sourceReady || !!busyAction} onSelect={() => openSaveCurrent(summary.credential_reference_count)}><RefreshCwIcon />{$_("antigravity.actions.updateCurrent")}</DropdownMenu.Item>{/if}
+												{#if summary.active}<DropdownMenu.Item disabled={!sourceReady || !!busyAction} onSelect={() => openSaveCurrent(summary.profile.id, summary.credential_reference_count)}><SaveIcon />{$_("antigravity.actions.updateCurrent")}</DropdownMenu.Item>{/if}
 												<DropdownMenu.Item variant="destructive" disabled={!!busyAction} onSelect={() => openProfileDelete({ id: summary.profile.id, name: summary.profile.name || $_("profile.unnamed") })}><Trash2Icon />{$_("actions.deleteProfile")}</DropdownMenu.Item>
 											</DropdownMenu.Group>
 										</DropdownMenu.Content>
@@ -640,7 +652,7 @@
 						</DropdownMenu.Group>
 					</DropdownMenu.Content>
 				</DropdownMenu.Root>
-				{#if detail.summary.active}<Button variant="outline" disabled={!sourceReady || !!busyAction} onclick={() => openSaveCurrent(detail!.summary.credential_reference_count)}>{$_("antigravity.actions.updateCurrent")}</Button>{/if}
+				{#if detail.summary.active}<Button variant="outline" disabled={!sourceReady || !!busyAction} onclick={() => openSaveCurrent(detail!.summary.profile.id, detail!.summary.credential_reference_count)}>{$_("antigravity.actions.updateCurrent")}</Button>{/if}
 					<Button disabled={!switchReady || (detail.summary.active && !activeLoginMissing) || !!busyAction || useBuilding || useApplying} onclick={() => openUse({ id: detail!.summary.profile.id, name: detail!.summary.profile.name || $_("profile.unnamed") })}>{$_("actions.useProfile")}</Button>
 			</Card.Footer>
 		</Card.Root>

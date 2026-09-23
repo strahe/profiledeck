@@ -20,7 +20,10 @@ const backend = vi.hoisted(() => ({
 	createGrokBuildProfile: vi.fn(),
 	forkCodexProfile: vi.fn(),
 	forkGrokBuildProfile: vi.fn(),
+	saveCodexProfile: vi.fn(),
 	saveGrokBuildProfile: vi.fn(),
+	listCodexConfigSets: vi.fn(),
+	listGrokBuildConfigSets: vi.fn(),
 	showCodexProfile: vi.fn(),
 	showGrokBuildProfile: vi.fn(),
 	listProfiles: vi.fn(),
@@ -32,11 +35,14 @@ vi.mock("../bindings/github.com/strahe/profiledeck/desktop/backend", () => ({
 		CreateProfile: backend.createCodexProfile,
 		ForkProfile: backend.forkCodexProfile,
 		ShowProfile: backend.showCodexProfile,
+		SaveActiveProfileState: backend.saveCodexProfile,
+		ListConfigSets: backend.listCodexConfigSets,
 	},
 	GrokBuildService: {
 		CreateProfile: backend.createGrokBuildProfile,
 		ForkProfile: backend.forkGrokBuildProfile,
 		SaveActiveProfileState: backend.saveGrokBuildProfile,
+		ListConfigSets: backend.listGrokBuildConfigSets,
 		ShowProfile: backend.showGrokBuildProfile,
 	},
 	ProfileService: {
@@ -188,11 +194,66 @@ function grokBuildQuotaProps() {
 
 beforeEach(async () => {
 	vi.clearAllMocks();
+	backend.listCodexConfigSets.mockImplementation(() => cancellableResolved({ config_sets: [] }));
+	backend.listGrokBuildConfigSets.mockImplementation(() => cancellableResolved({ config_sets: [] }));
 	locale.set("en");
 	await tick();
 });
 
 describe("managed Profile mutation guards", () => {
+	it("saves the active Codex Profile from its list and shows shared settings", async () => {
+		const user = userEvent.setup();
+		backend.saveCodexProfile.mockImplementation(() => cancellableResolved({ warnings: [] }));
+		render(CodexProfiles, {
+			route: { kind: "list", profileID: "" },
+			profiles: [codexDetail.summary],
+			dashboardConfigSets: [],
+			detectResult: validCodexDetect,
+			detectError: "",
+			activeProfileID: "work",
+			loadingProfiles: false,
+			profileError: "",
+			useRequest: null,
+			refreshDetect: vi.fn().mockResolvedValue(validCodexDetect),
+			refreshProfiles: vi.fn().mockResolvedValue(undefined),
+			cancelDetect: vi.fn(),
+			onUseRequestHandled: vi.fn(),
+			showError: vi.fn(),
+			showNotice: vi.fn(),
+		}, { wrapper: ProfileTestProviders });
+		await user.click(screen.getAllByRole("button", { name: "More actions" }).at(-1)!);
+		await user.click(await screen.findByText("Save Current Login and Settings"));
+		const dialog = screen.getByRole("alertdialog");
+		expect(within(dialog).getByText("These settings are used by 2 Profiles. Saving them will change them for all of them.")).toBeInTheDocument();
+		await user.click(within(dialog).getByRole("button", { name: "Save Current Login and Settings" }));
+		await waitFor(() => expect(backend.saveCodexProfile).toHaveBeenCalledWith("work"));
+	});
+
+	it("shows Grok Build shared settings from the active list row", async () => {
+		const user = userEvent.setup();
+		render(GrokBuildProfiles, {
+			...grokBuildQuotaProps(),
+			route: { kind: "list", profileID: "" },
+			profiles: [grokBuildDetail.summary],
+			dashboardConfigSets: [],
+			detectResult: validGrokBuildDetect,
+			detectError: "",
+			activeProfileID: "work",
+			loadingProfiles: false,
+			profileError: "",
+			useRequest: null,
+			refreshDetect: vi.fn().mockResolvedValue(validGrokBuildDetect),
+			refreshProfiles: vi.fn().mockResolvedValue(undefined),
+			cancelDetect: vi.fn(),
+			onUseRequestHandled: vi.fn(),
+			showError: vi.fn(),
+			showNotice: vi.fn(),
+		}, { wrapper: ProfileTestProviders });
+		await user.click(screen.getAllByRole("button", { name: "More actions" }).at(-1)!);
+		await user.click(await screen.findByText("Save Current Login and Settings"));
+		expect(within(screen.getByRole("alertdialog")).getByText("These settings are used by 2 Profiles. Saving them will change them for all of them.")).toBeInTheDocument();
+	});
+
 	it("shows Grok Build create recheck failures and does not create a Profile", async () => {
 		const user = userEvent.setup();
 		const invalid = { ...validGrokBuildDetect, auth_status: "invalid" };
@@ -484,12 +545,11 @@ describe("managed Profile mutation guards", () => {
 	it("blocks Grok Build save-current when config.toml is missing", async () => {
 		const user = userEvent.setup();
 		const missingConfig = { ...validGrokBuildDetect, config_status: "missing" };
-		backend.showGrokBuildProfile.mockReturnValue(cancellableResolved(grokBuildDetail));
 		const refreshDetect = vi.fn().mockResolvedValue(missingConfig);
 
 		render(GrokBuildProfiles, {
 			...grokBuildQuotaProps(),
-			route: { kind: "detail", profileID: "work" },
+			route: { kind: "list", profileID: "" },
 			profiles: [grokBuildDetail.summary],
 			dashboardConfigSets: [grokBuildDetail.config_set!],
 			detectResult: missingConfig,
@@ -506,16 +566,16 @@ describe("managed Profile mutation guards", () => {
 			showNotice: vi.fn(),
 		}, { wrapper: ProfileTestProviders });
 
-		await screen.findByRole("heading", { name: "Work" });
-		await user.click(screen.getByRole("button", { name: "More actions" }));
-		await user.click(await screen.findByText("Update from Current Grok Build"));
+		await user.click(screen.getAllByRole("button", { name: "More actions" }).at(-1)!);
+		await user.click(await screen.findByText("Save Current Login and Settings"));
 
 		const dialog = await screen.findByRole("alertdialog");
-		const message = "Grok Build config.toml is missing. Restore or recreate it before updating this Profile. ProfileDeck did not change the saved login or settings.";
+		const message = "Grok Build config.toml is missing. Restore or recreate it before saving. ProfileDeck did not change the saved login or settings.";
 		expect(within(dialog).getByText(message)).toBeInTheDocument();
 
-		await user.click(within(dialog).getByRole("button", { name: "Update from Current Grok Build" }));
-		await waitFor(() => expect(refreshDetect).toHaveBeenCalledOnce());
+		const detectCallsBeforeSave = refreshDetect.mock.calls.length;
+		await user.click(within(dialog).getByRole("button", { name: "Save Current Login and Settings" }));
+		await waitFor(() => expect(refreshDetect).toHaveBeenCalledTimes(detectCallsBeforeSave + 1));
 		expect(within(dialog).getByText(message)).toBeInTheDocument();
 		expect(backend.saveGrokBuildProfile).not.toHaveBeenCalled();
 	});

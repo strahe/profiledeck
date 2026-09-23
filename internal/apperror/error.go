@@ -33,6 +33,7 @@ const (
 	ProfileInUse                     Code = "PROFILE_IN_USE"
 	ProfileInvalid                   Code = "PROFILE_INVALID"
 	ProfileNotFound                  Code = "PROFILE_NOT_FOUND"
+	ProfileChanged                   Code = "PROFILE_CHANGED"
 	PlanBuildFailed                  Code = "PLAN_BUILD_FAILED"
 	AdapterNotFound                  Code = "ADAPTER_NOT_FOUND"
 	AgentDisabled                    Code = "agent_disabled"
@@ -157,6 +158,7 @@ func KnownCode(code Code) bool {
 		ProfileInUse,
 		ProfileInvalid,
 		ProfileNotFound,
+		ProfileChanged,
 		PlanBuildFailed,
 		AdapterNotFound,
 		AgentDisabled,

@@ -451,6 +451,41 @@ func TestAntigravityCreateAndSaveRequireCurrentConsumerOAuthLogin(t *testing.T) 
 	assertErrorCode(t, err, apperror.AntigravityInvalid)
 }
 
+func TestAntigravitySaveRejectsChangedActiveProfile(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	if _, err := initAntigravityTestRuntime(ctx, configDir); err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeKeyringClient{value: testAgyPayload("original", "refresh"), exists: true}
+	environment := newAntigravityTestEnvironment(t, configDir, client)
+	created, err := environment.antigravity.CreateProfile(ctx, CreateAntigravityProfileRequest{ProfileID: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := db.GetProviderCredential(ctx, created.Summary.CredentialID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	client.value = testAgyPayload("changed", "refresh")
+	_, err = environment.antigravity.SaveActiveProfileFor(ctx, "other")
+	assertErrorCode(t, err, apperror.ProfileChanged)
+	db, err = openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	after, err := db.GetProviderCredential(ctx, created.Summary.CredentialID)
+	if err != nil || after.PayloadJSON != before.PayloadJSON {
+		t.Fatalf("saved login changed after rejected save: credential=%#v err=%v", after, err)
+	}
+}
+
 func TestAntigravitySaveCurrentWarnsWhenLoginIsShared(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()

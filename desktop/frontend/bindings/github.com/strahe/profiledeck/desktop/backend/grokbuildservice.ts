@@ -56,8 +56,8 @@ export function ReadProfileQuota(profileID: string): $CancellablePromise<grokbui
     return $Call.ByID(1290892715, profileID);
 }
 
-export function SaveActiveProfileState(): $CancellablePromise<grokbuild$0.ProfileStateSaveResult> {
-    return $Call.ByID(1134372713);
+export function SaveActiveProfileState(expectedProfileID: string): $CancellablePromise<grokbuild$0.ProfileStateSaveResult> {
+    return $Call.ByID(1134372713, expectedProfileID);
 }
 
 export function SetProfileConfig(req: $models.UpdateGrokBuildProfileConfigSetRequest): $CancellablePromise<grokbuild$0.ProfileDetail> {

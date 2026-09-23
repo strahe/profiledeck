@@ -36,7 +36,7 @@ ProfileDeck 还需要有效的 `config.toml`。CLI 命令按以下顺序查找 C
 ## 在桌面端保存 Profile
 
 1. 选择 **Codex → Profiles**。
-2. 选择**保存当前**。
+2. 选择**新建 Profile**。
 3. 输入创建后不会改变的 Profile ID，以及用于显示的名称。
 4. 保存第一个 Profile 时，把当前 Codex 设置保存到默认的 `shared` 配置集。
 
@@ -107,7 +107,7 @@ profiledeck-cli codex profile fork work client-config \
 
 Codex 继续使用普通的 `auth.json` 和 `config.toml` 文件。离开当前 Profile 前，ProfileDeck 会保留当前登录或设置中的有效更改。
 
-如果准备登录其他账号或替换当前文件，并希望先明确保存当前内容，请在桌面端使用**从当前 Codex 更新**，或运行：
+如果准备登录其他账号或替换当前文件，并希望先明确保存当前内容，请打开当前 Profile 的**更多操作**菜单，选择**保存当前登录与设置**，或运行：
 
 ```bash
 profiledeck-cli codex profile save-current

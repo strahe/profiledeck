@@ -335,6 +335,43 @@ func TestClaudeCodeExpiredWorkingCopyDoesNotAutoOverwriteAndSharedSaveRequiresCo
 	}
 }
 
+func TestClaudeCodeSaveRejectsChangedActiveProfile(t *testing.T) {
+	ctx := context.Background()
+	configDir := t.TempDir()
+	credentialPath := filepath.Join(t.TempDir(), claudecodeconfig.CredentialsFile)
+	if _, err := initClaudeCodeTestRuntime(ctx, configDir); err != nil {
+		t.Fatal(err)
+	}
+	seedClaudeCodeFileProvider(t, ctx, configDir, credentialPath)
+	original := testClaudeCodePayload("original", "refresh", 4102444800000)
+	writeClaudeCodeCredential(t, credentialPath, original)
+	created, err := newClaudeCodeTestEnvironment(t, configDir).claudeCode.CreateProfile(ctx, CreateClaudeCodeProfileRequest{ProfileID: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := db.GetProviderCredential(ctx, created.Summary.CredentialID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	writeClaudeCodeCredential(t, credentialPath, testClaudeCodePayload("changed", "refresh", 4102444800000))
+	_, err = newClaudeCodeTestEnvironment(t, configDir).claudeCode.SaveActiveProfile(ctx, SaveActiveClaudeCodeProfileRequest{ExpectedProfileID: "other"})
+	assertErrorCode(t, err, apperror.ProfileChanged)
+	db, err = openHealthyStore(ctx, configDir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	credential, err := db.GetProviderCredential(ctx, created.Summary.CredentialID)
+	if err != nil || credential.PayloadJSON != before.PayloadJSON {
+		t.Fatalf("saved login changed after rejected save: credential=%#v err=%v", credential, err)
+	}
+}
+
 func TestClaudeCodeUnboundKnownCredentialDoesNotOverwriteActiveCredential(t *testing.T) {
 	ctx := context.Background()
 	configDir := t.TempDir()
