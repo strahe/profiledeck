@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -9,7 +10,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
+	pricing "github.com/strahe/profiledeck/internal/pricing"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -43,18 +46,21 @@ type TokenCounts struct {
 }
 
 type Event struct {
-	EventKey             store.UsageKey
-	SessionID            string
-	Model                string
-	OccurredAtUnixMS     int64
-	InputTokens          int64
-	CachedInputTokens    int64
-	OutputTokens         int64
-	TotalTokens          int64
-	EstimatedCostMicros  *int64
-	CostStatus           store.UsageCostStatus
-	ReportedCostUSDTicks *int64
-	ReportedCostStatus   store.UsageReportedCostStatus
+	EventKey                 store.UsageKey
+	SessionID                string
+	Model                    string
+	OccurredAtUnixMS         int64
+	InputTokens              int64
+	CachedInputTokens        int64
+	OutputTokens             int64
+	TotalTokens              int64
+	EstimatedCostMicros      *int64
+	CostStatus               store.UsageCostStatus
+	ReportedCostUSDTicks     *int64
+	ReportedCostStatus       store.UsageReportedCostStatus
+	PricingCatalogVersion    *int64
+	CacheWriteInputTokens    *int64
+	CacheCreationInputTokens *int64
 }
 
 type SourceFile struct {
@@ -74,149 +80,112 @@ type FileParseResult struct {
 	UnsupportedLines int64
 }
 
-type Price struct {
-	InputMicrosPerMillion       int64
-	CachedInputMicrosPerMillion *int64
-	CacheWriteMicrosPerMillion  *int64
-	OutputMicrosPerMillion      int64
+var bundledPricingCatalog = pricing.Embedded()
+
+type pricingContextKey struct{}
+
+func withPricingSnapshot(ctx context.Context, catalog pricing.Catalog) context.Context {
+	return context.WithValue(ctx, pricingContextKey{}, catalog)
 }
 
-// PriceCatalog owns a provider-scoped, immutable price snapshot. Callers can
-// estimate against it but cannot mutate or inspect its backing map.
-type PriceCatalog struct {
-	prices map[string]Price
-}
-
-func newPriceCatalog(prices map[string]Price) PriceCatalog {
-	copied := make(map[string]Price, len(prices))
-	for model, modelPrice := range prices {
-		copied[pricingModelID(model)] = modelPrice
+func pricingSnapshot(ctx context.Context) pricing.Catalog {
+	if catalog, ok := ctx.Value(pricingContextKey{}).(pricing.Catalog); ok {
+		return catalog
 	}
-	return PriceCatalog{prices: copied}
+	return bundledPricingCatalog
 }
-
-// Static price source: OpenAI API pricing, accessed 2026-09-12.
-// These local estimates use Standard API prices. For models with multiple
-// context tiers, the table uses the short-context rate until Codex logs expose
-// enough billing context to select batch, flex, priority, or long-context rates.
-// GPT-5.6 and GPT-6 Astra logs do not expose cache-write tokens, so their stored
-// amount is the verifiable input/cache-read/output subtotal and remains
-// explicitly partial.
-var codexPriceCatalog = newPriceCatalog(map[string]Price{
-	"gpt-6-astra":   priceWithCacheWrite(10_000_000, 1_000_000, 12_500_000, 50_000_000),
-	"gpt-5.6-sol":   priceWithCacheWrite(5_000_000, 500_000, 6_250_000, 30_000_000),
-	"gpt-5.6-terra": priceWithCacheWrite(2_500_000, 250_000, 3_125_000, 15_000_000),
-	"gpt-5.6-luna":  priceWithCacheWrite(1_000_000, 100_000, 1_250_000, 6_000_000),
-	"gpt-5.5":       price(5_000_000, 500_000, 30_000_000),
-	"gpt-5.5-pro":   priceWithoutCached(30_000_000, 180_000_000),
-	"gpt-5.4":       price(2_500_000, 250_000, 15_000_000),
-	"gpt-5.4-mini":  price(750_000, 75_000, 4_500_000),
-	"gpt-5.4-nano":  price(200_000, 20_000, 1_250_000),
-	"gpt-5.4-pro":   priceWithoutCached(30_000_000, 180_000_000),
-	"chat-latest":   price(5_000_000, 500_000, 30_000_000),
-	"gpt-5.3-codex": price(1_750_000, 175_000, 14_000_000),
-	"gpt-5.2":       price(1_750_000, 175_000, 14_000_000),
-	"gpt-5.2-pro":   priceWithoutCached(21_000_000, 168_000_000),
-	"gpt-5.1":       price(1_250_000, 125_000, 10_000_000),
-	"gpt-5":         price(1_250_000, 125_000, 10_000_000),
-	"gpt-5-mini":    price(250_000, 25_000, 2_000_000),
-	"gpt-5-nano":    price(50_000, 5_000, 400_000),
-	"gpt-5-pro":     priceWithoutCached(15_000_000, 120_000_000),
-	"gpt-4.1":       price(2_000_000, 500_000, 8_000_000),
-	"gpt-4.1-mini":  price(400_000, 100_000, 1_600_000),
-	"gpt-4.1-nano":  price(100_000, 25_000, 400_000),
-})
-
-// Static price source: xAI pricing documentation, accessed 2026-09-12.
-// Aggregated Grok Build records do not identify long-context calls, so
-// estimates intentionally use only the short-context Standard API tier.
-// Grok Build session records may emit model-specific -build identifiers.
-var grokBuildPriceCatalog = newPriceCatalog(map[string]Price{
-	"grok-4.5":          price(2_000_000, 300_000, 6_000_000),
-	"grok-4.5-build":    price(2_000_000, 300_000, 6_000_000),
-	"grok-4.5-latest":   price(2_000_000, 300_000, 6_000_000),
-	"grok-4.6":          price(2_000_000, 500_000, 6_000_000),
-	"grok-4.6-build":    price(2_000_000, 500_000, 6_000_000),
-	"grok-build-latest": price(2_000_000, 300_000, 6_000_000),
-})
 
 func EstimateCostMicros(model string, tokens TokenCounts) (*int64, store.UsageCostStatus) {
-	return codexPriceCatalog.EstimateCostMicros(model, tokens)
+	cost, status, _ := estimateCostAt(bundledPricingCatalog, ProviderCodex, model, time.Now().UnixMilli(), tokens, nil, nil)
+	return cost, status
 }
 
 func EstimateGrokBuildCostMicros(model string, tokens TokenCounts) (*int64, store.UsageCostStatus) {
-	return grokBuildPriceCatalog.EstimateCostMicros(model, tokens)
+	cost, status, _ := estimateCostAt(bundledPricingCatalog, "grok-build", model, time.Now().UnixMilli(), tokens, nil, nil)
+	return cost, status
 }
 
-func (catalog PriceCatalog) Supports(model string) bool {
-	_, ok := catalog.prices[pricingModelID(model)]
-	return ok
-}
-
-func (catalog PriceCatalog) EstimateCostMicros(
-	model string,
-	tokens TokenCounts,
-) (*int64, store.UsageCostStatus) {
-	price, ok := catalog.prices[pricingModelID(model)]
-	if !ok || tokens.CachedInputTokens > tokens.InputTokens {
-		return nil, CostStatusUnknown
+func estimateCostAt(catalog pricing.Catalog, provider, model string, occurredAt int64,
+	tokens TokenCounts, cacheWrite, perCallInput *int64,
+) (*int64, store.UsageCostStatus, *int64) {
+	selected, ok := catalog.Select(provider, pricingCatalogModelID(provider, model), occurredAt)
+	if !ok || tokens.InputTokens < 0 || tokens.CachedInputTokens < 0 ||
+		tokens.CachedInputTokens > tokens.InputTokens || tokens.OutputTokens < 0 {
+		return nil, CostStatusUnknown, nil
 	}
-	if tokens.CachedInputTokens > 0 && price.CachedInputMicrosPerMillion == nil {
-		return nil, CostStatusUnknown
-	}
-
-	uncachedInputTokens := tokens.InputTokens - tokens.CachedInputTokens
-	cost, ok := roundedTokenCostMicrosSafe(uncachedInputTokens, price.InputMicrosPerMillion)
-	if !ok {
-		return nil, CostStatusUnknown
-	}
-	if price.CachedInputMicrosPerMillion != nil {
-		cachedCost, ok := roundedTokenCostMicrosSafe(tokens.CachedInputTokens, *price.CachedInputMicrosPerMillion)
-		if !ok {
-			return nil, CostStatusUnknown
-		}
-		cost, ok = addCostMicros(cost, cachedCost)
-		if !ok {
-			return nil, CostStatusUnknown
+	rates := selected.Rates
+	partial := false
+	if selected.Long != nil && provider == ProviderCodex {
+		if perCallInput == nil {
+			partial = true
+		} else if *perCallInput > selected.Above {
+			rates = *selected.Long
 		}
 	}
-	outputCost, ok := roundedTokenCostMicrosSafe(tokens.OutputTokens, price.OutputMicrosPerMillion)
+	if tokens.CachedInputTokens > 0 && rates.CachedInput == nil {
+		return nil, CostStatusUnknown, nil
+	}
+	fresh := tokens.InputTokens - tokens.CachedInputTokens
+	if cacheWrite != nil {
+		if *cacheWrite < 0 || *cacheWrite > fresh {
+			return nil, CostStatusUnknown, nil
+		}
+		fresh -= *cacheWrite
+	} else if rates.CacheWrite != nil {
+		partial = true
+	}
+	cost, ok := roundedTokenCostMicrosSafe(fresh, rates.Input)
 	if !ok {
-		return nil, CostStatusUnknown
+		return nil, CostStatusUnknown, nil
 	}
-	cost, ok = addCostMicros(cost, outputCost)
+	if rates.CachedInput != nil {
+		cached, valid := roundedTokenCostMicrosSafe(tokens.CachedInputTokens, *rates.CachedInput)
+		if !valid {
+			return nil, CostStatusUnknown, nil
+		}
+		cost, ok = addCostMicros(cost, cached)
+		if !ok {
+			return nil, CostStatusUnknown, nil
+		}
+	}
+	if cacheWrite != nil && *cacheWrite > 0 {
+		if rates.CacheWrite == nil {
+			partial = true
+		} else {
+			writeCost, valid := roundedTokenCostMicrosSafe(*cacheWrite, *rates.CacheWrite)
+			if !valid {
+				return nil, CostStatusUnknown, nil
+			}
+			cost, ok = addCostMicros(cost, writeCost)
+			if !ok {
+				return nil, CostStatusUnknown, nil
+			}
+		}
+	}
+	output, ok := roundedTokenCostMicrosSafe(tokens.OutputTokens, rates.Output)
 	if !ok {
-		return nil, CostStatusUnknown
+		return nil, CostStatusUnknown, nil
 	}
-	if price.CacheWriteMicrosPerMillion != nil {
-		return &cost, CostStatusPartial
+	cost, ok = addCostMicros(cost, output)
+	if !ok {
+		return nil, CostStatusUnknown, nil
 	}
-	return &cost, CostStatusEstimated
+	version := selected.Version
+	if partial {
+		return &cost, CostStatusPartial, &version
+	}
+	return &cost, CostStatusEstimated, &version
 }
 
-func pricingModelID(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
-}
+func pricingModelID(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
 
-func price(inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion int64) Price {
-	return Price{
-		InputMicrosPerMillion:       inputMicrosPerMillion,
-		CachedInputMicrosPerMillion: &cachedInputMicrosPerMillion,
-		OutputMicrosPerMillion:      outputMicrosPerMillion,
+func pricingCatalogModelID(provider, model string) string {
+	model = pricingModelID(model)
+	// Grok Build's standard 4.7 session label is distinct from its Fast variant.
+	if provider == "grok-build" && model == "grok-4.7-build" {
+		return "grok-4.7"
 	}
-}
-
-func priceWithCacheWrite(inputMicrosPerMillion, cachedInputMicrosPerMillion, cacheWriteMicrosPerMillion, outputMicrosPerMillion int64) Price {
-	price := price(inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion)
-	price.CacheWriteMicrosPerMillion = &cacheWriteMicrosPerMillion
-	return price
-}
-
-func priceWithoutCached(inputMicrosPerMillion, outputMicrosPerMillion int64) Price {
-	return Price{
-		InputMicrosPerMillion:  inputMicrosPerMillion,
-		OutputMicrosPerMillion: outputMicrosPerMillion,
-	}
+	return model
 }
 
 func SourceKey(path string) (store.UsageKey, error) {

@@ -254,7 +254,7 @@ func TestAppliedSchemaUsesItsVersionedContract(t *testing.T) {
 	if _, err := db.db.DB.ExecContext(ctx, `ALTER TABLE usage_sources DROP COLUMN completed_generation`); err != nil {
 		t.Fatalf("remove usage completion generation: %v", err)
 	}
-	for _, column := range []string{"reported_cost_status", "reported_cost_usd_ticks"} {
+	for _, column := range []string{"cache_creation_input_tokens", "cache_write_input_tokens", "pricing_catalog_version", "reported_cost_status", "reported_cost_usd_ticks"} {
 		if _, err := db.db.DB.ExecContext(ctx, fmt.Sprintf("ALTER TABLE usage_facts DROP COLUMN %s", column)); err != nil {
 			t.Fatalf("remove reported usage cost column %s: %v", column, err)
 		}

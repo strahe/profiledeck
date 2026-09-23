@@ -41,8 +41,8 @@ func TestParseCodexSessionFileComputesCumulativeDeltas(t *testing.T) {
 	writeTestFile(t, path, strings.Join([]string{
 		`{"type":"session_meta","session_id":"session-1"}`,
 		`{"type":"turn_context","model":"gpt-5.3-codex"}`,
-		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110},"prompt":"do not store me","content":"do not store me"}},"timestamp":"2026-07-06T00:00:00Z"}`,
-		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":25,"output_tokens":15,"total_tokens":165}}},"timestamp":"2026-07-06T00:01:00Z"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10,"total_tokens":110},"prompt":"do not store me","content":"do not store me"}},"timestamp":"2026-09-12T00:00:00Z"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":150,"cached_input_tokens":25,"output_tokens":15,"total_tokens":165}}},"timestamp":"2026-09-12T00:01:00Z"}`,
 	}, "\n"))
 
 	sourceKey, err := SourceKey(path)
@@ -82,14 +82,14 @@ func TestParseCodexSessionFileStoresCacheWriteModelsAsPartial(t *testing.T) {
 		want  int64
 	}{
 		{model: "gpt-6-astra", want: 59_100_000},
-		{model: "gpt-5.6-sol", want: 34_550_000},
+		{model: "gpt-5.6-sol", want: 23_640_000},
 	} {
 		t.Run(test.model, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "session.jsonl")
 			writeTestFile(t, path, strings.Join([]string{
 				`{"type":"session_meta","session_id":"session-1"}`,
 				`{"type":"turn_context","model":"` + test.model + `"}`,
-				`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000000,"cached_input_tokens":100000,"output_tokens":1000000,"total_tokens":2000000}}}}`,
+				`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000000,"cached_input_tokens":100000,"output_tokens":1000000,"total_tokens":2000000}}},"timestamp":"2026-09-23T00:00:00Z"}`,
 			}, "\n"))
 
 			sourceKey, err := SourceKey(path)
@@ -111,6 +111,49 @@ func TestParseCodexSessionFileStoresCacheWriteModelsAsPartial(t *testing.T) {
 				t.Fatalf("expected %s base cost %d to remain explicitly partial, got %#v", test.model, test.want, event)
 			}
 		})
+	}
+}
+
+func TestParseCodexSessionFilePricesMatchedCacheWriteAndLongContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	writeTestFile(t, path, strings.Join([]string{
+		`{"type":"session_meta","session_id":"session-1"}`,
+		`{"type":"turn_context","model":"gpt-6-astra"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300000,"cached_input_tokens":50000,"output_tokens":10000,"total_tokens":310000}},"last_token_usage":{"input_tokens":300000,"cached_input_tokens":50000,"cache_write_input_tokens":25000,"output_tokens":10000}},"timestamp":"2026-09-23T00:00:00Z"}`,
+	}, "\n"))
+	sourceKey, err := SourceKey(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseCodexSessionFile(SourceFile{Path: path, SourceKey: sourceKey})
+	if err != nil || len(parsed.Events) != 1 {
+		t.Fatalf("matched call = %#v, err = %v", parsed, err)
+	}
+	event := parsed.Events[0]
+	if event.CostStatus != CostStatusEstimated || event.EstimatedCostMicros == nil || *event.EstimatedCostMicros != 5_975_000 ||
+		event.CacheWriteInputTokens == nil || *event.CacheWriteInputTokens != 25_000 || event.PricingCatalogVersion == nil || *event.PricingCatalogVersion != 1 {
+		t.Fatalf("matched cache write and long context = %#v", event)
+	}
+}
+
+func TestParseCodexSessionFileDoesNotUseUnmatchedCallRates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	writeTestFile(t, path, strings.Join([]string{
+		`{"type":"session_meta","session_id":"session-1"}`,
+		`{"type":"turn_context","model":"gpt-6-astra"}`,
+		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300000,"cached_input_tokens":50000,"output_tokens":10000,"total_tokens":310000}},"last_token_usage":{"input_tokens":299999,"cached_input_tokens":50000,"cache_write_input_tokens":25000,"output_tokens":10000}},"timestamp":"2026-09-23T00:00:00Z"}`,
+	}, "\n"))
+	sourceKey, err := SourceKey(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseCodexSessionFile(SourceFile{Path: path, SourceKey: sourceKey})
+	if err != nil || len(parsed.Events) != 1 {
+		t.Fatalf("unmatched call = %#v, err = %v", parsed, err)
+	}
+	event := parsed.Events[0]
+	if event.CostStatus != CostStatusPartial || event.EstimatedCostMicros == nil || *event.EstimatedCostMicros != 3_050_000 || event.CacheWriteInputTokens != nil {
+		t.Fatalf("unmatched call used cache-write or long-context pricing: %#v", event)
 	}
 }
 

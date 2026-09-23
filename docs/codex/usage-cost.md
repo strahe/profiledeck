@@ -64,13 +64,26 @@ Reports use your computer's local time zone. They include token totals, session 
 
 ## Understand cost estimates
 
-ProfileDeck estimates each event from its exact model name and the [OpenAI Standard API prices](https://developers.openai.com/api/docs/pricing) included with the installed version when that event first receives a cost estimate. Installing a later version does not recalculate existing estimates.
+ProfileDeck uses a price list based on [OpenAI Standard API prices](https://developers.openai.com/api/docs/pricing). It matches the exact model name and date of each event. If the date predates a verified price or the model name is an alias such as `chat-latest`, its cost remains unknown. Existing estimates do not change after a price update; a later sync can fill in unknown costs. A report may combine estimates made before and after price updates.
 
 - `estimated`: all selected usage has a price;
 - `partial`: ProfileDeck can estimate only part of the selected usage;
 - `unknown`: at least one selected record has no usable price.
 
 The report always keeps token totals and shows the known subtotal. Pricing coverage shows how much of the selected token usage could be priced.
+
+If local records do not provide enough detail to apply a cache-write or long-context rate, ProfileDeck shows a partial estimate.
+
+The app checks for price-list updates at startup and at most once every 24 hours while running. The CLI checks an overdue list before `usage sync`; a failed check does not stop the sync. Manage this independently of app updates in **Settings → Usage prices** or with:
+
+```bash
+profiledeck-cli usage pricing status
+profiledeck-cli usage pricing check
+profiledeck-cli usage pricing auto off
+profiledeck-cli usage pricing auto on
+```
+
+The included price list works offline. `usage report` never checks the network. Only the price list is downloaded; local usage is not uploaded.
 
 These estimates are not subscription billing, account limits, invoices, or ChatGPT balances. ProfileDeck does not contact a billing API when producing a usage report. [Codex limit checks](./profiles.md#check-limits-and-keep-a-login-active) are separate and never change or attribute usage reports.
 

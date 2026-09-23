@@ -1,6 +1,6 @@
 # Grok Build Usage and Cost
 
-ProfileDeck reads local Grok Build session records to show token usage, activity, static API-equivalent cost estimates, and cost reported by Grok Build. Reports stay offline and do not assign activity to a Profile, saved login, or account.
+ProfileDeck reads local Grok Build session records to show token usage, activity, API-equivalent cost estimates, and cost reported by Grok Build. Reports stay offline and do not assign activity to a Profile, saved login, or account.
 
 ## Sync in the Desktop app
 
@@ -66,24 +66,15 @@ The default range is `7d`. Reports use your computer's local time zone and inclu
 
 ## Understand cost figures
 
-ProfileDeck uses the short-context xAI Standard API-equivalent prices included with the installed version:
+ProfileDeck uses a price list based on [xAI Standard API prices](https://docs.x.ai/developers/pricing), selecting the rate by model and event date. The list includes `grok-4.5`, `grok-4.6`, and `grok-4.7`. Grok Build's `grok-4.7-build` records use the standard `grok-4.7` rate for API-equivalent estimates. Fast variants, other internal `*-build` names, and mutable `*-latest` names remain unknown until their exact model mapping is verified. Session records do not show whether an individual request entered a long-context pricing tier, so estimates use the short-context rates.
 
-| Model | Input | Cached input | Output |
-| --- | ---: | ---: | ---: |
-| `grok-4.5` | $2.00 / 1M tokens | $0.30 / 1M tokens | $6.00 / 1M tokens |
-| `grok-4.5-build` | $2.00 / 1M tokens | $0.30 / 1M tokens | $6.00 / 1M tokens |
-| `grok-4.5-latest` | $2.00 / 1M tokens | $0.30 / 1M tokens | $6.00 / 1M tokens |
-| `grok-4.6` | $2.00 / 1M tokens | $0.50 / 1M tokens | $6.00 / 1M tokens |
-| `grok-4.6-build` | $2.00 / 1M tokens | $0.50 / 1M tokens | $6.00 / 1M tokens |
-| `grok-build-latest` | $2.00 / 1M tokens | $0.30 / 1M tokens | $6.00 / 1M tokens |
-
-The prices come from [xAI pricing](https://docs.x.ai/developers/pricing). [Grok Build uses Grok 4.6](https://docs.x.ai/build/overview), so ProfileDeck treats the `grok-4.6-build` identifier found in current session records as pricing-equivalent to Grok 4.6. Aggregated session records do not show whether an individual request entered a long-context pricing tier, so ProfileDeck does not apply the 2× long-context multiplier.
-
-When a session record includes cache-creation tokens, ProfileDeck keeps the event and reports a partial estimate because usage facts currently price only input, cached input, and output tokens.
+When a session includes cache-creation tokens, ProfileDeck shows a partial estimate if that model has a verified short-context rate.
 
 ProfileDeck shows the amount Grok recorded for completed local session records. If some calls are missing an amount, ProfileDeck shows the known subtotal as partial. Only records with a complete amount count toward reported-cost coverage; when no selected record contains an amount, the reported cost is unavailable.
 
-API-equivalent estimates and Grok-reported amounts remain separate and are never added together. An unrecognized model keeps its token totals and Grok-reported amount but has unknown API-equivalent cost. Existing estimates are not recalculated when a later ProfileDeck version changes its built-in prices; facts with unknown API-equivalent cost can receive an estimate when their model becomes recognized.
+API-equivalent estimates and Grok-reported amounts remain separate and are never added together. An unrecognized model or an event predating a verified price keeps its token totals and Grok-reported amount but has unknown API-equivalent cost. Existing estimates do not change after a price update; a later sync can fill in unknown costs. A report may combine estimates made before and after price updates.
+
+The app checks the price list at startup and at most once every 24 hours while running. The CLI checks an overdue list before `usage sync`; a failed check does not stop the sync. Manage this independently of app updates in **Settings → Usage prices** or with `profiledeck-cli usage pricing status`, `check`, and `auto on|off`. The included list works offline, and `usage report` never checks the network.
 
 The Grok Build Usage Limit panel may cover only activity since the process started or was last resumed, while ProfileDeck reports completed turns found in local session history for the selected dates. Their totals can therefore differ even when both values came from the same local session.
 

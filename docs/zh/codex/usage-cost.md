@@ -64,13 +64,26 @@ profiledeck-cli usage report --range all
 
 ## 理解成本估算
 
-ProfileDeck 根据准确的模型名称，以及每条记录首次获得成本估算时所安装版本包含的 [OpenAI 标准 API 价格](https://developers.openai.com/api/docs/pricing)估算成本。安装新版本不会重新计算已有估算。
+ProfileDeck 根据 [OpenAI 标准 API 价格](https://developers.openai.com/api/docs/pricing)估算成本，按每条记录的准确模型名称和发生日期选择价格。早于已核实价格的记录，或模型名称为 `chat-latest` 等可变别名的记录，成本保持未知。价格更新后，已有估算不会改变；再次同步可补齐此前未知的成本。因此，一份报告可能包含价格更新前后的估算。
 
 - `estimated`：所选用量都有可用价格；
 - `partial`：只能估算所选用量中的一部分；
 - `unknown`：至少一条所选记录没有可用价格。
 
 报告始终保留令牌总量，并显示已知成本小计。定价覆盖率表示所选令牌用量中可估价的比例。
+
+如果本地记录缺少应用缓存写入或长上下文费率所需的详情，ProfileDeck 会显示部分估算。
+
+应用启动时会检查价格更新，运行期间最多每 24 小时检查一次。CLI 在价格表需要更新时，会先检查再执行 `usage sync`；检查失败不会中断同步。你可以在 **设置 → 用量价格** 中单独管理自动检查，也可以使用：
+
+```bash
+profiledeck-cli usage pricing status
+profiledeck-cli usage pricing check
+profiledeck-cli usage pricing auto off
+profiledeck-cli usage pricing auto on
+```
+
+离线时可使用内置价格表。`usage report` 不会联网。ProfileDeck 只下载价格表，不会上传本地用量。
 
 这些数值不是订阅账单、账号限额、发票或 ChatGPT 余额。生成用量报告时，ProfileDeck 不会请求计费 API。[Codex 限额查询](./profiles.md#检查限额并保持登录)是独立功能，不会改变用量报告，也不会为报告归属账号。
 

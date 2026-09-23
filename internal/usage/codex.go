@@ -159,7 +159,7 @@ func newCodexParserState(file SourceFile) codexParserState {
 	}
 }
 
-func (state *codexParserState) parseLine(line []byte) (*Event, bool, bool) {
+func (state *codexParserState) parseLineAt(ctx context.Context, line []byte) (*Event, bool, bool) {
 	var payload any
 	decoder := json.NewDecoder(bytes.NewReader(line))
 	decoder.UseNumber()
@@ -206,18 +206,34 @@ func (state *codexParserState) parseLine(line []byte) (*Event, bool, bool) {
 
 	state.UsageOrdinals[state.CurrentSessionKey]++
 	usageOrdinal := state.UsageOrdinals[state.CurrentSessionKey]
-	costMicros, costStatus := EstimateCostMicros(state.ModelForPricing, delta)
+	occurredAt := occurredAtUnixMS(object)
+	var cacheWrite, perCallInput *int64
+	if lastObject, ok := usageObjectFromKnownPaths(object, "last_token_usage"); ok {
+		last, valid := tokenCountsFromUsageObject(lastObject)
+		if valid && last.InputTokens == delta.InputTokens && last.CachedInputTokens == delta.CachedInputTokens && last.OutputTokens == delta.OutputTokens {
+			input := last.InputTokens
+			perCallInput = &input
+			if count, present := int64Field(lastObject, "cache_write_input_tokens"); present && count >= 0 {
+				cacheWrite = &count
+			}
+		}
+	}
+	costMicros, costStatus, catalogVersion := estimateCostAt(
+		pricingSnapshot(ctx), ProviderCodex, state.ModelForPricing, occurredAt, delta, cacheWrite, perCallInput,
+	)
 	event := Event{
-		EventKey:            EventID(ProviderCodex, SourceCodexSessionJSONL, usageOrdinal, state.CurrentSessionKey, state.ModelForStorage, delta),
-		SessionID:           state.CurrentSessionKey,
-		Model:               state.ModelForStorage,
-		OccurredAtUnixMS:    occurredAtUnixMS(object),
-		InputTokens:         delta.InputTokens,
-		CachedInputTokens:   delta.CachedInputTokens,
-		OutputTokens:        delta.OutputTokens,
-		TotalTokens:         delta.TotalTokens,
-		EstimatedCostMicros: costMicros,
-		CostStatus:          costStatus,
+		EventKey:              EventID(ProviderCodex, SourceCodexSessionJSONL, usageOrdinal, state.CurrentSessionKey, state.ModelForStorage, delta),
+		SessionID:             state.CurrentSessionKey,
+		Model:                 state.ModelForStorage,
+		OccurredAtUnixMS:      occurredAt,
+		InputTokens:           delta.InputTokens,
+		CachedInputTokens:     delta.CachedInputTokens,
+		OutputTokens:          delta.OutputTokens,
+		TotalTokens:           delta.TotalTokens,
+		EstimatedCostMicros:   costMicros,
+		CostStatus:            costStatus,
+		PricingCatalogVersion: catalogVersion,
+		CacheWriteInputTokens: cacheWrite,
 	}
 	return &event, false, false
 }
@@ -258,7 +274,7 @@ func parseCodexSessionFile(ctx context.Context, file SourceFile, maxLineBytes in
 			continue
 		}
 
-		event, invalid, unsupported := state.parseLine(line)
+		event, invalid, unsupported := state.parseLineAt(ctx, line)
 		if invalid {
 			result.InvalidLines++
 			continue

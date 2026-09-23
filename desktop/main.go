@@ -121,6 +121,7 @@ func main() {
 	hideMainWindowOnUserClose(mainWindow)
 	setupTray(desktopCtx, wailsApp, mainWindow, services)
 	setupUsageAutoSync(desktopCtx, wailsApp, services)
+	setupPricingUpdates(desktopCtx, wailsApp, core)
 	setupCodexQuotaRuntime(desktopCtx, wailsApp, services)
 	setupUpdateRuntime(desktopCtx, wailsApp, updates)
 	setupApplicationBackupRuntime(desktopCtx, wailsApp, services)
@@ -211,6 +212,25 @@ func setupUsageAutoSync(ctx context.Context, wailsApp *application.App, services
 		removeStartedHandler()
 		services.StopUsageAutoSync()
 	})
+}
+
+func setupPricingUpdates(ctx context.Context, wailsApp *application.App, core *app.Application) {
+	removeStartedHandler := wailsApp.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		go func() {
+			_, _ = core.Pricing().Check(ctx, false)
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					_, _ = core.Pricing().Check(ctx, false)
+				}
+			}
+		}()
+	})
+	wailsApp.OnShutdown(removeStartedHandler)
 }
 
 func noStoreAssetMiddleware(next http.Handler) http.Handler {

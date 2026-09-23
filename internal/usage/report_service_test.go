@@ -48,6 +48,9 @@ func TestUsageReportRangesUndatedAndPartialPricing(t *testing.T) {
 	for index := range events {
 		events[index].SourceID = source.ID
 	}
+	firstVersion, secondVersion := int64(1), int64(2)
+	events[0].PricingCatalogVersion = &firstVersion
+	events[2].PricingCatalogVersion = &secondVersion
 	if result, insertErr := db.InsertUsageFacts(ctx, store.InsertUsageFactsParams{
 		SourceID: source.ID, Generation: source.SyncGeneration, Facts: events,
 	}); insertErr != nil || result.Inserted != len(events) {
@@ -104,6 +107,9 @@ func TestUsageReportRangesUndatedAndPartialPricing(t *testing.T) {
 	}
 	if all.Summary.TotalTokens != 252 || all.Summary.SessionCount != 5 || all.Models[0].Summary.UndatedEventCount != 1 {
 		t.Fatalf("expected undated usage in all-time totals and models, got %#v", all)
+	}
+	if !all.Pricing.MultipleVersions || week.Pricing.MultipleVersions {
+		t.Fatalf("pricing version mix was not scoped to selected records: all=%#v week=%#v", all.Pricing, week.Pricing)
 	}
 }
 

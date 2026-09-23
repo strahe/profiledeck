@@ -199,7 +199,7 @@ func parseGrokBuildSessionFileWithOpenHook(
 		if len(line) == 0 {
 			continue
 		}
-		events, unsupported, err := parseGrokBuildSessionLine(line)
+		events, unsupported, err := parseGrokBuildSessionLineAt(ctx, line)
 		if err != nil {
 			return FileParseResult{}, err
 		}
@@ -239,6 +239,10 @@ type grokBuildParamsClassifier struct {
 }
 
 func parseGrokBuildSessionLine(line []byte) ([]Event, bool, error) {
+	return parseGrokBuildSessionLineAt(context.Background(), line)
+}
+
+func parseGrokBuildSessionLineAt(ctx context.Context, line []byte) ([]Event, bool, error) {
 	var classifier grokBuildEnvelopeClassifier
 	if err := decodeJSON(line, &classifier, false); err != nil {
 		return nil, false, errors.New("session file contains a malformed record")
@@ -270,7 +274,7 @@ func parseGrokBuildSessionLine(line []byte) ([]Event, bool, error) {
 	if err := decodeJSON(line, &envelope, false); err != nil {
 		return nil, false, errors.New("terminal update has an unsupported structure")
 	}
-	return grokBuildEventsFromTerminal(envelope)
+	return grokBuildEventsFromTerminal(ctx, envelope)
 }
 
 type grokBuildTerminalEnvelope struct {
@@ -387,6 +391,7 @@ type grokBuildUsageModel struct {
 }
 
 func grokBuildEventsFromTerminal(
+	ctx context.Context,
 	envelope grokBuildTerminalEnvelope,
 ) ([]Event, bool, error) {
 	if envelope.Method != grokBuildSessionUpdateMethod ||
@@ -433,6 +438,7 @@ func grokBuildEventsFromTerminal(
 			return nil, false, errors.New("terminal usage contains an invalid model")
 		}
 		row := usage.ModelUsage.values[rawModel]
+		cacheCreation := int64(row.CacheCreationTokens.value)
 		if row.InputTokens.value == 0 && row.OutputTokens.value == 0 &&
 			row.CachedReadTokens.value == 0 && row.CacheCreationTokens.value == 0 {
 			continue
@@ -443,24 +449,28 @@ func grokBuildEventsFromTerminal(
 			OutputTokens:      int64(row.OutputTokens.value),
 			TotalTokens:       int64(row.TotalTokens.value),
 		}
-		cost, status := EstimateGrokBuildCostMicros(model, tokens)
+		cost, status, catalogVersion := estimateCostAt(
+			pricingSnapshot(ctx), grokconfig.ProviderID, model, occurredAt, tokens, nil, nil,
+		)
 		if cost != nil && row.CacheCreationTokens.value > 0 {
 			status = CostStatusPartial
 		}
 		reportedCost, reportedStatus := grokBuildReportedCost(row, *usage, len(models) == 1)
 		events = append(events, Event{
-			EventKey:             GrokBuildEventID(promptID, model),
-			SessionID:            sessionKey,
-			Model:                model,
-			OccurredAtUnixMS:     occurredAt,
-			InputTokens:          tokens.InputTokens,
-			CachedInputTokens:    tokens.CachedInputTokens,
-			OutputTokens:         tokens.OutputTokens,
-			TotalTokens:          tokens.TotalTokens,
-			EstimatedCostMicros:  cost,
-			CostStatus:           status,
-			ReportedCostUSDTicks: reportedCost,
-			ReportedCostStatus:   reportedStatus,
+			EventKey:                 GrokBuildEventID(promptID, model),
+			SessionID:                sessionKey,
+			Model:                    model,
+			OccurredAtUnixMS:         occurredAt,
+			InputTokens:              tokens.InputTokens,
+			CachedInputTokens:        tokens.CachedInputTokens,
+			OutputTokens:             tokens.OutputTokens,
+			TotalTokens:              tokens.TotalTokens,
+			EstimatedCostMicros:      cost,
+			CostStatus:               status,
+			PricingCatalogVersion:    catalogVersion,
+			ReportedCostUSDTicks:     reportedCost,
+			ReportedCostStatus:       reportedStatus,
+			CacheCreationInputTokens: &cacheCreation,
 		})
 	}
 	if len(events) == 0 {

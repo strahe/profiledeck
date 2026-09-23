@@ -10,6 +10,7 @@ import (
 	"github.com/strahe/profiledeck/internal/apperror"
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	codexpreset "github.com/strahe/profiledeck/internal/codex/preset"
+	"github.com/strahe/profiledeck/internal/pricing"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -312,7 +313,11 @@ func (integration codexIntegration) preflight(
 	}
 	cursors := codexCursorMap(cursorRows)
 	observations := observationMap(observationRows)
-	priceBackfill := hasSupportedUnknownUsageModel(unknownModels, codexPriceCatalog.Supports)
+	catalog := pricingSnapshot(ctx)
+	priceBackfill, err := hasPriceableUnknownUsageModel(ctx, db, unknownModels, catalog, ProviderCodex)
+	if err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, err
+	}
 	work := source.SyncGeneration != source.CompletedGeneration || priceBackfill
 	discovered := make(map[store.UsageKey]struct{}, len(files))
 	for _, file := range files {
@@ -453,16 +458,19 @@ func observationMap(rows []store.UsageImportObservation) map[store.UsageKey]stor
 	return result
 }
 
-func hasSupportedUnknownUsageModel(
-	models []store.UsageUnknownCostModel,
-	supports func(string) bool,
-) bool {
+func hasPriceableUnknownUsageModel(
+	ctx context.Context, db *store.Store, models []store.UsageUnknownCostModel,
+	catalog pricing.Catalog, providerID string,
+) (bool, error) {
 	for _, model := range models {
-		if supports(model.Model) {
-			return true
+		for _, period := range catalog.EffectivePeriods(providerID, pricingCatalogModelID(providerID, model.Model)) {
+			found, err := db.HasUnknownUsageFactCostInPeriod(ctx, model.SourceID, model.ModelID, period.FromUnixMS, period.UntilUnixMS)
+			if err != nil || found {
+				return found, err
+			}
 		}
 	}
-	return false
+	return false, nil
 }
 
 func newUsageObservation(
@@ -593,31 +601,44 @@ func usageEventsToFactParams(sourceID int64, events []Event) []store.CreateUsage
 	facts := make([]store.CreateUsageFactParams, 0, len(events))
 	for _, event := range events {
 		facts = append(facts, store.CreateUsageFactParams{
-			EventKey:             event.EventKey,
-			SourceID:             sourceID,
-			SessionKey:           event.SessionID,
-			ModelKey:             event.Model,
-			OccurredAtUnixMS:     event.OccurredAtUnixMS,
-			InputTokens:          event.InputTokens,
-			CachedInputTokens:    event.CachedInputTokens,
-			OutputTokens:         event.OutputTokens,
-			TotalTokens:          event.TotalTokens,
-			EstimatedCostMicros:  event.EstimatedCostMicros,
-			CostStatus:           event.CostStatus,
-			ReportedCostUSDTicks: event.ReportedCostUSDTicks,
-			ReportedCostStatus:   event.ReportedCostStatus,
+			EventKey:                 event.EventKey,
+			SourceID:                 sourceID,
+			SessionKey:               event.SessionID,
+			ModelKey:                 event.Model,
+			OccurredAtUnixMS:         event.OccurredAtUnixMS,
+			InputTokens:              event.InputTokens,
+			CachedInputTokens:        event.CachedInputTokens,
+			OutputTokens:             event.OutputTokens,
+			TotalTokens:              event.TotalTokens,
+			EstimatedCostMicros:      event.EstimatedCostMicros,
+			CostStatus:               event.CostStatus,
+			ReportedCostUSDTicks:     event.ReportedCostUSDTicks,
+			ReportedCostStatus:       event.ReportedCostStatus,
+			PricingCatalogVersion:    event.PricingCatalogVersion,
+			CacheWriteInputTokens:    event.CacheWriteInputTokens,
+			CacheCreationInputTokens: event.CacheCreationInputTokens,
 		})
 	}
 	return facts
 }
 
 func backfillPartialUsageCosts(ctx context.Context, db *store.Store) error {
+	catalog := pricingSnapshot(ctx)
 	return backfillUnknownUsageCosts(
 		ctx,
 		db,
 		ProviderCodex,
-		codexPriceCatalog.Supports,
-		EstimateCostMicros,
+		catalog,
+		func(model string, candidate store.UsageFactCostCandidate) (*int64, store.UsageCostStatus, *int64) {
+			var perCallInput *int64
+			if candidate.CacheWriteInputTokens != nil {
+				perCallInput = &candidate.InputTokens
+			}
+			return estimateCostAt(catalog, ProviderCodex, model, candidate.OccurredAtUnixMS, TokenCounts{
+				InputTokens: candidate.InputTokens, CachedInputTokens: candidate.CachedInputTokens,
+				OutputTokens: candidate.OutputTokens, TotalTokens: candidate.TotalTokens,
+			}, candidate.CacheWriteInputTokens, perCallInput)
+		},
 	)
 }
 
@@ -625,8 +646,8 @@ func backfillUnknownUsageCosts(
 	ctx context.Context,
 	db *store.Store,
 	providerID string,
-	supports func(string) bool,
-	estimate func(string, TokenCounts) (*int64, store.UsageCostStatus),
+	catalog pricing.Catalog,
+	estimate func(string, store.UsageFactCostCandidate) (*int64, store.UsageCostStatus, *int64),
 ) error {
 	const batchSize = 256
 	models, err := db.ListUnknownUsageCostModels(ctx, providerID)
@@ -634,7 +655,11 @@ func backfillUnknownUsageCosts(
 		return err
 	}
 	for _, model := range models {
-		if !supports(model.Model) {
+		priceable, err := hasPriceableUnknownUsageModel(ctx, db, []store.UsageUnknownCostModel{model}, catalog, providerID)
+		if err != nil {
+			return err
+		}
+		if !priceable {
 			continue
 		}
 		var afterID int64
@@ -655,19 +680,15 @@ func backfillUnknownUsageCosts(
 			}
 			updates := make([]store.UpdateUsageFactCostParams, 0, len(candidates))
 			for _, candidate := range candidates {
-				cost, status := estimate(model.Model, TokenCounts{
-					InputTokens:       candidate.InputTokens,
-					CachedInputTokens: candidate.CachedInputTokens,
-					OutputTokens:      candidate.OutputTokens,
-					TotalTokens:       candidate.TotalTokens,
-				})
+				cost, status, version := estimate(model.Model, candidate)
 				if cost == nil || status == CostStatusUnknown {
 					continue
 				}
 				updates = append(updates, store.UpdateUsageFactCostParams{
-					ID:                  candidate.ID,
-					EstimatedCostMicros: *cost,
-					CostStatus:          status,
+					ID:                    candidate.ID,
+					EstimatedCostMicros:   *cost,
+					CostStatus:            status,
+					PricingCatalogVersion: version,
 				})
 			}
 			// Only unknown facts are eligible, so concurrent import/backfill runs are

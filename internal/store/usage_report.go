@@ -77,11 +77,12 @@ type UsageImportSummary struct {
 }
 
 type UsageReportSnapshot struct {
-	Sources       []string
-	Summary       UsageAggregate
-	Trend         []UsageTrendAggregate
-	Models        []UsageModelAggregate
-	ImportSummary UsageImportSummary
+	Sources             []string
+	Summary             UsageAggregate
+	Trend               []UsageTrendAggregate
+	Models              []UsageModelAggregate
+	ImportSummary       UsageImportSummary
+	PricingVersionCount int64
 }
 
 type usageProviderSources struct {
@@ -197,13 +198,33 @@ func (s *Store) usageReport(ctx context.Context, query UsageReportQuery) (UsageR
 	if err != nil {
 		return UsageReportSnapshot{}, err
 	}
+	versionCount, err := s.queryUsagePricingVersionCount(ctx, sources.IDs, query.StartUnixMS, query.EndUnixMS)
+	if err != nil {
+		return UsageReportSnapshot{}, err
+	}
 	return UsageReportSnapshot{
-		Sources:       sources.FactSources,
-		Summary:       summary,
-		Trend:         trend,
-		Models:        models,
-		ImportSummary: importSummary,
+		Sources:             sources.FactSources,
+		Summary:             summary,
+		Trend:               trend,
+		Models:              models,
+		ImportSummary:       importSummary,
+		PricingVersionCount: versionCount,
 	}, nil
+}
+
+func (s *Store) queryUsagePricingVersionCount(ctx context.Context, sourceIDs []int64, start *int64, end int64) (int64, error) {
+	where, args := usageSourceIDWhere("f", sourceIDs)
+	where += " AND f.cost_status <> ?"
+	args = append(args, UsageCostStatusUnknown)
+	if start != nil {
+		where += " AND f.occurred_at_unix_ms >= ? AND f.occurred_at_unix_ms < ?"
+		args = append(args, *start, end)
+	}
+	var count int64
+	err := s.executor().QueryRowContext(ctx,
+		"SELECT COUNT(DISTINCT COALESCE(f.pricing_catalog_version, 0)) FROM usage_facts f WHERE "+where,
+		args...).Scan(&count)
+	return count, err
 }
 
 func validateUsageReportQuery(query UsageReportQuery) error {

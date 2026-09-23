@@ -24,6 +24,7 @@ import (
 	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
 	grokcoordination "github.com/strahe/profiledeck/internal/grokbuild/coordination"
 	grokprofile "github.com/strahe/profiledeck/internal/grokbuild/profile"
+	"github.com/strahe/profiledeck/internal/pricing"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/provider"
@@ -69,6 +70,7 @@ type Application struct {
 	switching   *switching.Service
 	doctor      *doctor.Service
 	usage       *usage.Service
+	pricing     *pricing.Service
 	settings    *settings.Service
 	codex       *codex.Service
 	grokBuild   *grokbuild.Service
@@ -193,6 +195,7 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 		agyprofile.DeleteParticipant{},
 		claudeprofile.DeleteParticipant{},
 	)
+	pricingService := pricing.NewService(stores)
 	return &Application{
 		runtime: runtimeService, dataLease: dataLease, backups: backupService,
 		bootstrap: bootstrap.NewService(
@@ -206,8 +209,9 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 		profiles:  profile.NewService(stores, switchingService, profileDeleteRegistry),
 		targets:   profileTargetService,
 		switching: switchingService, doctor: doctorService,
-		usage: usage.NewService(stores, usageRegistry), settings: settings.NewService(stores),
-		codex: codexService, grokBuild: grokBuildService,
+		usage: usage.NewService(stores, usageRegistry, pricingService), pricing: pricingService,
+		settings: settings.NewService(stores),
+		codex:    codexService, grokBuild: grokBuildService,
 		antigravity: antigravityService, claudeCode: claudeCodeService,
 	}, nil
 }
@@ -247,6 +251,7 @@ func (application *Application) Targets() *profiletarget.Service   { return appl
 func (application *Application) Switching() *switching.Service     { return application.switching }
 func (application *Application) Doctor() *doctor.Service           { return application.doctor }
 func (application *Application) Usage() *usage.Service             { return application.usage }
+func (application *Application) Pricing() *pricing.Service         { return application.pricing }
 func (application *Application) Settings() *settings.Service       { return application.settings }
 func (application *Application) Codex() *codex.Service             { return application.codex }
 func (application *Application) GrokBuild() *grokbuild.Service     { return application.grokBuild }

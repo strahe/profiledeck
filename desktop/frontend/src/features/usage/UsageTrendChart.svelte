@@ -67,6 +67,15 @@
 		return Number.isFinite(value) ? Math.max(0, value) : 0;
 	}
 
+	function tooltipCost(point: UsageTrendPoint): string {
+		if (metric === "reported") {
+			if (point.summary.event_count > 0 && point.summary.reported_cost_event_count + point.summary.partial_reported_cost_event_count === 0) return "—";
+			return formatReportedCurrency(point.summary.known_reported_cost_usd);
+		}
+		if (point.summary.event_count > 0 && point.summary.estimated_cost_event_count + point.summary.partial_cost_event_count === 0) return "—";
+		return formatCurrency(point.summary.known_estimated_cost_usd);
+	}
+
 	function chartTitle(): string {
 		if (metric === "cost") return translate("usage.chart.costTitle");
 		if (metric === "reported") return translate("usage.chart.reportedCostTitle");
@@ -190,6 +199,9 @@
 
 	function bucketAriaLabel(point: UsageTrendPoint): string {
 		if (metric === "cost") {
+			if (point.summary.event_count > 0 && point.summary.estimated_cost_event_count + point.summary.partial_cost_event_count === 0) {
+				return translate("usage.chart.unknownCostBucketAria", { bucket: fullBucketLabel(point.start_unix_ms) });
+			}
 			if (point.summary.partial_cost_event_count > 0) {
 				return translate("usage.chart.partialCostBucketAria", {
 					bucket: fullBucketLabel(point.start_unix_ms),
@@ -204,6 +216,9 @@
 			});
 		}
 		if (metric === "reported") {
+			if (point.summary.event_count > 0 && point.summary.reported_cost_event_count + point.summary.partial_reported_cost_event_count === 0) {
+				return translate("usage.chart.unknownReportedCostBucketAria", { bucket: fullBucketLabel(point.start_unix_ms) });
+			}
 			if (point.summary.partial_reported_cost_event_count > 0) {
 				return translate("usage.chart.partialReportedCostBucketAria", {
 					bucket: fullBucketLabel(point.start_unix_ms),
@@ -385,7 +400,7 @@
 			{#if metric !== "tokens"}
 				<div class="mt-1 flex items-center justify-between gap-4">
 					<span>{metric === "reported" ? $_("usage.chart.knownReportedCost") : $_("usage.chart.knownCost")}</span>
-					<span class="font-mono tabular-nums">{metric === "reported" ? formatReportedCurrency(tooltipPoint.summary.known_reported_cost_usd) : formatCurrency(tooltipPoint.summary.known_estimated_cost_usd)}</span>
+					<span class="font-mono tabular-nums">{tooltipCost(tooltipPoint)}</span>
 				</div>
 				{#if metric === "cost" && tooltipPoint.summary.partial_cost_event_count > 0}
 					<div class="mt-1 text-muted-foreground">{$_("usage.chart.partialEstimate")}</div>

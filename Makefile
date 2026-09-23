@@ -43,7 +43,7 @@ UPDATE_SIGNING_KEY ?=
 UPDATE_PUBLIC_KEY ?= desktop/update/updater-public.pem
 RELEASES_DIR ?= $(CURDIR)/.task/release-assets
 
-.PHONY: fmt vet lint lint-core lint-desktop test build source-hygiene core-boundary core-check security-check check clean desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-build release-tools-check release-build release-build-macos release-build-linux-amd64 release-finalize release-linux-smoke verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-check ci-core-check ci-desktop-check ci-security-check ci-release-build-macos ci-release-build-linux-amd64 ci-release-finalize ci-verify-update-e2e
+.PHONY: fmt vet lint lint-core lint-desktop test build pricing-check source-hygiene core-boundary core-check security-check check clean desktop-bindings desktop-bindings-check desktop-taskfile-check desktop-frontend-install desktop-frontend-check desktop-build release-tools-check release-build release-build-macos release-build-linux-amd64 release-finalize release-linux-smoke verify-update-e2e desktop-check docs-install docs-dev docs-build docs-preview docs-check ci-check ci-core-check ci-desktop-check ci-security-check ci-release-build-macos ci-release-build-linux-amd64 ci-release-finalize ci-verify-update-e2e
 
 fmt:
 	$(GOLANGCI_LINT) fmt $(GO_PKGS)
@@ -63,6 +63,9 @@ lint-desktop:
 test:
 	go test $(CORE_PKGS)
 
+pricing-check:
+	go test ./internal/pricing
+
 build:
 	mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/$(BINARY) $(CMD)
@@ -73,7 +76,7 @@ source-hygiene:
 core-boundary:
 	go test ./internal/architecture
 
-core-check: source-hygiene lint-core core-boundary test build
+core-check: source-hygiene pricing-check lint-core core-boundary test build
 
 security-check: $(GOVULNCHECK) $(ACTIONLINT)
 	$(GOVULNCHECK) ./...

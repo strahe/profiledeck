@@ -232,12 +232,22 @@ func (integration grokBuildIntegration) Sync(
 		return SyncOutcome{}, err
 	}
 	if options.ProvisionMode == SyncProvisionProvider || priceBackfill {
+		catalog := pricingSnapshot(ctx)
 		if err := backfillUnknownUsageCosts(
 			ctx,
 			db,
 			grokconfig.ProviderID,
-			grokBuildPriceCatalog.Supports,
-			EstimateGrokBuildCostMicros,
+			catalog,
+			func(model string, candidate store.UsageFactCostCandidate) (*int64, store.UsageCostStatus, *int64) {
+				cost, status, version := estimateCostAt(catalog, grokconfig.ProviderID, model, candidate.OccurredAtUnixMS, TokenCounts{
+					InputTokens: candidate.InputTokens, CachedInputTokens: candidate.CachedInputTokens,
+					OutputTokens: candidate.OutputTokens, TotalTokens: candidate.TotalTokens,
+				}, nil, nil)
+				if cost != nil && (candidate.CacheCreationInputTokens == nil || *candidate.CacheCreationInputTokens > 0) {
+					status = CostStatusPartial
+				}
+				return cost, status, version
+			},
 		); err != nil {
 			return SyncOutcome{}, apperror.Wrap(
 				apperror.UsageImportFailed,
@@ -360,7 +370,11 @@ func (integration grokBuildIntegration) preflight(
 	}
 	cursors := grokBuildCursorMap(cursorRows)
 	observations := observationMap(observationRows)
-	priceBackfill := hasSupportedUnknownUsageModel(unknownModels, grokBuildPriceCatalog.Supports)
+	catalog := pricingSnapshot(ctx)
+	priceBackfill, err := hasPriceableUnknownUsageModel(ctx, db, unknownModels, catalog, grokconfig.ProviderID)
+	if err != nil {
+		return nil, nil, nil, false, UsageSyncResult{}, false, err
+	}
 	work := source.SyncGeneration != source.CompletedGeneration || priceBackfill
 	discovered := make(map[store.UsageKey]struct{}, len(files))
 	for _, file := range files {

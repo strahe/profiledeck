@@ -7,6 +7,9 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as pricing$0 from "../../internal/pricing/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as usage$0 from "../../internal/usage/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -17,8 +20,20 @@ export function AutoSyncStatus(providerID: string): $CancellablePromise<$models.
     return $Call.ByID(2973972616, providerID);
 }
 
+export function CheckPricing(): $CancellablePromise<pricing$0.Status> {
+    return $Call.ByID(2910122128);
+}
+
+export function PricingStatus(): $CancellablePromise<pricing$0.Status> {
+    return $Call.ByID(2879249746);
+}
+
 export function Report(providerID: string, rangeValue: string): $CancellablePromise<usage$0.UsageReportResult> {
     return $Call.ByID(2463093428, providerID, rangeValue);
+}
+
+export function SetAutomaticPricing(enabled: boolean): $CancellablePromise<pricing$0.Status> {
+    return $Call.ByID(2883654161, enabled);
 }
 
 export function Summary(providerID: string): $CancellablePromise<usage$0.UsageSummaryResult> {

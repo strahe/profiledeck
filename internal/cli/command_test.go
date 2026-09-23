@@ -684,8 +684,8 @@ func TestUsageSyncCodexAndSummaryJSON(t *testing.T) {
 	if summary.EventCount != 1 || summary.InputTokens != 10 || summary.CachedInputTokens != 2 || summary.OutputTokens != 3 || summary.TotalTokens != 13 {
 		t.Fatalf("unexpected usage summary: %#v", summary)
 	}
-	if summary.CostStatus != "estimated" || summary.EstimatedCostUSD == nil {
-		t.Fatalf("expected estimated cost summary, got %#v", summary)
+	if summary.CostStatus != "unknown" || summary.EstimatedCostUSD != nil {
+		t.Fatalf("expected undated usage cost to remain unknown, got %#v", summary)
 	}
 
 	reportOut, err := runCLI(t, "--config-dir", configDir, "usage", "report", "--json")
@@ -716,6 +716,32 @@ func TestUsageSyncCodexAndSummaryJSON(t *testing.T) {
 	}
 	if _, err := runCLI(t, "--config-dir", configDir, "usage", "report", "--range", "14d"); err == nil {
 		t.Fatalf("expected invalid usage report range to fail")
+	}
+}
+
+func TestUsagePricingStatusAndAutomaticSetting(t *testing.T) {
+	configDir := t.TempDir()
+	if _, err := runCLI(t, "--config-dir", configDir, "init"); err != nil {
+		t.Fatal(err)
+	}
+	read := func() map[string]any {
+		t.Helper()
+		output, err := runCLI(t, "--config-dir", configDir, "usage", "pricing", "status", "--json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var status map[string]any
+		decodeCLIJSON(t, []byte(output), &status)
+		return status
+	}
+	if status := read(); status["automatic"] != true || status["catalog_version"] != float64(1) {
+		t.Fatalf("initial price status = %#v", status)
+	}
+	if _, err := runCLI(t, "--config-dir", configDir, "usage", "pricing", "auto", "off"); err != nil {
+		t.Fatal(err)
+	}
+	if status := read(); status["automatic"] != false {
+		t.Fatalf("disabled price checks = %#v", status)
 	}
 }
 
@@ -774,7 +800,7 @@ func TestUsageSyncGrokBuildUsesGlobalHomeAndOmitsFileIdentifiers(t *testing.T) {
 	if summary.ProviderID != grokconfig.ProviderID ||
 		summary.EventCount != 1 ||
 		summary.TotalTokens != 120 ||
-		summary.CostStatus != "estimated" ||
+		summary.CostStatus != "unknown" ||
 		summary.ReportedCostUSD == nil ||
 		*summary.ReportedCostUSD != "0.0000000999" ||
 		summary.ReportedCostStatus != "reported" {

@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseGrokBuildSyntheticFixture(t *testing.T) {
@@ -41,8 +42,7 @@ func TestParseGrokBuildSyntheticFixture(t *testing.T) {
 		strings.Contains(first.SessionID, "synthetic-session") {
 		t.Fatalf("session identifier was not irreversibly derived: %q", first.SessionID)
 	}
-	if first.EstimatedCostMicros == nil || *first.EstimatedCostMicros != 252 ||
-		first.CostStatus != CostStatusEstimated {
+	if first.EstimatedCostMicros != nil || first.CostStatus != CostStatusUnknown {
 		t.Fatalf("first event cost = %#v", first)
 	}
 	if first.ReportedCostUSDTicks == nil || *first.ReportedCostUSDTicks != 999 ||
@@ -52,7 +52,7 @@ func TestParseGrokBuildSyntheticFixture(t *testing.T) {
 
 	known, unknown := result.Events[1], result.Events[2]
 	if known.Model != "grok-4.5" || known.OccurredAtUnixMS != 0 ||
-		known.EstimatedCostMicros == nil || *known.EstimatedCostMicros != 504 {
+		known.EstimatedCostMicros != nil || known.CostStatus != CostStatusUnknown {
 		t.Fatalf("known undated event = %#v", known)
 	}
 	if unknown.Model != "synthetic-unknown-model" ||
@@ -102,8 +102,9 @@ func TestParseGrokBuildCurrentSessionFixture(t *testing.T) {
 	event := result.Events[0]
 	if event.Model != "grok-4.6-build" || event.InputTokens != 1_000 ||
 		event.CachedInputTokens != 200 || event.OutputTokens != 100 ||
-		event.TotalTokens != 1_100 || event.EstimatedCostMicros == nil ||
-		*event.EstimatedCostMicros != 2_300 || event.CostStatus != CostStatusPartial ||
+		event.TotalTokens != 1_100 || event.EstimatedCostMicros != nil ||
+		event.CostStatus != CostStatusUnknown ||
+		event.CacheCreationInputTokens == nil || *event.CacheCreationInputTokens != 50 ||
 		event.ReportedCostUSDTicks == nil || *event.ReportedCostUSDTicks != 12_345 ||
 		event.ReportedCostStatus != ReportedCostStatusReported {
 		t.Fatalf("current Grok Build event = %#v", event)
@@ -251,26 +252,26 @@ func TestEstimateGrokBuildCostUsesShortContextStandardPrices(t *testing.T) {
 		OutputTokens:      1_000_000,
 		TotalTokens:       2_000_000,
 	}
-	for _, model := range []string{
-		"grok-4.5",
-		"grok-4.5-build",
-		"grok-4.5-latest",
-		"grok-build-latest",
-	} {
-		cost, status := EstimateGrokBuildCostMicros(model, tokens)
-		if status != CostStatusEstimated || cost == nil || *cost != 7_830_000 {
+	if cost, status := EstimateGrokBuildCostMicros("grok-4.5", tokens); status != CostStatusEstimated || cost == nil || *cost != 7_830_000 {
+		t.Fatalf("grok-4.5 cost = %v, status = %v", cost, status)
+	}
+	for _, model := range []string{"grok-4.5-build", "grok-4.5-latest", "grok-build-latest", "grok-4.6-build", "grok-4.7-fast", "grok-4.7-build-fast", "grok-unverified"} {
+		if cost, status := EstimateGrokBuildCostMicros(model, tokens); cost != nil || status != CostStatusUnknown {
 			t.Fatalf("%s cost = %v, status = %v", model, cost, status)
 		}
 	}
-	if cost, status := EstimateGrokBuildCostMicros("grok-unverified", tokens); cost != nil ||
-		status != CostStatusUnknown {
-		t.Fatalf("unverified model cost = %v, status = %v", cost, status)
+	if cost, status := EstimateGrokBuildCostMicros("grok-4.6", tokens); status != CostStatusEstimated || cost == nil || *cost != 7_850_000 {
+		t.Fatalf("grok-4.6 cost = %v, status = %v", cost, status)
 	}
-	for _, model := range []string{"grok-4.6", "grok-4.6-build"} {
-		cost, status := EstimateGrokBuildCostMicros(model, tokens)
-		if status != CostStatusEstimated || cost == nil || *cost != 7_850_000 {
-			t.Fatalf("%s cost = %v, status = %v", model, cost, status)
-		}
+	if cost, status := EstimateGrokBuildCostMicros("grok-4.7", tokens); status != CostStatusEstimated || cost == nil || *cost != 7_850_000 {
+		t.Fatalf("grok-4.7 cost = %v, status = %v", cost, status)
+	}
+	if cost, status := EstimateGrokBuildCostMicros("grok-4.7-build", tokens); status != CostStatusEstimated || cost == nil || *cost != 7_850_000 {
+		t.Fatalf("standard Grok Build 4.7 cost = %v, status = %v", cost, status)
+	}
+	beforeLaunch := time.Date(2026, time.September, 20, 23, 59, 59, 0, time.UTC).UnixMilli()
+	if cost, status, _ := estimateCostAt(bundledPricingCatalog, "grok-build", "grok-4.7-build", beforeLaunch, tokens, nil, nil); cost != nil || status != CostStatusUnknown {
+		t.Fatalf("pre-launch Grok Build 4.7 cost = %v, status = %v", cost, status)
 	}
 	if cost, status := EstimateGrokBuildCostMicros("grok-4.5", TokenCounts{
 		InputTokens:  math.MaxInt64,

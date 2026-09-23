@@ -79,6 +79,8 @@ type UsagePricingInfo struct {
 	SourceURL           string `json:"source_url"`
 	VerifiedAt          string `json:"verified_at"`
 	HistoricalRepricing bool   `json:"historical_repricing"`
+	CatalogVersion      int64  `json:"catalog_version"`
+	MultipleVersions    bool   `json:"multiple_versions"`
 }
 
 // Codex session logs do not prove which stored credential served a request;
@@ -121,6 +123,7 @@ func (service *Service) usageReportAt(ctx context.Context, req UsageReportReques
 
 	var resolved ResolvedRange
 	var snapshot store.UsageReportSnapshot
+	pricingInfo := integration.PricingInfo()
 	err = db.WithTransaction(ctx, func(txStore *store.Store) error {
 		earliest, err := txStore.EarliestDatedUsageUnixMS(ctx, providerID)
 		if err != nil {
@@ -143,7 +146,22 @@ func (service *Service) usageReportAt(ctx context.Context, req UsageReportReques
 			EndUnixMS:   resolved.EndUnixMS,
 			Buckets:     buckets,
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		if service.pricing != nil {
+			catalog, priceErr := service.pricing.SnapshotInStore(ctx, txStore)
+			if priceErr == nil {
+				pricingInfo.CatalogVersion = catalog.CatalogVersion
+				for _, entry := range catalog.Entries {
+					if entry.Provider == providerID && entry.VerifiedAt > pricingInfo.VerifiedAt {
+						pricingInfo.VerifiedAt = entry.VerifiedAt
+						pricingInfo.SourceURL = entry.SourceURL
+					}
+				}
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return UsageReportResult{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to read usage report", err)
@@ -171,8 +189,9 @@ func (service *Service) usageReportAt(ctx context.Context, req UsageReportReques
 			InvalidLines:       snapshot.ImportSummary.InvalidLines,
 			UnsupportedLines:   snapshot.ImportSummary.UnsupportedLines,
 		},
-		Pricing: integration.PricingInfo(),
+		Pricing: pricingInfo,
 	}
+	result.Pricing.MultipleVersions = snapshot.PricingVersionCount > 1
 	result.Trend = make([]UsageTrendPoint, 0, len(snapshot.Trend))
 	for _, point := range snapshot.Trend {
 		bucket := resolved.Buckets[point.BucketIndex]
