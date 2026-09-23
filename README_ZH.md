@@ -27,8 +27,6 @@ ProfileDeck 支持 Codex、Claude Code、Antigravity 和 Grok Build。各工具�
 | **Linux 便携版** | 桌面端 | [安装便携版桌面端](docs/zh/guide/getting-started.md#便携版桌面端) |
 | **源码构建** | CLI | [构建并使用 CLI](docs/zh/guide/getting-started.md#构建并使用-cli) |
 
-![ProfileDeck 桌面端中的 Profile 与用量限额](docs/images/desktop-codex-profiles-zh.png)
-
 ## CLI 示例
 
 以名为 `work` 的 Codex Profile 为例：

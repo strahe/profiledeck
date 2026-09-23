@@ -27,8 +27,6 @@ ProfileDeck supports Codex, Claude Code, Antigravity, and Grok Build. See [Suppo
 | **Linux portable app** | Desktop | [Install portable Desktop](docs/guide/getting-started.md#portable-desktop) |
 | **Build from source** | CLI | [Build and use the CLI](docs/guide/getting-started.md#build-and-use-the-cli) |
 
-![ProfileDeck Desktop showing Profiles and usage limits](docs/images/desktop-codex-profiles-en.png)
-
 ## CLI example
 
 For a Codex Profile named `work`:
