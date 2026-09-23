@@ -1,27 +1,15 @@
 # 切换其他配置文件
 
-通用目标是高级 CLI 功能，用于切换用户明确选择的本地配置文件。Codex、Claude Code、Antigravity 和 Grok Build 必须使用各自的 Profile 命令；通用目标命令不能修改这些工具管理的登录或设置。
+通用目标是高级 CLI 功能，用于切换用户指定的本地配置文件。它不能管理 Codex、Claude Code、Antigravity 或 Grok Build 的登录与设置；这些工具应使用各自的 Profile 命令。
 
-## 开始前准备
+请使用普通文件的绝对路径；不支持符号链接。先决定替换整个文件还是合并部分值；可能包含敏感内容时，请仔细审核预览。
 
-- 运行 `profiledeck-cli init` 初始化 ProfileDeck。
-- 使用普通本地文件的绝对路径。
-- 确定要替换整个文件，还是只合并指定值。
-
-ProfileDeck 不会修改通过符号链接访问的文件。如果目标文件包含敏感值，请仔细审核预览。
-
-## 创建工具和 Profile
+## 保存文件目标
 
 ```bash
+profiledeck-cli init
 profiledeck-cli provider create my-tool --adapter generic --name "My Tool"
 profiledeck-cli profile create work --name "Work"
-```
-
-Provider ID 用于在后续命令中标识工具；Profile ID 用于标识要切换到的已保存设置。
-
-## 添加配置文件
-
-```bash
 profiledeck-cli profile target add work settings \
   --provider my-tool \
   --path /absolute/path/to/settings.json \
@@ -30,37 +18,20 @@ profiledeck-cli profile target add work settings \
   --value-json '{"model":"example-model"}'
 ```
 
-## 选择文件修改方式
-
-| 策略 | 格式 | `--value-json` 提供的内容 |
+| 策略 | 格式 | `--value-json` |
 | --- | --- | --- |
 | `replace-file` | `text`、`json`、`toml`、`env` | `{"content":"..."}`，替换整个文件。 |
-| `json-merge` | `json` | 合并到当前 JSON 文件的 JSON 对象。 |
-| `toml-merge` | `toml` | 转换为 TOML 后合并的 JSON 对象。 |
-| `env-merge` | `env` | 转换为环境变量赋值的字符串 JSON 对象。 |
+| `json-merge` | `json` | 合并到文件中的 JSON 对象。 |
+| `toml-merge` | `toml` | 转为 TOML 后合并的 JSON 对象。 |
+| `env-merge` | `env` | 转为变量赋值的字符串 JSON 对象。 |
 
-使用合并策略时，当前文件必须是有效的 JSON、TOML 或 env 内容。内容无效时，请先修复文件，再执行切换。
+合并前，现有文件内容必须有效。添加或编辑目标只更改 ProfileDeck 保存的规则；切换成功后才会修改外部文件。
 
-## 审核并切换
-
-预览是可选操作：
+## 切换文件
 
 ```bash
 profiledeck-cli switch my-tool work --dry-run
 profiledeck-cli switch my-tool work --yes
 ```
 
-预览会显示所选文件，并隐藏疑似敏感值。应用前，ProfileDeck 会再次检查文件并创建操作恢复点。
-
-## 查看或恢复
-
-```bash
-profiledeck-cli provider list
-profiledeck-cli profile list
-profiledeck-cli profile target list work
-profiledeck-cli profile target show work my-tool settings
-```
-
-添加或编辑目标时，只会修改已保存规则。只有 `profiledeck-cli switch` 成功后，外部文件才会改变。
-
-如果切换没有完成，请先运行 `profiledeck-cli doctor`。恢复切换前状态的方法见[诊断与恢复](../operations/recovery.md)。成功切换不能撤销；如需更换配置，请切换到目标 Profile。
+预览可选，会隐藏疑似敏感值。切换失败时，运行 `profiledeck-cli doctor` 并按[恢复说明](../operations/recovery.md)处理。成功切换不能撤销。

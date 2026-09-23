@@ -34,7 +34,7 @@ const enGrokBuild = [
 
 const enSafety = [
   { text: 'Review and Switch', link: '/operations/switching' },
-  { text: 'Recover or Undo', link: '/operations/recovery' },
+  { text: 'Recovery', link: '/operations/recovery' },
   { text: 'Data and Security', link: '/reference/data-security' }
 ]
 
@@ -69,7 +69,7 @@ const zhGrokBuild = [
 
 const zhSafety = [
   { text: '审核并切换', link: '/zh/operations/switching' },
-  { text: '恢复或撤销', link: '/zh/operations/recovery' },
+  { text: '诊断与恢复', link: '/zh/operations/recovery' },
   { text: '数据与安全', link: '/zh/reference/data-security' }
 ]
 

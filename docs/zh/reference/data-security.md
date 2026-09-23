@@ -1,16 +1,8 @@
 # 本地数据与安全
 
-ProfileDeck 会在你的设备上保存 Profile、登录、设置、用量报告、备份和操作历史。请将其数据目录视为敏感内容。
+ProfileDeck 在你的设备上保存 Profile、登录、设置、用量报告和备份。请将其数据目录视为敏感内容。
 
 ## 查找数据目录
-
-默认位置是：
-
-```text
-<用户配置目录>/profiledeck
-```
-
-常见位置如下：
 
 | 系统 | 默认位置 |
 | --- | --- |
@@ -18,51 +10,26 @@ ProfileDeck 会在你的设备上保存 Profile、登录、设置、用量报告
 | Linux | `$XDG_CONFIG_HOME/profiledeck` 或 `~/.config/profiledeck` |
 | Windows | `%AppData%\profiledeck` |
 
-如果传入 `--config-dir <directory>`，ProfileDeck 会改用 `<directory>/profiledeck`。
+`--config-dir <directory>` 改用 `<directory>/profiledeck`。其中包含 `profiledeck.db`、加密应用备份和未完成切换的恢复文件。
 
-该目录包含 `profiledeck.db`（以及存在时的 SQLite WAL 附属文件 `profiledeck.db-wal` / `profiledeck.db-shm`）、加密应用备份，以及未完成切换所需的临时恢复数据。ProfileDeck 可能在数据库或操作恢复数据中保存 Codex、Claude Code、Antigravity 和 Grok Build 登录，以便安全切换 Profile。已保存的 Grok Build 配置集可能包含完整的本地 `config.toml`。
+## 保护已保存数据
 
-## 保护本地数据
+应用备份使用 age X25519 加密。当前数据库和未完成切换的恢复文件没有单独加密，可能包含完整登录或设置。不要同步、提交、上传或分享数据目录；请启用全盘加密和屏幕锁。`profiledeck-cli doctor` 可以报告允许其他本地用户访问的文件权限。
 
-ProfileDeck 使用 age X25519 加密 `.profiledeck-backup` 文件。当前数据库和未完成切换的恢复数据不会单独加密，因此能读取你本地文件的人仍可能读取已保存的登录。操作系统允许时，ProfileDeck 会限制这些文件的权限。桌面端“诊断”和 `profiledeck-cli doctor` 会报告 ProfileDeck、Codex、Grok Build 或 Claude Code 路径中可能允许其他本地用户访问的权限问题。检查不会阻止启动或 Profile 切换，也不会更改这些工具拥有的文件。
+私有备份恢复密钥保存在系统凭据存储中，不在备份里。把备份移到其他电脑前，请单独导出密钥，并避免把密钥文件放在共享目录。命令见[备份与恢复](../operations/recovery.md)。成功切换不保留恢复点，也不能撤销。
 
-- 启用操作系统的全盘加密和屏幕锁定。
-- 不要同步、提交、上传或分享完整的 ProfileDeck 数据目录。
-- 移动或重新安装 ProfileDeck 时，请使用已导出的加密应用备份，并单独导出恢复密钥。
-- 恢复密钥文件不得放入仓库或共享文件夹。
+## 何时联网
 
-Claude Code 支持与 Claude Desktop 相互独立。ProfileDeck 不会读取或更改 Claude Desktop 的登录、设置或进程。
+- 用量报告读取本地 Codex 和 Grok Build 会话。价格检查从 GitHub 下载公开费率，不上传本地用量。运行 `profiledeck-cli usage pricing auto off` 可关闭自动检查。
+- ChatGPT Codex 限额检查使用所选登录连接 Codex 或 OpenAI。API Key 限额检查将已保存密钥发送到该 Profile 的自定义 Base URL；HTTP 不会加密传输中的密钥。
+- Grok Build credits 检查使用已安装的 Grok Build，可能续期当前登录。
+- Antigravity 限额检查将当前访问令牌发送到未公开的 Google Cloud Code 服务，可能带来账号风险；检查不会刷新或回写令牌。
+- 桌面端更新检查和下载会连接 GitHub 上的 ProfileDeck Release。
 
-## 了解应用备份与操作恢复
+限额和 credits 结果仅保留在内存中。ProfileDeck 不提供云同步，也不发送遥测。
 
-应用备份包含完整的 ProfileDeck 数据库，并会在发布到 `backups/` 前加密。ProfileDeck 把现有本地数据更新为新版格式前也会先创建加密备份。如果检查或备份创建失败，ProfileDeck 会在更新数据前停止；如果后续数据更新失败，启动会停止，并在恢复页面保留该加密备份。
+## 输出和用量报告
 
-手动备份由你自行删除。自动备份每 24 小时执行一次，并会在更新重启、数据库恢复或本地数据更新前创建。各类自动备份合计最多保留 10 份，其中本地数据更新前备份最多保留 3 份。
+预览、命令、日志、错误和备份摘要会隐藏已保存登录及敏感设置。导出的备份仍保持加密；单独导出的恢复密钥是敏感文件。
 
-私有 X25519 恢复密钥保存在操作系统凭据存储中，不会写入备份。把备份移到其他系统前，请单独导出密钥；替换当前密钥也不会重新加密已有备份。
-
-切换修改外部工具前，ProfileDeck 会在 `recovery/<operation-id>/` 下创建私有恢复点。其中可能包含未经过应用备份加密的完整 Codex 或 Grok Build 文件、Claude Code 账号登录或 Antigravity 登录。恢复点只为未完成切换保留，成功后会删除；它不会出现在备份列表中，不能导出，也不能用于撤销成功切换。
-
-操作状态正式生效前，ProfileDeck 会先登记清理责任；只有恢复目录完成同步后才会清除该责任。因此，崩溃或文件系统错误可能使已完成操作的恢复数据仍然存在，并显示清理警告。警告存在时，Profile 切换和应用恢复会暂停，但读取、诊断和应用备份仍可使用。请运行 `profiledeck-cli doctor retry-cleanup --yes`，或在桌面端“诊断”中选择**重试清理**。清理不会改变工具登录信息或设置。
-
-备份列表和预览只显示安全元数据。作为纵深保护，请保持加密备份私有，并且绝不分享操作恢复数据。
-
-## 了解何时联网
-
-ProfileDeck 的大部分操作只使用本地数据。
-
-- 用量同步和报告读取本地 Codex 或 Grok Build 会话文件，不会请求计费服务。
-- 用量价格检查会从 GitHub 下载公开的 ProfileDeck 价格表。桌面端运行期间每天最多自动检查一次；`usage sync` 在到期时会先检查。不会上传本地用量。可在**设置 → 用量价格**中或通过 `profiledeck-cli usage pricing auto off` 关闭自动检查。
-- ChatGPT Codex 限额查询会使用所选的已保存登录连接 Codex 或 OpenAI。该登录绝不会发送到已保存 Codex 设置中的自定义模型服务地址。
-- API Key 限额查询会把已保存的 API Key 发送到该 Profile 自定义 Base URL 的 `/v1/usage`。ProfileDeck 只发送一次请求且不跟随重定向。HTTP Base URL 不会对传输中的 API Key 或响应加密。限额结果只保留在内存中，不会写入用量报告或应用备份。
-- Grok Build credits 查询会使用当前受管 Profile，并遵循已安装 Grok Build 的网络和登录设置。查询期间，Grok 可能续期当前登录。ProfileDeck 不会查询非当前 Profile，结果只保留在内存中，不会写入数据库、用量报告或应用备份。
-- Antigravity 限额检查会把当前 Antigravity 访问令牌发送到固定但未公开的 Google Cloud Code 服务，使用该服务可能带来账号风险。检查过程中，ProfileDeck 不会刷新、保存或回写令牌。结果只保留在应用内存中，不会写入数据库、用量报告或应用备份。
-- 桌面端更新检查和下载会连接 GitHub 上公开的 ProfileDeck Release。
-
-ProfileDeck 不提供云同步，也不会发送遥测或分析数据。Codex 自动限额刷新和登录续期默认关闭，而且只会在桌面端打开或驻留菜单栏时运行。
-
-## 输出和用量报告不会包含什么
-
-普通预览、命令、日志、错误和备份摘要会隐藏已保存登录及其他敏感设置。导出的应用备份仍保持加密；恢复密钥导出是另一份敏感文件，必须妥善保管。
-
-用量报告会保存令牌数、模型名称、时间信息、派生会话标识和成本估算，但不会保存原始提示词、原始回复、代理结果、API 密钥、直接会话标识、完整会话记录或完整源文件路径。本地 Codex 和 Grok Build 活动无法可靠判断请求由哪个 Profile、已保存登录或账号处理，因此 ProfileDeck 不会猜测此类归属。
+用量报告保存令牌数、模型、日期和估算，不保存原始提示词、回复、代理结果、API Key、完整会话记录或完整源文件路径。历史活动无法可靠归属到某个 Profile、已保存登录或账号。

@@ -1,57 +1,23 @@
 # Profile、登录与设置
 
-Profile 用来标记某个受支持工具应使用的登录和设置。保存 Profile 不会立即修改对应工具；只有确认切换或恢复未完成切换后，ProfileDeck 才会修改工具文件或系统登录。
+Profile 保存登录和设置。一个 Profile 可以包含多个工具的数据，但每个工具分别记录自己的当前 Profile。创建或编辑 Profile 只改变 ProfileDeck 保存的数据；[切换](../operations/switching.md)才会修改所选工具正在使用的登录或文件。
 
-## Profile 保存什么
-
-| 工具 | 保存的登录 | 保存的设置 |
-| --- | --- | --- |
-| Codex | 一份 Codex 登录 | 一组已保存的 Codex 设置（配置集） |
-| Claude Code | 一份账号登录 | 不包含设置 |
-| Antigravity | 一份个人 OAuth 登录 | 不包含设置 |
-| Grok Build | 一份基于文件的登录 | 一组已保存的 Grok Build 设置（配置集） |
-
-每个 Profile 都有用于 CLI 命令和链接的永久 ID。不同工具共用同一个 Profile ID 命名空间，一个 Profile 也可以包含多个工具的已保存数据。
-
-## 当前 Profile
-
-ProfileDeck 会分别记录每个受支持工具的当前 Profile。当前 Profile 对应该工具正在使用的登录或文件：
-
-- Codex 使用当前 Codex 目录中的 `auth.json` 和 `config.toml`。
-- Claude Code 在 macOS 上将账号登录保存在 Keychain，在 Linux 和 Windows 上保存在凭据文件。
-- Antigravity 使用系统凭据存储中的当前登录。
-- Grok Build 使用已绑定 Grok Home 中的 `auth.json` 和 `config.toml`。
-
-离开当前 Profile 前，ProfileDeck 会在可以安全保存时保留有效的刷新登录或有效的 Codex、Grok Build 设置。内容缺失、无效或不受支持时，ProfileDeck 会报告问题，不会静默保存。
-
-## 已保存登录
-
-一份登录可以由多个 Profile 共享。更新共享登录会影响所有使用它的 Profile，因此桌面端会在保存前显示受影响的 Profile 数量。
-
-ProfileDeck 可能显示 Codex Account ID 的末尾字符，帮助区分不同登录。这个值只用于显示，不会决定更新或共享哪份登录。
+Profile ID 创建后不能修改，并在各工具之间共用。一份已保存登录可被多个 Profile 共用；更新它会影响所有使用它的 Profile。保存前，ProfileDeck 会显示受影响的数量。
 
 ## 配置集
 
-配置集是 Codex 或 Grok Build 用户级 `config.toml` 的可复用副本。两个工具分别拥有自己的配置集。每个工具的第一个 Profile 使用名为 `shared` 的配置集；如尚不存在，会根据当前设置创建；后续 Profile 可以复用它，也可以保存独立副本。
+Codex 和 Grok Build 还会把用户级 `config.toml` 设置保存为配置集，两种工具的配置集互不共用。第一个 Profile 使用 `shared`；必要时根据当前设置创建。之后的 Profile 可以复用或另存一份。
 
-多个 Profile 共享配置集时，保存更改后的设置会同时更新这些 Profile。如果某个 Profile 的设置需要独立变化，请复制配置集。只有未被任何 Profile 使用的配置集才能删除。
-
-配置集不包含会话、日志、插件、Skills、项目设置、托管配置或系统策略。
+修改共享配置集会影响所有使用它的 Profile。需要独立修改时请复制。配置集不包含会话、日志、插件、项目设置或系统策略。
 
 ## 删除 Profile
 
-删除会从所有 Agent 中移除完整的 Profile。ProfileDeck 还会删除只有该 Profile 使用的已保存登录和配置集，但会保留共享数据和无关的未绑定数据。Profile 是任一 Agent 的当前 Profile，或仍有未完成操作引用它时，不能删除。
+```bash
+profiledeck-cli profile delete <profile-id> --yes
+```
 
-删除只会更改 ProfileDeck 保存的数据，并会清除引用该 Profile 的已完成操作记录；它不会退出工具登录、替换当前设置或删除工具工作文件。
-
-## ProfileDeck 会修改什么
-
-创建、编辑或 Fork Profile 时，只会更改 ProfileDeck 保存的数据。确认切换或恢复未完成切换后，ProfileDeck 才可能修改所选工具正在使用的登录或文件。
-
-每次修改前，ProfileDeck 都会根据工具当前状态重新检查并创建临时操作恢复点。正常流程请参阅[审核并切换](../operations/switching.md)；操作未完成时请参阅[诊断与恢复](../operations/recovery.md)。成功切换不能撤销。
+删除会从所有工具中移除完整的 Profile，以及只有它使用的已保存登录和配置集；共享数据保留。当前 Profile 或仍被未完成切换引用的 Profile 不能删除。删除不会退出工具登录，也不会更改工具正在使用的文件。
 
 ## 本地数据
 
-Profile、配置集、已保存登录、偏好设置、用量报告和操作历史都保存在 ProfileDeck 本地数据目录中。受支持工具仍然拥有自己正在使用的文件和系统凭据条目。
-
-已保存数据、操作恢复点和加密应用备份都可能包含完整登录数据。复制、导出或删除 ProfileDeck 数据前，请阅读[数据与安全](../reference/data-security.md)。
+ProfileDeck 在本地保存 Profile、登录、设置、用量报告和备份。当前数据库和未完成切换的恢复数据可能包含完整登录内容。复制或分享这些文件前，请阅读[数据与安全](../reference/data-security.md)。

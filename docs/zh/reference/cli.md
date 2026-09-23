@@ -1,215 +1,56 @@
 # CLI 参考
 
-本页用于查找命令名称和常用选项。请运行 `profiledeck-cli --help` 或 `profiledeck-cli <command> --help`，查看当前安装版本包含的准确帮助；如果与本页不同，以安装版本的帮助为准。
+运行 `profiledeck-cli --help` 或 `profiledeck-cli <command> --help` 可查看当前安装版本支持的完整语法。全局选项放在命令前：
 
-尖括号表示必填值，方括号表示可选参数。
+- `--config-dir <directory>` 使用 `<directory>/profiledeck` 保存应用数据。
+- `--grok-home <directory>` 指定 Grok Build Home，优先于 `GROK_HOME` 和 `~/.grok`。
 
-## 全局选项
+将尖括号中的值替换为自己的 ID 或路径。
 
-所有命令都支持：
+脚本需要结构化结果时，为支持该选项的命令添加 `--json`。
 
-```text
---config-dir string  Use a custom ProfileDeck config directory
---grok-home string   Use a custom Grok Build Home
-```
-
-`--config-dir` 是用户配置根目录。ProfileDeck 会在其下创建或使用 `profiledeck` 文件夹。
-
-`--grok-home` 会覆盖 `GROK_HOME` 和默认的 `~/.grok` 位置。全局选项应放在命令名称前。
-
-## 命令
-
-| 命令 | 用途 |
-| --- | --- |
-| `antigravity` | 保存和管理 Antigravity Profile。 |
-| `backup` | 创建、导出、恢复和管理加密应用备份。 |
-| `claude-code` | 保存和管理 Claude Code 账号登录 Profile。 |
-| `codex` | 管理 Codex Profile 和已保存设置（配置集）。 |
-| `doctor` | 诊断本地数据、权限和中断操作的问题。 |
-| `grok-build` | 管理 Grok Build Profile 和已保存设置（配置集）。 |
-| `init` | 创建 ProfileDeck 本地数据。 |
-| `provider` | 为其他 AI 工具配置高级文件切换。 |
-| `profile` | 管理 Profile 和高级文件目标。 |
-| `recover` | 处理被中断或失败的切换。 |
-| `status` | 检查 ProfileDeck 是否已初始化。 |
-| `switch` | 预览或应用 Profile 切换。 |
-| `usage` | 导入和报告本地 Codex 用量。 |
-| `version` | 输出版本信息。 |
-
-## 初始化与状态
+## 初始化与 Profile
 
 ```bash
-profiledeck-cli init [--json]
-profiledeck-cli status [--json]
-profiledeck-cli version
+profiledeck-cli init
+profiledeck-cli status
+profiledeck-cli codex detect
+profiledeck-cli codex profile create work
+profiledeck-cli codex profile list
+profiledeck-cli switch codex work --dry-run
+profiledeck-cli switch codex work --yes
 ```
 
-## Codex
+把 `codex` 换成 `claude-code`、`antigravity` 或 `grok-build`，即可使用对应工具的 Profile 命令。每种工具还提供 `profile show`、`profile save-current` 和 `profile delete`。删除会移除跨工具的完整全局 Profile；见[Profile 与设置](../guide/concepts.md)。切换预览可选，成功切换不能撤销。
+
+Codex 和 Grok Build 还提供 `config-set` 管理、`profile set-config` 和 `profile fork`，用于共享或复制登录与设置。实用示例见 [Codex](../codex/profiles.md) 和 [Grok Build](../grok-build/profiles.md)。
+
+## 用量与价格
 
 ```bash
-profiledeck-cli codex detect [--codex-dir PATH] [--json]
-profiledeck-cli codex profile list [--json]
-profiledeck-cli codex profile show <profile-id> [--json]
-profiledeck-cli codex profile create <profile-id> [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
-profiledeck-cli codex profile fork <source-profile-id> <destination-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
-profiledeck-cli codex profile save-current [--codex-dir PATH] [--json]
-profiledeck-cli codex profile set-config <profile-id> <config-set-id> [--json]
-profiledeck-cli codex profile delete <profile-id> --yes [--json]
-
-profiledeck-cli codex config-set list [--json]
-profiledeck-cli codex config-set show <config-set-id> [--json]
-profiledeck-cli codex config-set create <config-set-id> [--codex-dir PATH] [--name NAME] [--description TEXT] [--json]
-profiledeck-cli codex config-set copy <source-id> <new-id> [--name NAME] [--description TEXT] [--json]
-profiledeck-cli codex config-set update <config-set-id> [--name NAME] [--description TEXT] [--json]
-profiledeck-cli codex config-set delete <config-set-id> --yes [--json]
+profiledeck-cli usage sync codex
+profiledeck-cli usage sync grok-build
+profiledeck-cli usage summary --provider grok-build
+profiledeck-cli usage report --provider grok-build --range 30d
+profiledeck-cli usage pricing check
+profiledeck-cli usage pricing auto off
 ```
 
-第一次运行 `profile create` 会保存当前 Codex 登录和设置，并创建 `shared` 配置集。后续创建默认复用当前配置集，除非传入 `--new-config-set`。
+报告可使用 `--provider codex` 或 `--provider grok-build`，默认是 Codex。范围可选 `today`、`7d`、`30d`、`all`。估算限制见 [Codex](../codex/usage-cost.md) 或 [Grok Build](../grok-build/usage-cost.md)。
 
-`fork` 要求同时选择登录和配置集的处理方式，且至少一项必须是 `copy-new`。目标可以是新 Profile，也可以是尚无 Codex 数据的现有 Profile。复用 Profile 时，省略 `--name` 或 `--description` 会保留相应详情。复制设置时还必须提供 `--new-config-set`。`save-current` 保存 Codex 当前使用的登录和设置；`set-config` 只能更改非当前 Profile。
-
-`config-set create` 保存当前 `config.toml`。列表和详情命令只返回安全摘要。只有未被任何 Profile 使用的配置集才能删除。
-
-任务示例与安全说明见 [Codex Profile](../codex/profiles.md)。
-
-## Grok Build
+## 备份与恢复
 
 ```bash
-profiledeck-cli grok-build detect [--json]
-profiledeck-cli grok-build profile list [--json]
-profiledeck-cli grok-build profile show <profile-id> [--json]
-profiledeck-cli grok-build profile create <profile-id> [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--name NAME] [--description TEXT] [--json]
-profiledeck-cli grok-build profile fork <source-profile-id> <destination-profile-id> --credential-binding share-parent|copy-new --config-binding share-parent|copy-new [--new-config-set ID] [--config-set-name NAME] [--config-set-description TEXT] [--name NAME] [--description TEXT] [--json]
-profiledeck-cli grok-build profile save-current [--json]
-profiledeck-cli grok-build profile set-config <profile-id> <config-set-id> [--json]
-profiledeck-cli grok-build profile delete <profile-id> --yes [--json]
-
-profiledeck-cli grok-build config-set list [--json]
-profiledeck-cli grok-build config-set show <config-set-id> [--json]
-profiledeck-cli grok-build config-set create <config-set-id> [--name NAME] [--description TEXT] [--json]
-profiledeck-cli grok-build config-set copy <source-id> <new-id> [--name NAME] [--description TEXT] [--json]
-profiledeck-cli grok-build config-set update <config-set-id> [--name NAME] [--description TEXT] [--json]
-profiledeck-cli grok-build config-set delete <config-set-id> --yes [--json]
+profiledeck-cli doctor
+profiledeck-cli backup create
+profiledeck-cli backup list
+profiledeck-cli backup export <backup-id> --output <私有文件>
+profiledeck-cli backup key export --output <私有密钥文件> --yes
+profiledeck-cli backup restore <backup-id> --yes
 ```
 
-第一次运行 `profile create` 会保存当前基于文件的登录并使用 `shared` 配置集。如果 `shared` 尚不存在，ProfileDeck 会根据当前 `config.toml` 创建；文件缺失时会保存为空设置。预先创建的 `shared` 会原样复用。后续创建默认复用当前 Profile 的已保存配置集，不读取或覆盖当前 `config.toml`；传入 `--new-config-set` 时才会保存当前设置。`auth.json` 必须存在、非空且有效。
+备份已加密，但密钥必须单独转移。在目标电脑上运行 `profiledeck-cli backup key import --file <私有密钥文件> --yes`。恢复不会修改工具自己的文件或登录。只有[诊断](../operations/recovery.md)明确建议时，才运行 `recover <operation-id> --yes`、`doctor repair-lock --yes` 或 `doctor retry-cleanup --yes`。
 
-`fork` 要求同时选择登录和配置集的处理方式，且至少一项必须是 `copy-new`。目标可以是新 Profile，也可以是尚无 Grok Build 数据的现有 Profile。复用 Profile 时，省略 `--name` 或 `--description` 会保留相应详情。`save-current` 要求 `auth.json` 有效，并且 `config.toml` 存在且有效；空的 `config.toml` 仍然有效。任一条件不满足时，已保存的登录和设置都不会改变。配置集列表和详情输出不会包含 `config.toml`。
+## 其他配置文件
 
-需要时，请把 `--grok-home` 放在 `grok-build` 前：
-
-```bash
-profiledeck-cli --grok-home /path/to/grok-home grok-build detect
-```
-
-Provider 会一直绑定到首次初始化使用的 Home。当设置了 `GROK_AUTH` 或 `GROK_AUTH_PATH` 时，创建 Profile、`save-current` 和切换不可用。切换与安全说明见 [Grok Build Profile](../grok-build/profiles.md)。
-
-## Claude Code
-
-```bash
-profiledeck-cli claude-code detect [--json]
-profiledeck-cli claude-code profile create <profile-id> [--name NAME] [--description TEXT] [--json]
-profiledeck-cli claude-code profile list [--json]
-profiledeck-cli claude-code profile show <profile-id> [--json]
-profiledeck-cli claude-code profile update <profile-id> [--name NAME] [--description TEXT] [--json]
-profiledeck-cli claude-code profile save-current [--yes] [--json]
-profiledeck-cli claude-code profile delete <profile-id> --yes [--json]
-```
-
-`create` 保存当前 Claude Code 账号登录，并把新 Profile 设为当前 Profile。`save-current` 更新当前 Profile 使用的登录。如果该登录被共享，命令会报告受影响的 Profile 数量，并要求传入 `--yes`。
-
-Claude Code 没有 `claude` 别名。如需预览，请运行 `profiledeck-cli switch claude-code <profile-id> --dry-run`；应用时运行 `profiledeck-cli switch claude-code <profile-id> --yes`。命令只显示登录状态和安全元数据，不会显示令牌值。
-
-登录要求与验证方式见 [Claude Code Profile](../claude-code/profiles.md)。
-
-## Antigravity
-
-```bash
-profiledeck-cli antigravity detect [--json]
-profiledeck-cli antigravity profile list [--json]
-profiledeck-cli antigravity profile show <profile-id> [--json]
-profiledeck-cli antigravity profile create <profile-id> [--name NAME] [--description TEXT] [--json]
-profiledeck-cli antigravity profile update <profile-id> [--name NAME] [--description TEXT] [--json]
-profiledeck-cli antigravity profile save-current [--json]
-profiledeck-cli antigravity profile delete <profile-id> --yes [--json]
-```
-
-`agy` 是 `antigravity` 的别名。`create` 和 `save-current` 要求 Antigravity 当前存在有效的个人 OAuth 登录。输出只显示安全元数据，不会打印登录内容。
-
-兼容性和切换建议见 [Antigravity Profile](../antigravity/profiles.md)。
-
-## 预览与切换
-
-```bash
-profiledeck-cli switch --dry-run [--json] <provider-id> <profile-id>
-profiledeck-cli switch --yes [--plan-fingerprint FINGERPRINT] [--json] <provider-id> <profile-id>
-```
-
-`switch --dry-run` 是可选的只读预览。使用 `switch --yes` 应用变更。如果希望 ProfileDeck 在检查后状态发生变化时拒绝切换，请传入预览返回的指纹。
-
-## 用量
-
-```bash
-profiledeck-cli usage sync codex [--codex-dir PATH] [--json]
-profiledeck-cli usage sync grok-build [--json]
-profiledeck-cli --grok-home PATH usage sync grok-build [--json]
-profiledeck-cli usage summary [--provider codex|grok-build] [--json]
-profiledeck-cli usage report [--provider codex|grok-build] [--range today|7d|30d|all] [--json]
-```
-
-目前只支持本地 Codex 和 Grok Build 用量，缺省 Provider 仍为 Codex。`report` 默认范围为 `7d`；`summary` 提供更简短的全量视图。报告字段和估算限制见 [Codex 用量与成本](../codex/usage-cost.md) 或 [Grok Build 用量与成本](../grok-build/usage-cost.md)。
-
-## 其他工具与配置文件
-
-以下命令是面向其他工具的高级 CLI 功能。Codex、Claude Code、Antigravity 和 Grok Build 必须使用上方各自的专用命令；通用文件目标命令不能管理它们保存的登录或设置。
-
-```bash
-profiledeck-cli provider list [--json]
-profiledeck-cli provider show <id> [--json]
-profiledeck-cli provider create <id> [--name NAME] [--adapter ID] [--metadata-json JSON] [--json]
-profiledeck-cli provider update <id> [--name NAME] [--adapter ID] [--metadata-json JSON] [--json]
-profiledeck-cli provider delete <id> --yes [--json]
-
-profiledeck-cli profile list [--json]
-profiledeck-cli profile show <id> [--json]
-profiledeck-cli profile create <id> [--name NAME] [--description TEXT] [--metadata-json JSON] [--json]
-profiledeck-cli profile update <id> [--name NAME] [--description TEXT] [--metadata-json JSON] [--json]
-profiledeck-cli profile delete <id> --yes [--json]
-```
-
-删除 Provider 会清除全部由它拥有的 ProfileDeck 数据，包括设置、已保存资源及绑定、文件目标、当前 Profile 状态、用量报告和已完成操作记录。全局 Profile、桌面端 Agent 偏好，以及工具当前使用的登录、设置和文件会保留。Provider 存在未完成操作时，删除会停止。
-
-以上五种 Profile 删除命令执行同一个全局删除。即使 Profile 只包含其他 Agent 的数据，从某个 Agent 命令进入也会删除整个 Profile。Profile 是任一 Agent 的当前 Profile，或存在未完成操作时，删除会停止。只有该 Profile 使用的已保存登录和配置集会一并删除；共享数据和无关的未绑定数据会保留。引用该 Profile 的已完成操作记录也会删除。工具当前使用的登录、设置和文件不会改变。
-
-文件目标命令：
-
-```bash
-profiledeck-cli profile target add <profile-id> <target-id> --provider ID --path PATH --format FORMAT --strategy STRATEGY --value-json JSON [--disabled] [--metadata-json JSON] [--json]
-profiledeck-cli profile target list <profile-id> [--provider ID] [--all] [--json]
-profiledeck-cli profile target show <profile-id> <provider-id> <target-id> [--json]
-profiledeck-cli profile target update <profile-id> <provider-id> <target-id> [--path PATH] [--format FORMAT] [--strategy STRATEGY] [--value-json JSON] [--enabled] [--disabled] [--metadata-json JSON] [--json]
-profiledeck-cli profile target delete <profile-id> <provider-id> <target-id> --yes [--json]
-```
-
-添加文件目标前，请先阅读[其他配置文件](../guide/generic-targets.md)。
-
-## 备份、诊断与恢复
-
-```bash
-profiledeck-cli backup create [--json]
-profiledeck-cli backup list [--json]
-profiledeck-cli backup show <backup-id> [--json]
-profiledeck-cli backup export <backup-id> --output <file> [--json]
-profiledeck-cli backup restore [<backup-id> | --file <file>] --yes [--json]
-profiledeck-cli backup delete <backup-id> --yes
-profiledeck-cli backup key status [--json]
-profiledeck-cli backup key export --output <file> --yes [--json]
-profiledeck-cli backup key import --file <file> [--replace] --yes [--json]
-profiledeck-cli doctor [--json]
-profiledeck-cli doctor repair-lock --yes [--json]
-profiledeck-cli recover <operation-id> --yes [--json]
-```
-
-应用备份包含完整的 ProfileDeck 数据库，但不包含工具自己的工作文件或系统凭据存储条目。把备份移到其他系统前，请单独导出恢复密钥。替换不同密钥时必须同时传入 `--replace` 和 `--yes`；当前密钥将无法打开旧密钥加密的备份。
-
-`recover` 只处理“诊断”报告的未完成切换。成功切换不能撤销。不同状态下的安全操作见[诊断与恢复](../operations/recovery.md)。
+`provider` 和 `profile target` 命令用于其他工具的高级本地文件切换，不能管理 Codex、Claude Code、Antigravity 或 Grok Build 已受管的登录与设置。可运行的示例见[切换其他配置文件](../guide/generic-targets.md)。

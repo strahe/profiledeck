@@ -12,7 +12,7 @@ Use this guide to prepare and submit changes to ProfileDeck.
 
 Install these prerequisites:
 
-- Go 1.26, as declared in `go.mod`
+- Go 1.27, as declared in `go.mod`
 - Node.js 26 with npm, as used by the CI workflows
 - Make
 - The `golangci-lint` and `wails3` versions declared in `Makefile` when working on the full Desktop application
@@ -34,7 +34,7 @@ Desktop builds require platform development libraries. The Linux packages used b
 - Keep each change focused on one problem.
 - Follow the style and structure of the surrounding code.
 - Add tests for meaningful behavior and regressions.
-- Update documentation when commands, setup, behavior, or supported workflows change.
+- Update relevant docs when workflows or developer contracts change. In user docs, keep each fact in one place and cover only changed tasks, prerequisites, results, limitations, or recovery actions; omit obvious UI navigation.
 - Use synthetic or redacted test data. Do not commit credentials, personal data, runtime databases, exports, backups, logs, or local build output.
 
 ## Validate Changes

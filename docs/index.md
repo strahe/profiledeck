@@ -11,8 +11,6 @@ ProfileDeck saves local AI coding tool logins and settings as Profiles, then let
 | Linux portable Desktop | Desktop only; in-app updates in a user directory | [Portable Desktop](./guide/getting-started.md#portable-desktop) |
 | CLI source build | Terminal workflows and automation | [Build and use the CLI](./guide/getting-started.md#build-and-use-the-cli) |
 
-The Universal Desktop app requires macOS 14 or later and runs natively on Apple silicon and Intel Macs. Linux packages and portable Desktop installs require amd64 plus GTK 4 and WebKitGTK 6.0. The CLI requires Go 1.27 and Make when building from source.
-
 ## Supported tools
 
 | Tool | What ProfileDeck switches | What stays unchanged |
@@ -22,26 +20,4 @@ The Universal Desktop app requires macOS 14 or later and runs natively on Apple 
 | Antigravity | A consumer OAuth login | Sign-in flow, settings, quotas, Manager data, and SSH or container login files |
 | Grok Build | A file-based login and reusable user-level settings | Sessions, logs, plugins, project settings, managed configuration, and quotas |
 
-Codex and Grok Build usage reports are separate from Profile switching. They summarize local session data without assigning activity to a Profile, saved login, or account.
-
-The Desktop app can also show temporary usage-limit snapshots for the current Codex or Antigravity Profile. These checks do not change limits or add activity attribution.
-
-## What happens when you switch
-
-1. Review what will change. Login values remain hidden.
-2. Confirm the switch. ProfileDeck checks the current files or login again.
-3. ProfileDeck creates a temporary recovery point before changing the selected tool.
-4. The selected Profile becomes current only after the change succeeds.
-
-If a change does not finish, open Diagnostics or run `profiledeck-cli doctor` before switching again.
-
-## Continue
-
-- [Get started](./guide/getting-started.md)
-- [Understand Profiles, logins, and settings](./guide/concepts.md)
-- [Manage Codex Profiles](./codex/profiles.md)
-- [Manage Claude Code Profiles](./claude-code/profiles.md)
-- [Manage Antigravity Profiles](./antigravity/profiles.md)
-- [Manage Grok Build Profiles](./grok-build/profiles.md)
-- [Review Grok Build usage and estimated cost](./grok-build/usage-cost.md)
-- [Review data and security](./reference/data-security.md)
+See [Getting Started](./guide/getting-started.md) for the first Profile, [Switching](./operations/switching.md) before changing a tool, and [Local Data and Security](./reference/data-security.md) before moving saved data.

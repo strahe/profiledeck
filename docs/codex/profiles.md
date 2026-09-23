@@ -1,151 +1,65 @@
 # Codex Profiles
 
-A Codex Profile saves one login and one set of reusable Codex settings, called a Config Set. The login and settings can be shared or copied independently when you fork them to a destination Profile.
-
-Each Config Set contains only the user-level `config.toml`. Sessions, logs, skills, plugin caches, project `.codex/config.toml` files, and system policy are not included.
+A Codex Profile saves one login and one reusable set of user-level `config.toml` settings, called a Config Set. Sessions, logs, skills, plugins, project settings, and system policy are not included.
 
 ## Before you start
 
-Codex must store its login in `auth.json`. If that file is missing, add this setting to `$CODEX_HOME/config.toml`, then sign in again:
+Codex must save its login in `auth.json` and have a valid `config.toml`. If `auth.json` is missing, add this setting to `$CODEX_HOME/config.toml` and sign in again:
 
 ```toml
 cli_auth_credentials_store = "file"
 ```
 
-Use the Codex login command for the sign-in method you want to save:
+Use the login command for the account type you need:
 
 ```bash
-# ChatGPT
 codex login
-
-# OpenAI API key
 printenv OPENAI_API_KEY | codex login --with-api-key
-
-# Codex access token
 printf '%s' "$CODEX_ACCESS_TOKEN" | codex login --with-access-token
 ```
 
-ProfileDeck can save and switch these file-backed sign-ins. Supplying `OPENAI_API_KEY` or `CODEX_ACCESS_TOKEN` to a Codex process without running the matching login command does not create `auth.json`, so there is no login for ProfileDeck to save.
+Passing an API key or access token only as an environment variable does not create `auth.json`. CLI commands look for Codex files in `--codex-dir`, `CODEX_HOME`, then `~/.codex`.
 
-ProfileDeck also requires a valid `config.toml`. CLI commands resolve the Codex home in this order:
-
-1. `--codex-dir`
-2. `CODEX_HOME`
-3. `~/.codex`
-
-## Save a Profile in Desktop
-
-1. Select **Codex → Profiles**.
-2. Choose **New Profile**.
-3. Enter a permanent Profile ID and a display name.
-4. For the first Profile, save the current Codex settings in the default `shared` Config Set.
-
-The first Profile becomes current. To save another login, run the appropriate Codex login command, return to ProfileDeck, and save another Profile. Reuse the current Config Set when both logins should use the same settings, or save a new Config Set when the settings must change independently.
-
-## Save a Profile with the CLI
+## Save Profiles
 
 ```bash
-profiledeck-cli init
-profiledeck-cli codex detect
 profiledeck-cli codex profile create work
 ```
 
-The first Profile saves the current login and settings, creates the `shared` Config Set, and becomes current. Later Profiles reuse the current Config Set by default:
+The first Profile saves the current login and settings in a `shared` Config Set. After signing in to another account, create another Profile. It reuses the current Config Set unless you request a separate one:
 
 ```bash
-# Run the appropriate Codex login command first.
 profiledeck-cli codex profile create personal
+profiledeck-cli codex profile create client --new-config-set client
 ```
 
-Save the current settings separately when needed:
-
-```bash
-profiledeck-cli codex profile create client \
-  --new-config-set client \
-  --config-set-name "Client"
-```
-
-## Manage Config Sets
-
-In Desktop, open **Config Sets** from the Codex Profiles page. You can create, copy, rename, or delete saved settings. A Config Set cannot be deleted while a Profile uses it.
-
-The equivalent CLI commands show summaries without printing the complete settings:
-
-```bash
-profiledeck-cli codex config-set list
-profiledeck-cli codex config-set show shared
-profiledeck-cli codex config-set create experimental --name "Experimental"
-profiledeck-cli codex config-set copy shared local --name "Local"
-profiledeck-cli codex config-set update local --description "Local models"
-profiledeck-cli codex config-set delete local --yes
-```
-
-Choose different saved settings for an inactive Profile with:
-
-```bash
-profiledeck-cli codex profile set-config work shared
-```
+Shared Config Set changes affect every Profile using it. To give an existing inactive Profile different saved settings, use `profiledeck-cli codex profile set-config <profile-id> <config-set-id>`. See [Profiles and Config Sets](../guide/concepts.md) for sharing and deletion effects.
 
 ## Fork a Profile
 
-Forking adds saved Codex data to a destination Profile. The destination can be new, or it can be an existing Profile that does not already contain Codex data. Any data for other Agents remains unchanged. Copy the login or Config Set when the destination Profile must be able to change that item without affecting the source Profile.
-
-Desktop presents the share-or-copy choice in the Fork form. In the CLI, at least one item must use `copy-new`:
+Forking adds Codex data to a new Profile or to an existing Profile without Codex data. Choose whether the login and settings should be shared or copied; at least one must be copied. For example, to share the login and copy the settings:
 
 ```bash
-profiledeck-cli codex profile fork work client-login \
-  --credential-binding copy-new \
-  --config-binding share-parent
-
-profiledeck-cli codex profile fork work client-config \
+profiledeck-cli codex profile fork work client \
   --credential-binding share-parent \
   --config-binding copy-new \
-  --new-config-set client-config
+  --new-config-set client
 ```
 
 ## Save changes and switch
 
-Codex continues to use normal `auth.json` and `config.toml` files. Before switching away, ProfileDeck preserves valid changes made to the current login or settings.
-
-To save before signing in to a different account or replacing these files, open the current Profile's **…** menu and choose **Save Current Login and Settings**, or run:
+Codex keeps using its normal `auth.json` and `config.toml`. ProfileDeck saves valid changes from the current Profile when you switch away. To save them before signing in to another account or replacing those files, run:
 
 ```bash
 profiledeck-cli codex profile save-current
 ```
 
-In Desktop, choose **Use Profile**, review the hidden-value preview, and confirm. In the CLI:
-
-```bash
-profiledeck-cli switch codex work --dry-run
-profiledeck-cli switch codex work --yes
-```
-
-The `--dry-run` preview is optional and read-only. To require the switch to match an earlier preview, pass its fingerprint:
-
-```bash
-profiledeck-cli switch codex work \
-  --plan-fingerprint <fingerprint> \
-  --yes
-```
-
-If the current `auth.json` or `config.toml` is missing or invalid, the preview warns that it will not be saved; a confirmed switch can recreate it from the selected Profile. ProfileDeck stops before writing when the current state is unsupported, cannot be checked safely, or changes after review. Open Diagnostics or run `profiledeck-cli doctor` before retrying.
-
-## Delete a Profile
-
-Open a Profile's action menu in Desktop and choose **Delete Profile**, or run:
-
-```bash
-profiledeck-cli codex profile delete work --yes
-```
-
-This deletes the complete global Profile from every Agent, not only its Codex data. It also deletes saved logins and Config Sets used only by that Profile, while shared saved data remains. A current Profile or one with an unfinished operation cannot be deleted. Deletion does not change Codex `auth.json`, `config.toml`, or any other tool-owned working state.
+If either working file is missing or invalid, ProfileDeck warns that it will not capture that file. A switch can still restore valid files from the selected Profile. See [Review and Switch](../operations/switching.md) for the CLI command and recovery behavior.
 
 ## Check limits and keep a login active
 
-Desktop can check limits for ChatGPT Codex logins and compatible API Key services. ProfileDeck checks the current Profile once at startup and after a successful switch; use **Refresh limits** when you need a later result. A ChatGPT check can renew a supported Codex sign-in and save the refreshed login.
+Desktop can check limits for ChatGPT Codex logins and compatible API Key services. Current-Profile checks run at startup and after a switch. Automatic ChatGPT limit refresh and sign-in renewal are optional and off by default; otherwise later checks are manual. A ChatGPT check may renew and save the login.
 
-Set automatic limit refresh to Off, 5, 10, 30, or 60 minutes on the Profile detail page or under **Codex → Settings**. Managed ChatGPT logins can also enable **Renew sign-in automatically**. Both options are off by default and run only while ProfileDeck is open or hidden in the menu bar.
+For an API Key Profile with a custom absolute HTTP or HTTPS Base URL, a limit check sends the saved key to that URL's `/v1/usage`. API Key checks run only at startup, after switching, or manually. HTTP does not encrypt the key or response in transit. Codex access-token Profiles do not have automatic limit or login refresh.
 
-For an API Key Profile with an absolute custom HTTP or HTTPS Base URL, ProfileDeck makes one compatibility request to `/v1/usage` using the saved API Key. A compatible response can show the remaining quota or wallet balance, plan, expiry, and limit windows. API Key limits are checked only at startup, after switching, or when you refresh manually; they never use the automatic interval. An HTTP Base URL sends the API Key and response without transport encryption.
-
-Limit information is temporary and is not saved to disk or added to usage reports. API service responses are used only for the current snapshot; ProfileDeck does not import their historical usage. Codex access-token Profiles can be saved and switched, but their limits and sign-ins are not refreshed automatically.
+Limit snapshots are temporary and separate from [local usage reports](./usage-cost.md). They do not identify which Profile produced earlier activity.
