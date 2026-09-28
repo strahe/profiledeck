@@ -27,6 +27,7 @@ import (
 	codexconfig "github.com/strahe/profiledeck/internal/codex/config"
 	"github.com/strahe/profiledeck/internal/doctor"
 	grokconfig "github.com/strahe/profiledeck/internal/grokbuild/config"
+	"github.com/strahe/profiledeck/internal/pricing"
 	"github.com/strahe/profiledeck/internal/profile"
 	"github.com/strahe/profiledeck/internal/profiletarget"
 	"github.com/strahe/profiledeck/internal/provider"
@@ -734,7 +735,7 @@ func TestUsagePricingStatusAndAutomaticSetting(t *testing.T) {
 		decodeCLIJSON(t, []byte(output), &status)
 		return status
 	}
-	if status := read(); status["automatic"] != true || status["catalog_version"] != float64(1) {
+	if status := read(); status["automatic"] != true || status["catalog_version"] != float64(pricing.Embedded().CatalogVersion) {
 		t.Fatalf("initial price status = %#v", status)
 	}
 	if _, err := runCLI(t, "--config-dir", configDir, "usage", "pricing", "auto", "off"); err != nil {
@@ -2417,5 +2418,56 @@ func assertNoTargetToolConfigCreated(t *testing.T, configDir string) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("expected init not to create target tool config path %s, stat error: %v", path, err)
 		}
+	}
+}
+
+func TestClaudeCodeUsageCustomDirectoryDoesNotChangeBindingsOrLeakIdentifiers(t *testing.T) {
+	configDir := t.TempDir()
+	logDir := t.TempDir()
+	envDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", envDir)
+	project := filepath.Join(logDir, "projects", "project")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"assistant","requestId":"private-request-id","sessionId":"private-session-id","timestamp":"2026-09-24T12:00:00Z","message":{"id":"private-message-id","model":"claude-opus-5-5","content":[{"text":"discarded private answer"}],"stop_reason":null,"usage":{"input_tokens":70,"cache_read_input_tokens":20,"cache_creation_input_tokens":10,"output_tokens":1,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":10}}}}` + "\n"
+	if err := os.WriteFile(filepath.Join(project, "session.jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"--config-dir", configDir}
+	if _, err := runCLI(t, append(base, "init")...); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCLI(t, append(base, "usage", "pricing", "auto", "off")...); err != nil {
+		t.Fatal(err)
+	}
+	syncOut, err := runCLI(t, append(base, "usage", "sync", "claude-code", "--claude-dir", logDir, "--json")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var synced usage.UsageSyncResult
+	decodeCLIJSON(t, []byte(syncOut), &synced)
+	if synced.ImportedEvents != 1 || synced.ScannedFiles != 1 {
+		t.Fatalf("custom logs ignored: %+v", synced)
+	}
+	human, err := runCLI(t, append(base, "usage", "summary", "--provider", "claude-code")...)
+	if err != nil || !strings.Contains(human, "total tokens: at least 100") || !strings.Contains(human, "output tokens: unknown") || !strings.Contains(human, "incomplete events: 1") {
+		t.Fatalf("partial summary: %s, %v", human, err)
+	}
+	for _, out := range []string{syncOut, human} {
+		for _, private := range []string{logDir, "private-request-id", "private-session-id", "private-message-id", "discarded private answer"} {
+			if strings.Contains(out, private) {
+				t.Fatalf("usage output disclosed %q", private)
+			}
+		}
+	}
+	db, err := store.Open(context.Background(), filepath.Join(configDir, "profiledeck", "profiledeck.db"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	provider, err := db.GetProvider(context.Background(), "claude-code")
+	if err != nil || strings.Contains(provider.MetadataJSON, logDir) {
+		t.Fatalf("log override changed auth binding: %+v, %v", provider, err)
 	}
 }

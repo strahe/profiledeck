@@ -213,7 +213,7 @@ func applicationFor(cmd *urfavecli.Command) (*app.Application, error) {
 		grokHome = cmd.String(grokHomeFlagName)
 	}
 	application, err := app.New(app.Config{
-		ConfigDir: configDirValue(cmd), CodexDir: codexDir, GrokHome: grokHome,
+		ConfigDir: configDirValue(cmd), CodexDir: codexDir, GrokHome: grokHome, ClaudeDir: cmd.String(claudeDirFlagName),
 		AgentAccess: agent.AccessUnrestricted,
 	})
 	if err != nil {

@@ -601,6 +601,8 @@ func usageEventsToFactParams(sourceID int64, events []Event) []store.CreateUsage
 	facts := make([]store.CreateUsageFactParams, 0, len(events))
 	for _, event := range events {
 		facts = append(facts, store.CreateUsageFactParams{
+			TokenStatus: event.TokenStatus, CacheWrite5mTokens: event.CacheWrite5mTokens, CacheWrite1hTokens: event.CacheWrite1hTokens,
+			PricingEligible: event.PricingEligible, PriceSnapshot: event.PriceSnapshot,
 			EventKey:                 event.EventKey,
 			SourceID:                 sourceID,
 			SessionKey:               event.SessionID,

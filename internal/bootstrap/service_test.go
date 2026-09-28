@@ -304,7 +304,7 @@ func TestInitializeBacksUpPreviousBaselineBeforePricingCatalogMigration(t *testi
 				t.Fatalf("backup request = %#v", req)
 			}
 			snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
-			if len(snapshot.markers) != len(storemigrations.Migrations.Sorted())-1 ||
+			if len(snapshot.markers) != len(storemigrations.Migrations.Sorted())-2 ||
 				!snapshot.usageTable || !snapshot.grokUsageTable ||
 				!snapshot.usageObservationTable || !snapshot.reportedCostColumns || snapshot.pricingColumns ||
 				!snapshot.pathKeyIndex ||
@@ -318,7 +318,7 @@ func TestInitializeBacksUpPreviousBaselineBeforePricingCatalogMigration(t *testi
 	if err != nil {
 		t.Fatalf("apply pricing catalog migration: %v", err)
 	}
-	if result.MigrationsApplied != 1 || backups.calls != 1 {
+	if result.MigrationsApplied != 2 || backups.calls != 1 {
 		t.Fatalf("upgrade result = %#v, backups = %d", result, backups.calls)
 	}
 	snapshot := inspectDatabaseSnapshot(t, runtimeService.Paths().Database)
@@ -434,18 +434,30 @@ func createPreviousBaseline(t *testing.T, ctx context.Context, runtimeService *r
 		t.Fatalf("registered migrations = %d, want at least 2", len(registered))
 	}
 	execDatabaseStatements(t, runtimeService.Paths().Database,
+		`DROP TABLE claude_code_usage_import_files`,
+		`ALTER TABLE usage_facts DROP COLUMN token_status`,
+		`ALTER TABLE usage_facts DROP COLUMN cache_write_5m_tokens`,
+		`ALTER TABLE usage_facts DROP COLUMN cache_write_1h_tokens`,
+		`ALTER TABLE usage_facts DROP COLUMN pricing_eligible`,
+		`ALTER TABLE usage_facts DROP COLUMN price_snapshot_json`,
 		`ALTER TABLE usage_facts DROP COLUMN cache_creation_input_tokens`,
 		`ALTER TABLE usage_facts DROP COLUMN cache_write_input_tokens`,
 		`ALTER TABLE usage_facts DROP COLUMN pricing_catalog_version`,
 	)
 	execDatabaseStatements(t, runtimeService.Paths().Database,
-		`DELETE FROM bun_migrations WHERE name = '`+registered[len(registered)-1].Name+`'`,
+		`DELETE FROM bun_migrations WHERE name IN ('`+registered[len(registered)-1].Name+`','`+registered[len(registered)-2].Name+`')`,
 	)
 }
 
 func dropIncrementalUsageSchema(t *testing.T, path string) {
 	t.Helper()
 	execDatabaseStatements(t, path,
+		`DROP TABLE claude_code_usage_import_files`,
+		`ALTER TABLE usage_facts DROP COLUMN token_status`,
+		`ALTER TABLE usage_facts DROP COLUMN cache_write_5m_tokens`,
+		`ALTER TABLE usage_facts DROP COLUMN cache_write_1h_tokens`,
+		`ALTER TABLE usage_facts DROP COLUMN pricing_eligible`,
+		`ALTER TABLE usage_facts DROP COLUMN price_snapshot_json`,
 		`ALTER TABLE usage_facts DROP COLUMN cache_creation_input_tokens`,
 		`ALTER TABLE usage_facts DROP COLUMN cache_write_input_tokens`,
 		`ALTER TABLE usage_facts DROP COLUMN pricing_catalog_version`,

@@ -61,6 +61,8 @@ function usageReport(): UsageReportResult {
 			time_zone: "UTC",
 		},
 		summary: {
+ missing_output_cost_event_count: 0, missing_cache_ttl_event_count: 0, missing_cache_rate_event_count: 0,
+ token_total_status:"complete", output_tokens_status:"complete", incomplete_event_count:0, conflicting_event_count:0,
 			event_count: 1,
 			session_count: 1,
 			fresh_input_tokens: 1_000_000,
@@ -90,6 +92,7 @@ function usageReport(): UsageReportResult {
 		import: {
 			tracked_files: 1,
 			last_synced_at_unix_ms: 200,
+			invalid_reasons: {},
 			invalid_lines: 0,
 			unsupported_lines: 0,
 		},
@@ -232,6 +235,36 @@ describe("UsagePage initial sync", () => {
 		expect(screen.getByText("Known subtotal · some calls have no reported cost")).toBeInTheDocument();
 		expect(screen.getByText("Partial")).toBeInTheDocument();
 		expect(screen.queryByText(/complete cost for/)).not.toBeInTheDocument();
+	});
+
+	it("marks incomplete Claude totals and explains excluded conflicts", async () => {
+		const report = usageReport();
+		report.provider_id = "claude-code";
+		report.summary = {
+			...report.summary,
+			token_total_status: "partial",
+			output_tokens_status: "unknown",
+			incomplete_event_count: 1,
+			missing_output_cost_event_count: 1,
+			partial_cost_event_count: 1,
+			conflicting_event_count: 1,
+		};
+		report.import.invalid_lines = 42;
+		report.import.invalid_reasons = { cache_tokens_mismatch: 42 };
+		runtime.on.mockReturnValue(vi.fn());
+		backend.report.mockReturnValue(cancellable(Promise.resolve(report)));
+		backend.syncNow.mockReturnValue(cancellable(Promise.resolve(syncStatus({ provider_id: "claude-code", syncing: false }))));
+		render(UsagePage, {
+			providerID: "claude-code", providerName: "Claude Code", providerExists: true,
+			onOpenProfiles: vi.fn(), showError: vi.fn(),
+		}, { wrapper: TestProviders });
+		expect(await screen.findByText(/At least/)).toBeInTheDocument();
+		expect(screen.getByText("Current range: 1 requests have no final output token count in the logs. Input and cache tokens are included; output tokens and their cost are excluded.")).toBeInTheDocument();
+		await act(() => screen.getByRole("button", { name: "Show details" }).click());
+		expect(await screen.findByText(/42 usage records have a cache write total that differs/)).toBeInTheDocument();
+		expect(screen.queryByText(/partial estimate|invalid and|0 unsupported/)).not.toBeInTheDocument();
+		expect(screen.getByText("Conflicting requests: 1. Their tokens and costs are excluded from totals.")).toBeInTheDocument();
+		expect(screen.queryByText("Grok-reported cost")).not.toBeInTheDocument();
 	});
 
 });

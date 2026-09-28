@@ -117,6 +117,7 @@
 	const loadClaudeCodeProfiles = () => import("../profiles/ClaudeCodeProfiles.svelte");
 	const loadUsagePage = () => import("../usage/UsagePage.svelte");
 	const loadCodexSettings = () => import("../settings/CodexSettings.svelte");
+	const loadClaudeCodeSettings = () => import("../settings/ClaudeCodeSettings.svelte");
 	const loadGrokBuildSettings = () => import("../settings/GrokBuildSettings.svelte");
 	const loadGlobalSettings = () => import("./GlobalSettings.svelte");
 	const loadDiagnosticsPage = () => import("./DiagnosticsPage.svelte");
@@ -206,9 +207,9 @@
 		const enabled = new Set<string>(states.filter((state) => state.enabled).map((state) => String(state.manifest.id)));
 		return agents.filter((agent) => enabled.has(agent.id));
 	});
-	let activeAgentTab = $derived(workspaceRoute.view === "codex-settings" || workspaceRoute.view === "grok-build-settings"
+	let activeAgentTab = $derived(workspaceRoute.view === "codex-settings" || workspaceRoute.view === "grok-build-settings" || workspaceRoute.view === "claude-code-settings"
 		? "settings"
-		: workspaceRoute.view === "grok-build-usage"
+		: workspaceRoute.view === "grok-build-usage" || workspaceRoute.view === "claude-code-usage"
 			? "usage"
 		: workspaceRoute.view === "antigravity-profiles"
 			|| workspaceRoute.view === "claude-code-profiles"
@@ -225,9 +226,9 @@
 			?? grokBuildDetectResult?.provider_exists
 			?? false,
 	);
-	let usageProviderID = $derived(workspaceRoute.view === "grok-build-usage" ? grokBuildProviderID : codexProviderID);
-	let usageProviderName = $derived(workspaceRoute.view === "grok-build-usage" ? "Grok Build" : "Codex");
-	let usageProviderExists = $derived(workspaceRoute.view === "grok-build-usage" ? grokBuildProviderExists : codexProviderExists);
+	let usageProviderID = $derived(workspaceRoute.view === "claude-code-usage" ? claudeCodeProviderID : workspaceRoute.view === "grok-build-usage" ? grokBuildProviderID : codexProviderID);
+	let usageProviderName = $derived(workspaceRoute.view === "claude-code-usage" ? "Claude Code" : workspaceRoute.view === "grok-build-usage" ? "Grok Build" : "Codex");
+	let usageProviderExists = $derived(workspaceRoute.view === "claude-code-usage" ? (dashboard?.providers?.some((provider) => provider.id === claudeCodeProviderID) ?? false) : workspaceRoute.view === "grok-build-usage" ? grokBuildProviderExists : codexProviderExists);
 	let activeProfileID = $derived(
 		selectedAgent === "grok-build"
 			? grokBuildActiveProfileID
@@ -918,11 +919,11 @@
 	}
 
 	function selectAgentTab(value: string) {
-		if (selectedAgent !== "codex" && selectedAgent !== "grok-build") {
+		if (selectedAgent !== "codex" && selectedAgent !== "grok-build" && selectedAgent !== "claude-code") {
 			if (selectedAgent) void push(agentHome(selectedAgent));
 			return;
 		}
-		const basePath = selectedAgent === "grok-build" ? "/grok-build" : "/codex";
+		const basePath = `/${selectedAgent}`;
 		switch (value) {
 			case "profiles":
 				void push(`${basePath}/profiles`);
@@ -1170,7 +1171,7 @@
 					<Tabs.Root value={activeAgentTab} onValueChange={selectAgentTab}>
 						<Tabs.List variant="line" class="h-auto bg-transparent p-0">
 							<Tabs.Trigger value="profiles">{$_("tabs.profiles")}</Tabs.Trigger>
-							{#if selectedAgent === "codex" || selectedAgent === "grok-build"}
+							{#if selectedAgent === "codex" || selectedAgent === "grok-build" || selectedAgent === "claude-code"}
 								<Tabs.Trigger value="usage">{$_("tabs.usage")}</Tabs.Trigger>
 								<Tabs.Trigger value="settings">{$_("tabs.settings")}</Tabs.Trigger>
 							{/if}
@@ -1323,7 +1324,7 @@
 					{:catch}
 						<WorkspaceViewStatus state="error" />
 					{/await}
-				{:else if workspaceRoute.view === "usage" || workspaceRoute.view === "grok-build-usage"}
+				{:else if workspaceRoute.view === "usage" || workspaceRoute.view === "grok-build-usage" || workspaceRoute.view === "claude-code-usage"}
 					{#key `${usageProviderID}:${usageProviderExists}`}
 						{#await loadUsagePage()}
 							<WorkspaceViewStatus state="loading" />
@@ -1332,7 +1333,7 @@
 								providerID={usageProviderID}
 								providerName={usageProviderName}
 								providerExists={usageProviderExists}
-								onOpenProfiles={() => push(usageProviderID === grokBuildProviderID ? "/grok-build/profiles" : "/codex/profiles")}
+								onOpenProfiles={() => push(`/${usageProviderID}/profiles`)}
 								{showError}
 							/>
 						{:catch}
@@ -1354,6 +1355,19 @@
 						<GrokBuildSettings
 							providerExists={grokBuildProviderExists}
 							onOpenProfiles={() => push("/grok-build/profiles")}
+							{showError}
+							{showNotice}
+						/>
+					{:catch}
+						<WorkspaceViewStatus state="error" />
+					{/await}
+				{:else if workspaceRoute.view === "claude-code-settings"}
+					{#await loadClaudeCodeSettings()}
+						<WorkspaceViewStatus state="loading" />
+					{:then { default: ClaudeCodeSettings }}
+						<ClaudeCodeSettings
+							providerExists={(dashboard?.providers?.some((provider) => provider.id === claudeCodeProviderID) ?? false)}
+							onOpenProfiles={() => push("/claude-code/profiles")}
 							{showError}
 							{showNotice}
 						/>

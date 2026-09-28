@@ -13,6 +13,8 @@ describe("Workspace route policy", () => {
 		["/grok-build/profiles", "grok-build-profiles"],
 		["/antigravity/profiles", "antigravity-profiles"],
 		["/claude-code/profiles", "claude-code-profiles"],
+		["/claude-code/usage", "claude-code-usage"],
+		["/claude-code/settings", "claude-code-settings"],
 		["/codex/usage", "usage"],
 		["/codex/settings", "codex-settings"],
 		["/grok-build/usage", "grok-build-usage"],
@@ -61,6 +63,8 @@ describe("Workspace route policy", () => {
 		expect(agentForWorkspace("grok-build-settings")).toBe("grok-build");
 		expect(agentForWorkspace("antigravity-profiles")).toBe("antigravity");
 		expect(agentForWorkspace("claude-code-profiles")).toBe("claude-code");
+		expect(agentForWorkspace("claude-code-usage")).toBe("claude-code");
+		expect(agentForWorkspace("claude-code-settings")).toBe("claude-code");
 		expect(agentForWorkspace("settings")).toBeNull();
 		expect(agentForWorkspace("diagnostics")).toBeNull();
 		expect(agentHome("codex")).toBe("/codex/profiles");

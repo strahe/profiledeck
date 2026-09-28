@@ -603,3 +603,24 @@ var stableBaselineTriggerSpecs = []triggerSpec{
 		},
 	},
 }
+
+var claudeCodeUsageImportTableSpec = func() tableSpec {
+	spec := copyTableSpec(usageIncrementalGrokBuildImportTableSpec)
+	spec.name = "claude_code_usage_import_files"
+	return spec
+}()
+
+var claudeCodeUsageFactTableSpec = func() tableSpec {
+	spec := copyTableSpec(pricingCatalogFactTableSpec)
+	spec.columns = append(spec.columns, columnSpec{name: "token_status", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"})
+	spec.checks = append(spec.checks, `CHECK (token_status BETWEEN 0 AND 3)`)
+	spec.columns = append(spec.columns, columnSpec{name: "cache_write_5m_tokens", columnType: "INTEGER"})
+	spec.checks = append(spec.checks, `CHECK (cache_write_5m_tokens IS NULL OR cache_write_5m_tokens >= 0)`)
+	spec.columns = append(spec.columns, columnSpec{name: "cache_write_1h_tokens", columnType: "INTEGER"})
+	spec.checks = append(spec.checks, `CHECK (cache_write_1h_tokens IS NULL OR cache_write_1h_tokens >= 0)`)
+	spec.columns = append(spec.columns, columnSpec{name: "pricing_eligible", columnType: "INTEGER", notNull: true, requireDefault: true, defaultValue: "0"})
+	spec.checks = append(spec.checks, `CHECK (pricing_eligible IN (0, 1))`)
+	spec.columns = append(spec.columns, columnSpec{name: "price_snapshot_json", columnType: "TEXT", notNull: true, requireDefault: true, defaultValue: "'{}'"})
+	spec.checks = append(spec.checks, `CHECK (CASE WHEN json_valid(price_snapshot_json) THEN json_type(price_snapshot_json) = 'object' AND length(CAST(price_snapshot_json AS BLOB)) <= 1024 ELSE 0 END)`)
+	return spec
+}()

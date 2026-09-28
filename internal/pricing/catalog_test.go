@@ -60,7 +60,7 @@ func TestCatalogRejectsOverlappingPeriodsAndVersionRollback(t *testing.T) {
 	if _, err := Parse(data); err == nil {
 		t.Fatal("overlapping price periods accepted")
 	}
-	if err := catalog.ValidateCompatibleVersion(2); err == nil {
+	if err := catalog.ValidateCompatibleVersion(catalog.CatalogVersion + 1); err == nil {
 		t.Fatal("older catalog accepted")
 	}
 }
@@ -84,5 +84,35 @@ func TestCatalogRejectsUnknownFieldsAndUnsafeSource(t *testing.T) {
 	changed, _ = json.Marshal(catalog)
 	if _, err := Parse(changed); err == nil {
 		t.Fatal("unverified Grok Build model mapping accepted")
+	}
+}
+
+func TestLegacyCatalogDoesNotInferOneHourCacheRate(t *testing.T) {
+	catalog := Embedded()
+	catalog.SchemaVersion = 1
+	for i := range catalog.Entries {
+		catalog.Entries[i].ShortContext.CacheWrite1h = nil
+		if catalog.Entries[i].LongContext != nil {
+			catalog.Entries[i].LongContext.Rates.CacheWrite1h = nil
+		}
+	}
+	data, err := json.Marshal(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at, _ := time.Parse("2006-01-02", "2026-09-24")
+	selected, ok := legacy.Select("claude-code", "claude-opus-5-5", at.UnixMilli())
+	if !ok || selected.Rates.CacheWrite == nil || *selected.Rates.CacheWrite != 5_000_000 || selected.Rates.CacheWrite1h != nil {
+		t.Fatalf("legacy rates: %+v", selected.Rates)
+	}
+	rate := "8"
+	catalog.Entries[0].ShortContext.CacheWrite1h = &rate
+	data, _ = json.Marshal(catalog)
+	if _, err := Parse(data); err == nil {
+		t.Fatal("v1 accepted one-hour rate")
 	}
 }

@@ -129,7 +129,31 @@ type UsageSource struct {
 	UnsupportedRecords    int64
 }
 
+type UsageTokenStatus int64
+
+const (
+	UsageTokensComplete UsageTokenStatus = iota
+	UsageTokensPartial
+	UsageTokensPartialConflict
+	UsageTokensFinalConflict
+)
+
+type UsagePriceSnapshot struct {
+	ModelKey     string `json:"model"`
+	Version      int64  `json:"version"`
+	Input        int64  `json:"input"`
+	CachedInput  *int64 `json:"cached_input,omitempty"`
+	CacheWrite5m *int64 `json:"cache_write_5m,omitempty"`
+	CacheWrite1h *int64 `json:"cache_write_1h,omitempty"`
+	Output       int64  `json:"output"`
+}
+
 type CreateUsageFactParams struct {
+	TokenStatus              UsageTokenStatus
+	CacheWrite5mTokens       *int64
+	CacheWrite1hTokens       *int64
+	PricingEligible          bool
+	PriceSnapshot            *UsagePriceSnapshot
 	EventKey                 UsageKey
 	SourceID                 int64
 	SessionKey               string
@@ -149,6 +173,7 @@ type CreateUsageFactParams struct {
 }
 
 type UsageInsertResult struct {
+	Updated    int
 	Inserted   int
 	Duplicates int
 }
@@ -1060,6 +1085,7 @@ func (s *Store) ListUnknownUsageCostModels(ctx context.Context, providerID strin
 			SELECT 1
 			FROM usage_facts f INDEXED BY idx_usage_facts_source_cost_model_id
 			WHERE f.source_id = m.source_id AND f.cost_status = ? AND f.model_id = m.id
+ AND (s.provider_id <> 'claude-code' OR (f.pricing_eligible=1 AND f.token_status IN (0,1)))
 			LIMIT 1
 		)
 		ORDER BY m.source_id ASC, m.id ASC

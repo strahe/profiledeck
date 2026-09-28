@@ -9,6 +9,8 @@ import (
 )
 
 type UsageSummary struct {
+	IncompleteEventCount      int64
+	ConflictingEventCount     int64
 	ProviderID                string
 	Sources                   []string
 	EventCount                int64
@@ -39,6 +41,11 @@ type UsageTimeBucket struct {
 }
 
 type UsageAggregate struct {
+	MissingOutputCostEventCount   int64
+	MissingCacheTTLEventCount     int64
+	MissingCacheRateEventCount    int64
+	IncompleteEventCount          int64
+	ConflictingEventCount         int64
 	EventCount                    int64
 	SessionCount                  int64
 	FreshInputTokens              int64
@@ -70,6 +77,7 @@ type UsageModelAggregate struct {
 }
 
 type UsageImportSummary struct {
+	InvalidReasons     map[string]int64
 	TrackedFiles       int64
 	LastSyncedAtUnixMS int64
 	InvalidLines       int64
@@ -115,6 +123,8 @@ func (s *Store) usageSummary(ctx context.Context, providerID string) (UsageSumma
 	if err != nil {
 		return UsageSummary{}, err
 	}
+	summary.IncompleteEventCount = aggregate.IncompleteEventCount
+	summary.ConflictingEventCount = aggregate.ConflictingEventCount
 	summary.EventCount = aggregate.EventCount
 	summary.InputTokens = aggregate.InputTokens
 	summary.CachedInputTokens = aggregate.CachedInputTokens
@@ -405,7 +415,27 @@ func (s *Store) queryUsageSourceSummary(ctx context.Context, sourceIDs []int64) 
 		&summary.InvalidLines,
 		&summary.UnsupportedLines,
 	)
-	return summary, err
+	if err != nil {
+		return summary, err
+	}
+	summary.InvalidReasons = make(map[string]int64)
+	where, args = usageSourceIDWhere("f", sourceIDs)
+	rows, err := s.executor().QueryContext(ctx, `SELECT reason.key, SUM(reason.value)
+		FROM claude_code_usage_import_files AS f, json_each(f.parser_state_json) AS reason
+		WHERE `+where+` GROUP BY reason.key`, args...)
+	if err != nil {
+		return summary, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var reason string
+		var count int64
+		if err := rows.Scan(&reason, &count); err != nil {
+			return summary, err
+		}
+		summary.InvalidReasons[reason] = count
+	}
+	return summary, rows.Err()
 }
 
 func usageSourceIDWhere(alias string, sourceIDs []int64) (string, []any) {
@@ -430,6 +460,16 @@ func usageIDWhere(column string, sourceIDs []int64) (string, []any) {
 func usageFactAggregateColumns(alias, undatedExpression string) string {
 	return fmt.Sprintf(`
 		COUNT(%[1]s.id),
+		COALESCE(SUM(CASE WHEN %[1]s.cost_status=%[3]d AND %[1]s.token_status=1 THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN %[1]s.cost_status=%[3]d AND %[1]s.cache_creation_input_tokens>0 AND %[1]s.cache_write_5m_tokens IS NULL AND %[1]s.price_snapshot_json<>'{}' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN %[1]s.cost_status=%[3]d AND (
+			%[1]s.price_snapshot_json='{}'
+			OR (%[1]s.cached_input_tokens>0 AND json_extract(%[1]s.price_snapshot_json,'$.cached_input') IS NULL)
+			OR (%[1]s.cache_write_5m_tokens>0 AND json_extract(%[1]s.price_snapshot_json,'$.cache_write_5m') IS NULL)
+			OR (%[1]s.cache_write_1h_tokens>0 AND json_extract(%[1]s.price_snapshot_json,'$.cache_write_1h') IS NULL)
+		) THEN 1 ELSE 0 END),0),
+ COALESCE(SUM(CASE WHEN %[1]s.token_status=1 THEN 1 ELSE 0 END),0),
+ COALESCE(SUM(CASE WHEN %[1]s.token_status IN (2,3) THEN 1 ELSE 0 END),0),
 		COUNT(DISTINCT %[1]s.session_id),
 		COALESCE(SUM(%[1]s.input_tokens - %[1]s.cached_input_tokens), 0),
 		COALESCE(SUM(%[1]s.input_tokens), 0),
@@ -467,6 +507,11 @@ func scanUsageAggregate(row rowScanner) (UsageAggregate, error) {
 func usageAggregateScanTargets(aggregate *UsageAggregate) []any {
 	return []any{
 		&aggregate.EventCount,
+		&aggregate.MissingOutputCostEventCount,
+		&aggregate.MissingCacheTTLEventCount,
+		&aggregate.MissingCacheRateEventCount,
+		&aggregate.IncompleteEventCount,
+		&aggregate.ConflictingEventCount,
 		&aggregate.SessionCount,
 		&aggregate.FreshInputTokens,
 		&aggregate.InputTokens,

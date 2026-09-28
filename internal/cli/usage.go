@@ -16,6 +16,7 @@ import (
 
 const (
 	codexDirFlagName   = "codex-dir"
+	claudeDirFlagName  = "claude-dir"
 	usageRangeFlagName = "range"
 )
 
@@ -69,6 +70,7 @@ func newUsageSyncCommand() *urfavecli.Command {
 		Commands: []*urfavecli.Command{
 			newUsageSyncCodexCommand(),
 			newUsageSyncGrokBuildCommand(),
+			newUsageSyncClaudeCodeCommand(),
 		},
 	}
 }
@@ -126,6 +128,33 @@ func newUsageSyncGrokBuildCommand() *urfavecli.Command {
 	}
 }
 
+func newUsageSyncClaudeCodeCommand() *urfavecli.Command {
+	return &urfavecli.Command{
+		Name:  "claude-code",
+		Usage: "Import Claude Code local session usage",
+		Flags: []urfavecli.Flag{
+			stringFlag(claudeDirFlagName, "Claude Code log directory"),
+			boolFlag(jsonFlagName, "Write JSON output"),
+		},
+		Action: func(ctx context.Context, cmd *urfavecli.Command) error {
+			application, err := applicationFor(cmd)
+			if err != nil {
+				return err
+			}
+			_, _ = application.Pricing().Check(ctx, false)
+			result, err := application.Usage().Sync(ctx, usage.UsageSyncRequest{ProviderID: "claude-code"})
+			if err != nil {
+				return err
+			}
+			w := outputWriter(cmd)
+			if cmd.Bool(jsonFlagName) {
+				return writeJSON(w, result)
+			}
+			return writeUsageSyncResult(w, result)
+		},
+	}
+}
+
 func newUsageSummaryCommand() *urfavecli.Command {
 	return &urfavecli.Command{
 		Name:  "summary",
@@ -157,12 +186,13 @@ func newUsageSummaryCommand() *urfavecli.Command {
 func writeUsageSyncResult(w io.Writer, result usage.UsageSyncResult) error {
 	if _, err := fmt.Fprintf(
 		w,
-		"Usage sync\nprovider: %s\nsource: %s\nscanned files: %d\nskipped unchanged files: %d\nimported events: %d\nskipped duplicate events: %d\nunsupported lines: %d\ninvalid lines: %d\nerrors: %d\n",
+		"Usage sync\nprovider: %s\nsource: %s\nscanned files: %d\nskipped unchanged files: %d\nimported events: %d\nupdated events: %d\nskipped duplicate events: %d\nunsupported lines: %d\ninvalid lines: %d\nerrors: %d\n",
 		result.ProviderID,
 		result.Source,
 		result.ScannedFiles,
 		result.SkippedUnchangedFiles,
 		result.ImportedEvents,
+		result.UpdatedEvents,
 		result.SkippedDuplicateEvents,
 		result.UnsupportedLines,
 		result.InvalidLines,
@@ -213,17 +243,20 @@ func writeUsageSummary(w io.Writer, result usage.UsageSummaryResult) error {
 	sources := strings.Join(result.Sources, ",")
 	if _, err := fmt.Fprintf(
 		w,
-		"Usage summary\nprovider: %s\nsource: %s\nsources: %s\nevents: %d\ninput tokens: %d\ncached input tokens: %d\noutput tokens: %d\ntotal tokens: %d\nAPI-equivalent cost status: %s\nAPI-equivalent estimated cost usd: %s\nunknown API-equivalent cost events: %d\n",
+		"Usage summary\nprovider: %s\nsource: %s\nsources: %s\nevents: %d\ninput tokens: %d\ncached input tokens: %d\noutput tokens: %s\ntotal tokens: %s\nincomplete events: %d\nconflicting events: %d\nAPI-equivalent cost status: %s\nAPI-equivalent estimated cost usd: %s\nknown API-equivalent estimated cost usd: %s\nunknown API-equivalent cost events: %d\n",
 		result.ProviderID,
 		result.Source,
 		sources,
 		result.EventCount,
 		result.InputTokens,
 		result.CachedInputTokens,
-		result.OutputTokens,
-		result.TotalTokens,
+		usageTokenValue(result.OutputTokens, result.OutputTokensStatus),
+		usageTokenValue(result.TotalTokens, result.TokenTotalStatus),
+		result.IncompleteEventCount,
+		result.ConflictingEventCount,
 		result.CostStatus,
 		cost,
+		result.KnownEstimatedCostUSD,
 		result.UnknownCostEventCount,
 	); err != nil {
 		return err
@@ -261,7 +294,7 @@ func writeUsageReport(w io.Writer, result usage.UsageReportResult) error {
 	}
 	if _, err := fmt.Fprintf(
 		w,
-		"Usage report\nprovider: %s\nrange: %s\ntime zone: %s\nevents: %d\nsessions: %d\nfresh input tokens: %d\ncached input tokens: %d\noutput tokens: %d\ntotal tokens: %d\ncache hit rate: %.1f%%\nknown API-equivalent estimated cost usd: %s\nAPI-equivalent cost status: %s\npricing coverage: %.1f%%\n%sundated events: %d\ntracked files: %d\nlast sync: %s\ninvalid lines: %d\nunsupported lines: %d\npricing basis: %s\n\nTrend\n",
+		"Usage report\nprovider: %s\nrange: %s\ntime zone: %s\nevents: %d\nsessions: %d\nfresh input tokens: %d\ncached input tokens: %d\noutput tokens: %s\ntotal tokens: %s\nincomplete events: %d\nconflicting events: %d\ncache hit rate: %.1f%%\nknown API-equivalent estimated cost usd: %s\nAPI-equivalent cost status: %s\npricing coverage: %.1f%%\n%sundated events: %d\ntracked files: %d\nlast sync: %s\ninvalid lines: %d\nunsupported lines: %d\npricing basis: %s\n",
 		result.ProviderID,
 		result.Range.Preset,
 		result.Range.TimeZone,
@@ -269,8 +302,10 @@ func writeUsageReport(w io.Writer, result usage.UsageReportResult) error {
 		result.Summary.SessionCount,
 		result.Summary.FreshInputTokens,
 		result.Summary.CachedInputTokens,
-		result.Summary.OutputTokens,
-		result.Summary.TotalTokens,
+		usageTokenValue(result.Summary.OutputTokens, result.Summary.OutputTokensStatus),
+		usageTokenValue(result.Summary.TotalTokens, result.Summary.TokenTotalStatus),
+		result.Summary.IncompleteEventCount,
+		result.Summary.ConflictingEventCount,
 		result.Summary.CacheHitRate*100,
 		result.Summary.KnownEstimatedCostUSD,
 		result.Summary.CostStatus,
@@ -286,6 +321,12 @@ func writeUsageReport(w io.Writer, result usage.UsageReportResult) error {
 		return err
 	}
 
+	if err := writeUsageReportNotes(w, result); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "\nTrend"); err != nil {
+		return err
+	}
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	showReportedCost := result.ProviderID == grokconfig.ProviderID
 	if showReportedCost {
@@ -297,15 +338,15 @@ func writeUsageReport(w io.Writer, result usage.UsageReportResult) error {
 	}
 	for _, point := range result.Trend {
 		if showReportedCost {
-			if _, err := fmt.Fprintf(table, "%s\t%d\t%d\t%d\t%d\t%s\t%s\n",
+			if _, err := fmt.Fprintf(table, "%s\t%d\t%d\t%s\t%s\t%s\t%s\n",
 				usageBucketLabel(result.Range, point.StartUnixMS), point.Summary.FreshInputTokens,
-				point.Summary.CachedInputTokens, point.Summary.OutputTokens, point.Summary.TotalTokens,
+				point.Summary.CachedInputTokens, usageTokenValue(point.Summary.OutputTokens, point.Summary.OutputTokensStatus), usageTokenValue(point.Summary.TotalTokens, point.Summary.TokenTotalStatus),
 				point.Summary.KnownEstimatedCostUSD, point.Summary.KnownReportedCostUSD); err != nil {
 				return err
 			}
-		} else if _, err := fmt.Fprintf(table, "%s\t%d\t%d\t%d\t%d\t%s\n",
+		} else if _, err := fmt.Fprintf(table, "%s\t%d\t%d\t%s\t%s\t%s\n",
 			usageBucketLabel(result.Range, point.StartUnixMS), point.Summary.FreshInputTokens,
-			point.Summary.CachedInputTokens, point.Summary.OutputTokens, point.Summary.TotalTokens,
+			point.Summary.CachedInputTokens, usageTokenValue(point.Summary.OutputTokens, point.Summary.OutputTokensStatus), usageTokenValue(point.Summary.TotalTokens, point.Summary.TokenTotalStatus),
 			point.Summary.KnownEstimatedCostUSD); err != nil {
 			return err
 		}
@@ -326,21 +367,59 @@ func writeUsageReport(w io.Writer, result usage.UsageReportResult) error {
 	}
 	for _, model := range result.Models {
 		if showReportedCost {
-			if _, err := fmt.Fprintf(table, "%s\t%d\t%d\t%.1f%%\t%s\t%s\t%s\t%s\n",
-				model.Model, model.Summary.SessionCount, model.Summary.TotalTokens,
+			if _, err := fmt.Fprintf(table, "%s\t%d\t%s\t%.1f%%\t%s\t%s\t%s\t%s\n",
+				model.Model, model.Summary.SessionCount, usageTokenValue(model.Summary.TotalTokens, model.Summary.TokenTotalStatus),
 				model.Summary.CacheHitRate*100, model.Summary.KnownEstimatedCostUSD,
 				model.Summary.CostStatus, model.Summary.KnownReportedCostUSD,
 				model.Summary.ReportedCostStatus); err != nil {
 				return err
 			}
-		} else if _, err := fmt.Fprintf(table, "%s\t%d\t%d\t%.1f%%\t%s\t%s\n",
-			model.Model, model.Summary.SessionCount, model.Summary.TotalTokens,
+		} else if _, err := fmt.Fprintf(table, "%s\t%d\t%s\t%.1f%%\t%s\t%s\n",
+			model.Model, model.Summary.SessionCount, usageTokenValue(model.Summary.TotalTokens, model.Summary.TokenTotalStatus),
 			model.Summary.CacheHitRate*100, model.Summary.KnownEstimatedCostUSD,
 			model.Summary.CostStatus); err != nil {
 			return err
 		}
 	}
 	return table.Flush()
+}
+
+func writeUsageReportNotes(w io.Writer, result usage.UsageReportResult) error {
+	for _, note := range []struct {
+		count int64
+		text  string
+	}{
+		{result.Summary.MissingOutputCostEventCount, "requests in this range have no final output token count; their output cost is excluded"},
+		{result.Summary.MissingCacheTTLEventCount, "requests in this range have no cache write duration; their cache write cost is excluded"},
+		{result.Summary.MissingCacheRateEventCount, "requests in this range have cache tokens without an applicable rate; those cache costs are excluded"},
+	} {
+		if note.count > 0 {
+			if _, err := fmt.Fprintf(w, "%d %s\n", note.count, note.text); err != nil {
+				return err
+			}
+		}
+	}
+	for _, reason := range []struct {
+		key  string
+		text string
+	}{
+		{"malformed_json", "malformed JSON"},
+		{"record_too_large", "record size exceeds the limit"},
+		{"invalid_fields", "incorrectly typed fields"},
+		{"invalid_tokens", "missing or invalid token counts"},
+		{"cache_tokens_mismatch", "cache write total differs from the 5-minute and 1-hour counts"},
+		{"iteration_tokens_mismatch", "inconsistent iteration token counts"},
+		{"invalid_identity", "invalid request identifiers"},
+		{"invalid_timestamp", "invalid timestamps"},
+		{"token_overflow", "token count exceeds the supported range"},
+	} {
+		if count := result.Import.InvalidReasons[reason.key]; count > 0 {
+			if _, err := fmt.Fprintf(w, "skipped across all scanned logs: %d records (%s)\n", count, reason.text); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func usageBucketLabel(resolved usage.UsageResolvedRange, unixMS int64) string {
@@ -360,5 +439,16 @@ func usageBucketLabel(resolved usage.UsageResolvedRange, unixMS int64) string {
 		return value.Format("2006")
 	default:
 		return value.Format("2006-01-02")
+	}
+}
+
+func usageTokenValue(value int64, status string) string {
+	switch status {
+	case "unknown":
+		return "unknown"
+	case "partial":
+		return fmt.Sprintf("at least %d", value)
+	default:
+		return fmt.Sprint(value)
 	}
 }

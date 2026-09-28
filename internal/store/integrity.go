@@ -297,7 +297,27 @@ var schemaContracts = func() []schemaContract {
 	pricingCatalog := reportedCost
 	pricingCatalog.migrationKey = "pricing_catalog"
 	pricingCatalog.tableSpecs = replaceTableSpec(pricingCatalog.tableSpecs, pricingCatalogFactTableSpec)
-	return []schemaContract{stable, grokBuild, incremental, observationParserRevision, reportedCost, pricingCatalog}
+	claudeCode := pricingCatalog
+	claudeCode.migrationKey = "claude_code_usage"
+	claudeCode.tableSpecs = replaceTableSpec(claudeCode.tableSpecs, claudeCodeUsageFactTableSpec)
+	claudeCode.tableSpecs = append(append([]tableSpec(nil), claudeCode.tableSpecs...), claudeCodeUsageImportTableSpec)
+	claudeCode.jsonQueries = append(append([]string(nil), pricingCatalog.jsonQueries...), `SELECT COUNT(1) FROM usage_facts WHERE NOT (`+jsonObjectExpression("price_snapshot_json")+`)`, claudeCodeUsageDiagnosticsViolationQuery)
+	claudeCode.referenceQueries = append(append([]string(nil), pricingCatalog.referenceQueries...), `SELECT COUNT(1) FROM claude_code_usage_import_files AS value WHERE NOT EXISTS (SELECT 1 FROM usage_sources WHERE usage_sources.id = value.source_id AND usage_sources.provider_id = 'claude-code' AND usage_sources.identity_revision = value.identity_revision)`)
+	claudeCode.stateQueries = append(append([]string(nil), pricingCatalog.stateQueries...), `SELECT COUNT(1) FROM usage_facts AS f JOIN usage_sources AS s ON s.id=f.source_id WHERE (s.provider_id <> 'claude-code' AND (f.token_status <> 0 OR f.price_snapshot_json <> '{}' OR f.cache_write_5m_tokens IS NOT NULL OR f.cache_write_1h_tokens IS NOT NULL OR f.pricing_eligible <> 0)) OR (f.token_status IN (2,3) AND (f.input_tokens <> 0 OR f.cached_input_tokens <> 0 OR f.output_tokens <> 0 OR f.total_tokens <> 0 OR f.estimated_cost_micros IS NOT NULL))`, `SELECT COUNT(1) FROM claude_code_usage_import_files WHERE checkpoint_revision <> 1 OR metadata_digest=zeroblob(32) OR boundary_digest=zeroblob(32) OR checkpoint_event_digest=zeroblob(32)`)
+	claudeCode.stateQueries = append(claudeCode.stateQueries, `SELECT COUNT(1) FROM usage_facts AS f JOIN usage_sources AS s ON s.id=f.source_id WHERE s.provider_id='claude-code' AND (
+		(f.token_status=1 AND f.output_tokens<>0) OR
+		(f.cache_write_5m_tokens IS NULL)<>(f.cache_write_1h_tokens IS NULL) OR
+		(f.cache_write_5m_tokens IS NOT NULL AND (f.cache_creation_input_tokens IS NULL OR f.cache_write_5m_tokens>f.cache_creation_input_tokens OR f.cache_write_1h_tokens<>f.cache_creation_input_tokens-f.cache_write_5m_tokens)) OR
+		(f.cache_creation_input_tokens>f.input_tokens-f.cached_input_tokens) OR
+		(f.token_status IN (2,3) AND (f.cost_status<>0 OR f.pricing_eligible<>0 OR (f.token_status=3 AND f.price_snapshot_json<>'{}') OR f.cache_write_input_tokens IS NOT NULL OR f.cache_creation_input_tokens IS NOT NULL OR f.cache_write_5m_tokens IS NOT NULL OR f.cache_write_1h_tokens IS NOT NULL))
+	)`, `SELECT COUNT(1) FROM usage_facts AS f WHERE CASE WHEN json_valid(f.price_snapshot_json)=0 THEN 0 WHEN f.price_snapshot_json='{}' THEN 0 ELSE
+		COALESCE(json_type(f.price_snapshot_json,'$.version'),'')<>'integer' OR COALESCE(json_extract(f.price_snapshot_json,'$.version'),0)<=0 OR
+		COALESCE(json_type(f.price_snapshot_json,'$.input'),'')<>'integer' OR COALESCE(json_extract(f.price_snapshot_json,'$.input'),0) NOT BETWEEN 1 AND 1000000000 OR
+		COALESCE(json_type(f.price_snapshot_json,'$.output'),'')<>'integer' OR COALESCE(json_extract(f.price_snapshot_json,'$.output'),0) NOT BETWEEN 1 AND 1000000000 OR
+		COALESCE(json_type(f.price_snapshot_json,'$.model'),'')<>'text' OR length(COALESCE(json_extract(f.price_snapshot_json,'$.model'),'')) NOT BETWEEN 1 AND 200 OR json_extract(f.price_snapshot_json,'$.model') GLOB '*[^a-zA-Z0-9._:/@-]*' OR
+		f.token_status=3 OR (f.token_status IN (0,1) AND (f.pricing_eligible<>1 OR f.estimated_cost_micros IS NULL)) OR COALESCE(f.pricing_catalog_version,0)<>json_extract(f.price_snapshot_json,'$.version') OR
+		EXISTS (SELECT 1 FROM json_each(f.price_snapshot_json) WHERE key NOT IN ('model','version','input','output','cached_input','cache_write_5m','cache_write_1h') OR (key IN ('cached_input','cache_write_5m','cache_write_1h') AND (type<>'integer' OR value NOT BETWEEN 1 AND 1000000000))) END`)
+	return []schemaContract{stable, grokBuild, incremental, observationParserRevision, reportedCost, pricingCatalog, claudeCode}
 }()
 
 func jsonObjectExpression(column string) string {

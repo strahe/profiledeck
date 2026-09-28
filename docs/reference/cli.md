@@ -30,13 +30,14 @@ Codex and Grok Build additionally offer `config-set` management, `profile set-co
 ```bash
 profiledeck-cli usage sync codex
 profiledeck-cli usage sync grok-build
+profiledeck-cli usage sync claude-code --claude-dir /path/to/claude-home
 profiledeck-cli usage summary --provider grok-build
 profiledeck-cli usage report --provider grok-build --range 30d
 profiledeck-cli usage pricing check
 profiledeck-cli usage pricing auto off
 ```
 
-Use `--provider codex` or `--provider grok-build` for reports; the default is Codex. Report ranges are `today`, `7d`, `30d`, and `all`. See [Codex](../codex/usage-cost.md) or [Grok Build](../grok-build/usage-cost.md) for estimate limits.
+Use `--provider codex`, `--provider grok-build`, or `--provider claude-code` for reports; the default is Codex. Report ranges are `today`, `7d`, `30d`, and `all`. See [Codex](../codex/usage-cost.md), [Grok Build](../grok-build/usage-cost.md), or [Claude Code](../claude-code/usage-cost.md) for estimate limits.
 
 ## Backups and recovery
 

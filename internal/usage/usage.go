@@ -46,6 +46,11 @@ type TokenCounts struct {
 }
 
 type Event struct {
+	TokenStatus              store.UsageTokenStatus
+	CacheWrite5mTokens       *int64
+	CacheWrite1hTokens       *int64
+	PricingEligible          bool
+	PriceSnapshot            *store.UsagePriceSnapshot
 	EventKey                 store.UsageKey
 	SessionID                string
 	Model                    string

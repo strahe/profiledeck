@@ -20,7 +20,7 @@ The private backup recovery key is stored in your system credential store, not i
 
 ## Network access
 
-- Usage reports read local Codex and Grok Build sessions. Price-list checks download public rates from GitHub; local usage is not uploaded. Disable automatic checks with `profiledeck-cli usage pricing auto off`.
+- Usage reports read local Codex, Grok Build, and Claude Code sessions. Price-list checks download public rates from GitHub; local usage is not uploaded. Disable automatic checks with `profiledeck-cli usage pricing auto off`.
 - ChatGPT Codex limit checks contact Codex or OpenAI with the selected login. API Key limit checks send the saved key to the Profile's custom Base URL; HTTP does not encrypt it in transit.
 - Grok Build credits checks use the installed Grok Build app and may renew its current login.
 - Antigravity limit checks send the current access token to an unpublished Google Cloud Code service and may carry account risk. They do not refresh or write back the token.

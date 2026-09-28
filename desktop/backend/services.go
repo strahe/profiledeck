@@ -61,6 +61,8 @@ type AntigravityService struct {
 }
 
 type ClaudeCodeService struct {
+	autoSync    *usageAutoSyncRuntime
+	settingsMu  sync.Mutex
 	application *app.Application
 	changes     *ChangeNotifier
 }
@@ -106,24 +108,25 @@ type AgentService struct {
 }
 
 type Services struct {
-	App                *AppService
-	Agent              *AgentService
-	Antigravity        *AntigravityService
-	ClaudeCode         *ClaudeCodeService
-	Codex              *CodexService
-	GrokBuild          *GrokBuildService
-	Profile            *ProfileService
-	Switch             *SwitchService
-	Doctor             *DoctorService
-	Backup             *BackupService
-	Usage              *UsageService
-	Settings           *SettingsService
-	changes            *ChangeNotifier
-	codexUsageSync     *usageAutoSyncRuntime
-	grokBuildUsageSync *usageAutoSyncRuntime
-	quota              *codexQuotaRuntime
-	runtimes           *agentRuntimeManager
-	backups            *applicationBackupRuntime
+	App                 *AppService
+	Agent               *AgentService
+	Antigravity         *AntigravityService
+	ClaudeCode          *ClaudeCodeService
+	Codex               *CodexService
+	GrokBuild           *GrokBuildService
+	Profile             *ProfileService
+	Switch              *SwitchService
+	Doctor              *DoctorService
+	Backup              *BackupService
+	Usage               *UsageService
+	Settings            *SettingsService
+	changes             *ChangeNotifier
+	codexUsageSync      *usageAutoSyncRuntime
+	grokBuildUsageSync  *usageAutoSyncRuntime
+	claudeCodeUsageSync *usageAutoSyncRuntime
+	quota               *codexQuotaRuntime
+	runtimes            *agentRuntimeManager
+	backups             *applicationBackupRuntime
 }
 
 type DashboardResult struct {
@@ -310,6 +313,18 @@ func NewServices(application *app.Application, info app.Info, env Environment, s
 			return application.Usage().SyncProviderBackground(ctx, grokconfig.ProviderID, onWorkDetected)
 		},
 	)
+	claudeCodeUsageSync := newUsageAutoSyncRuntime(
+		claudecodeconfig.ProviderID,
+		func(ctx context.Context) (usage.ProviderSyncSettings, error) {
+			value, err := application.ClaudeCode().GetSettings(ctx)
+			return usage.ProviderSyncSettings{
+				UsageSyncIntervalSeconds: value.UsageSyncIntervalSeconds,
+			}, err
+		},
+		func(ctx context.Context, onWorkDetected func()) (usage.BackgroundSyncOutcome, error) {
+			return application.Usage().SyncProviderBackground(ctx, claudecodeconfig.ProviderID, onWorkDetected)
+		},
+	)
 	quota := newCodexQuotaRuntime(application.Codex().ListAutomationTargets, application.Codex().RunCredentialJob)
 	backups := newApplicationBackupRuntime(
 		application.Settings().Get,
@@ -323,7 +338,7 @@ func NewServices(application *app.Application, info app.Info, env Environment, s
 		App:         &AppService{application: application, info: info, env: env, startupErr: startupErr, changes: changes},
 		Agent:       &AgentService{application: application, changes: changes},
 		Antigravity: &AntigravityService{application: application, changes: changes},
-		ClaudeCode:  &ClaudeCodeService{application: application, changes: changes},
+		ClaudeCode:  &ClaudeCodeService{application: application, changes: changes, autoSync: claudeCodeUsageSync},
 		Codex:       &CodexService{application: application, changes: changes, autoSync: codexUsageSync, quota: quota},
 		GrokBuild:   &GrokBuildService{application: application, changes: changes, autoSync: grokBuildUsageSync},
 		Profile:     &ProfileService{application: application, changes: changes, quota: quota},
@@ -333,20 +348,23 @@ func NewServices(application *app.Application, info app.Info, env Environment, s
 		Usage: &UsageService{
 			application: application,
 			autoSync: map[string]*usageAutoSyncRuntime{
-				codexconfig.ProviderID: codexUsageSync,
-				grokconfig.ProviderID:  grokBuildUsageSync,
+				codexconfig.ProviderID:      codexUsageSync,
+				grokconfig.ProviderID:       grokBuildUsageSync,
+				claudecodeconfig.ProviderID: claudeCodeUsageSync,
 			},
 		},
-		Settings:           &SettingsService{application: application},
-		changes:            changes,
-		codexUsageSync:     codexUsageSync,
-		grokBuildUsageSync: grokBuildUsageSync,
-		quota:              quota,
-		runtimes:           runtimes,
-		backups:            backups,
+		Settings:            &SettingsService{application: application},
+		changes:             changes,
+		codexUsageSync:      codexUsageSync,
+		grokBuildUsageSync:  grokBuildUsageSync,
+		claudeCodeUsageSync: claudeCodeUsageSync,
+		quota:               quota,
+		runtimes:            runtimes,
+		backups:             backups,
 	}
 	runtimes.Register(agent.Codex, codexUsageSync)
 	runtimes.Register(agent.GrokBuild, grokBuildUsageSync)
+	runtimes.Register(agent.ClaudeCode, claudeCodeUsageSync)
 	runtimes.Register(agent.Codex, quota)
 	return services
 }
@@ -358,13 +376,16 @@ func (s Services) SubscribeChanges(listener func(DesktopChangeEvent)) func() {
 func (s Services) StartUsageAutoSync(ctx context.Context, emitter func(UsageAutoSyncStatus)) {
 	s.codexUsageSync.SetEmitter(emitter)
 	s.grokBuildUsageSync.SetEmitter(emitter)
+	s.claudeCodeUsageSync.SetEmitter(emitter)
 	s.runtimes.Activate(ctx, agent.Codex, s.codexUsageSync)
 	s.runtimes.Activate(ctx, agent.GrokBuild, s.grokBuildUsageSync)
+	s.runtimes.Activate(ctx, agent.ClaudeCode, s.claudeCodeUsageSync)
 }
 
 func (s Services) StopUsageAutoSync() {
 	s.runtimes.Deactivate(agent.Codex, s.codexUsageSync)
 	s.runtimes.Deactivate(agent.GrokBuild, s.grokBuildUsageSync)
+	s.runtimes.Deactivate(agent.ClaudeCode, s.claudeCodeUsageSync)
 }
 
 func (s Services) StartCodexQuotaRuntime(ctx context.Context, emitter func(CodexQuotaRuntimeStatus)) {
@@ -1348,4 +1369,26 @@ func FormatDesktopErrorPtr(err error) *DesktopError {
 	}
 	payload := FormatDesktopError(err)
 	return &payload
+}
+
+func (s *ClaudeCodeService) GetSettings(ctx context.Context) (claudecode.Settings, error) {
+	return s.application.ClaudeCode().GetSettings(ctx)
+}
+
+func (s *ClaudeCodeService) UpdateSettings(
+	ctx context.Context,
+	req claudecode.UpdateSettingsRequest,
+) (claudecode.Settings, error) {
+	// Persist and update only this Provider's runtime under one serial order so
+	// a slower older request cannot restore a stale interval.
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	value, err := s.application.ClaudeCode().UpdateSettings(ctx, req)
+	if err != nil {
+		return claudecode.Settings{}, err
+	}
+	if req.UsageSyncIntervalSeconds != nil {
+		s.autoSync.SetInterval(value.UsageSyncIntervalSeconds)
+	}
+	return value, nil
 }

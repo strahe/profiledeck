@@ -21,10 +21,11 @@ const MaxCatalogBytes = 256 << 10
 var modelIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 
 type Rates struct {
-	Input       string  `json:"input"`
-	CachedInput *string `json:"cached_input"`
-	CacheWrite  *string `json:"cache_write"`
-	Output      string  `json:"output"`
+	CacheWrite1h *string `json:"cache_write_1h,omitempty"`
+	Input        string  `json:"input"`
+	CachedInput  *string `json:"cached_input"`
+	CacheWrite   *string `json:"cache_write"`
+	Output       string  `json:"output"`
 }
 
 type LongContext struct {
@@ -51,10 +52,11 @@ type Catalog struct {
 }
 
 type TokenRates struct {
-	Input       int64
-	CachedInput *int64
-	CacheWrite  *int64
-	Output      int64
+	CacheWrite1h *int64
+	Input        int64
+	CachedInput  *int64
+	CacheWrite   *int64
+	Output       int64
 }
 
 type Selected struct {
@@ -112,11 +114,14 @@ func Parse(data []byte) (Catalog, error) {
 	if decoder.Decode(new(any)) != io.EOF {
 		return Catalog{}, errors.New("pricing catalog has trailing data")
 	}
-	if catalog.SchemaVersion != 1 || catalog.CatalogVersion <= 0 || len(catalog.Entries) == 0 || len(catalog.Entries) > 2_000 {
+	if (catalog.SchemaVersion != 1 && catalog.SchemaVersion != 2) || catalog.CatalogVersion <= 0 || len(catalog.Entries) == 0 || len(catalog.Entries) > 2_000 {
 		return Catalog{}, errors.New("pricing catalog version or entries are invalid")
 	}
 	byModel := make(map[string][]Entry)
 	for _, entry := range catalog.Entries {
+		if catalog.SchemaVersion == 1 && (entry.ShortContext.CacheWrite1h != nil || entry.LongContext != nil && entry.LongContext.Rates.CacheWrite1h != nil) {
+			return Catalog{}, errors.New("pricing schema v1 does not support one-hour cache writes")
+		}
 		if err := validateEntry(entry); err != nil {
 			return Catalog{}, err
 		}
@@ -206,6 +211,13 @@ func parseRates(rates Rates) (TokenRates, error) {
 			return TokenRates{}, err
 		}
 		selected.CacheWrite = &value
+	}
+	if rates.CacheWrite1h != nil {
+		value, err := decimalMicros(*rates.CacheWrite1h)
+		if err != nil {
+			return TokenRates{}, err
+		}
+		selected.CacheWrite1h = &value
 	}
 	return selected, nil
 }

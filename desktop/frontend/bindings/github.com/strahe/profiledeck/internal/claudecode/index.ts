@@ -6,5 +6,7 @@ export type {
     ClaudeCodeProfileDetail,
     ClaudeCodeProfileListResult,
     ClaudeCodeProfileSaveResult,
-    ClaudeCodeProfileSummary
+    ClaudeCodeProfileSummary,
+    Settings,
+    UpdateSettingsRequest
 } from "./models.js";

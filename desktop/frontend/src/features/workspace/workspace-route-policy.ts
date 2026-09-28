@@ -10,6 +10,8 @@ export type WorkspaceView =
 	| "grok-build-profiles"
 	| "antigravity-profiles"
 	| "claude-code-profiles"
+	| "claude-code-usage"
+	| "claude-code-settings"
 	| "usage"
 	| "codex-settings"
 	| "grok-build-usage"
@@ -92,6 +94,8 @@ export function parseWorkspaceRoute(path: string): WorkspaceRoute {
 			: { ...build("antigravity-profiles"), valid: false };
 	}
 
+	if (path === "/claude-code/usage") return build("claude-code-usage");
+	if (path === "/claude-code/settings") return build("claude-code-settings");
 	if (path === "/claude-code/profiles") return build("claude-code-profiles");
 	if (path === "/claude-code/profiles/new") {
 		return build("claude-code-profiles", codexList, grokBuildList, antigravityList, { kind: "new", profileID: "" });
@@ -126,6 +130,8 @@ export function isAgentWorkspace(view: WorkspaceView): boolean {
 	return view === "profiles"
 		|| view === "antigravity-profiles"
 		|| view === "claude-code-profiles"
+	|| view === "claude-code-usage"
+	|| view === "claude-code-settings"
 		|| view === "grok-build-profiles"
 		|| view === "grok-build-usage"
 		|| view === "grok-build-settings"
@@ -135,7 +141,7 @@ export function isAgentWorkspace(view: WorkspaceView): boolean {
 
 export function agentForWorkspace(view: WorkspaceView): AgentID | null {
 	if (view === "antigravity-profiles") return "antigravity";
-	if (view === "claude-code-profiles") return "claude-code";
+	if (view === "claude-code-profiles" || view === "claude-code-usage" || view === "claude-code-settings") return "claude-code";
 	if (view === "grok-build-profiles" || view === "grok-build-usage" || view === "grok-build-settings") return "grok-build";
 	return view === "profiles" || view === "usage" || view === "codex-settings" ? "codex" : null;
 }
