@@ -68,10 +68,6 @@ func claudeCodePricer(catalog pricing.Catalog) store.ClaudeCodeUsagePricer {
 	}
 }
 
-func backfillClaudeCodeUsageCosts(ctx context.Context, db *store.Store) error {
-	source, err := db.GetUsageSource(ctx, "claude-code", SourceClaudeCodeSessionJSONL)
-	if err != nil {
-		return err
-	}
-	return db.BackfillClaudeCodeUsageCosts(ctx, source.ID, source.SyncGeneration, claudeCodePricer(pricingSnapshot(ctx)))
+func backfillClaudeCodeUsageCosts(ctx context.Context, db *store.Store, sourceID, generation int64) error {
+	return db.BackfillClaudeCodeUsageCosts(ctx, sourceID, generation, claudeCodePricer(pricingSnapshot(ctx)))
 }

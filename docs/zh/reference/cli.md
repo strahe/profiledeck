@@ -37,7 +37,7 @@ profiledeck-cli usage pricing check
 profiledeck-cli usage pricing auto off
 ```
 
-报告可使用 `--provider codex`、`--provider grok-build` 或 `--provider claude-code`，默认是 Codex。范围可选 `today`、`7d`、`30d`、`all`。估算限制见 [Codex](../codex/usage-cost.md) [Grok Build](../grok-build/usage-cost.md) 或 [Claude Code](../claude-code/usage-cost.md)。
+报告可使用 `--provider codex`、`--provider grok-build` 或 `--provider claude-code`，默认是 Codex。范围可选 `today`、`7d`、`30d`、`all`。估算限制见 [Codex](../codex/usage-cost.md)、[Grok Build](../grok-build/usage-cost.md) 或 [Claude Code](../claude-code/usage-cost.md)。
 
 ## 备份与恢复
 

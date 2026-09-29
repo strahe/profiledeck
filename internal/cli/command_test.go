@@ -2454,7 +2454,11 @@ func TestClaudeCodeUsageCustomDirectoryDoesNotChangeBindingsOrLeakIdentifiers(t 
 	if err != nil || !strings.Contains(human, "total tokens: at least 100") || !strings.Contains(human, "output tokens: unknown") || !strings.Contains(human, "incomplete events: 1") {
 		t.Fatalf("partial summary: %s, %v", human, err)
 	}
-	for _, out := range []string{syncOut, human} {
+	report, err := runCLI(t, append(base, "usage", "report", "--provider", "claude-code", "--range", "all")...)
+	if err != nil || !strings.Contains(report, "requests without a final output token count in this range: 1; their output cost is excluded") {
+		t.Fatalf("partial report explanation: %s, %v", report, err)
+	}
+	for _, out := range []string{syncOut, human, report} {
 		for _, private := range []string{logDir, "private-request-id", "private-session-id", "private-message-id", "discarded private answer"} {
 			if strings.Contains(out, private) {
 				t.Fatalf("usage output disclosed %q", private)
@@ -2469,5 +2473,19 @@ func TestClaudeCodeUsageCustomDirectoryDoesNotChangeBindingsOrLeakIdentifiers(t 
 	provider, err := db.GetProvider(context.Background(), "claude-code")
 	if err != nil || strings.Contains(provider.MetadataJSON, logDir) {
 		t.Fatalf("log override changed auth binding: %+v, %v", provider, err)
+	}
+}
+
+func TestUsageReportNotesPreserveLegacyPartialEstimateExplanation(t *testing.T) {
+	for _, providerID := range []string{"codex", "grok-build"} {
+		t.Run(providerID, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := writeUsageReportNotes(&output, usage.UsageReportResult{ProviderID: providerID, Summary: usage.UsageAggregateSummary{PartialCostEventCount: 1}}); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(output.String(), "partially estimated requests: 1;") || strings.Contains(output.String(), "cache tokens but no applicable rate") {
+				t.Fatalf("partial estimate misexplained: %s", output.String())
+			}
+		})
 	}
 }

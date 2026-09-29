@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,6 +22,63 @@ func claudeUsageLine(session, request string, final bool, output int64) []byte {
 	usage := map[string]any{"input_tokens": 70, "cache_read_input_tokens": 20, "cache_creation_input_tokens": 10, "output_tokens": output, "cache_creation": map[string]any{"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 10}}
 	data, _ := json.Marshal(map[string]any{"type": "assistant", "sessionId": session, "requestId": request, "timestamp": "2026-09-24T12:00:00Z", "message": map[string]any{"id": "message-" + request, "model": "claude-opus-5-5", "stop_reason": stop, "usage": usage}})
 	return append(data, '\n')
+}
+
+func claudeZeroedHistoryLine(t *testing.T, retainedDetails bool) []byte {
+	t.Helper()
+	var record map[string]any
+	if err := json.Unmarshal(claudeUsageLine("fork", "request", true, 30), &record); err != nil {
+		t.Fatal(err)
+	}
+	usage := record["message"].(map[string]any)["usage"].(map[string]any)
+	if retainedDetails {
+		iteration := maps.Clone(usage)
+		iteration["type"] = "message"
+		usage["iterations"] = []any{iteration}
+	} else {
+		delete(usage, "cache_creation")
+	}
+	for _, field := range []string{"input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"} {
+		usage[field] = 0
+	}
+	line, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(line, '\n')
+}
+
+func importClaudeCodeTestFile(t *testing.T, ctx context.Context, db *store.Store, source store.UsageSource, file SourceFile, revision int64, price store.ClaudeCodeUsagePricer) store.ClaudeCodeUsageImportFile {
+	t.Helper()
+	parsed, err := parseClaudeCodeCheckpointFile(ctx, file, 0, store.UsageKey{}, store.UsageKey{}, nil, nil, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := json.Marshal(parsed.ClaudeInvalidReasons)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor := store.ClaudeCodeUsageImportFile{
+		SourceID: source.ID, FileKey: file.SourceKey,
+		ModifiedUnixMS: file.ModifiedUnixMS, SizeBytes: file.SizeBytes,
+		ImportedFacts: int64(len(parsed.Events)), InvalidLines: parsed.InvalidLines, UnsupportedLines: parsed.UnsupportedLines,
+		ParserRevision: revision, IdentityRevision: ClaudeCodeUsageIdentityRevision,
+		EventDigest: parsed.CheckpointEventDigest, CheckpointRevision: usageCheckpointRevision,
+		ProcessedBytes: parsed.ProcessedBytes, MetadataDigest: file.MetadataDigest,
+		FileIdentityDigest: file.FileIdentityDigest, BoundaryDigest: parsed.BoundaryDigest,
+		CheckpointEventDigest: parsed.CheckpointEventDigest, ParserStateJSON: string(state),
+	}
+	if _, err := db.CommitClaudeCodeUsageImport(ctx, store.CommitClaudeCodeUsageImportParams{
+		ProviderID: "claude-code", Generation: source.SyncGeneration,
+		Facts: usageEventsToFactParams(source.ID, parsed.Events), File: cursor, Price: price,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cursor, err = db.GetClaudeCodeUsageImportFile(ctx, source.ID, file.SourceKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cursor
 }
 
 func TestClaudeCodeParserValidatesCandidatesWithoutUsingEarlyOutput(t *testing.T) {
@@ -53,6 +111,21 @@ func TestClaudeCodeParserValidatesCandidatesWithoutUsingEarlyOutput(t *testing.T
 	if event, _, unsupported, err := parseClaudeCodeSessionLine(bad); err != nil || !unsupported || event != nil {
 		t.Fatalf("missing identity accepted: %+v, %t, %v", event, unsupported, err)
 	}
+	cached := bytes.Replace(claudeUsageLine("session", "cached", true, 30), []byte(`"input_tokens":70`), []byte(`"input_tokens":0`), 1)
+	cached = bytes.Replace(cached, []byte(`"end_turn"`), []byte(`"model_context_window_exceeded"`), 1)
+	event, reason, unsupported, err := parseClaudeCodeSessionObservation(cached)
+	if err != nil || reason != "" || unsupported || event == nil {
+		t.Fatalf("cached context-limit response rejected: %+v, %s, %t, %v", event, reason, unsupported, err)
+	}
+	if event.TokenStatus != store.UsageTokensComplete || event.InputTokens != 30 || event.OutputTokens != 30 {
+		t.Fatalf("cached context-limit response lost usage: %+v", event)
+	}
+	for _, retainedDetails := range []bool{false, true} {
+		event, reason, unsupported, err := parseClaudeCodeSessionObservation(claudeZeroedHistoryLine(t, retainedDetails))
+		if err != nil || reason != "" || unsupported || event != nil {
+			t.Fatalf("zeroed history became a usage candidate: %+v, %s, %t, %v", event, reason, unsupported, err)
+		}
+	}
 }
 
 type claudeTestProvisioner struct{}
@@ -83,6 +156,9 @@ func TestClaudeCodeSyncCompletesAcrossRestartWithFrozenPricingAndRetractsConflic
 		t.Fatal(err)
 	}
 	path := filepath.Join(project, "parent.jsonl")
+	if err := os.WriteFile(filepath.Join(project, "a-history.jsonl"), claudeZeroedHistoryLine(t, false), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, claudeUsageLine("parent", "request", false, 1), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -137,12 +213,18 @@ func TestClaudeCodeSyncCompletesAcrossRestartWithFrozenPricingAndRetractsConflic
 	if err := os.WriteFile(filepath.Join(childDir, "agent-copy.jsonl"), claudeUsageLine("fork", "request", true, 30), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(childDir, "agent-zeroed.jsonl"), claudeZeroedHistoryLine(t, true), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := integration.Sync(ctx, factory, SyncOptions{ProvisionMode: SyncExistingProvider}); err != nil {
 		t.Fatal(err)
 	}
 	report, err = service.Report(ctx, UsageReportRequest{ProviderID: "claude-code", Range: UsageRangeAll})
 	if err != nil || report.Summary.EventCount != 1 || report.Summary.TotalTokens != 130 {
 		t.Fatalf("fork counted twice: %+v, %v", report.Summary, err)
+	}
+	if report.Import.InvalidLines != 0 || report.Import.UnsupportedLines != 0 || report.Summary.ConflictingEventCount != 0 {
+		t.Fatalf("history copies caused a quality warning: %+v, %+v", report.Import, report.Summary)
 	}
 	if err := os.WriteFile(filepath.Join(project, "conflict.jsonl"), claudeUsageLine("other", "request", true, 40), 0o600); err != nil {
 		t.Fatal(err)
@@ -181,6 +263,213 @@ func TestClaudeCodePricingDistinguishesCacheDurationAndUnknownTTL(t *testing.T) 
 		if cost == nil || *cost != test.want || status != test.status {
 			t.Fatalf("%s: %v, %v", test.ttl, cost, status)
 		}
+	}
+}
+
+func TestClaudeCodeCostBackfillCannotBorrowANewerSyncGeneration(t *testing.T) {
+	ctx := context.Background()
+	factory := store.NewFactory(filepath.Join(t.TempDir(), "profiledeck.db"))
+	db, err := factory.Open(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	source, err := beginClaudeCodeUsageSync(ctx, db, claudeTestProvisioner{}, SyncProvisionProvider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, _, _, err := parseClaudeCodeSessionLine(claudeUsageLine("session", "request", true, 30))
+	if err != nil || event == nil {
+		t.Fatalf("parse fixture: %+v, %v", event, err)
+	}
+	dir := t.TempDir()
+	project := filepath.Join(dir, "projects", "project")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "session.jsonl"), claudeUsageLine("session", "request", true, 30), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files, err := ListClaudeCodeSessionFilesContext(ctx, dir)
+	if err != nil || len(files) != 1 {
+		t.Fatalf("discover fixture: %d files, %v", len(files), err)
+	}
+	importClaudeCodeTestFile(t, ctx, db, source, files[0], ClaudeCodeUsageParserRevision, nil)
+	if err := db.CompleteUsageSync(ctx, store.CompleteUsageSyncParams{
+		SourceID: source.ID, Generation: source.SyncGeneration, CompletedAtUnixMS: event.OccurredAtUnixMS,
+		Finalization: &store.ClaudeCodeUsageSyncFinalization{ProviderID: "claude-code", DiscoveredFileKeys: []store.UsageKey{files[0].SourceKey}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	newSource, err := db.BeginUsageSync(ctx, "claude-code", SourceClaudeCodeSessionJSONL, ClaudeCodeUsageIdentityRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backfillClaudeCodeUsageCosts(ctx, db, source.ID, source.SyncGeneration); !errors.Is(err, store.ErrUsageSyncSuperseded) {
+		t.Fatalf("superseded backfill wrote with a newer generation: %v", err)
+	}
+	summary, err := db.UsageSummary(ctx, "claude-code")
+	if err != nil || summary.UnknownCostEvents != 1 || summary.EstimatedCostMicros != 0 {
+		t.Fatalf("superseded backfill changed costs: %+v, %v", summary, err)
+	}
+	catalog := pricing.Embedded()
+	catalog.CatalogVersion++
+	for i := range catalog.Entries {
+		if catalog.Entries[i].Model == "claude-opus-5-5" {
+			catalog.Entries[i].ShortContext.Output = "99"
+		}
+	}
+	if err := backfillClaudeCodeUsageCosts(withPricingSnapshot(ctx, catalog), db, newSource.ID, newSource.SyncGeneration); err != nil {
+		t.Fatal(err)
+	}
+	summary, err = db.UsageSummary(ctx, "claude-code")
+	if err != nil || summary.EstimatedCostMicros != 3334 || summary.UnknownCostEvents != 0 {
+		t.Fatalf("current backfill did not retain its own prices: %+v, %v", summary, err)
+	}
+}
+
+func TestClaudeCodeSyncDoesNotBackfillIneligibleUsageInAPriceablePeriod(t *testing.T) {
+	ctx := context.Background()
+	factory := store.NewFactory(filepath.Join(t.TempDir(), "profiledeck.db"))
+	db, err := factory.Open(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	project := filepath.Join(dir, "projects", "project")
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := bytes.Replace(claudeUsageLine("session", "before-prices", true, 30), []byte("2026-09-24"), []byte("2026-09-21"), 1)
+	for _, field := range []string{`"speed":"fast"`, `"inference_geo":"us"`, `"server_tool_use":{"web_search_requests":1}`} {
+		line := claudeUsageLine("session", field, true, 30)
+		line = bytes.Replace(line, []byte(`"input_tokens":70`), []byte(field+`,"input_tokens":70`), 1)
+		content = append(content, line...)
+	}
+	if err := os.WriteFile(filepath.Join(project, "session.jsonl"), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	integration := NewClaudeCodeIntegrationWithProvisioner(dir, claudeTestProvisioner{})
+	if _, err := integration.Sync(ctx, factory, SyncOptions{ProvisionMode: SyncProvisionProvider}); err != nil {
+		t.Fatal(err)
+	}
+	source, err := db.GetUsageSource(ctx, "claude-code", SourceClaudeCodeSessionJSONL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := false
+	outcome, err := integration.Sync(ctx, factory, SyncOptions{ProvisionMode: SyncExistingProvider, OnWorkDetected: func() { work = true }})
+	if err != nil || outcome.Performed || work {
+		t.Fatalf("ineligible usage triggered an empty backfill: %+v, work=%t, %v", outcome, work, err)
+	}
+	current, err := db.GetUsageSource(ctx, "claude-code", SourceClaudeCodeSessionJSONL)
+	if err != nil || current.SyncGeneration != source.SyncGeneration {
+		t.Fatalf("empty backfill advanced the source generation: %+v, %v", current, err)
+	}
+	summary, err := db.UsageSummary(ctx, "claude-code")
+	if err != nil || summary.EventCount != 4 || summary.UnknownCostEvents != 4 {
+		t.Fatalf("unknown usage was lost or estimated: %+v, %v", summary, err)
+	}
+}
+
+func TestClaudeCodeParserUpgradeVerifiesOldHistoryAndCompletesSupportedResponses(t *testing.T) {
+	for _, rewritten := range []bool{false, true} {
+		name := "unchanged"
+		if rewritten {
+			name = "rewritten"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			factory := store.NewFactory(filepath.Join(t.TempDir(), "profiledeck.db"))
+			db, err := factory.Open(ctx, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if _, err := db.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			project := filepath.Join(dir, "projects", "project")
+			if err := os.MkdirAll(project, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(project, "session.jsonl")
+			content := claudeUsageLine("session", "request", false, 1)
+			contextLimit := bytes.Replace(claudeUsageLine("session", "request", true, 30), []byte(`"end_turn"`), []byte(`"model_context_window_exceeded"`), 1)
+			content = append(content, contextLimit...)
+			content = append(content, claudeZeroedHistoryLine(t, true)...)
+			content = append(content, claudeUsageLine("session", "next", true, 30)...)
+			if err := os.WriteFile(path, content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			source, err := beginClaudeCodeUsageSync(ctx, db, claudeTestProvisioner{}, SyncProvisionProvider)
+			if err != nil {
+				t.Fatal(err)
+			}
+			files, err := ListClaudeCodeSessionFilesContext(ctx, dir)
+			if err != nil || len(files) != 1 {
+				t.Fatalf("discover fixture: %d files, %v", len(files), err)
+			}
+			cursor := importClaudeCodeTestFile(t, ctx, db, source, files[0], 2, claudeCodePricer(pricing.Embedded()))
+			if cursor.InvalidLines != 1 || cursor.UnsupportedLines != 1 || cursor.ImportedFacts != 2 {
+				t.Fatalf("legacy fixture did not reproduce rejected history: %+v", cursor)
+			}
+			if err := db.CompleteUsageSync(ctx, store.CompleteUsageSyncParams{
+				SourceID: source.ID, Generation: source.SyncGeneration, CompletedAtUnixMS: 1,
+				Finalization: &store.ClaudeCodeUsageSyncFinalization{ProviderID: "claude-code", DiscoveredFileKeys: []store.UsageKey{files[0].SourceKey}},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if rewritten {
+				content = bytes.Replace(content, []byte(`"input_tokens":70`), []byte(`"input_tokens":71`), 1)
+				if err := os.WriteFile(path, content, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			integration := NewClaudeCodeIntegrationWithProvisioner(dir, claudeTestProvisioner{})
+			outcome, err := integration.Sync(ctx, factory, SyncOptions{ProvisionMode: SyncExistingProvider})
+			if err != nil {
+				t.Fatal(err)
+			}
+			current, err := db.GetClaudeCodeUsageImportFile(ctx, source.ID, files[0].SourceKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			summary, err := db.UsageSummary(ctx, "claude-code")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rewritten {
+				if len(outcome.Result.Errors) != 1 || outcome.Result.UpdatedEvents != 0 || !sameClaudeCodeUsageImportProgress(current, cursor) {
+					t.Fatalf("upgrade accepted rewritten history: %+v, %+v", outcome, current)
+				}
+				if summary.TotalTokens != 230 || summary.EstimatedCostMicros != 1328 || summary.IncompleteEventCount != 1 {
+					t.Fatalf("rewritten history changed accepted usage: %+v", summary)
+				}
+				return
+			}
+			if len(outcome.Result.Errors) != 0 || outcome.Result.UpdatedEvents != 1 || current.ParserRevision != ClaudeCodeUsageParserRevision {
+				t.Fatalf("upgrade failed to complete supported usage: %+v, %+v", outcome, current)
+			}
+			if current.InvalidLines != 0 || current.UnsupportedLines != 0 || current.ImportedFacts != 3 {
+				t.Fatalf("upgrade retained obsolete warnings: %+v", current)
+			}
+			if summary.TotalTokens != 260 || summary.EstimatedCostMicros != 1928 || summary.IncompleteEventCount != 0 || summary.ConflictingEventCount != 0 {
+				t.Fatalf("upgraded totals: %+v", summary)
+			}
+			noWork, err := integration.Sync(ctx, factory, SyncOptions{ProvisionMode: SyncExistingProvider})
+			if err != nil || noWork.Performed {
+				t.Fatalf("upgraded checkpoint was not stable: %+v, %v", noWork, err)
+			}
+		})
 	}
 }
 

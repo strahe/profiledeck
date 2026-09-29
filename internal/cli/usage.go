@@ -385,16 +385,21 @@ func writeUsageReport(w io.Writer, result usage.UsageReportResult) error {
 }
 
 func writeUsageReportNotes(w io.Writer, result usage.UsageReportResult) error {
+	if result.ProviderID != "claude-code" && result.Summary.PartialCostEventCount > 0 {
+		if _, err := fmt.Fprintf(w, "partially estimated requests: %d; cache write details or per-request input sizes are unavailable, or a cache write rate is missing; the cost subtotal may be incomplete\n", result.Summary.PartialCostEventCount); err != nil {
+			return err
+		}
+	}
 	for _, note := range []struct {
 		count int64
 		text  string
 	}{
-		{result.Summary.MissingOutputCostEventCount, "requests in this range have no final output token count; their output cost is excluded"},
-		{result.Summary.MissingCacheTTLEventCount, "requests in this range have no cache write duration; their cache write cost is excluded"},
-		{result.Summary.MissingCacheRateEventCount, "requests in this range have cache tokens without an applicable rate; those cache costs are excluded"},
+		{result.Summary.MissingOutputCostEventCount, "requests without a final output token count in this range: %d; their output cost is excluded\n"},
+		{result.Summary.MissingCacheTTLEventCount, "requests without a cache write duration in this range: %d; their cache write cost is excluded\n"},
+		{result.Summary.MissingCacheRateEventCount, "requests with cache tokens but no applicable rate in this range: %d; those cache costs are excluded\n"},
 	} {
 		if note.count > 0 {
-			if _, err := fmt.Fprintf(w, "%d %s\n", note.count, note.text); err != nil {
+			if _, err := fmt.Fprintf(w, note.text, note.count); err != nil {
 				return err
 			}
 		}

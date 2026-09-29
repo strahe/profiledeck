@@ -265,6 +265,7 @@ func parseClaudeCodeCheckpointFile(
 	expectedBoundary store.UsageKey,
 	fileSystem usageFileSystem,
 	observer UsageSyncObserver,
+	parserRevision int64,
 ) (checkpointParseResult, error) {
 	if fileSystem == nil {
 		fileSystem = osUsageFileSystem{}
@@ -327,7 +328,7 @@ func parseClaudeCodeCheckpointFile(
 			boundary.appendSuffix(boundarySuffix, consumed)
 			continue
 		}
-		event, invalidReason, unsupported, parseErr := parseClaudeCodeSessionObservation(line)
+		event, invalidReason, unsupported, parseErr := parseClaudeCodeSessionObservationForRevision(line, parserRevision)
 		if parseErr != nil && !terminated {
 			break
 		}

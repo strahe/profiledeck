@@ -1113,9 +1113,11 @@ func (s *Store) HasUnknownUsageFactCostInPeriod(ctx context.Context, sourceID, m
 	var found int
 	err := s.executor().QueryRowContext(ctx, `
 		SELECT EXISTS (
-			SELECT 1 FROM usage_facts INDEXED BY idx_usage_facts_source_cost_model_id
-			WHERE source_id = ? AND cost_status = ? AND model_id = ?
-				AND occurred_at_unix_ms >= ? AND occurred_at_unix_ms < ?
+			SELECT 1 FROM usage_facts f INDEXED BY idx_usage_facts_source_cost_model_id
+			JOIN usage_sources s ON s.id = f.source_id
+			WHERE f.source_id = ? AND f.cost_status = ? AND f.model_id = ?
+				AND f.occurred_at_unix_ms >= ? AND f.occurred_at_unix_ms < ?
+				AND (s.provider_id <> 'claude-code' OR (f.pricing_eligible=1 AND f.token_status IN (0,1)))
 			LIMIT 1
 		)
 	`, sourceID, UsageCostStatusUnknown, modelID, fromUnixMS, untilUnixMS).Scan(&found)

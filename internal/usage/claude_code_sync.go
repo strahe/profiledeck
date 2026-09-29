@@ -17,6 +17,8 @@ const (
 	claudeCodeFactConflictMessage    = "A Claude Code session file conflicts with previously imported usage. It will be checked again after the file changes or when you sync manually."
 )
 
+var errClaudeCodeHistoryChanged = errors.New("claude code usage checkpoint history changed")
+
 type claudeCodeIntegration struct {
 	claudeDir   string
 	provisioner ProviderProvisioner
@@ -119,6 +121,11 @@ func (integration claudeCodeIntegration) Sync(
 					ctxErr,
 				)
 			}
+			if errors.Is(err, errClaudeCodeHistoryChanged) {
+				result.Errors = append(result.Errors, claudeCodeObservationError(store.UsageImportObservationHistoryChanged))
+				observations = append(observations, newUsageObservation(source.ID, file, ClaudeCodeUsageParserRevision, store.UsageImportObservationHistoryChanged))
+				continue
+			}
 			result.InvalidLines++
 			result.Errors = append(result.Errors, claudeCodeObservationError(store.UsageImportObservationUnavailable))
 			observations = append(observations, newUsageObservation(source.ID, file, ClaudeCodeUsageParserRevision, store.UsageImportObservationUnavailable))
@@ -130,11 +137,6 @@ func (integration claudeCodeIntegration) Sync(
 		invalidLines := parsed.InvalidLines
 		unsupportedLines := parsed.UnsupportedLines
 		if hasCursor {
-			if fullParse && !claudeCodeCheckpointPrefixMatches(parsed.Events, cursor) {
-				result.Errors = append(result.Errors, claudeCodeObservationError(store.UsageImportObservationHistoryChanged))
-				observations = append(observations, newUsageObservation(source.ID, file, ClaudeCodeUsageParserRevision, store.UsageImportObservationHistoryChanged))
-				continue
-			}
 			if fullParse {
 				eventsToStore = parsed.Events
 				replayExistingFacts = true
@@ -237,7 +239,7 @@ func (integration claudeCodeIntegration) Sync(
 		return SyncOutcome{}, err
 	}
 	if options.ProvisionMode == SyncProvisionProvider || priceBackfill {
-		if err := backfillClaudeCodeUsageCosts(ctx, db); err != nil {
+		if err := backfillClaudeCodeUsageCosts(ctx, db, source.ID, source.SyncGeneration); err != nil {
 			return SyncOutcome{}, err
 		}
 	}
@@ -418,6 +420,7 @@ func parseClaudeCodeUsageChange(
 			cursor.BoundaryDigest,
 			options.fileSystem,
 			options.Observer,
+			ClaudeCodeUsageParserRevision,
 		)
 		if parseErr == nil {
 			return parsed, false, nil
@@ -434,8 +437,24 @@ func parseClaudeCodeUsageChange(
 		store.UsageKey{},
 		options.fileSystem,
 		options.Observer,
+		ClaudeCodeUsageParserRevision,
 	)
-	return parsed, true, err
+	if err != nil || !hasCursor {
+		return parsed, true, err
+	}
+	validationEvents := parsed.Events
+	if cursor.ParserRevision < ClaudeCodeUsageParserRevision {
+		// Validate accepted observations with their original parser before applying new semantics.
+		previous, err := parseClaudeCodeCheckpointFile(ctx, file, 0, store.UsageKey{}, store.UsageKey{}, options.fileSystem, options.Observer, cursor.ParserRevision)
+		if err != nil {
+			return checkpointParseResult{}, true, err
+		}
+		validationEvents = previous.Events
+	}
+	if !claudeCodeCheckpointPrefixMatches(validationEvents, cursor) {
+		return checkpointParseResult{}, true, errClaudeCodeHistoryChanged
+	}
+	return parsed, true, nil
 }
 
 func claudeCodeCheckpointPrefixMatches(events []Event, cursor store.ClaudeCodeUsageImportFile) bool {

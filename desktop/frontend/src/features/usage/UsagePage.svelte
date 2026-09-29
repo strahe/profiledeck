@@ -248,6 +248,7 @@
 			|| value.import.invalid_lines > 0 || value.import.unsupported_lines > 0
 			|| value.summary.undated_event_count > 0
 			|| value.summary.missing_cache_ttl_event_count > 0 || value.summary.missing_cache_rate_event_count > 0
+			|| (providerID !== "claude-code" && value.summary.partial_cost_event_count > 0)
 			|| value.summary.unknown_cost_event_count > 0
 			|| (providerID === "grok-build" && (value.summary.partial_reported_cost_event_count > 0 || value.summary.unknown_reported_cost_event_count > 0));
 	}
@@ -330,6 +331,7 @@
 									{#if report.summary.undated_event_count > 0}<li>{$_("usage.dataQuality.undated", { values: { count: formatInteger(report.summary.undated_event_count) } })}</li>{/if}
 									{#if report.summary.missing_cache_ttl_event_count > 0}<li>{$_("usage.dataQuality.missingCacheTTL", { values: { count: formatInteger(report.summary.missing_cache_ttl_event_count) } })}</li>{/if}
 									{#if report.summary.missing_cache_rate_event_count > 0}<li>{$_("usage.dataQuality.missingCacheRate", { values: { count: formatInteger(report.summary.missing_cache_rate_event_count) } })}</li>{/if}
+									{#if providerID !== "claude-code" && report.summary.partial_cost_event_count > 0}<li>{$_("usage.dataQuality.partialPricing", { values: { count: formatInteger(report.summary.partial_cost_event_count) } })}</li>{/if}
 									{#if report.summary.event_count > 0 && report.summary.unknown_cost_event_count > 0}<li>{$_("usage.dataQuality.pricing", { values: { count: formatInteger(report.summary.unknown_cost_event_count), coverage: formatPercent(report.summary.pricing_coverage) } })}</li>{/if}
 									{#if providerID === "grok-build" && report.summary.partial_reported_cost_event_count > 0}<li>{$_("usage.dataQuality.partialReportedCost", { values: { count: formatInteger(report.summary.partial_reported_cost_event_count) } })}</li>{/if}
 									{#if providerID === "grok-build" && report.summary.event_count > 0 && report.summary.unknown_reported_cost_event_count > 0}<li>{$_("usage.dataQuality.reportedCost", { values: { count: formatInteger(report.summary.unknown_reported_cost_event_count) } })}</li>{/if}

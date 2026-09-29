@@ -15,7 +15,7 @@ The log directory defaults to `CLAUDE_CONFIG_DIR`, then `~/.claude`. `--claude-d
 
 ## Understand incomplete usage
 
-When a final record is missing, verified input and cache tokens still contribute. Totals show “at least” and missing output shows “unknown”. A later sync can complete the request. Invalid candidates are skipped; contradictory valid final records are excluded from token and cost totals. The report shows incomplete and conflicting request counts. Data notes name the rejected usage fields, such as a cache write total that disagrees with its duration counts. Rejected-record counts cover all scanned logs; request and cost counts follow the selected date range.
+When a final record is missing, verified input and cache tokens still contribute. Totals show “at least” and missing output shows “unknown”. A later sync can complete the request. Restored history copies with input, output, and cache token totals cleared are skipped without a warning. Invalid candidates are skipped; contradictory valid final records are excluded from token and cost totals. The report shows incomplete and conflicting request counts. Data notes name the rejected usage fields, such as a cache write total that disagrees with its duration counts. Rejected-record counts cover all scanned logs; request and cost counts follow the selected date range.
 
 If a file is truncated or previously imported usage is rewritten, the accepted report is retained and sync shows a warning. Unreadable, unsupported, deleted, or unrecorded activity cannot be recovered. Claude Desktop and cloud sessions are not included. Deleting the Claude Code Provider also deletes its saved usage; explicit sync can reimport logs that remain available.
 

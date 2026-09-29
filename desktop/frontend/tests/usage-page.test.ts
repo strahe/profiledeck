@@ -237,6 +237,25 @@ describe("UsagePage initial sync", () => {
 		expect(screen.queryByText(/complete cost for/)).not.toBeInTheDocument();
 	});
 
+	it.each(["codex", "grok-build"])("preserves the partial estimate explanation for %s", async (providerID) => {
+		const report = usageReport();
+		report.provider_id = providerID;
+		report.summary.cost_status = "partial";
+		report.summary.partial_cost_event_count = 1;
+		report.summary.estimated_cost_event_count = 0;
+		runtime.on.mockReturnValue(vi.fn());
+		backend.report.mockReturnValue(cancellable(Promise.resolve(report)));
+		backend.syncNow.mockReturnValue(cancellable(Promise.resolve(syncStatus({ provider_id: providerID, syncing: false }))));
+		render(UsagePage, {
+			providerID, providerName: providerID === "codex" ? "Codex" : "Grok Build", providerExists: true,
+			onOpenProfiles: vi.fn(), showError: vi.fn(),
+		}, { wrapper: TestProviders });
+		const details = await screen.findByRole("button", { name: "Show details" });
+		await act(() => details.click());
+		expect(await screen.findByText(/Partially estimated requests: 1\./)).toBeInTheDocument();
+		expect(screen.queryByText(/cache tokens but no applicable rate|1 requests/)).not.toBeInTheDocument();
+	});
+
 	it("marks incomplete Claude totals and explains excluded conflicts", async () => {
 		const report = usageReport();
 		report.provider_id = "claude-code";
@@ -259,7 +278,7 @@ describe("UsagePage initial sync", () => {
 			onOpenProfiles: vi.fn(), showError: vi.fn(),
 		}, { wrapper: TestProviders });
 		expect(await screen.findByText(/At least/)).toBeInTheDocument();
-		expect(screen.getByText("Current range: 1 requests have no final output token count in the logs. Input and cache tokens are included; output tokens and their cost are excluded.")).toBeInTheDocument();
+		expect(screen.getByText("Requests without a final output token count in this range: 1. Input and cache tokens are included; output tokens and their cost are excluded.")).toBeInTheDocument();
 		await act(() => screen.getByRole("button", { name: "Show details" }).click());
 		expect(await screen.findByText(/42 usage records have a cache write total that differs/)).toBeInTheDocument();
 		expect(screen.queryByText(/partial estimate|invalid and|0 unsupported/)).not.toBeInTheDocument();

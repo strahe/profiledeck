@@ -462,9 +462,8 @@ func usageFactAggregateColumns(alias, undatedExpression string) string {
 		COUNT(%[1]s.id),
 		COALESCE(SUM(CASE WHEN %[1]s.cost_status=%[3]d AND %[1]s.token_status=1 THEN 1 ELSE 0 END),0),
 		COALESCE(SUM(CASE WHEN %[1]s.cost_status=%[3]d AND %[1]s.cache_creation_input_tokens>0 AND %[1]s.cache_write_5m_tokens IS NULL AND %[1]s.price_snapshot_json<>'{}' THEN 1 ELSE 0 END),0),
-		COALESCE(SUM(CASE WHEN %[1]s.cost_status=%[3]d AND (
-			%[1]s.price_snapshot_json='{}'
-			OR (%[1]s.cached_input_tokens>0 AND json_extract(%[1]s.price_snapshot_json,'$.cached_input') IS NULL)
+		COALESCE(SUM(CASE WHEN %[1]s.cost_status=%[3]d AND %[1]s.price_snapshot_json<>'{}' AND (
+			(%[1]s.cached_input_tokens>0 AND json_extract(%[1]s.price_snapshot_json,'$.cached_input') IS NULL)
 			OR (%[1]s.cache_write_5m_tokens>0 AND json_extract(%[1]s.price_snapshot_json,'$.cache_write_5m') IS NULL)
 			OR (%[1]s.cache_write_1h_tokens>0 AND json_extract(%[1]s.price_snapshot_json,'$.cache_write_1h') IS NULL)
 		) THEN 1 ELSE 0 END),0),

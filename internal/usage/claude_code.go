@@ -19,7 +19,7 @@ import (
 
 const (
 	SourceClaudeCodeSessionJSONL    = "claude-code-session-jsonl"
-	ClaudeCodeUsageParserRevision   = int64(2)
+	ClaudeCodeUsageParserRevision   = int64(3)
 	ClaudeCodeUsageIdentityRevision = int64(1)
 	maxClaudeCodeSessionLineBytes   = 16 * 1024 * 1024
 )
@@ -134,6 +134,10 @@ func parseClaudeCodeSessionLine(line []byte) (*Event, bool, bool, error) {
 }
 
 func parseClaudeCodeSessionObservation(line []byte) (*Event, string, bool, error) {
+	return parseClaudeCodeSessionObservationForRevision(line, ClaudeCodeUsageParserRevision)
+}
+
+func parseClaudeCodeSessionObservationForRevision(line []byte, revision int64) (*Event, string, bool, error) {
 	var record struct {
 		Type      string `json:"type"`
 		RequestID string `json:"requestId"`
@@ -180,9 +184,17 @@ func parseClaudeCodeSessionObservation(line []byte) (*Event, string, bool, error
 	if final {
 		switch *record.Message.StopReason {
 		case "end_turn", "tool_use", "max_tokens", "stop_sequence", "refusal", "pause_turn":
+		case "model_context_window_exceeded":
+			if revision < 3 {
+				return nil, "", true, nil
+			}
 		default:
 			return nil, "", true, nil
 		}
+	}
+	// Claude Code clears these counts when restoring history, leaving nested usage intact.
+	if revision >= 3 && final && usage.Input != nil && *usage.Input == 0 && usage.Read != nil && *usage.Read == 0 && usage.Write != nil && *usage.Write == 0 && usage.Output != nil && *usage.Output == 0 {
+		return nil, "", false, nil
 	}
 	if reason := invalidClaudeUsageReason(usage, final); reason != "" {
 		return nil, reason, false, nil
