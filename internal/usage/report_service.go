@@ -31,6 +31,13 @@ type UsageResolvedRange struct {
 }
 
 type UsageAggregateSummary struct {
+	MissingOutputCostEventCount   int64   `json:"missing_output_cost_event_count"`
+	MissingCacheTTLEventCount     int64   `json:"missing_cache_ttl_event_count"`
+	MissingCacheRateEventCount    int64   `json:"missing_cache_rate_event_count"`
+	TokenTotalStatus              string  `json:"token_total_status"`
+	OutputTokensStatus            string  `json:"output_tokens_status"`
+	IncompleteEventCount          int64   `json:"incomplete_event_count"`
+	ConflictingEventCount         int64   `json:"conflicting_event_count"`
 	EventCount                    int64   `json:"event_count"`
 	SessionCount                  int64   `json:"session_count"`
 	FreshInputTokens              int64   `json:"fresh_input_tokens"`
@@ -68,10 +75,11 @@ type UsageModelSummary struct {
 }
 
 type UsageImportSummary struct {
-	TrackedFiles       int64 `json:"tracked_files"`
-	LastSyncedAtUnixMS int64 `json:"last_synced_at_unix_ms"`
-	InvalidLines       int64 `json:"invalid_lines"`
-	UnsupportedLines   int64 `json:"unsupported_lines"`
+	InvalidReasons     map[string]int64 `json:"invalid_reasons"`
+	TrackedFiles       int64            `json:"tracked_files"`
+	LastSyncedAtUnixMS int64            `json:"last_synced_at_unix_ms"`
+	InvalidLines       int64            `json:"invalid_lines"`
+	UnsupportedLines   int64            `json:"unsupported_lines"`
 }
 
 type UsagePricingInfo struct {
@@ -184,6 +192,7 @@ func (service *Service) usageReportAt(ctx context.Context, req UsageReportReques
 		},
 		Summary: usageAggregateSummary(snapshot.Summary),
 		Import: UsageImportSummary{
+			InvalidReasons:     snapshot.ImportSummary.InvalidReasons,
 			TrackedFiles:       snapshot.ImportSummary.TrackedFiles,
 			LastSyncedAtUnixMS: snapshot.ImportSummary.LastSyncedAtUnixMS,
 			InvalidLines:       snapshot.ImportSummary.InvalidLines,
@@ -227,7 +236,13 @@ func usageAggregateSummary(aggregate store.UsageAggregate) UsageAggregateSummary
 		aggregate.PartialReportedCostEventCount,
 		aggregate.UnknownReportedCostEvents,
 	)
+	totalStatus, outputStatus := usageTokenStatuses(aggregate.EventCount, aggregate.IncompleteEventCount, aggregate.ConflictingEventCount)
 	return UsageAggregateSummary{
+		MissingOutputCostEventCount: aggregate.MissingOutputCostEventCount,
+		MissingCacheTTLEventCount:   aggregate.MissingCacheTTLEventCount,
+		MissingCacheRateEventCount:  aggregate.MissingCacheRateEventCount,
+		TokenTotalStatus:            totalStatus, OutputTokensStatus: outputStatus,
+		IncompleteEventCount: aggregate.IncompleteEventCount, ConflictingEventCount: aggregate.ConflictingEventCount,
 		EventCount:                    aggregate.EventCount,
 		SessionCount:                  aggregate.SessionCount,
 		FreshInputTokens:              aggregate.FreshInputTokens,
@@ -275,4 +290,19 @@ func ratio(numerator, denominator int64) float64 {
 		return 1
 	}
 	return value
+}
+
+func usageTokenStatuses(events, incomplete, conflicts int64) (string, string) {
+	total, output := "complete", "complete"
+	if incomplete+conflicts > 0 {
+		total = "partial"
+		output = "partial"
+	}
+	if events > 0 && events == conflicts {
+		total = "unknown"
+	}
+	if events > 0 && events == conflicts+incomplete {
+		output = "unknown"
+	}
+	return total, output
 }

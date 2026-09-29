@@ -13,6 +13,7 @@ import (
 	"github.com/strahe/profiledeck/internal/bootstrap"
 	"github.com/strahe/profiledeck/internal/claudecode"
 	claudeadapter "github.com/strahe/profiledeck/internal/claudecode/adapter"
+	claudeconfig "github.com/strahe/profiledeck/internal/claudecode/config"
 	claudeprofile "github.com/strahe/profiledeck/internal/claudecode/profile"
 	claudetarget "github.com/strahe/profiledeck/internal/claudecode/target"
 	"github.com/strahe/profiledeck/internal/codex"
@@ -40,6 +41,7 @@ import (
 )
 
 type Config struct {
+	ClaudeDir   string
 	ConfigDir   string
 	CodexDir    string
 	GrokHome    string
@@ -105,9 +107,15 @@ func NewWithDependencies(config Config, dependencies Dependencies) (*Application
 	if accessMode != agent.AccessUnrestricted && accessMode != agent.AccessDesktopPreferences {
 		return nil, fmt.Errorf("unsupported Agent access mode %q", accessMode)
 	}
+	claudeDir, err := claudeconfig.ResolveConfigDir(config.ClaudeDir)
+	if err != nil {
+		return nil, err
+	}
+	config.ClaudeDir = claudeDir
 	usageRegistry, err := usage.NewRegistry(
 		usage.NewCodexIntegration(config.CodexDir),
 		usage.NewGrokBuildIntegration(config.GrokHome),
+		usage.NewClaudeCodeIntegrationWithProvisioner(config.ClaudeDir, claudecode.NewUsageProvisioner()),
 	)
 	if err != nil {
 		return nil, err

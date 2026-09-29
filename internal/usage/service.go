@@ -39,6 +39,7 @@ type UsageSyncRequest struct {
 }
 
 type UsageSyncResult struct {
+	UpdatedEvents          int64              `json:"updated_events"`
 	ProviderID             string             `json:"provider_id"`
 	Source                 string             `json:"source"`
 	ScannedFiles           int64              `json:"scanned_files"`
@@ -55,6 +56,10 @@ type UsageSummaryRequest struct {
 }
 
 type UsageSummaryResult struct {
+	TokenTotalStatus              string   `json:"token_total_status"`
+	OutputTokensStatus            string   `json:"output_tokens_status"`
+	IncompleteEventCount          int64    `json:"incomplete_event_count"`
+	ConflictingEventCount         int64    `json:"conflicting_event_count"`
 	ProviderID                    string   `json:"provider_id"`
 	Source                        string   `json:"source"`
 	Sources                       []string `json:"sources"`
@@ -64,6 +69,7 @@ type UsageSummaryResult struct {
 	OutputTokens                  int64    `json:"output_tokens"`
 	TotalTokens                   int64    `json:"total_tokens"`
 	EstimatedCostUSD              *string  `json:"estimated_cost_usd"`
+	KnownEstimatedCostUSD         string   `json:"known_estimated_cost_usd"`
 	CostStatus                    string   `json:"cost_status"`
 	UnknownCostEventCount         int64    `json:"unknown_cost_event_count"`
 	EstimatedCostEventCount       int64    `json:"estimated_cost_event_count"`
@@ -282,7 +288,9 @@ func (service *Service) Summary(ctx context.Context, req UsageSummaryRequest) (U
 	if err != nil {
 		return UsageSummaryResult{}, apperror.Wrap(apperror.StoreStatusFailed, "failed to read usage summary", err)
 	}
+	totalStatus, outputStatus := usageTokenStatuses(summary.EventCount, summary.IncompleteEventCount, summary.ConflictingEventCount)
 	result := UsageSummaryResult{
+		TokenTotalStatus: totalStatus, OutputTokensStatus: outputStatus, IncompleteEventCount: summary.IncompleteEventCount, ConflictingEventCount: summary.ConflictingEventCount,
 		ProviderID:                    providerID,
 		Source:                        summarySource(summary.Sources),
 		Sources:                       summary.Sources,
@@ -292,6 +300,7 @@ func (service *Service) Summary(ctx context.Context, req UsageSummaryRequest) (U
 		OutputTokens:                  summary.OutputTokens,
 		TotalTokens:                   summary.TotalTokens,
 		CostStatus:                    CostStatusEstimated.String(),
+		KnownEstimatedCostUSD:         USDStringFromMicros(summary.EstimatedCostMicros),
 		UnknownCostEventCount:         summary.UnknownCostEvents + summary.PartialCostEvents,
 		EstimatedCostEventCount:       summary.EstimatedCostEventCount,
 		ReportedCostStatus:            ReportedCostStatusUnknown.String(),

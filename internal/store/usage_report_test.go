@@ -194,6 +194,42 @@ func TestUsageSummaryPreservesPersistedCostStatusMeanings(t *testing.T) {
 	}
 }
 
+func TestUsageReportDoesNotInferMissingCacheRatesFromLegacyPartialEstimates(t *testing.T) {
+	for _, providerID := range []string{"codex", "grok-build"} {
+		t.Run(providerID, func(t *testing.T) {
+			ctx := context.Background()
+			db := migratedTestStore(t, ctx)
+			defer closeTestStore(t, db)
+			createUsageProviderFixture(t, ctx, db, providerID)
+			source, err := db.BeginUsageSync(ctx, providerID, providerID+"-session-jsonl", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cost := int64(10)
+			facts := []CreateUsageFactParams{
+				{EventKey: testUsageKey("no-cache"), SourceID: source.ID, ModelKey: "model", OccurredAtUnixMS: 1000, InputTokens: 100, OutputTokens: 30, TotalTokens: 130, EstimatedCostMicros: &cost, CostStatus: UsageCostStatusPartial},
+				{EventKey: testUsageKey("cached"), SourceID: source.ID, ModelKey: "model", OccurredAtUnixMS: 1500, InputTokens: 100, CachedInputTokens: 20, OutputTokens: 30, TotalTokens: 130, EstimatedCostMicros: &cost, CostStatus: UsageCostStatusPartial},
+			}
+			if _, err := db.InsertUsageFacts(ctx, testUsageFactBatch(source, facts)); err != nil {
+				t.Fatal(err)
+			}
+			report, err := db.UsageReport(ctx, UsageReportQuery{ProviderID: providerID, EndUnixMS: 3000, Buckets: []UsageTimeBucket{{StartUnixMS: 0, EndUnixMS: 3000}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			aggregates := []UsageAggregate{report.Summary, report.Models[0].UsageAggregate, report.Trend[0].UsageAggregate}
+			for _, aggregate := range aggregates {
+				if aggregate.PartialCostEventCount != 2 || aggregate.EstimatedCostMicros != 20 {
+					t.Fatalf("partial estimate changed: %+v", aggregate)
+				}
+				if aggregate.MissingCacheRateEventCount != 0 || aggregate.MissingCacheTTLEventCount != 0 || aggregate.MissingOutputCostEventCount != 0 {
+					t.Fatalf("legacy estimate received a Claude-specific cause: %+v", aggregate)
+				}
+			}
+		})
+	}
+}
+
 func TestUsageSummaryKeepsSourcesAndFactsInOneSnapshot(t *testing.T) {
 	registerUsageSummarySnapshotBarrier(t)
 	ctx := context.Background()

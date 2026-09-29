@@ -254,10 +254,13 @@ func TestAppliedSchemaUsesItsVersionedContract(t *testing.T) {
 	if _, err := db.db.DB.ExecContext(ctx, `ALTER TABLE usage_sources DROP COLUMN completed_generation`); err != nil {
 		t.Fatalf("remove usage completion generation: %v", err)
 	}
-	for _, column := range []string{"cache_creation_input_tokens", "cache_write_input_tokens", "pricing_catalog_version", "reported_cost_status", "reported_cost_usd_ticks"} {
+	for _, column := range []string{"price_snapshot_json", "pricing_eligible", "cache_write_1h_tokens", "cache_write_5m_tokens", "token_status", "cache_creation_input_tokens", "cache_write_input_tokens", "pricing_catalog_version", "reported_cost_status", "reported_cost_usd_ticks"} {
 		if _, err := db.db.DB.ExecContext(ctx, fmt.Sprintf("ALTER TABLE usage_facts DROP COLUMN %s", column)); err != nil {
 			t.Fatalf("remove reported usage cost column %s: %v", column, err)
 		}
+	}
+	if _, err := db.db.DB.ExecContext(ctx, `DROP TABLE claude_code_usage_import_files`); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := db.db.DB.ExecContext(ctx, `DROP TABLE grok_build_usage_import_files`); err != nil {
 		t.Fatalf("restore unmarked Stable schema: %v", err)

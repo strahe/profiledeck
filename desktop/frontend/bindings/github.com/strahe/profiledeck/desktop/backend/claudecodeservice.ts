@@ -25,6 +25,10 @@ export function Detect(): $CancellablePromise<claudecode$0.ClaudeCodeDetectResul
     return $Call.ByID(4104865097);
 }
 
+export function GetSettings(): $CancellablePromise<claudecode$0.Settings> {
+    return $Call.ByID(77725791);
+}
+
 export function ListProfiles(): $CancellablePromise<claudecode$0.ClaudeCodeProfileListResult> {
     return $Call.ByID(2487267564);
 }
@@ -39,4 +43,8 @@ export function ShowProfile(profileID: string): $CancellablePromise<claudecode$0
 
 export function UpdateProfile(req: $models.UpdateClaudeCodeProfileRequest): $CancellablePromise<claudecode$0.ClaudeCodeProfileDetail> {
     return $Call.ByID(3263369448, req);
+}
+
+export function UpdateSettings(req: claudecode$0.UpdateSettingsRequest): $CancellablePromise<claudecode$0.Settings> {
+    return $Call.ByID(325034858, req);
 }

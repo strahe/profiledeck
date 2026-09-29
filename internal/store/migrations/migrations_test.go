@@ -310,3 +310,28 @@ func TestGrokBuildReportedCostUpgradeIsReplaySafeAndReversible(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeCodeUsageMigrationRollsBackAddedColumns(t *testing.T) {
+	ctx := context.Background()
+	sqlDB, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "migration.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := bun.NewDB(sqlDB, sqlitedialect.New())
+	defer db.Close()
+	if err := upStableBaseline(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `CREATE VIEW claude_code_usage_import_files AS SELECT 1 AS source_id`); err != nil {
+		t.Fatal(err)
+	}
+	if err := upClaudeCodeUsage(ctx, db); err == nil {
+		t.Fatal("migration accepted incompatible checkpoint object")
+	}
+	for _, column := range []string{"token_status", "cache_write_5m_tokens", "cache_write_1h_tokens", "pricing_eligible", "price_snapshot_json"} {
+		exists, err := usageColumnExists(ctx, db, "usage_facts", column)
+		if err != nil || exists {
+			t.Fatalf("failed migration retained %s: %t, %v", column, exists, err)
+		}
+	}
+}

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { usageTokenLabel } from "./token-format";
 	import { onMount } from "svelte";
 	import { Events, type CancellablePromise } from "@wailsio/runtime";
 	import { _ } from "svelte-i18n";
@@ -238,15 +239,20 @@
 		return autoSyncStatus?.last_success_at_unix_ms || report?.import.last_synced_at_unix_ms || 0;
 	}
 
-	function dataQualityIssueCount(value: UsageReportResult): number {
-		return Number(autoSyncStatus?.outcome === "warning")
-			+ Number(value.import.invalid_lines > 0 || value.import.unsupported_lines > 0)
-			+ Number(value.summary.undated_event_count > 0)
-			+ Number(value.summary.partial_cost_event_count > 0)
-			+ Number(value.summary.event_count > 0 && value.summary.unknown_cost_event_count > 0)
-			+ Number(providerID === "grok-build" && value.summary.partial_reported_cost_event_count > 0)
-			+ Number(providerID === "grok-build" && value.summary.event_count > 0 && value.summary.unknown_reported_cost_event_count > 0);
+	function unclassifiedInvalidLines(value: UsageReportResult): number {
+		return Math.max(0, value.import.invalid_lines - Object.values(value.import.invalid_reasons ?? {}).reduce<number>((sum, count) => sum + (count ?? 0), 0));
 	}
+
+	function hasDataQualityDetails(value: UsageReportResult): boolean {
+		return autoSyncStatus?.outcome === "warning"
+			|| value.import.invalid_lines > 0 || value.import.unsupported_lines > 0
+			|| value.summary.undated_event_count > 0
+			|| value.summary.missing_cache_ttl_event_count > 0 || value.summary.missing_cache_rate_event_count > 0
+			|| (providerID !== "claude-code" && value.summary.partial_cost_event_count > 0)
+			|| value.summary.unknown_cost_event_count > 0
+			|| (providerID === "grok-build" && (value.summary.partial_reported_cost_event_count > 0 || value.summary.unknown_reported_cost_event_count > 0));
+	}
+
 </script>
 
 <ContentContainer class="max-w-6xl">
@@ -300,20 +306,32 @@
 	{#if (loading && (!report || report.summary.event_count === 0)) || (report?.summary.event_count === 0 && initialSyncPending)}
 		<div class="grid min-h-56 place-items-center rounded-lg border bg-card"><Spinner class="size-5" /></div>
 	{:else if report}
-		{#if autoSyncStatus?.outcome === "warning" || report.import.invalid_lines > 0 || report.import.unsupported_lines > 0 || report.summary.undated_event_count > 0 || report.summary.partial_cost_event_count > 0 || (report.summary.event_count > 0 && report.summary.unknown_cost_event_count > 0) || (providerID === "grok-build" && (report.summary.partial_reported_cost_event_count > 0 || (report.summary.event_count > 0 && report.summary.unknown_reported_cost_event_count > 0)))}
+		{#if autoSyncStatus?.outcome === "warning" || report.import.invalid_lines > 0 || report.import.unsupported_lines > 0 || report.summary.undated_event_count > 0 || report.summary.incomplete_event_count > 0 || report.summary.conflicting_event_count > 0 || report.summary.partial_cost_event_count > 0 || (report.summary.event_count > 0 && report.summary.unknown_cost_event_count > 0) || (providerID === "grok-build" && (report.summary.partial_reported_cost_event_count > 0 || (report.summary.event_count > 0 && report.summary.unknown_reported_cost_event_count > 0)))}
 			<Alert.Root>
 				<Alert.Title>{$_("usage.dataQuality.title")}</Alert.Title>
 				<Alert.Description>
-					<p>{$_("usage.dataQuality.summary", { values: { count: dataQualityIssueCount(report) } })}</p>
+					{#if report.summary.incomplete_event_count > 0}
+						<p>{$_(providerID === "claude-code" ? "usage.claudeIncompleteUsage" : "usage.incompleteUsage", { values: { count: formatInteger(report.summary.incomplete_event_count) } })}</p>
+					{/if}
+					{#if report.summary.conflicting_event_count > 0}
+						<p>{$_("usage.conflictingUsage", { values: { count: formatInteger(report.summary.conflicting_event_count) } })}</p>
+					{/if}
+					{#if hasDataQualityDetails(report)}
 					<Accordion.Root type="single" class="mt-1">
 						<Accordion.Item value="details" class="border-0">
 							<Accordion.Trigger class="py-1 text-xs">{$_("usage.dataQuality.showDetails")}</Accordion.Trigger>
 							<Accordion.Content>
 								<ul class="flex list-disc flex-col gap-1 pl-4">
 									{#if autoSyncStatus?.outcome === "warning"}<li>{$_("usage.dataQuality.fileErrors", { values: { count: autoSyncStatus.import_error_count } })}</li>{/if}
-									{#if report.import.invalid_lines > 0 || report.import.unsupported_lines > 0}<li>{$_("usage.dataQuality.lines", { values: { invalid: formatInteger(report.import.invalid_lines), unsupported: formatInteger(report.import.unsupported_lines) } })}</li>{/if}
+									{#each Object.entries(report.import.invalid_reasons ?? {}) as [reason, count]}
+										{#if typeof count === "number" && count > 0}<li>{$_(`usage.dataQuality.invalidReasons.${reason}`, { values: { count: formatInteger(count) } })}</li>{/if}
+									{/each}
+									{#if unclassifiedInvalidLines(report) > 0}<li>{$_("usage.dataQuality.invalidLines", { values: { count: formatInteger(unclassifiedInvalidLines(report)) } })}</li>{/if}
+									{#if report.import.unsupported_lines > 0}<li>{$_("usage.dataQuality.unsupportedLines", { values: { count: formatInteger(report.import.unsupported_lines) } })}</li>{/if}
 									{#if report.summary.undated_event_count > 0}<li>{$_("usage.dataQuality.undated", { values: { count: formatInteger(report.summary.undated_event_count) } })}</li>{/if}
-									{#if report.summary.partial_cost_event_count > 0}<li>{$_("usage.dataQuality.partialPricing", { values: { count: formatInteger(report.summary.partial_cost_event_count) } })}</li>{/if}
+									{#if report.summary.missing_cache_ttl_event_count > 0}<li>{$_("usage.dataQuality.missingCacheTTL", { values: { count: formatInteger(report.summary.missing_cache_ttl_event_count) } })}</li>{/if}
+									{#if report.summary.missing_cache_rate_event_count > 0}<li>{$_("usage.dataQuality.missingCacheRate", { values: { count: formatInteger(report.summary.missing_cache_rate_event_count) } })}</li>{/if}
+									{#if providerID !== "claude-code" && report.summary.partial_cost_event_count > 0}<li>{$_("usage.dataQuality.partialPricing", { values: { count: formatInteger(report.summary.partial_cost_event_count) } })}</li>{/if}
 									{#if report.summary.event_count > 0 && report.summary.unknown_cost_event_count > 0}<li>{$_("usage.dataQuality.pricing", { values: { count: formatInteger(report.summary.unknown_cost_event_count), coverage: formatPercent(report.summary.pricing_coverage) } })}</li>{/if}
 									{#if providerID === "grok-build" && report.summary.partial_reported_cost_event_count > 0}<li>{$_("usage.dataQuality.partialReportedCost", { values: { count: formatInteger(report.summary.partial_reported_cost_event_count) } })}</li>{/if}
 									{#if providerID === "grok-build" && report.summary.event_count > 0 && report.summary.unknown_reported_cost_event_count > 0}<li>{$_("usage.dataQuality.reportedCost", { values: { count: formatInteger(report.summary.unknown_reported_cost_event_count) } })}</li>{/if}
@@ -321,6 +339,7 @@
 							</Accordion.Content>
 						</Accordion.Item>
 					</Accordion.Root>
+					{/if}
 				</Alert.Description>
 			</Alert.Root>
 		{/if}
@@ -388,7 +407,7 @@
 				<Card.Root>
 					<Card.Header class="gap-1 py-3">
 						<Card.Description>{$_("usage.totalTokens")}</Card.Description>
-						<Card.Title class="text-xl tabular-nums">{formatCompact(report.summary.total_tokens)}</Card.Title>
+						<Card.Title class="text-xl tabular-nums">{usageTokenLabel(formatCompact(report.summary.total_tokens), report.summary.token_total_status)}</Card.Title>
 					</Card.Header>
 				</Card.Root>
 			</div>

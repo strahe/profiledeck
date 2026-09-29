@@ -131,7 +131,7 @@ func TestParseCodexSessionFilePricesMatchedCacheWriteAndLongContext(t *testing.T
 	}
 	event := parsed.Events[0]
 	if event.CostStatus != CostStatusEstimated || event.EstimatedCostMicros == nil || *event.EstimatedCostMicros != 5_975_000 ||
-		event.CacheWriteInputTokens == nil || *event.CacheWriteInputTokens != 25_000 || event.PricingCatalogVersion == nil || *event.PricingCatalogVersion != 1 {
+		event.CacheWriteInputTokens == nil || *event.CacheWriteInputTokens != 25_000 || event.PricingCatalogVersion == nil || *event.PricingCatalogVersion != bundledPricingCatalog.CatalogVersion {
 		t.Fatalf("matched cache write and long context = %#v", event)
 	}
 }

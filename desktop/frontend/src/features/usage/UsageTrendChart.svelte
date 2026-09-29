@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { usageTokenLabel } from "./token-format";
 	import { tick } from "svelte";
 	import { _ } from "svelte-i18n";
 	import type { UsageResolvedRange, UsageTrendPoint } from "../../../bindings/github.com/strahe/profiledeck/internal/usage/models";
@@ -235,8 +236,8 @@
 			bucket: fullBucketLabel(point.start_unix_ms),
 			fresh: formatInteger(point.summary.fresh_input_tokens),
 			cached: formatInteger(point.summary.cached_input_tokens),
-			output: formatInteger(point.summary.output_tokens),
-			total: formatInteger(point.summary.total_tokens),
+			output: usageTokenLabel(formatInteger(point.summary.output_tokens), point.summary.output_tokens_status),
+			total: usageTokenLabel(formatInteger(point.summary.total_tokens), point.summary.token_total_status),
 		});
 	}
 
@@ -412,11 +413,11 @@
 					<div class="mt-1 flex items-center justify-between gap-4 text-muted-foreground"><span>{$_("usage.chart.coverage")}</span><span class="font-mono tabular-nums">{formatPercent(coverage)}</span></div>
 				{/if}
 			{:else}
-				<div class="mt-1 flex items-center justify-between gap-4"><span>{$_("usage.total")}</span><span class="font-mono tabular-nums">{formatInteger(tooltipPoint.summary.total_tokens)}</span></div>
+				<div class="mt-1 flex items-center justify-between gap-4"><span>{$_("usage.total")}</span><span class="font-mono tabular-nums">{usageTokenLabel(formatInteger(tooltipPoint.summary.total_tokens), tooltipPoint.summary.token_total_status)}</span></div>
 				<div class="mt-1 grid grid-cols-2 gap-x-4 text-muted-foreground">
 					<span>{$_("usage.freshInput")}</span><span class="text-right font-mono tabular-nums">{formatInteger(tooltipPoint.summary.fresh_input_tokens)}</span>
 					<span>{$_("usage.cachedInput")}</span><span class="text-right font-mono tabular-nums">{formatInteger(tooltipPoint.summary.cached_input_tokens)}</span>
-					<span>{$_("usage.output")}</span><span class="text-right font-mono tabular-nums">{formatInteger(tooltipPoint.summary.output_tokens)}</span>
+					<span>{$_("usage.output")}</span><span class="text-right font-mono tabular-nums">{usageTokenLabel(formatInteger(tooltipPoint.summary.output_tokens), tooltipPoint.summary.output_tokens_status)}</span>
 				</div>
 			{/if}
 		</div>

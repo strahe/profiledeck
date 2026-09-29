@@ -43,3 +43,11 @@ export interface ClaudeCodeProfileSummary {
     "updated_at_unix_ms": number;
     "warnings"?: string[] | null;
 }
+
+export interface Settings {
+    "usage_sync_interval_seconds": number;
+}
+
+export interface UpdateSettingsRequest {
+    "usage_sync_interval_seconds"?: number | null;
+}

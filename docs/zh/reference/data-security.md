@@ -20,7 +20,7 @@ ProfileDeck 在你的设备上保存 Profile、登录、设置、用量报告和
 
 ## 何时联网
 
-- 用量报告读取本地 Codex 和 Grok Build 会话。价格检查从 GitHub 下载公开费率，不上传本地用量。运行 `profiledeck-cli usage pricing auto off` 可关闭自动检查。
+- 用量报告读取本地 Codex、Grok Build 和 Claude Code 会话。价格检查从 GitHub 下载公开费率，不上传本地用量。运行 `profiledeck-cli usage pricing auto off` 可关闭自动检查。
 - ChatGPT Codex 限额检查使用所选登录连接 Codex 或 OpenAI。API Key 限额检查将已保存密钥发送到该 Profile 的自定义 Base URL；HTTP 不会加密传输中的密钥。
 - Grok Build credits 检查使用已安装的 Grok Build，可能续期当前登录。
 - Antigravity 限额检查将当前访问令牌发送到未公开的 Google Cloud Code 服务，可能带来账号风险；检查不会刷新或回写令牌。

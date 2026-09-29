@@ -69,6 +69,7 @@ type checkpointParseResult struct {
 	BoundaryDigest        store.UsageKey
 	CheckpointEventDigest store.UsageKey
 	ParserStateJSON       string
+	ClaudeInvalidReasons  map[string]int64
 }
 
 func parseCodexCheckpointFile(
@@ -243,6 +244,103 @@ func parseGrokBuildCheckpointFile(
 				event,
 			)
 		}
+		if unsupported {
+			result.UnsupportedLines++
+		}
+		result.ProcessedBytes += consumed
+		boundary.appendSuffix(boundarySuffix, consumed)
+	}
+	result.BoundaryDigest = boundary.digest()
+	if err := verifyStableUsageFile(file, handle, fileSystem); err != nil {
+		return checkpointParseResult{}, err
+	}
+	return result, nil
+}
+
+func parseClaudeCodeCheckpointFile(
+	ctx context.Context,
+	file SourceFile,
+	start int64,
+	eventDigest store.UsageKey,
+	expectedBoundary store.UsageKey,
+	fileSystem usageFileSystem,
+	observer UsageSyncObserver,
+	parserRevision int64,
+) (checkpointParseResult, error) {
+	if fileSystem == nil {
+		fileSystem = osUsageFileSystem{}
+	}
+	handle, err := openStableUsageFile(file, fileSystem, observer)
+	if err != nil {
+		return checkpointParseResult{}, err
+	}
+	defer handle.Close()
+	if start < 0 || start > file.SizeBytes {
+		return checkpointParseResult{}, errors.New("usage checkpoint is outside the Claude Code session file")
+	}
+	boundary, err := readUsageBoundaryWindow(handle, start, observer)
+	if err != nil {
+		return checkpointParseResult{}, err
+	}
+	if start > 0 {
+		if boundary.digest() != expectedBoundary {
+			return checkpointParseResult{}, errUsageBoundaryChanged
+		}
+	}
+	if eventDigest.IsZero() {
+		eventDigest = initialCheckpointEventDigest("claude-code")
+	}
+	result := checkpointParseResult{
+		ProcessedBytes:        start,
+		CheckpointEventDigest: eventDigest,
+		ClaudeInvalidReasons:  make(map[string]int64),
+	}
+	section := io.NewSectionReader(observedReaderAt{reader: handle, observer: observer}, start, file.SizeBytes-start)
+	reader := bufio.NewReaderSize(section, 64*1024)
+	for {
+		if err := ctx.Err(); err != nil {
+			return checkpointParseResult{}, err
+		}
+		rawLine, boundarySuffix, tooLong, terminated, consumed, err := readCheckpointLine(
+			ctx,
+			reader,
+			maxClaudeCodeSessionLineBytes,
+		)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return checkpointParseResult{}, err
+		}
+		if tooLong {
+			if !terminated {
+				break
+			}
+			result.InvalidLines++
+			result.ClaudeInvalidReasons[store.ClaudeCodeRecordTooLarge]++
+			result.ProcessedBytes += consumed
+			boundary.appendSuffix(boundarySuffix, consumed)
+			continue
+		}
+		line := bytes.TrimSpace(rawLine)
+		if len(line) == 0 {
+			result.ProcessedBytes += consumed
+			boundary.appendSuffix(boundarySuffix, consumed)
+			continue
+		}
+		event, invalidReason, unsupported, parseErr := parseClaudeCodeSessionObservationForRevision(line, parserRevision)
+		if parseErr != nil && !terminated {
+			break
+		}
+		if invalidReason != "" {
+			result.InvalidLines++
+			result.ClaudeInvalidReasons[invalidReason]++
+		}
+		if event != nil {
+			result.Events = append(result.Events, *event)
+			result.CheckpointEventDigest = advanceCheckpointEventDigest("claude-code", result.CheckpointEventDigest, *event)
+		}
+
 		if unsupported {
 			result.UnsupportedLines++
 		}
@@ -439,6 +537,19 @@ func advanceCheckpointEventDigest(
 	} {
 		binary.BigEndian.PutUint64(encoded[:], uint64(value))
 		_, _ = hash.Write(encoded[:])
+	}
+	if providerID == "claude-code" {
+		projection, _ := json.Marshal(struct {
+			Model    string
+			Session  string
+			Time     int64
+			Status   store.UsageTokenStatus
+			Write    *int64
+			Five     *int64
+			Hour     *int64
+			Eligible bool
+		}{event.Model, event.SessionID, event.OccurredAtUnixMS, event.TokenStatus, event.CacheCreationInputTokens, event.CacheWrite5mTokens, event.CacheWrite1hTokens, event.PricingEligible})
+		_, _ = hash.Write(projection)
 	}
 	var digest store.UsageKey
 	copy(digest[:], hash.Sum(nil))

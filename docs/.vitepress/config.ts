@@ -20,7 +20,8 @@ const enCodex = [
 ]
 
 const enClaudeCode = [
-  { text: 'Profiles', link: '/claude-code/profiles' }
+  { text: 'Profiles', link: '/claude-code/profiles' },
+  { text: 'Usage and Cost', link: '/claude-code/usage-cost' }
 ]
 
 const enAntigravity = [
@@ -55,7 +56,8 @@ const zhCodex = [
 ]
 
 const zhClaudeCode = [
-  { text: 'Profile', link: '/zh/claude-code/profiles' }
+  { text: 'Profile', link: '/zh/claude-code/profiles' },
+  { text: '用量与成本', link: '/zh/claude-code/usage-cost' }
 ]
 
 const zhAntigravity = [

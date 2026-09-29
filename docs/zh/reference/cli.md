@@ -30,13 +30,14 @@ Codex 和 Grok Build 还提供 `config-set` 管理、`profile set-config` 和 `p
 ```bash
 profiledeck-cli usage sync codex
 profiledeck-cli usage sync grok-build
+profiledeck-cli usage sync claude-code --claude-dir /path/to/claude-home
 profiledeck-cli usage summary --provider grok-build
 profiledeck-cli usage report --provider grok-build --range 30d
 profiledeck-cli usage pricing check
 profiledeck-cli usage pricing auto off
 ```
 
-报告可使用 `--provider codex` 或 `--provider grok-build`，默认是 Codex。范围可选 `today`、`7d`、`30d`、`all`。估算限制见 [Codex](../codex/usage-cost.md) 或 [Grok Build](../grok-build/usage-cost.md)。
+报告可使用 `--provider codex`、`--provider grok-build` 或 `--provider claude-code`，默认是 Codex。范围可选 `today`、`7d`、`30d`、`all`。估算限制见 [Codex](../codex/usage-cost.md)、[Grok Build](../grok-build/usage-cost.md) 或 [Claude Code](../claude-code/usage-cost.md)。
 
 ## 备份与恢复
 

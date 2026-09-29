@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { usageTokenLabel } from "./token-format";
 	import { _ } from "svelte-i18n";
 	import type { UsageModelSummary } from "../../../bindings/github.com/strahe/profiledeck/internal/usage/models";
 
@@ -65,7 +66,7 @@
 							</div>
 						</Table.Cell>
 					{/if}
-					<Table.Cell class="text-right tabular-nums">{formatInteger(model.summary.total_tokens)}</Table.Cell>
+					<Table.Cell class="text-right tabular-nums">{usageTokenLabel(formatInteger(model.summary.total_tokens), model.summary.token_total_status)}</Table.Cell>
 					<Table.Cell class="text-right tabular-nums">{formatInteger(model.summary.session_count)}</Table.Cell>
 				</Table.Row>
 			{/each}
