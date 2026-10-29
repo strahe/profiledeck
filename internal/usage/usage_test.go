@@ -3,7 +3,9 @@ package usage
 import (
 	"math"
 	"testing"
+	"time"
 
+	"github.com/strahe/profiledeck/internal/pricing"
 	"github.com/strahe/profiledeck/internal/store"
 )
 
@@ -67,27 +69,80 @@ func TestEstimateCostMicrosCoversCurrentOpenAIAndCodexModels(t *testing.T) {
 	}
 }
 
-func TestEstimateCostMicrosReportsCacheWriteModelsAsPartial(t *testing.T) {
+func TestEstimateCostMicrosRequiresCacheWriteEvidence(t *testing.T) {
 	tokens := TokenCounts{
 		InputTokens:       1_000_000,
 		CachedInputTokens: 100_000,
 		OutputTokens:      1_000_000,
 		TotalTokens:       2_000_000,
 	}
-	tests := []struct {
-		model string
-		want  int64
-	}{
-		{model: "gpt-6-astra", want: 59_100_000},
-		{model: "gpt-5.6-sol", want: 23_640_000},
-		{model: "gpt-5.6-terra", want: 13_820_000},
-		{model: "gpt-5.6-luna", want: 1_382_000},
+	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		t.Run(model, func(t *testing.T) {
+			got, status := EstimateCostMicros(model, tokens)
+			if status != CostStatusUnknown || got != nil {
+				t.Fatalf("expected missing cache-write evidence to remain unknown, got status=%q cost=%v", status, got)
+			}
+		})
 	}
-	for _, tt := range tests {
-		t.Run(tt.model, func(t *testing.T) {
-			got, status := EstimateCostMicros(tt.model, tokens)
-			if status != CostStatusPartial || got == nil || *got != tt.want {
-				t.Fatalf("expected partial base cost %d, got status=%q cost=%v", tt.want, status, got)
+}
+
+func TestCodexCostUsesCacheWriteEvidenceAndEventDate(t *testing.T) {
+	zero, writes, perCall := int64(0), int64(25_000), int64(300_000)
+	atLimit, aboveLimit := int64(272_000), int64(272_001)
+	for _, test := range []struct {
+		name       string
+		model      string
+		date       string
+		cacheWrite *int64
+		perCall    *int64
+		input      int64
+		want       int64
+		status     store.UsageCostStatus
+		singleRate bool
+	}{
+		{name: "before retention choice", model: "gpt-6-astra", date: "2026-10-19T23:59:59Z", cacheWrite: &writes, perCall: &perCall, want: 5_975_000, status: CostStatusEstimated},
+		{name: "retention choice starts", model: "gpt-6-astra", date: "2026-10-20T00:00:00Z", cacheWrite: &writes, perCall: &perCall, want: 5_350_000, status: CostStatusPartial},
+		{name: "explicit zero", model: "gpt-6-astra", date: "2026-10-20T00:00:00Z", cacheWrite: &zero, perCall: &perCall, want: 5_850_000, status: CostStatusEstimated},
+		{name: "missing count", model: "gpt-6-astra", date: "2026-10-20T00:00:00Z", perCall: &perCall, status: CostStatusUnknown},
+		{name: "missing call evidence", model: "gpt-6-astra", date: "2026-10-20T00:00:00Z", cacheWrite: &writes, want: 2_800_000, status: CostStatusPartial},
+		{name: "sol starts at verification", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", cacheWrite: &zero, perCall: &perCall, want: 1_160_000, status: CostStatusEstimated},
+		{name: "sol at short-context limit", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", cacheWrite: &zero, perCall: &atLimit, input: atLimit, want: 549_000, status: CostStatusEstimated},
+		{name: "sol above short-context limit", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", cacheWrite: &zero, perCall: &aboveLimit, input: aboveLimit, want: 1_048_004, status: CostStatusEstimated},
+		{name: "sol writes lack retention", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", cacheWrite: &writes, perCall: &perCall, want: 1_060_000, status: CostStatusPartial, singleRate: true},
+		{name: "terra starts at verification", model: "gpt-6.1-terra", date: "2026-10-29T00:00:00Z", cacheWrite: &zero, perCall: &perCall, want: 580_000, status: CostStatusEstimated},
+		{name: "unverified historical sol", model: "gpt-6.1-sol", date: "2026-10-28T23:59:59Z", cacheWrite: &zero, perCall: &perCall, status: CostStatusUnknown},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			at, err := time.Parse(time.RFC3339, test.date)
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalog := pricing.Embedded()
+			if test.singleRate {
+				short, long := "2.5", "5"
+				for i := range catalog.Entries {
+					if catalog.Entries[i].Model == test.model {
+						catalog.Entries[i].ShortContext.CacheWrite = &short
+						catalog.Entries[i].LongContext.Rates.CacheWrite = &long
+					}
+				}
+			}
+			input := test.input
+			if input == 0 {
+				input = 300_000
+			}
+			cost, status, version := estimateCostAt(catalog, ProviderCodex, test.model, at.UnixMilli(), TokenCounts{
+				InputTokens: input, CachedInputTokens: 50_000, OutputTokens: 10_000, TotalTokens: input + 10_000,
+			}, test.cacheWrite, test.perCall)
+			if status != test.status {
+				t.Fatalf("cost status = %v, want %v", status, test.status)
+			}
+			if test.status == CostStatusUnknown {
+				if cost != nil || version != nil {
+					t.Fatalf("unknown cost retained price: cost=%v version=%v", cost, version)
+				}
+			} else if cost == nil || *cost != test.want || version == nil || *version != catalog.CatalogVersion {
+				t.Fatalf("cost=%v version=%v, want %d at catalog %d", cost, version, test.want, catalog.CatalogVersion)
 			}
 		})
 	}

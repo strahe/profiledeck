@@ -115,24 +115,43 @@ func TestParseCodexSessionFileStoresCacheWriteModelsAsPartial(t *testing.T) {
 }
 
 func TestParseCodexSessionFilePricesMatchedCacheWriteAndLongContext(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session.jsonl")
-	writeTestFile(t, path, strings.Join([]string{
-		`{"type":"session_meta","session_id":"session-1"}`,
-		`{"type":"turn_context","model":"gpt-6-astra"}`,
-		`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300000,"cached_input_tokens":50000,"output_tokens":10000,"total_tokens":310000}},"last_token_usage":{"input_tokens":300000,"cached_input_tokens":50000,"cache_write_input_tokens":25000,"output_tokens":10000}},"timestamp":"2026-09-23T00:00:00Z"}`,
-	}, "\n"))
-	sourceKey, err := SourceKey(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, err := ParseCodexSessionFile(SourceFile{Path: path, SourceKey: sourceKey})
-	if err != nil || len(parsed.Events) != 1 {
-		t.Fatalf("matched call = %#v, err = %v", parsed, err)
-	}
-	event := parsed.Events[0]
-	if event.CostStatus != CostStatusEstimated || event.EstimatedCostMicros == nil || *event.EstimatedCostMicros != 5_975_000 ||
-		event.CacheWriteInputTokens == nil || *event.CacheWriteInputTokens != 25_000 || event.PricingCatalogVersion == nil || *event.PricingCatalogVersion != bundledPricingCatalog.CatalogVersion {
-		t.Fatalf("matched cache write and long context = %#v", event)
+	for _, test := range []struct {
+		name    string
+		model   string
+		date    string
+		writes  string
+		want    int64
+		partial bool
+	}{
+		{name: "single retention", model: "gpt-6-astra", date: "2026-09-23T00:00:00Z", writes: "25000", want: 5_975_000},
+		{name: "sol explicit zero writes", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", writes: "0", want: 1_160_000},
+		{name: "sol unspecified retention", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", writes: "25000", want: 1_060_000, partial: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "session.jsonl")
+			writeTestFile(t, path, strings.Join([]string{
+				`{"type":"session_meta","session_id":"session-1"}`,
+				`{"type":"turn_context","model":"` + test.model + `"}`,
+				`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300000,"cached_input_tokens":50000,"output_tokens":10000,"total_tokens":310000}},"last_token_usage":{"input_tokens":300000,"cached_input_tokens":50000,"cache_write_input_tokens":` + test.writes + `,"output_tokens":10000}},"timestamp":"` + test.date + `"}`,
+			}, "\n"))
+			sourceKey, err := SourceKey(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := ParseCodexSessionFile(SourceFile{Path: path, SourceKey: sourceKey})
+			if err != nil || len(parsed.Events) != 1 {
+				t.Fatalf("matched call = %#v, err = %v", parsed, err)
+			}
+			event := parsed.Events[0]
+			wantStatus := CostStatusEstimated
+			if test.partial {
+				wantStatus = CostStatusPartial
+			}
+			if event.Model != test.model || event.CostStatus != wantStatus || event.EstimatedCostMicros == nil || *event.EstimatedCostMicros != test.want ||
+				event.CacheWriteInputTokens == nil || event.PricingCatalogVersion == nil || *event.PricingCatalogVersion != bundledPricingCatalog.CatalogVersion {
+				t.Fatalf("matched cache write and long context = %#v", event)
+			}
+		})
 	}
 }
 

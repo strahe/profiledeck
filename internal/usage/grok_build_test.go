@@ -269,6 +269,13 @@ func TestEstimateGrokBuildCostUsesShortContextStandardPrices(t *testing.T) {
 	if cost, status := EstimateGrokBuildCostMicros("grok-4.7-build", tokens); status != CostStatusEstimated || cost == nil || *cost != 7_850_000 {
 		t.Fatalf("standard Grok Build 4.7 cost = %v, status = %v", cost, status)
 	}
+	verifiedAt := time.Date(2026, time.October, 29, 0, 0, 0, 0, time.UTC).UnixMilli()
+	for _, model := range []string{"grok-build-0.1", "grok-code-fast-1", "grok-code-fast", "grok-code-fast-1-0825"} {
+		cost, status, _ := estimateCostAt(bundledPricingCatalog, "grok-build", model, verifiedAt, tokens, nil, nil)
+		if status != CostStatusEstimated || cost == nil || *cost != 2_920_000 {
+			t.Fatalf("%s short-context estimate = %v, status = %v", model, cost, status)
+		}
+	}
 	beforeLaunch := time.Date(2026, time.September, 20, 23, 59, 59, 0, time.UTC).UnixMilli()
 	if cost, status, _ := estimateCostAt(bundledPricingCatalog, "grok-build", "grok-4.7-build", beforeLaunch, tokens, nil, nil); cost != nil || status != CostStatusUnknown {
 		t.Fatalf("pre-launch Grok Build 4.7 cost = %v, status = %v", cost, status)

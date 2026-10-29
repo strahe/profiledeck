@@ -258,8 +258,17 @@ type UsageUnknownCostModel struct {
 	Model    string
 }
 
+type UsageCostFilter struct {
+	ModelID                 int64
+	FromUnixMS              int64
+	UntilUnixMS             int64
+	RequireCompleteTokens   bool
+	RequireCacheWriteTokens bool
+}
+
 type UsageFactCostCandidate struct {
 	ID                       int64
+	EventKey                 UsageKey
 	OccurredAtUnixMS         int64
 	InputTokens              int64
 	CachedInputTokens        int64
@@ -1106,8 +1115,8 @@ func (s *Store) ListUnknownUsageCostModels(ctx context.Context, providerID strin
 	return models, rows.Err()
 }
 
-func (s *Store) HasUnknownUsageFactCostInPeriod(ctx context.Context, sourceID, modelID, fromUnixMS, untilUnixMS int64) (bool, error) {
-	if sourceID <= 0 || modelID <= 0 || untilUnixMS <= fromUnixMS {
+func (s *Store) HasUnknownUsageFactCostInPeriod(ctx context.Context, sourceID int64, filter UsageCostFilter) (bool, error) {
+	if sourceID <= 0 || filter.ModelID <= 0 || filter.UntilUnixMS <= filter.FromUnixMS {
 		return false, errors.New("usage cost period query is invalid")
 	}
 	var found int
@@ -1118,9 +1127,12 @@ func (s *Store) HasUnknownUsageFactCostInPeriod(ctx context.Context, sourceID, m
 			WHERE f.source_id = ? AND f.cost_status = ? AND f.model_id = ?
 				AND f.occurred_at_unix_ms >= ? AND f.occurred_at_unix_ms < ?
 				AND (s.provider_id <> 'claude-code' OR (f.pricing_eligible=1 AND f.token_status IN (0,1)))
+				AND (NOT ? OR f.token_status = ?)
+				AND (NOT ? OR f.cache_write_input_tokens IS NOT NULL)
 			LIMIT 1
 		)
-	`, sourceID, UsageCostStatusUnknown, modelID, fromUnixMS, untilUnixMS).Scan(&found)
+	`, sourceID, UsageCostStatusUnknown, filter.ModelID, filter.FromUnixMS, filter.UntilUnixMS,
+		filter.RequireCompleteTokens, UsageTokensComplete, filter.RequireCacheWriteTokens).Scan(&found)
 	return found != 0, err
 }
 
@@ -1130,25 +1142,30 @@ func (s *Store) ListUnknownUsageFactCostCandidates(
 	ctx context.Context,
 	providerID string,
 	sourceID int64,
-	modelID int64,
+	filter UsageCostFilter,
 	afterID int64,
 	limit int,
 ) ([]UsageFactCostCandidate, error) {
 	providerID = strings.TrimSpace(providerID)
-	if providerID == "" || sourceID <= 0 || modelID <= 0 || afterID < 0 || limit <= 0 || limit > 1_000 {
+	if providerID == "" || sourceID <= 0 || filter.ModelID <= 0 || filter.UntilUnixMS <= filter.FromUnixMS || afterID < 0 || limit <= 0 || limit > 1_000 {
 		return nil, errors.New("usage cost candidate query is invalid")
 	}
 
 	rows, err := s.executor().QueryContext(ctx, `
-		SELECT f.id, f.occurred_at_unix_ms, f.input_tokens, f.cached_input_tokens,
+		SELECT f.id, f.event_key, f.occurred_at_unix_ms, f.input_tokens, f.cached_input_tokens,
 			f.cache_write_input_tokens, f.cache_creation_input_tokens, f.output_tokens, f.total_tokens
 		FROM usage_facts f INDEXED BY idx_usage_facts_source_cost_model_id
 		JOIN usage_sources s ON s.id = f.source_id
 		WHERE s.provider_id = ? AND f.source_id = ? AND f.cost_status = ?
 			AND f.model_id = ? AND f.id > ?
+			AND f.occurred_at_unix_ms >= ? AND f.occurred_at_unix_ms < ?
+			AND (s.provider_id <> 'claude-code' OR (f.pricing_eligible=1 AND f.token_status IN (0,1)))
+			AND (NOT ? OR f.token_status = ?)
+			AND (NOT ? OR f.cache_write_input_tokens IS NOT NULL)
 		ORDER BY f.id ASC
 		LIMIT ?
-	`, providerID, sourceID, UsageCostStatusUnknown, modelID, afterID, limit)
+	`, providerID, sourceID, UsageCostStatusUnknown, filter.ModelID, afterID, filter.FromUnixMS, filter.UntilUnixMS,
+		filter.RequireCompleteTokens, UsageTokensComplete, filter.RequireCacheWriteTokens, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1159,6 +1176,7 @@ func (s *Store) ListUnknownUsageFactCostCandidates(
 		var candidate UsageFactCostCandidate
 		if err := rows.Scan(
 			&candidate.ID,
+			&candidate.EventKey,
 			&candidate.OccurredAtUnixMS,
 			&candidate.InputTokens,
 			&candidate.CachedInputTokens,

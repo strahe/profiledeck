@@ -1345,7 +1345,7 @@ func TestUsageSyncCodexBackfillsRecognizedPartialCost(t *testing.T) {
 			if result, err := db.InsertUsageFacts(ctx, store.InsertUsageFactsParams{
 				SourceID: source.ID, Generation: source.SyncGeneration, Facts: []store.CreateUsageFactParams{{
 					EventKey: usageTestEventKey(test.eventKey), SourceID: source.ID,
-					SessionKey: "session", ModelKey: test.model, OccurredAtUnixMS: time.Now().UnixMilli(),
+					SessionKey: "session", ModelKey: test.model, OccurredAtUnixMS: time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC).UnixMilli(),
 					InputTokens: 1_000_000, CachedInputTokens: 100_000, OutputTokens: 1_000_000, TotalTokens: 2_000_000,
 					CostStatus: store.UsageCostStatusUnknown, CacheWriteInputTokens: test.cacheWrite,
 				}},

@@ -364,7 +364,7 @@ func TestUpdateUnknownUsageFactCostsIsFilteredAtomicAndIdempotent(t *testing.T) 
 	if err != nil || len(models) != 2 || models[0].Model != "gpt-5.6-sol" || models[1].Model != "other-model" {
 		t.Fatalf("unexpected unknown-cost models: %#v err=%v", models, err)
 	}
-	candidates, err := db.ListUnknownUsageFactCostCandidates(ctx, "codex", models[0].SourceID, models[0].ModelID, 0, 10)
+	candidates, err := db.ListUnknownUsageFactCostCandidates(ctx, "codex", models[0].SourceID, UsageCostFilter{ModelID: models[0].ModelID, UntilUnixMS: 1}, 0, 10)
 	if err != nil || len(candidates) != 1 || candidates[0].CachedInputTokens != 20 {
 		t.Fatalf("unexpected paged candidates: %#v err=%v", candidates, err)
 	}
@@ -405,7 +405,7 @@ func TestUpdateUnknownUsageFactCostsIsFilteredAtomicAndIdempotent(t *testing.T) 
 	if err != nil || len(models) != 1 || models[0].Model != "other-model" {
 		t.Fatalf("expected only the unclassified model, models=%#v err=%v", models, err)
 	}
-	other, err := db.ListUnknownUsageFactCostCandidates(ctx, "codex", models[0].SourceID, models[0].ModelID, 0, 10)
+	other, err := db.ListUnknownUsageFactCostCandidates(ctx, "codex", models[0].SourceID, UsageCostFilter{ModelID: models[0].ModelID, UntilUnixMS: 1}, 0, 10)
 	if err != nil || len(other) != 1 {
 		t.Fatalf("expected second unknown candidate, candidates=%#v err=%v", other, err)
 	}

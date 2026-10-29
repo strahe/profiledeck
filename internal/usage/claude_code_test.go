@@ -24,6 +24,28 @@ func claudeUsageLine(session, request string, final bool, output int64) []byte {
 	return append(data, '\n')
 }
 
+func claudeHaikuUsageLine(t *testing.T, totalInput int64, final bool) []byte {
+	t.Helper()
+	var record map[string]any
+	if err := json.Unmarshal(claudeUsageLine("session", "request", final, 1_000), &record); err != nil {
+		t.Fatal(err)
+	}
+	record["timestamp"] = "2026-10-29T12:00:00Z"
+	message := record["message"].(map[string]any)
+	message["model"] = "claude-haiku-5-5"
+	writes := totalInput - 91_000
+	message["usage"] = map[string]any{
+		"input_tokens": 1_000, "cache_read_input_tokens": 90_000,
+		"cache_creation_input_tokens": writes, "output_tokens": 1_000,
+		"cache_creation": map[string]any{"ephemeral_5m_input_tokens": writes, "ephemeral_1h_input_tokens": 0},
+	}
+	line, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(line, '\n')
+}
+
 func claudeZeroedHistoryLine(t *testing.T, retainedDetails bool) []byte {
 	t.Helper()
 	var record map[string]any
@@ -263,6 +285,121 @@ func TestClaudeCodePricingDistinguishesCacheDurationAndUnknownTTL(t *testing.T) 
 		if cost == nil || *cost != test.want || status != test.status {
 			t.Fatalf("%s: %v, %v", test.ttl, cost, status)
 		}
+	}
+}
+
+func TestClaudeCodeHaikuPricingUsesCompleteTotalInput(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		totalInput int64
+		final      bool
+		missingTTL bool
+		want       int64
+		status     store.UsageCostStatus
+		inputRate  int64
+	}{
+		{name: "partial below threshold", totalInput: 99_999, status: CostStatusUnknown},
+		{name: "partial above threshold", totalInput: 100_001, status: CostStatusUnknown},
+		{name: "below threshold", totalInput: 99_999, final: true, want: 2_625, status: CostStatusEstimated, inputRate: 100_000},
+		{name: "at threshold", totalInput: 100_000, final: true, want: 2_625, status: CostStatusEstimated, inputRate: 100_000},
+		{name: "above threshold", totalInput: 100_001, final: true, want: 13_126, status: CostStatusEstimated, inputRate: 500_000},
+		{name: "complete input with unknown TTL", totalInput: 100_001, final: true, missingTTL: true, want: 7_500, status: CostStatusPartial, inputRate: 500_000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			event, reason, unsupported, err := parseClaudeCodeSessionObservation(claudeHaikuUsageLine(t, test.totalInput, test.final))
+			if err != nil || reason != "" || unsupported || event == nil || event.InputTokens != test.totalInput {
+				t.Fatalf("usage not accepted with total input: event=%+v reason=%s unsupported=%t err=%v", event, reason, unsupported, err)
+			}
+			fact := usageEventsToFactParams(1, []Event{*event})[0]
+			if test.missingTTL {
+				fact.CacheWrite5mTokens, fact.CacheWrite1hTokens = nil, nil
+			}
+			cost, status, version, snapshot := claudeCodePricer(pricing.Embedded())(fact)
+			if status != test.status {
+				t.Fatalf("cost status = %v, want %v", status, test.status)
+			}
+			if test.status == CostStatusUnknown {
+				if cost != nil || version != nil || snapshot != nil {
+					t.Fatalf("incomplete request retained pricing: cost=%v version=%v snapshot=%+v", cost, version, snapshot)
+				}
+			} else if cost == nil || *cost != test.want || snapshot == nil || snapshot.Input != test.inputRate || version == nil || *version != snapshot.Version {
+				t.Fatalf("cost=%v snapshot=%+v version=%v, want %d with input rate %d", cost, snapshot, version, test.want, test.inputRate)
+			}
+		})
+	}
+}
+
+func TestClaudeCodeHaikuCompletionSelectsThenFreezesTierAcrossRestart(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		partialInput int64
+		finalInput   int64
+		wantCost     int64
+	}{
+		{name: "low to high", partialInput: 99_000, finalInput: 101_000, wantCost: 110_250},
+		{name: "high to low", partialInput: 101_000, finalInput: 99_000, wantCost: 101_000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			factory := store.NewFactory(filepath.Join(t.TempDir(), "profiledeck.db"))
+			db, err := factory.Open(ctx, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if _, err := db.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			path := filepath.Join(dir, "projects", "project", "session.jsonl")
+			writeTestFile(t, path, string(claudeHaikuUsageLine(t, test.partialInput, false)))
+			integration := NewClaudeCodeIntegrationWithProvisioner(dir, claudeTestProvisioner{})
+			if _, err := integration.Sync(ctx, factory, SyncOptions{ProvisionMode: SyncProvisionProvider}); err != nil {
+				t.Fatal(err)
+			}
+			summary, err := db.UsageSummary(ctx, "claude-code")
+			if err != nil || summary.UnknownCostEvents != 1 || summary.EstimatedCostMicros != 0 {
+				t.Fatalf("partial request was priced: %+v, %v", summary, err)
+			}
+			catalog := pricing.Embedded()
+			catalog.CatalogVersion++
+			for i := range catalog.Entries {
+				if catalog.Entries[i].Model == "claude-haiku-5-5" {
+					catalog.Entries[i].ShortContext.Output = "99"
+					catalog.Entries[i].LongContext.Rates.Output = "99"
+				}
+			}
+			content := append(claudeHaikuUsageLine(t, test.partialInput, false), claudeHaikuUsageLine(t, test.finalInput, true)...)
+			writeTestFile(t, path, string(content))
+			integration = NewClaudeCodeIntegrationWithProvisioner(dir, claudeTestProvisioner{})
+			if _, err := integration.Sync(withPricingSnapshot(ctx, catalog), factory, SyncOptions{ProvisionMode: SyncExistingProvider}); err != nil {
+				t.Fatal(err)
+			}
+			summary, err = db.UsageSummary(ctx, "claude-code")
+			if err != nil || summary.UnknownCostEvents != 0 || summary.EstimatedCostMicros != test.wantCost {
+				t.Fatalf("completion selected the wrong tier or froze partial rates: %+v, %v", summary, err)
+			}
+			catalog.CatalogVersion++
+			for i := range catalog.Entries {
+				if catalog.Entries[i].Model == "claude-haiku-5-5" {
+					catalog.Entries[i].ShortContext.Output = "199"
+					catalog.Entries[i].LongContext.Rates.Output = "199"
+				}
+			}
+			content = append(content, claudeHaikuUsageLine(t, test.finalInput, true)...)
+			writeTestFile(t, path, string(content))
+			if _, err := integration.Sync(withPricingSnapshot(ctx, catalog), factory, SyncOptions{ProvisionMode: SyncExistingProvider}); err != nil {
+				t.Fatal(err)
+			}
+			summary, err = db.UsageSummary(ctx, "claude-code")
+			if err != nil || summary.EventCount != 1 || summary.EstimatedCostMicros != test.wantCost {
+				t.Fatalf("completed request lost frozen tier rates: %+v, %v", summary, err)
+			}
+			integrity, err := db.InspectIntegrity(ctx, store.IntegrityCurrentBaseline)
+			if err != nil || len(integrity.Issues) != 0 {
+				t.Fatalf("tier snapshot violates persistence contract: %+v, %v", integrity, err)
+			}
+		})
 	}
 }
 

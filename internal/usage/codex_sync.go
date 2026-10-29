@@ -463,14 +463,27 @@ func hasPriceableUnknownUsageModel(
 	catalog pricing.Catalog, providerID string,
 ) (bool, error) {
 	for _, model := range models {
-		for _, period := range catalog.EffectivePeriods(providerID, pricingCatalogModelID(providerID, model.Model)) {
-			found, err := db.HasUnknownUsageFactCostInPeriod(ctx, model.SourceID, model.ModelID, period.FromUnixMS, period.UntilUnixMS)
+		for _, filter := range usageCostFilters(catalog, providerID, model) {
+			found, err := db.HasUnknownUsageFactCostInPeriod(ctx, model.SourceID, filter)
 			if err != nil || found {
 				return found, err
 			}
 		}
 	}
 	return false, nil
+}
+
+func usageCostFilters(catalog pricing.Catalog, providerID string, model store.UsageUnknownCostModel) []store.UsageCostFilter {
+	periods := catalog.EffectivePeriods(providerID, pricingCatalogModelID(providerID, model.Model))
+	filters := make([]store.UsageCostFilter, 0, len(periods))
+	for _, period := range periods {
+		filters = append(filters, store.UsageCostFilter{
+			ModelID: model.ModelID, FromUnixMS: period.FromUnixMS, UntilUnixMS: period.UntilUnixMS,
+			RequireCompleteTokens:   period.Requirements.CompleteTokens,
+			RequireCacheWriteTokens: period.Requirements.UnpricedCacheWrites,
+		})
+	}
+	return filters
 }
 
 func newUsageObservation(
@@ -657,50 +670,36 @@ func backfillUnknownUsageCosts(
 		return err
 	}
 	for _, model := range models {
-		priceable, err := hasPriceableUnknownUsageModel(ctx, db, []store.UsageUnknownCostModel{model}, catalog, providerID)
-		if err != nil {
-			return err
-		}
-		if !priceable {
-			continue
-		}
-		var afterID int64
-		for {
-			candidates, err := db.ListUnknownUsageFactCostCandidates(
-				ctx,
-				providerID,
-				model.SourceID,
-				model.ModelID,
-				afterID,
-				batchSize,
-			)
-			if err != nil {
-				return err
-			}
-			if len(candidates) == 0 {
-				break
-			}
-			updates := make([]store.UpdateUsageFactCostParams, 0, len(candidates))
-			for _, candidate := range candidates {
-				cost, status, version := estimate(model.Model, candidate)
-				if cost == nil || status == CostStatusUnknown {
-					continue
+		for _, filter := range usageCostFilters(catalog, providerID, model) {
+			var afterID int64
+			for {
+				candidates, err := db.ListUnknownUsageFactCostCandidates(
+					ctx, providerID, model.SourceID, filter, afterID, batchSize,
+				)
+				if err != nil {
+					return err
 				}
-				updates = append(updates, store.UpdateUsageFactCostParams{
-					ID:                    candidate.ID,
-					EstimatedCostMicros:   *cost,
-					CostStatus:            status,
-					PricingCatalogVersion: version,
-				})
-			}
-			// Only unknown facts are eligible, so concurrent import/backfill runs are
-			// idempotent and never overwrite an already classified historical fact.
-			if _, err := db.UpdateUnknownUsageFactCosts(ctx, providerID, updates); err != nil {
-				return err
-			}
-			afterID = candidates[len(candidates)-1].ID
-			if len(candidates) < batchSize {
-				break
+				if len(candidates) == 0 {
+					break
+				}
+				updates := make([]store.UpdateUsageFactCostParams, 0, len(candidates))
+				for _, candidate := range candidates {
+					cost, status, version := estimate(model.Model, candidate)
+					if cost == nil || status == CostStatusUnknown {
+						continue
+					}
+					updates = append(updates, store.UpdateUsageFactCostParams{
+						ID: candidate.ID, EstimatedCostMicros: *cost, CostStatus: status,
+						PricingCatalogVersion: version,
+					})
+				}
+				if _, err := db.UpdateUnknownUsageFactCosts(ctx, providerID, updates); err != nil {
+					return err
+				}
+				afterID = candidates[len(candidates)-1].ID
+				if len(candidates) < batchSize {
+					break
+				}
 			}
 		}
 	}

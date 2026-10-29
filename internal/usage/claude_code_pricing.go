@@ -15,10 +15,14 @@ func claudeCodePricer(catalog pricing.Catalog) store.ClaudeCodeUsagePricer {
 		snapshot := fact.PriceSnapshot
 		if snapshot == nil {
 			selected, ok := catalog.Select("claude-code", fact.ModelKey, fact.OccurredAtUnixMS)
-			if !ok {
+			if !ok || selected.Requirements.CompleteTokens && fact.TokenStatus != store.UsageTokensComplete {
 				return nil, CostStatusUnknown, nil, nil
 			}
-			snapshot = &store.UsagePriceSnapshot{ModelKey: fact.ModelKey, Version: selected.Version, Input: selected.Rates.Input, CachedInput: selected.Rates.CachedInput, CacheWrite5m: selected.Rates.CacheWrite, CacheWrite1h: selected.Rates.CacheWrite1h, Output: selected.Rates.Output}
+			rates := selected.Rates
+			if selected.Requirements.CompleteTokens && selected.Long != nil && fact.InputTokens > selected.Above {
+				rates = *selected.Long
+			}
+			snapshot = &store.UsagePriceSnapshot{ModelKey: fact.ModelKey, Version: selected.Version, Input: rates.Input, CachedInput: rates.CachedInput, CacheWrite5m: rates.CacheWrite, CacheWrite1h: rates.CacheWrite1h, Output: rates.Output}
 		}
 		if fact.CacheCreationInputTokens == nil {
 			return nil, CostStatusUnknown, nil, nil
@@ -69,5 +73,16 @@ func claudeCodePricer(catalog pricing.Catalog) store.ClaudeCodeUsagePricer {
 }
 
 func backfillClaudeCodeUsageCosts(ctx context.Context, db *store.Store, sourceID, generation int64) error {
-	return db.BackfillClaudeCodeUsageCosts(ctx, sourceID, generation, claudeCodePricer(pricingSnapshot(ctx)))
+	catalog := pricingSnapshot(ctx)
+	models, err := db.ListUnknownUsageCostModels(ctx, "claude-code")
+	if err != nil {
+		return err
+	}
+	var filters []store.UsageCostFilter
+	for _, model := range models {
+		if model.SourceID == sourceID {
+			filters = append(filters, usageCostFilters(catalog, "claude-code", model)...)
+		}
+	}
+	return db.BackfillClaudeCodeUsageCosts(ctx, sourceID, generation, filters, claudeCodePricer(catalog))
 }
