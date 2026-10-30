@@ -6,8 +6,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/strahe/profiledeck/internal/store"
 )
 
 func TestParseCodexSessionFileHonorsCanceledContext(t *testing.T) {
@@ -76,19 +79,13 @@ func TestParseCodexSessionFileComputesCumulativeDeltas(t *testing.T) {
 	}
 }
 
-func TestParseCodexSessionFileStoresCacheWriteModelsAsPartial(t *testing.T) {
-	for _, test := range []struct {
-		model string
-		want  int64
-	}{
-		{model: "gpt-6-astra", want: 59_100_000},
-		{model: "gpt-5.6-sol", want: 23_640_000},
-	} {
-		t.Run(test.model, func(t *testing.T) {
+func TestParseCodexSessionFileRequiresCacheWriteEvidence(t *testing.T) {
+	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
+		t.Run(model, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "session.jsonl")
 			writeTestFile(t, path, strings.Join([]string{
 				`{"type":"session_meta","session_id":"session-1"}`,
-				`{"type":"turn_context","model":"` + test.model + `"}`,
+				`{"type":"turn_context","model":"` + model + `"}`,
 				`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000000,"cached_input_tokens":100000,"output_tokens":1000000,"total_tokens":2000000}}},"timestamp":"2026-09-23T00:00:00Z"}`,
 			}, "\n"))
 
@@ -104,35 +101,42 @@ func TestParseCodexSessionFileStoresCacheWriteModelsAsPartial(t *testing.T) {
 				t.Fatalf("expected one usage event, got %d", len(result.Events))
 			}
 			event := result.Events[0]
-			if event.Model != test.model {
-				t.Fatalf("expected model %q, got %#v", test.model, event)
+			if event.Model != model {
+				t.Fatalf("expected model %q, got %#v", model, event)
 			}
-			if event.CostStatus != CostStatusPartial || event.EstimatedCostMicros == nil || *event.EstimatedCostMicros != test.want {
-				t.Fatalf("expected %s base cost %d to remain explicitly partial, got %#v", test.model, test.want, event)
+			if event.CostStatus != CostStatusUnknown || event.EstimatedCostMicros != nil || event.PricingCatalogVersion != nil || event.CacheWriteInputTokens != nil {
+				t.Fatalf("missing cache-write evidence was priced: %#v", event)
 			}
 		})
 	}
 }
 
 func TestParseCodexSessionFilePricesMatchedCacheWriteAndLongContext(t *testing.T) {
+	zero, writes := int64(0), int64(25_000)
 	for _, test := range []struct {
-		name    string
-		model   string
-		date    string
-		writes  string
-		want    int64
-		partial bool
+		name   string
+		model  string
+		date   string
+		writes *int64
+		want   int64
+		status store.UsageCostStatus
 	}{
-		{name: "single retention", model: "gpt-6-astra", date: "2026-09-23T00:00:00Z", writes: "25000", want: 5_975_000},
-		{name: "sol explicit zero writes", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", writes: "0", want: 1_160_000},
-		{name: "sol unspecified retention", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", writes: "25000", want: 1_060_000, partial: true},
+		{name: "single retention", model: "gpt-6-astra", date: "2026-09-23T00:00:00Z", writes: &writes, want: 5_975_000, status: CostStatusEstimated},
+		// Codex serializes absent upstream cache-write counts as zero.
+		{name: "upstream defaulted zero", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", writes: &zero, status: CostStatusUnknown},
+		{name: "missing write count", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", status: CostStatusUnknown},
+		{name: "sol unspecified retention", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", writes: &writes, want: 1_060_000, status: CostStatusPartial},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "session.jsonl")
+			writeField := ""
+			if test.writes != nil {
+				writeField = `,"cache_write_input_tokens":` + strconv.FormatInt(*test.writes, 10)
+			}
 			writeTestFile(t, path, strings.Join([]string{
 				`{"type":"session_meta","session_id":"session-1"}`,
 				`{"type":"turn_context","model":"` + test.model + `"}`,
-				`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300000,"cached_input_tokens":50000,"output_tokens":10000,"total_tokens":310000}},"last_token_usage":{"input_tokens":300000,"cached_input_tokens":50000,"cache_write_input_tokens":` + test.writes + `,"output_tokens":10000}},"timestamp":"` + test.date + `"}`,
+				`{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300000,"cached_input_tokens":50000` + writeField + `,"output_tokens":10000,"total_tokens":310000},"last_token_usage":{"input_tokens":300000,"cached_input_tokens":50000` + writeField + `,"output_tokens":10000,"total_tokens":310000}}},"timestamp":"` + test.date + `"}`,
 			}, "\n"))
 			sourceKey, err := SourceKey(path)
 			if err != nil {
@@ -143,13 +147,22 @@ func TestParseCodexSessionFilePricesMatchedCacheWriteAndLongContext(t *testing.T
 				t.Fatalf("matched call = %#v, err = %v", parsed, err)
 			}
 			event := parsed.Events[0]
-			wantStatus := CostStatusEstimated
-			if test.partial {
-				wantStatus = CostStatusPartial
-			}
-			if event.Model != test.model || event.CostStatus != wantStatus || event.EstimatedCostMicros == nil || *event.EstimatedCostMicros != test.want ||
-				event.CacheWriteInputTokens == nil || event.PricingCatalogVersion == nil || *event.PricingCatalogVersion != bundledPricingCatalog.CatalogVersion {
+			if event.Model != test.model || event.CostStatus != test.status {
 				t.Fatalf("matched cache write and long context = %#v", event)
+			}
+			if test.writes == nil {
+				if event.CacheWriteInputTokens != nil {
+					t.Fatalf("missing write count acquired a value: %#v", event)
+				}
+			} else if event.CacheWriteInputTokens == nil || *event.CacheWriteInputTokens != *test.writes {
+				t.Fatalf("observed write count changed: %#v", event)
+			}
+			if test.status == CostStatusUnknown {
+				if event.EstimatedCostMicros != nil || event.PricingCatalogVersion != nil {
+					t.Fatalf("unverified write count acquired pricing: %#v", event)
+				}
+			} else if event.EstimatedCostMicros == nil || *event.EstimatedCostMicros != test.want || event.PricingCatalogVersion == nil || *event.PricingCatalogVersion != bundledPricingCatalog.CatalogVersion {
+				t.Fatalf("matched write count was priced incorrectly: %#v", event)
 			}
 		})
 	}
@@ -171,7 +184,7 @@ func TestParseCodexSessionFileDoesNotUseUnmatchedCallRates(t *testing.T) {
 		t.Fatalf("unmatched call = %#v, err = %v", parsed, err)
 	}
 	event := parsed.Events[0]
-	if event.CostStatus != CostStatusPartial || event.EstimatedCostMicros == nil || *event.EstimatedCostMicros != 3_050_000 || event.CacheWriteInputTokens != nil {
+	if event.CostStatus != CostStatusUnknown || event.EstimatedCostMicros != nil || event.PricingCatalogVersion != nil || event.CacheWriteInputTokens != nil {
 		t.Fatalf("unmatched call used cache-write or long-context pricing: %#v", event)
 	}
 }

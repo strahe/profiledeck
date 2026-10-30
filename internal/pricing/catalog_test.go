@@ -47,6 +47,15 @@ func TestEmbeddedCatalogSelectsDatedExactModels(t *testing.T) {
 			t.Fatalf("%s %s on %s: selected=%t", test.provider, test.model, test.date, ok)
 		}
 	}
+	for _, entry := range catalog.Entries {
+		if entry.Provider != "codex" {
+			continue
+		}
+		at, _ := time.Parse("2006-01-02", entry.EffectiveFrom)
+		if _, ok := catalog.Select(entry.Provider, entry.Model, at.UnixMilli()); !ok || !catalog.Supports(entry.Provider, entry.Model) || len(catalog.EffectivePeriods(entry.Provider, entry.Model)) == 0 {
+			t.Fatalf("bundled Codex model has no verified pricing semantics: %s", entry.Model)
+		}
+	}
 }
 
 func TestCatalogKeepsHistoricalPriceBoundary(t *testing.T) {
@@ -148,9 +157,9 @@ func TestCatalogSplitsPricePeriodsAtUsageRequirementBoundary(t *testing.T) {
 		return parsed.UnixMilli()
 	}
 	want := []EffectivePeriod{
-		{FromUnixMS: at("2026-09-22"), UntilUnixMS: at("2026-10-20")},
-		{FromUnixMS: at("2026-10-20"), UntilUnixMS: at("2026-10-29"), Requirements: UsageRequirements{UnpricedCacheWrites: true}},
-		{FromUnixMS: at("2026-10-29"), UntilUnixMS: math.MaxInt64, Requirements: UsageRequirements{UnpricedCacheWrites: true}},
+		{FromUnixMS: at("2026-09-22"), UntilUnixMS: at("2026-10-20"), Requirements: UsageRequirements{PositiveCacheWrites: true}},
+		{FromUnixMS: at("2026-10-20"), UntilUnixMS: at("2026-10-29"), Requirements: UsageRequirements{PositiveCacheWrites: true, UnpricedCacheWrites: true}},
+		{FromUnixMS: at("2026-10-29"), UntilUnixMS: math.MaxInt64, Requirements: UsageRequirements{PositiveCacheWrites: true, UnpricedCacheWrites: true}},
 	}
 	periods := catalog.EffectivePeriods("codex", "gpt-6-sol")
 	if !reflect.DeepEqual(periods, want) {
@@ -181,12 +190,60 @@ func TestCatalogSplitsPricePeriodsAtUsageRequirementBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, date := range []string{"2026-10-20", "2026-10-29"} {
+		for _, date := range []string{"2026-10-19", "2026-10-20", "2026-10-29"} {
 			selected, ok := parsed.Select("codex", "gpt-6-sol", at(date))
-			if !ok || !selected.Requirements.UnpricedCacheWrites {
+			if !ok || !selected.Requirements.PositiveCacheWrites || selected.Requirements.UnpricedCacheWrites != (date >= "2026-10-20") {
 				t.Fatalf("schema %d at %s bypassed cache requirements: %+v", schema, date, selected)
 			}
 		}
+	}
+}
+
+func TestCatalogDoesNotEnableUnverifiedCodexPricingSemantics(t *testing.T) {
+	var base Entry
+	for _, entry := range Embedded().Entries {
+		if entry.Model == "gpt-6-sol" {
+			base = entry
+			break
+		}
+	}
+	base.Model = "gpt-6.2-sol"
+	base.EffectiveFrom, base.EffectiveUntil, base.VerifiedAt = "2026-10-29", "", "2026-10-29"
+	at := time.Date(2026, time.October, 29, 0, 0, 0, 0, time.UTC).UnixMilli()
+	for _, schema := range []int{1, 2, 3} {
+		for _, longContext := range []bool{false, true} {
+			for _, cacheWrite := range []bool{false, true} {
+				t.Run(fmt.Sprintf("schema-%d/long-%t/write-%t", schema, longContext, cacheWrite), func(t *testing.T) {
+					entry := base
+					entry.LongContext = nil
+					if longContext {
+						long := *base.LongContext
+						entry.LongContext = &long
+					}
+					if !cacheWrite {
+						entry.ShortContext.CacheWrite = nil
+						if entry.LongContext != nil {
+							entry.LongContext.Rates.CacheWrite = nil
+						}
+					}
+					data, err := json.Marshal(Catalog{SchemaVersion: schema, CatalogVersion: 4, Entries: []Entry{entry}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					catalog, err := Parse(data)
+					if err != nil {
+						t.Fatalf("unverified model rates should remain readable: %v", err)
+					}
+					if _, ok := catalog.Select("codex", entry.Model, at); ok || catalog.Supports("codex", entry.Model) || len(catalog.EffectivePeriods("codex", entry.Model)) != 0 {
+						t.Fatal("unverified Codex model activated pricing or backfill")
+					}
+				})
+			}
+		}
+	}
+	legacy, ok := Embedded().Select("codex", "gpt-5.5", at)
+	if !ok || legacy.Requirements != (UsageRequirements{}) {
+		t.Fatalf("legacy model acquired unsupported cache-write requirements: %+v, selected=%t", legacy.Requirements, ok)
 	}
 }
 

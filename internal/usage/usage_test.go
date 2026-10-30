@@ -101,15 +101,18 @@ func TestCodexCostUsesCacheWriteEvidenceAndEventDate(t *testing.T) {
 		singleRate bool
 	}{
 		{name: "before retention choice", model: "gpt-6-astra", date: "2026-10-19T23:59:59Z", cacheWrite: &writes, perCall: &perCall, want: 5_975_000, status: CostStatusEstimated},
+		{name: "zero before retention choice", model: "gpt-6-astra", date: "2026-10-19T23:59:59Z", cacheWrite: &zero, perCall: &perCall, status: CostStatusUnknown},
+		{name: "missing count before retention choice", model: "gpt-6-astra", date: "2026-10-19T23:59:59Z", perCall: &perCall, status: CostStatusUnknown},
 		{name: "retention choice starts", model: "gpt-6-astra", date: "2026-10-20T00:00:00Z", cacheWrite: &writes, perCall: &perCall, want: 5_350_000, status: CostStatusPartial},
-		{name: "explicit zero", model: "gpt-6-astra", date: "2026-10-20T00:00:00Z", cacheWrite: &zero, perCall: &perCall, want: 5_850_000, status: CostStatusEstimated},
+		{name: "unverified zero", model: "gpt-6-astra", date: "2026-10-20T00:00:00Z", cacheWrite: &zero, perCall: &perCall, status: CostStatusUnknown},
 		{name: "missing count", model: "gpt-6-astra", date: "2026-10-20T00:00:00Z", perCall: &perCall, status: CostStatusUnknown},
 		{name: "missing call evidence", model: "gpt-6-astra", date: "2026-10-20T00:00:00Z", cacheWrite: &writes, want: 2_800_000, status: CostStatusPartial},
-		{name: "sol starts at verification", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", cacheWrite: &zero, perCall: &perCall, want: 1_160_000, status: CostStatusEstimated},
-		{name: "sol at short-context limit", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", cacheWrite: &zero, perCall: &atLimit, input: atLimit, want: 549_000, status: CostStatusEstimated},
-		{name: "sol above short-context limit", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", cacheWrite: &zero, perCall: &aboveLimit, input: aboveLimit, want: 1_048_004, status: CostStatusEstimated},
+		{name: "sol zero lacks source evidence", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", cacheWrite: &zero, perCall: &perCall, status: CostStatusUnknown},
+		{name: "sol at short-context limit", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", cacheWrite: &writes, perCall: &atLimit, input: atLimit, want: 499_000, status: CostStatusPartial},
+		{name: "sol above short-context limit", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", cacheWrite: &writes, perCall: &aboveLimit, input: aboveLimit, want: 948_004, status: CostStatusPartial},
 		{name: "sol writes lack retention", model: "gpt-6.1-sol", date: "2026-10-29T00:00:00Z", cacheWrite: &writes, perCall: &perCall, want: 1_060_000, status: CostStatusPartial, singleRate: true},
-		{name: "terra starts at verification", model: "gpt-6.1-terra", date: "2026-10-29T00:00:00Z", cacheWrite: &zero, perCall: &perCall, want: 580_000, status: CostStatusEstimated},
+		{name: "terra zero lacks source evidence", model: "gpt-6.1-terra", date: "2026-10-29T00:00:00Z", cacheWrite: &zero, perCall: &perCall, status: CostStatusUnknown},
+		{name: "terra starts at verification", model: "gpt-6.1-terra", date: "2026-10-29T00:00:00Z", cacheWrite: &writes, perCall: &perCall, want: 530_000, status: CostStatusPartial},
 		{name: "unverified historical sol", model: "gpt-6.1-sol", date: "2026-10-28T23:59:59Z", cacheWrite: &zero, perCall: &perCall, status: CostStatusUnknown},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -479,8 +479,8 @@ func usageCostFilters(catalog pricing.Catalog, providerID string, model store.Us
 	for _, period := range periods {
 		filters = append(filters, store.UsageCostFilter{
 			ModelID: model.ModelID, FromUnixMS: period.FromUnixMS, UntilUnixMS: period.UntilUnixMS,
-			RequireCompleteTokens:   period.Requirements.CompleteTokens,
-			RequireCacheWriteTokens: period.Requirements.UnpricedCacheWrites,
+			RequireCompleteTokens:      period.Requirements.CompleteTokens,
+			RequirePositiveCacheWrites: period.Requirements.PositiveCacheWrites,
 		})
 	}
 	return filters

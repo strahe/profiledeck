@@ -35,7 +35,7 @@ func TestCodexPricingBackfillRespectsCacheEvidenceAcrossPolicyDate(t *testing.T)
 	cutoff := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC).UnixMilli()
 	current := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC).UnixMilli()
 	facts := []store.CreateUsageFactParams{
-		{EventKey: usageTestEventKey("before-retention-policy"), OccurredAtUnixMS: before},
+		{EventKey: usageTestEventKey("before-retention-policy"), OccurredAtUnixMS: before, CacheWriteInputTokens: &writes},
 		{EventKey: usageTestEventKey("missing-write-count"), OccurredAtUnixMS: cutoff},
 		{EventKey: usageTestEventKey("zero-writes"), OccurredAtUnixMS: current, CacheWriteInputTokens: &zero},
 		{EventKey: usageTestEventKey("unpriced-writes"), OccurredAtUnixMS: current, CacheWriteInputTokens: &writes},
@@ -44,11 +44,14 @@ func TestCodexPricingBackfillRespectsCacheEvidenceAcrossPolicyDate(t *testing.T)
 			EstimatedCostMicros: &retainedCost, CostStatus: store.UsageCostStatusEstimated,
 			PricingCatalogVersion: &retainedVersion,
 		},
+		{EventKey: usageTestEventKey("unreviewed-model"), ModelKey: "gpt-6.2-sol", OccurredAtUnixMS: current, CacheWriteInputTokens: &writes},
 	}
 	for i := range facts {
 		facts[i].SourceID = source.ID
 		facts[i].SessionKey = "session"
-		facts[i].ModelKey = "gpt-6-sol"
+		if facts[i].ModelKey == "" {
+			facts[i].ModelKey = "gpt-6-sol"
+		}
 		facts[i].InputTokens = 1_000
 		facts[i].CachedInputTokens = 100
 		facts[i].OutputTokens = 1_000
@@ -57,7 +60,7 @@ func TestCodexPricingBackfillRespectsCacheEvidenceAcrossPolicyDate(t *testing.T)
 	inserted, err := db.InsertUsageFacts(ctx, store.InsertUsageFactsParams{
 		SourceID: source.ID, Generation: source.SyncGeneration, Facts: facts,
 	})
-	if err != nil || inserted.Inserted != 5 {
+	if err != nil || inserted.Inserted != len(facts) {
 		t.Fatalf("insert historical facts: %+v, %v", inserted, err)
 	}
 	if err := db.CompleteUsageSync(ctx, store.CompleteUsageSyncParams{
@@ -66,14 +69,28 @@ func TestCodexPricingBackfillRespectsCacheEvidenceAcrossPolicyDate(t *testing.T)
 	}); err != nil {
 		t.Fatal(err)
 	}
+	catalog := pricing.Embedded()
+	addedUnreviewedModel := false
+	for _, entry := range catalog.Entries {
+		if entry.Model == "gpt-6-sol" && entry.EffectiveFrom == "2026-10-29" {
+			entry.Model = "gpt-6.2-sol"
+			catalog.Entries = append(catalog.Entries, entry)
+			addedUnreviewedModel = true
+			break
+		}
+	}
+	if !addedUnreviewedModel {
+		t.Fatal("missing baseline for unreviewed model pricing")
+	}
+	ctx = withPricingSnapshot(ctx, catalog)
 
 	outcome, err := environment.service.sync(ctx, UsageSyncRequest{ProviderID: ProviderCodex}, SyncOptions{ProvisionMode: SyncExistingProvider})
 	if err != nil || !outcome.Performed {
 		t.Fatalf("eligible historical facts did not trigger backfill: %+v, %v", outcome, err)
 	}
 	summary, err := db.UsageSummary(ctx, ProviderCodex)
-	if err != nil || summary.EventCount != 5 || summary.UnknownCostEvents != 1 ||
-		summary.PartialCostEvents != 2 || summary.EstimatedCostEventCount != 2 || summary.EstimatedCostMicros != 35_383 {
+	if err != nil || summary.EventCount != 6 || summary.UnknownCostEvents != 3 ||
+		summary.PartialCostEvents != 1 || summary.EstimatedCostEventCount != 2 || summary.EstimatedCostMicros != 23_613 {
 		t.Fatalf("backfill crossed its date or evidence boundary, or repriced classified cost: %+v, %v", summary, err)
 	}
 	source, err = db.GetUsageSource(ctx, ProviderCodex, SourceCodexSessionJSONL)
@@ -83,7 +100,7 @@ func TestCodexPricingBackfillRespectsCacheEvidenceAcrossPolicyDate(t *testing.T)
 	for range 2 {
 		outcome, err = environment.service.sync(ctx, UsageSyncRequest{ProviderID: ProviderCodex}, SyncOptions{ProvisionMode: SyncExistingProvider})
 		if err != nil || outcome.Performed {
-			t.Fatalf("missing write count triggered empty backfill: %+v, %v", outcome, err)
+			t.Fatalf("unverified cache evidence or model triggered empty backfill: %+v, %v", outcome, err)
 		}
 		currentSource, err := db.GetUsageSource(ctx, ProviderCodex, SourceCodexSessionJSONL)
 		if err != nil || currentSource != source {

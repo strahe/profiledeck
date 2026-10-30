@@ -1306,22 +1306,31 @@ func TestUsageSyncCodexConcurrentRunsRemainIdempotentWhenOneRunIsSuperseded(t *t
 	}
 }
 
-func TestUsageSyncCodexBackfillsRecognizedPartialCost(t *testing.T) {
+func TestUsageSyncCodexBackfillsOnlyPriceableWriteEvidence(t *testing.T) {
 	cacheWrite := int64(100_000)
+	zero := int64(0)
 	for _, test := range []struct {
 		name             string
 		model            string
+		date             string
 		eventKey         string
 		wantCost         string
 		cacheWrite       *int64
 		wantStatus       string
 		wantPartialCount int64
+		wantUnknownCount int64
+		wantCoverage     float64
 	}{
-		{name: "gpt-5.6-sol", model: "GPT-5.6-SOL", eventKey: "existing-gpt-5.6", wantCost: "23.640000", wantStatus: "partial", wantPartialCount: 1},
-		{name: "gpt-6-astra", model: "gpt-6-astra", eventKey: "existing-gpt-6-astra", wantCost: "59.100000", wantStatus: "partial", wantPartialCount: 1},
-		{name: "gpt-6-astra known long context", model: "gpt-6-astra", eventKey: "existing-gpt-6-astra-long", wantCost: "93.700000", cacheWrite: &cacheWrite, wantStatus: "estimated"},
+		{name: "missing write count", model: "GPT-5.6-SOL", date: "2026-10-19", eventKey: "existing-gpt-5.6", wantCost: "0.000000", wantStatus: "unknown", wantUnknownCount: 1},
+		{name: "unproven zero", model: "gpt-6-astra", date: "2026-10-19", eventKey: "existing-gpt-6-astra", wantCost: "0.000000", cacheWrite: &zero, wantStatus: "unknown", wantUnknownCount: 1},
+		{name: "known count with single write rate", model: "gpt-6-astra", date: "2026-10-19", eventKey: "existing-gpt-6-astra-long", wantCost: "93.700000", cacheWrite: &cacheWrite, wantStatus: "estimated", wantCoverage: 1},
+		{name: "known count without retention", model: "gpt-6-astra", date: "2026-10-20", eventKey: "existing-gpt-6-astra-multiple", wantCost: "91.200000", cacheWrite: &cacheWrite, wantStatus: "partial", wantPartialCount: 1, wantCoverage: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			at, err := time.Parse("2006-01-02", test.date)
+			if err != nil {
+				t.Fatal(err)
+			}
 			ctx := context.Background()
 			configDir := t.TempDir()
 			codexDir := t.TempDir()
@@ -1345,7 +1354,7 @@ func TestUsageSyncCodexBackfillsRecognizedPartialCost(t *testing.T) {
 			if result, err := db.InsertUsageFacts(ctx, store.InsertUsageFactsParams{
 				SourceID: source.ID, Generation: source.SyncGeneration, Facts: []store.CreateUsageFactParams{{
 					EventKey: usageTestEventKey(test.eventKey), SourceID: source.ID,
-					SessionKey: "session", ModelKey: test.model, OccurredAtUnixMS: time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC).UnixMilli(),
+					SessionKey: "session", ModelKey: test.model, OccurredAtUnixMS: at.UnixMilli(),
 					InputTokens: 1_000_000, CachedInputTokens: 100_000, OutputTokens: 1_000_000, TotalTokens: 2_000_000,
 					CostStatus: store.UsageCostStatusUnknown, CacheWriteInputTokens: test.cacheWrite,
 				}},
@@ -1365,7 +1374,7 @@ func TestUsageSyncCodexBackfillsRecognizedPartialCost(t *testing.T) {
 				t.Fatalf("expected usage report, got %v", err)
 			}
 			if report.Summary.KnownEstimatedCostUSD != test.wantCost || report.Summary.CostStatus != test.wantStatus ||
-				report.Summary.PartialCostEventCount != test.wantPartialCount || report.Summary.UnknownCostEventCount != 0 || report.Summary.PricingCoverage != 1 {
+				report.Summary.PartialCostEventCount != test.wantPartialCount || report.Summary.UnknownCostEventCount != test.wantUnknownCount || report.Summary.PricingCoverage != test.wantCoverage {
 				t.Fatalf("unexpected %s partial pricing summary: %#v", test.model, report.Summary)
 			}
 			if len(report.Models) != 1 || report.Models[0].Model != test.model || report.Models[0].Summary.KnownEstimatedCostUSD != test.wantCost {
@@ -1379,7 +1388,7 @@ func TestUsageSyncCodexBackfillsRecognizedPartialCost(t *testing.T) {
 			if err != nil {
 				t.Fatalf("expected legacy usage summary, got %v", err)
 			}
-			if test.wantStatus == "partial" && (legacy.CostStatus != "unknown" || legacy.EstimatedCostUSD != nil || legacy.UnknownCostEventCount != 1) {
+			if test.wantStatus != "estimated" && (legacy.CostStatus != "unknown" || legacy.EstimatedCostUSD != nil || legacy.UnknownCostEventCount != 1) {
 				t.Fatalf("expected legacy summary to preserve its conservative contract, got %#v", legacy)
 			}
 			if test.wantStatus == "estimated" && (legacy.CostStatus != "estimated" || legacy.EstimatedCostUSD == nil || *legacy.EstimatedCostUSD != test.wantCost) {

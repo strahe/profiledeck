@@ -259,11 +259,11 @@ type UsageUnknownCostModel struct {
 }
 
 type UsageCostFilter struct {
-	ModelID                 int64
-	FromUnixMS              int64
-	UntilUnixMS             int64
-	RequireCompleteTokens   bool
-	RequireCacheWriteTokens bool
+	ModelID                    int64
+	FromUnixMS                 int64
+	UntilUnixMS                int64
+	RequireCompleteTokens      bool
+	RequirePositiveCacheWrites bool
 }
 
 type UsageFactCostCandidate struct {
@@ -1128,11 +1128,11 @@ func (s *Store) HasUnknownUsageFactCostInPeriod(ctx context.Context, sourceID in
 				AND f.occurred_at_unix_ms >= ? AND f.occurred_at_unix_ms < ?
 				AND (s.provider_id <> 'claude-code' OR (f.pricing_eligible=1 AND f.token_status IN (0,1)))
 				AND (NOT ? OR f.token_status = ?)
-				AND (NOT ? OR f.cache_write_input_tokens IS NOT NULL)
+				AND (NOT ? OR f.cache_write_input_tokens > 0)
 			LIMIT 1
 		)
 	`, sourceID, UsageCostStatusUnknown, filter.ModelID, filter.FromUnixMS, filter.UntilUnixMS,
-		filter.RequireCompleteTokens, UsageTokensComplete, filter.RequireCacheWriteTokens).Scan(&found)
+		filter.RequireCompleteTokens, UsageTokensComplete, filter.RequirePositiveCacheWrites).Scan(&found)
 	return found != 0, err
 }
 
@@ -1161,11 +1161,11 @@ func (s *Store) ListUnknownUsageFactCostCandidates(
 			AND f.occurred_at_unix_ms >= ? AND f.occurred_at_unix_ms < ?
 			AND (s.provider_id <> 'claude-code' OR (f.pricing_eligible=1 AND f.token_status IN (0,1)))
 			AND (NOT ? OR f.token_status = ?)
-			AND (NOT ? OR f.cache_write_input_tokens IS NOT NULL)
+			AND (NOT ? OR f.cache_write_input_tokens > 0)
 		ORDER BY f.id ASC
 		LIMIT ?
 	`, providerID, sourceID, UsageCostStatusUnknown, filter.ModelID, afterID, filter.FromUnixMS, filter.UntilUnixMS,
-		filter.RequireCompleteTokens, UsageTokensComplete, filter.RequireCacheWriteTokens, limit)
+		filter.RequireCompleteTokens, UsageTokensComplete, filter.RequirePositiveCacheWrites, limit)
 	if err != nil {
 		return nil, err
 	}

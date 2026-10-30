@@ -71,6 +71,7 @@ type Selected struct {
 
 type UsageRequirements struct {
 	CompleteTokens      bool
+	PositiveCacheWrites bool
 	UnpricedCacheWrites bool
 }
 
@@ -84,6 +85,10 @@ func (catalog Catalog) EffectivePeriods(provider, model string) []EffectivePerio
 	if strings.Contains(model, "latest") {
 		return nil
 	}
+	start, _, supported := usageRequirementsFrom(provider, model)
+	if !supported {
+		return nil
+	}
 	var periods []EffectivePeriod
 	for _, entry := range catalog.Entries {
 		if entry.Provider != provider || entry.Model != model {
@@ -95,16 +100,14 @@ func (catalog Catalog) EffectivePeriods(provider, model string) []EffectivePerio
 			until, _ := time.Parse("2006-01-02", entry.EffectiveUntil)
 			period.UntilUnixMS = until.UnixMilli()
 		}
-		start, requirements := usageRequirementsFrom(provider, model)
 		if start > period.FromUnixMS && start < period.UntilUnixMS {
 			before := period
 			before.UntilUnixMS = start
+			before.Requirements, _ = usageRequirementsAt(provider, model, before.FromUnixMS)
 			periods = append(periods, before)
 			period.FromUnixMS = start
 		}
-		if period.FromUnixMS >= start {
-			period.Requirements = requirements
-		}
+		period.Requirements, _ = usageRequirementsAt(provider, model, period.FromUnixMS)
 		periods = append(periods, period)
 	}
 	return periods
@@ -191,7 +194,7 @@ func validateEntry(entry Entry, schemaVersion int) error {
 	if _, err := parseRates(entry.ShortContext); err != nil {
 		return err
 	}
-	_, requirements := usageRequirementsFrom(entry.Provider, entry.Model)
+	_, requirements, _ := usageRequirementsFrom(entry.Provider, entry.Model)
 	if requirements.CompleteTokens {
 		if schemaVersion < 3 || entry.LongContext == nil || !completeClaudeRates(entry.ShortContext) || !completeClaudeRates(entry.LongContext.Rates) {
 			return errors.New("pricing model requires both context rates")
@@ -227,17 +230,28 @@ func verifiedGrokBuildModel(model string) bool {
 	}
 }
 
-func usageRequirementsFrom(provider, model string) (int64, UsageRequirements) {
+func usageRequirementsFrom(provider, model string) (int64, UsageRequirements, bool) {
 	if provider == "claude-code" && model == "claude-haiku-5-5" {
-		return 0, UsageRequirements{CompleteTokens: true}
+		return 0, UsageRequirements{CompleteTokens: true}, true
 	}
 	if provider == "codex" {
 		switch model {
+		case "gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.4-pro", "gpt-5.3-codex", "gpt-5.2", "gpt-5.2-pro", "gpt-5.1", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-pro", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano":
+			return 0, UsageRequirements{}, true
 		case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra":
-			return time.Date(2026, time.October, 20, 0, 0, 0, 0, time.UTC).UnixMilli(), UsageRequirements{UnpricedCacheWrites: true}
+			return time.Date(2026, time.October, 20, 0, 0, 0, 0, time.UTC).UnixMilli(), UsageRequirements{PositiveCacheWrites: true, UnpricedCacheWrites: true}, true
 		}
+		return 0, UsageRequirements{}, false
 	}
-	return 0, UsageRequirements{}
+	return 0, UsageRequirements{}, true
+}
+
+func usageRequirementsAt(provider, model string, occurredAtUnixMS int64) (UsageRequirements, bool) {
+	start, requirements, supported := usageRequirementsFrom(provider, model)
+	if occurredAtUnixMS < start {
+		requirements.UnpricedCacheWrites = false
+	}
+	return requirements, supported
 }
 
 func parseRates(rates Rates) (TokenRates, error) {
@@ -311,6 +325,10 @@ func (catalog Catalog) Select(provider, model string, occurredAtUnixMS int64) (S
 	if occurredAtUnixMS <= 0 || strings.Contains(model, "latest") {
 		return Selected{}, false
 	}
+	requirements, supported := usageRequirementsAt(provider, model, occurredAtUnixMS)
+	if !supported {
+		return Selected{}, false
+	}
 	day := time.UnixMilli(occurredAtUnixMS).UTC().Format("2006-01-02")
 	for _, entry := range catalog.Entries {
 		if entry.Provider != provider || entry.Model != model || day < entry.EffectiveFrom || entry.EffectiveUntil != "" && day >= entry.EffectiveUntil {
@@ -320,10 +338,7 @@ func (catalog Catalog) Select(provider, model string, occurredAtUnixMS int64) (S
 		if err != nil {
 			return Selected{}, false
 		}
-		result := Selected{Rates: rates, Basis: entry.Basis, Source: entry.SourceURL, Version: catalog.CatalogVersion}
-		if start, requirements := usageRequirementsFrom(provider, model); occurredAtUnixMS >= start {
-			result.Requirements = requirements
-		}
+		result := Selected{Rates: rates, Basis: entry.Basis, Source: entry.SourceURL, Version: catalog.CatalogVersion, Requirements: requirements}
 		if entry.LongContext != nil {
 			long, err := parseRates(entry.LongContext.Rates)
 			if err != nil {
@@ -337,6 +352,9 @@ func (catalog Catalog) Select(provider, model string, occurredAtUnixMS int64) (S
 }
 
 func (catalog Catalog) Supports(provider, model string) bool {
+	if _, _, supported := usageRequirementsFrom(provider, model); !supported {
+		return false
+	}
 	for _, entry := range catalog.Entries {
 		if entry.Provider == provider && entry.Model == model {
 			return true
