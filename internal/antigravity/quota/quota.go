@@ -100,7 +100,7 @@ func NewClient() *Client {
 				return http.ErrUseLastResponse
 			},
 		},
-		userAgent: NewInstallationResolver(), loadEndpoint: loadEndpoint,
+		userAgent: newInstallationResolver(), loadEndpoint: loadEndpoint,
 		summaryEndpoints: append([]string(nil), summaryEndpoints...),
 		timeout:          defaultTimeout, maxResponseBytes: maxResponseBytes, now: time.Now,
 	}

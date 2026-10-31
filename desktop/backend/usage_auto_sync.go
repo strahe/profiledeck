@@ -21,8 +21,8 @@ const (
 	UsageAutoSyncOutcomeError   = "error"
 
 	usageAutoSyncTimeout       = 60 * time.Second
-	usageAutoSyncStartDelayMin = 1 * time.Second
-	usageAutoSyncStartDelayMax = 3 * time.Second
+	usageAutoSyncMinStartDelay = 1 * time.Second
+	usageAutoSyncMaxStartDelay = 3 * time.Second
 )
 
 type UsageAutoSyncError struct {
@@ -116,8 +116,8 @@ func newUsageAutoSyncRuntime(
 }
 
 func randomUsageAutoSyncStartDelay() time.Duration {
-	span := usageAutoSyncStartDelayMax - usageAutoSyncStartDelayMin
-	return usageAutoSyncStartDelayMin + time.Duration(rand.Int63n(int64(span)+1))
+	span := usageAutoSyncMaxStartDelay - usageAutoSyncMinStartDelay
+	return usageAutoSyncMinStartDelay + time.Duration(rand.Int63n(int64(span)+1))
 }
 
 func defaultUsageAutoSyncStatus(providerID string) UsageAutoSyncStatus {

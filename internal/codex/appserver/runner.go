@@ -84,7 +84,7 @@ type processStarter func(context.Context, string, string) (*runningProcess, erro
 type runningProcess struct {
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
-	wait   <-chan error
+	wait   <-chan struct{}
 	kill   func() error
 	once   sync.Once
 }
@@ -179,9 +179,10 @@ func (r *Runner) startCommand(ctx context.Context, command, codexHome string) (*
 		_ = stdout.Close()
 		return nil, err
 	}
-	wait := make(chan error, 1)
+	wait := make(chan struct{})
 	go func() {
-		wait <- cmd.Wait()
+		// Exit status does not replace the protocol result; cleanup waits for completion.
+		_ = cmd.Wait()
 		close(wait)
 	}()
 	return &runningProcess{

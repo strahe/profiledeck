@@ -99,11 +99,10 @@ func TestRunnerTimeoutCancelsAndCleansUpProcess(t *testing.T) {
 	var stdinClosed atomic.Bool
 	runner.start = func(ctx context.Context, _, _ string) (*runningProcess, error) {
 		reader, writer := io.Pipe()
-		wait := make(chan error, 1)
+		wait := make(chan struct{})
 		go func() {
 			<-ctx.Done()
 			_ = writer.Close()
-			wait <- ctx.Err()
 			close(wait)
 		}()
 		return &runningProcess{

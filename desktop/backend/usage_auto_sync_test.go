@@ -217,8 +217,8 @@ func TestUsageAutoSyncSyncNowDoesNotWaitForStartDelay(t *testing.T) {
 func TestRandomUsageAutoSyncStartDelayIsWithinRange(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		d := randomUsageAutoSyncStartDelay()
-		if d < usageAutoSyncStartDelayMin || d > usageAutoSyncStartDelayMax {
-			t.Fatalf("delay %v outside [%v, %v]", d, usageAutoSyncStartDelayMin, usageAutoSyncStartDelayMax)
+		if d < usageAutoSyncMinStartDelay || d > usageAutoSyncMaxStartDelay {
+			t.Fatalf("delay %v outside [%v, %v]", d, usageAutoSyncMinStartDelay, usageAutoSyncMaxStartDelay)
 		}
 	}
 }

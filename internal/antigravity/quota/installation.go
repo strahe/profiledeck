@@ -35,7 +35,7 @@ type installationResolver struct {
 	stat       func(string) (os.FileInfo, error)
 }
 
-func NewInstallationResolver() userAgentProvider {
+func newInstallationResolver() userAgentProvider {
 	return &installationResolver{
 		candidates: defaultBundleCandidates(), runner: osCommandRunner{}, stat: os.Stat,
 	}

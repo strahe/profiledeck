@@ -278,9 +278,10 @@ func (p *runningProcess) stop() {
 		}
 		// Start Wait only after the protocol reader has stopped; os/exec closes
 		// StdoutPipe from Wait and must not race the active scanner.
-		wait := make(chan error, 1)
+		wait := make(chan struct{})
 		go func() {
-			wait <- p.wait()
+			// Exit status does not replace the protocol result; cleanup waits for completion.
+			_ = p.wait()
 			close(wait)
 		}()
 		timer := time.NewTimer(shutdownTimeout)
