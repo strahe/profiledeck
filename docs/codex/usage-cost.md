@@ -22,9 +22,11 @@ The report defaults to `7d`; other ranges are `today`, `30d`, and `all`. Dates u
 
 ## Understand estimates
 
-ProfileDeck uses a price list based on [OpenAI Standard API prices](https://developers.openai.com/api/docs/pricing), matched by exact model and event date. Unknown model aliases, dates without verified prices, and records missing details needed for special rates can leave cost unknown or partial. Token totals and known cost subtotals remain visible. Updating prices does not recalculate existing estimates; syncing again can fill previously unknown costs.
+ProfileDeck estimates costs using [OpenAI Standard API prices](https://developers.openai.com/api/docs/pricing), matched by exact model and usage date. Unverified model names, dates without verified prices, or incomplete usage details can leave costs unknown or only partly estimated. Token totals and any known cost subtotal remain visible.
 
-The included price list works offline. `usage report` does not connect to a billing service or upload local usage. To check or disable price-list updates:
+Price updates do not recalculate existing estimates. Syncing again can fill previously unknown costs.
+
+The included price list works offline. New Codex models may require a ProfileDeck update before cost estimates are available. `usage report` does not connect to a billing service or upload local usage. To check or disable price-list updates:
 
 ```bash
 profiledeck-cli usage pricing check

@@ -364,7 +364,7 @@ func TestUpdateUnknownUsageFactCostsIsFilteredAtomicAndIdempotent(t *testing.T) 
 	if err != nil || len(models) != 2 || models[0].Model != "gpt-5.6-sol" || models[1].Model != "other-model" {
 		t.Fatalf("unexpected unknown-cost models: %#v err=%v", models, err)
 	}
-	candidates, err := db.ListUnknownUsageFactCostCandidates(ctx, "codex", models[0].SourceID, models[0].ModelID, 0, 10)
+	candidates, err := db.ListUnknownUsageFactCostCandidates(ctx, "codex", models[0].SourceID, UsageCostFilter{ModelID: models[0].ModelID, UntilUnixMS: 1}, 0, 10)
 	if err != nil || len(candidates) != 1 || candidates[0].CachedInputTokens != 20 {
 		t.Fatalf("unexpected paged candidates: %#v err=%v", candidates, err)
 	}
@@ -405,7 +405,7 @@ func TestUpdateUnknownUsageFactCostsIsFilteredAtomicAndIdempotent(t *testing.T) 
 	if err != nil || len(models) != 1 || models[0].Model != "other-model" {
 		t.Fatalf("expected only the unclassified model, models=%#v err=%v", models, err)
 	}
-	other, err := db.ListUnknownUsageFactCostCandidates(ctx, "codex", models[0].SourceID, models[0].ModelID, 0, 10)
+	other, err := db.ListUnknownUsageFactCostCandidates(ctx, "codex", models[0].SourceID, UsageCostFilter{ModelID: models[0].ModelID, UntilUnixMS: 1}, 0, 10)
 	if err != nil || len(other) != 1 {
 		t.Fatalf("expected second unknown candidate, candidates=%#v err=%v", other, err)
 	}
@@ -421,5 +421,67 @@ func TestUpdateUnknownUsageFactCostsIsFilteredAtomicAndIdempotent(t *testing.T) 
 	}
 	if status != int(UsageCostStatusUnknown) {
 		t.Fatalf("expected invalid batch to roll back, got %d", status)
+	}
+}
+
+func TestUsageCostQueriesRequirePositiveWriteEvidence(t *testing.T) {
+	ctx := context.Background()
+	db := migratedTestStore(t, ctx)
+	defer closeTestStore(t, db)
+	createUsageProviderFixture(t, ctx, db, "codex")
+	source, err := db.BeginUsageSync(ctx, "codex", "codex-session-jsonl", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero, writes, atLimit, aboveLimit := int64(0), int64(10), int64(900), int64(901)
+	tests := []struct {
+		name  string
+		count *int64
+	}{
+		{"missing", nil},
+		{"unproven zero", &zero},
+		{"positive", &writes},
+		{"at uncached input limit", &atLimit},
+		{"above uncached input limit", &aboveLimit},
+	}
+	facts := make([]CreateUsageFactParams, 0, len(tests))
+	for i, test := range tests {
+		facts = append(facts, CreateUsageFactParams{
+			EventKey: testUsageKey(test.name), SourceID: source.ID,
+			SessionKey: "session", ModelKey: "gpt-6-sol", OccurredAtUnixMS: int64(i + 1),
+			InputTokens: 1_000, CachedInputTokens: 100, TotalTokens: 1_000, CacheWriteInputTokens: test.count,
+		})
+	}
+	if _, err := db.InsertUsageFacts(ctx, testUsageFactBatch(source, facts)); err != nil {
+		t.Fatal(err)
+	}
+	models, err := db.ListUnknownUsageCostModels(ctx, "codex")
+	if err != nil || len(models) != 1 {
+		t.Fatalf("unknown models = %+v, err=%v", models, err)
+	}
+	for i, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, requirePositive := range []bool{false, true} {
+				filter := UsageCostFilter{
+					ModelID: models[0].ModelID, FromUnixMS: int64(i + 1), UntilUnixMS: int64(i + 2),
+					RequirePositiveCacheWrites: requirePositive,
+				}
+				want := !requirePositive || test.count != nil && *test.count > 0 && *test.count <= 900
+				found, err := db.HasUnknownUsageFactCostInPeriod(ctx, source.ID, filter)
+				if err != nil || found != want {
+					t.Fatalf("preflight requirePositive=%t: found=%t want=%t err=%v", requirePositive, found, want, err)
+				}
+				candidates, err := db.ListUnknownUsageFactCostCandidates(ctx, "codex", source.ID, filter, 0, 10)
+				if err != nil || (len(candidates) == 1) != want || len(candidates) > 1 {
+					t.Fatalf("candidates requirePositive=%t: %+v, want match=%t err=%v", requirePositive, candidates, want, err)
+				}
+				if want {
+					got := candidates[0].CacheWriteInputTokens
+					if (got == nil) != (test.count == nil) || got != nil && *got != *test.count {
+						t.Fatalf("observed write count changed: got=%v want=%v", got, test.count)
+					}
+				}
+			}
+		})
 	}
 }

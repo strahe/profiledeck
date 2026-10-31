@@ -21,8 +21,10 @@ If a file is truncated or previously imported usage is rewritten, the accepted r
 
 ## Understand estimates
 
-Estimates use [Claude Standard API prices](https://platform.claude.com/docs/en/about-claude/pricing), matched by exact model and date. Five-minute and one-hour cache writes have separate rates. Unknown cache duration, unsupported models, and unsupported pricing modes can leave cost partial or unknown. Only known components contribute to the subtotal. The report distinguishes missing final output counts, missing cache duration, and unavailable cache rates. Missing final output leaves only its output cost undetermined when input and cache rates are available.
+Estimates use [Claude Standard API prices](https://platform.claude.com/docs/en/about-claude/pricing), matched by exact model and date. Five-minute and one-hour cache writes have separate rates. Haiku 5.5 uses one rate tier for the entire request: total input, including cache reads and writes, uses the lower tier at 100,000 tokens or fewer and the higher tier above that. Its cost remains unknown until request usage is complete.
 
-The first available estimate retains its selected rates when missing usage is completed. Price updates do not recalculate classified estimates. The bundled price list works offline; `usage pricing auto off` disables price-list updates. Reports do not connect to a billing service or upload usage.
+Unknown cache duration, unsupported models, and unsupported pricing modes can leave cost partial or unknown. Only known components contribute to the subtotal. The report distinguishes missing final output counts, missing cache duration, and unavailable cache rates. Other models can estimate known input and cache costs without final output when those rates are available.
+
+The first estimate fixes the rates used for later usage completion. Price updates do not replace those rates; syncing can fill previously unknown costs. The bundled price list works offline; `usage pricing auto off` disables price-list updates. Reports do not connect to a billing service or upload usage.
 
 These figures are not invoices, subscription charges, or account limits. Saved usage excludes raw request IDs, prompts, completions, credentials, and log content; see [Local Data and Security](../reference/data-security.md).

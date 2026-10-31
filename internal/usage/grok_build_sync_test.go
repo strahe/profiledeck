@@ -588,7 +588,8 @@ func TestGrokBuildBackfillUsesEachUnknownRecordDate(t *testing.T) {
 		}); err != nil {
 		t.Fatal(err)
 	}
-	candidates, err := db.ListUnknownUsageFactCostCandidates(ctx, grokconfig.ProviderID, models[0].SourceID, models[0].ModelID, 0, 10)
+	candidates, err := db.ListUnknownUsageFactCostCandidates(ctx, grokconfig.ProviderID, models[0].SourceID,
+		store.UsageCostFilter{ModelID: models[0].ModelID, UntilUnixMS: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).UnixMilli()}, 0, 10)
 	if err != nil || len(candidates) != 1 || candidates[0].OccurredAtUnixMS != time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC).UnixMilli() {
 		t.Fatalf("remaining unknown records = %+v, err=%v", candidates, err)
 	}

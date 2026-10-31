@@ -118,6 +118,9 @@ func estimateCostAt(catalog pricing.Catalog, provider, model string, occurredAt 
 		tokens.CachedInputTokens > tokens.InputTokens || tokens.OutputTokens < 0 {
 		return nil, CostStatusUnknown, nil
 	}
+	if selected.Requirements.PositiveCacheWrites && (cacheWrite == nil || *cacheWrite <= 0) {
+		return nil, CostStatusUnknown, nil
+	}
 	rates := selected.Rates
 	partial := false
 	if selected.Long != nil && provider == ProviderCodex {
@@ -154,7 +157,7 @@ func estimateCostAt(catalog pricing.Catalog, provider, model string, occurredAt 
 		}
 	}
 	if cacheWrite != nil && *cacheWrite > 0 {
-		if rates.CacheWrite == nil {
+		if rates.CacheWrite == nil || selected.Requirements.UnpricedCacheWrites {
 			partial = true
 		} else {
 			writeCost, valid := roundedTokenCostMicrosSafe(*cacheWrite, *rates.CacheWrite)

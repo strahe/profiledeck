@@ -60,21 +60,33 @@ type TokenRates struct {
 }
 
 type Selected struct {
-	Rates   TokenRates
-	Long    *TokenRates
-	Above   int64
-	Basis   string
-	Source  string
-	Version int64
+	Rates        TokenRates
+	Long         *TokenRates
+	Above        int64
+	Basis        string
+	Source       string
+	Version      int64
+	Requirements UsageRequirements
+}
+
+type UsageRequirements struct {
+	CompleteTokens      bool
+	PositiveCacheWrites bool
+	UnpricedCacheWrites bool
 }
 
 type EffectivePeriod struct {
-	FromUnixMS  int64
-	UntilUnixMS int64
+	FromUnixMS   int64
+	UntilUnixMS  int64
+	Requirements UsageRequirements
 }
 
 func (catalog Catalog) EffectivePeriods(provider, model string) []EffectivePeriod {
 	if strings.Contains(model, "latest") {
+		return nil
+	}
+	start, _, supported := usageRequirementsFrom(provider, model)
+	if !supported {
 		return nil
 	}
 	var periods []EffectivePeriod
@@ -88,6 +100,14 @@ func (catalog Catalog) EffectivePeriods(provider, model string) []EffectivePerio
 			until, _ := time.Parse("2006-01-02", entry.EffectiveUntil)
 			period.UntilUnixMS = until.UnixMilli()
 		}
+		if start > period.FromUnixMS && start < period.UntilUnixMS {
+			before := period
+			before.UntilUnixMS = start
+			before.Requirements, _ = usageRequirementsAt(provider, model, before.FromUnixMS)
+			periods = append(periods, before)
+			period.FromUnixMS = start
+		}
+		period.Requirements, _ = usageRequirementsAt(provider, model, period.FromUnixMS)
 		periods = append(periods, period)
 	}
 	return periods
@@ -114,7 +134,7 @@ func Parse(data []byte) (Catalog, error) {
 	if decoder.Decode(new(any)) != io.EOF {
 		return Catalog{}, errors.New("pricing catalog has trailing data")
 	}
-	if (catalog.SchemaVersion != 1 && catalog.SchemaVersion != 2) || catalog.CatalogVersion <= 0 || len(catalog.Entries) == 0 || len(catalog.Entries) > 2_000 {
+	if catalog.SchemaVersion < 1 || catalog.SchemaVersion > 3 || catalog.CatalogVersion <= 0 || len(catalog.Entries) == 0 || len(catalog.Entries) > 2_000 {
 		return Catalog{}, errors.New("pricing catalog version or entries are invalid")
 	}
 	byModel := make(map[string][]Entry)
@@ -122,7 +142,7 @@ func Parse(data []byte) (Catalog, error) {
 		if catalog.SchemaVersion == 1 && (entry.ShortContext.CacheWrite1h != nil || entry.LongContext != nil && entry.LongContext.Rates.CacheWrite1h != nil) {
 			return Catalog{}, errors.New("pricing schema v1 does not support one-hour cache writes")
 		}
-		if err := validateEntry(entry); err != nil {
+		if err := validateEntry(entry, catalog.SchemaVersion); err != nil {
 			return Catalog{}, err
 		}
 		key := entry.Provider + "\x00" + entry.Model
@@ -139,10 +159,11 @@ func Parse(data []byte) (Catalog, error) {
 	return catalog, nil
 }
 
-func validateEntry(entry Entry) error {
+func validateEntry(entry Entry, schemaVersion int) error {
 	if !modelIDPattern.MatchString(entry.Model) || strings.Contains(entry.Model, "latest") ||
 		(entry.Provider != "codex" && entry.Provider != "grok-build" && entry.Provider != "claude-code") ||
-		(entry.Provider == "grok-build" && (strings.Contains(entry.Model, "-build") || strings.Contains(entry.Model, "fast"))) {
+		(entry.Provider == "grok-build" && (strings.Contains(entry.Model, "-build") || strings.Contains(entry.Model, "fast")) &&
+			(schemaVersion < 3 || !verifiedGrokBuildModel(entry.Model))) {
 		return errors.New("pricing model is invalid")
 	}
 	wantBasis, wantHost := "openai-standard-api", "developers.openai.com"
@@ -173,10 +194,18 @@ func validateEntry(entry Entry) error {
 	if _, err := parseRates(entry.ShortContext); err != nil {
 		return err
 	}
+	_, requirements, _ := usageRequirementsFrom(entry.Provider, entry.Model)
+	if requirements.CompleteTokens {
+		if schemaVersion < 3 || entry.LongContext == nil || !completeClaudeRates(entry.ShortContext) || !completeClaudeRates(entry.LongContext.Rates) {
+			return errors.New("pricing model requires both context rates")
+		}
+	}
 	if entry.LongContext != nil {
 		threshold := int64(272_000)
 		if entry.Provider == "grok-build" {
 			threshold = 199_999
+		} else if requirements.CompleteTokens {
+			threshold = 100_000
 		}
 		if entry.LongContext.AboveInputTokens != threshold {
 			return errors.New("pricing context threshold is invalid")
@@ -186,6 +215,44 @@ func validateEntry(entry Entry) error {
 		}
 	}
 	return nil
+}
+
+func completeClaudeRates(rates Rates) bool {
+	return rates.CachedInput != nil && rates.CacheWrite != nil && rates.CacheWrite1h != nil
+}
+
+func verifiedGrokBuildModel(model string) bool {
+	switch model {
+	case "grok-build-0.1", "grok-code-fast-1", "grok-code-fast", "grok-code-fast-1-0825":
+		return true
+	default:
+		return false
+	}
+}
+
+func usageRequirementsFrom(provider, model string) (int64, UsageRequirements, bool) {
+	if provider == "claude-code" && model == "claude-haiku-5-5" {
+		return 0, UsageRequirements{CompleteTokens: true}, true
+	}
+	if provider == "codex" {
+		switch model {
+		case "gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.4-pro", "gpt-5.3-codex", "gpt-5.2", "gpt-5.2-pro", "gpt-5.1", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-pro", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano":
+			return 0, UsageRequirements{}, true
+		case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra":
+			// 12-hour cache pricing applies from 2026-10-20: https://developers.openai.com/api/docs/changelog.
+			return time.Date(2026, time.October, 20, 0, 0, 0, 0, time.UTC).UnixMilli(), UsageRequirements{PositiveCacheWrites: true, UnpricedCacheWrites: true}, true
+		}
+		return 0, UsageRequirements{}, false
+	}
+	return 0, UsageRequirements{}, true
+}
+
+func usageRequirementsAt(provider, model string, occurredAtUnixMS int64) (UsageRequirements, bool) {
+	start, requirements, supported := usageRequirementsFrom(provider, model)
+	if occurredAtUnixMS < start {
+		requirements.UnpricedCacheWrites = false
+	}
+	return requirements, supported
 }
 
 func parseRates(rates Rates) (TokenRates, error) {
@@ -259,6 +326,10 @@ func (catalog Catalog) Select(provider, model string, occurredAtUnixMS int64) (S
 	if occurredAtUnixMS <= 0 || strings.Contains(model, "latest") {
 		return Selected{}, false
 	}
+	requirements, supported := usageRequirementsAt(provider, model, occurredAtUnixMS)
+	if !supported {
+		return Selected{}, false
+	}
 	day := time.UnixMilli(occurredAtUnixMS).UTC().Format("2006-01-02")
 	for _, entry := range catalog.Entries {
 		if entry.Provider != provider || entry.Model != model || day < entry.EffectiveFrom || entry.EffectiveUntil != "" && day >= entry.EffectiveUntil {
@@ -268,7 +339,7 @@ func (catalog Catalog) Select(provider, model string, occurredAtUnixMS int64) (S
 		if err != nil {
 			return Selected{}, false
 		}
-		result := Selected{Rates: rates, Basis: entry.Basis, Source: entry.SourceURL, Version: catalog.CatalogVersion}
+		result := Selected{Rates: rates, Basis: entry.Basis, Source: entry.SourceURL, Version: catalog.CatalogVersion, Requirements: requirements}
 		if entry.LongContext != nil {
 			long, err := parseRates(entry.LongContext.Rates)
 			if err != nil {
@@ -282,6 +353,9 @@ func (catalog Catalog) Select(provider, model string, occurredAtUnixMS int64) (S
 }
 
 func (catalog Catalog) Supports(provider, model string) bool {
+	if _, _, supported := usageRequirementsFrom(provider, model); !supported {
+		return false
+	}
 	for _, entry := range catalog.Entries {
 		if entry.Provider == provider && entry.Model == model {
 			return true

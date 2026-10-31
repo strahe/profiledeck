@@ -22,9 +22,11 @@ profiledeck-cli usage report --range 30d
 
 ## 理解成本估算
 
-ProfileDeck 使用依据 [OpenAI 标准 API 价格](https://developers.openai.com/api/docs/pricing)编制的价格表，按准确模型名称和记录日期匹配。无法确认的模型别名、没有已核实价格的日期，以及缺少特殊费率所需详情的记录，成本可能未知或仅能部分估算。令牌总量和已知成本小计仍会显示。价格更新不会重算已有估算；再次同步可补齐此前未知的成本。
+ProfileDeck 按确切的模型名称和用量日期，使用 [OpenAI 标准 API 价格](https://developers.openai.com/api/docs/pricing)估算成本。模型名称无法确认、对应日期没有已核实价格，或用量信息不完整时，成本可能未知，或只能显示已知部分的小计。令牌总量仍可查看。
 
-内置价格表可离线使用。`usage report` 不请求计费服务，也不上传本地用量。检查或关闭价格更新：
+价格更新不会重算已有估算。再次同步可补齐此前未知的成本。
+
+内置价格表可离线使用。新 Codex 模型可能需要升级 ProfileDeck 才能估算成本。`usage report` 不请求计费服务，也不上传本地用量。检查或关闭价格更新：
 
 ```bash
 profiledeck-cli usage pricing check

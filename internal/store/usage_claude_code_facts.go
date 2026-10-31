@@ -210,7 +210,7 @@ func (s *Store) writeClaudeCodeUsageFact(ctx context.Context, fact CreateUsageFa
 	return err
 }
 
-func (s *Store) BackfillClaudeCodeUsageCosts(ctx context.Context, sourceID, generation int64, price ClaudeCodeUsagePricer) error {
+func (s *Store) BackfillClaudeCodeUsageCosts(ctx context.Context, sourceID, generation int64, filters []UsageCostFilter, price ClaudeCodeUsagePricer) error {
 	return s.WithTransaction(ctx, func(tx *Store) error {
 		source, err := tx.reserveCurrentUsageSyncForWrite(ctx, sourceID, generation)
 		if err != nil {
@@ -219,34 +219,27 @@ func (s *Store) BackfillClaudeCodeUsageCosts(ctx context.Context, sourceID, gene
 		if source.ProviderID != "claude-code" {
 			return errors.New("claude code usage source is invalid")
 		}
-		rows, err := tx.executor().QueryContext(ctx, `SELECT event_key FROM usage_facts WHERE source_id=? AND cost_status=0 AND token_status IN (0,1) AND pricing_eligible=1`, sourceID)
-		if err != nil {
-			return err
-		}
-		var keys []UsageKey
-		for rows.Next() {
-			var key UsageKey
-			if err := rows.Scan(&key); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			keys = append(keys, key)
-		}
-		err = rows.Err()
-		closeErr := rows.Close()
-		if err != nil {
-			return err
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		for _, key := range keys {
-			fact, err := tx.getClaudeCodeUsageFact(ctx, key)
-			if err != nil {
-				return err
-			}
-			if _, err := tx.reconcileClaudeCodeUsageFacts(ctx, []CreateUsageFactParams{fact}, price); err != nil {
-				return err
+		const batchSize = 256
+		for _, filter := range filters {
+			var afterID int64
+			for {
+				candidates, err := tx.ListUnknownUsageFactCostCandidates(ctx, source.ProviderID, sourceID, filter, afterID, batchSize)
+				if err != nil {
+					return err
+				}
+				for _, candidate := range candidates {
+					fact, err := tx.getClaudeCodeUsageFact(ctx, candidate.EventKey)
+					if err != nil {
+						return err
+					}
+					if _, err := tx.reconcileClaudeCodeUsageFacts(ctx, []CreateUsageFactParams{fact}, price); err != nil {
+						return err
+					}
+				}
+				if len(candidates) < batchSize {
+					break
+				}
+				afterID = candidates[len(candidates)-1].ID
 			}
 		}
 		return nil
