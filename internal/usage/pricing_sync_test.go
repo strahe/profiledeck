@@ -109,6 +109,55 @@ func TestCodexPricingBackfillRespectsCacheEvidenceAcrossPolicyDate(t *testing.T)
 	}
 }
 
+func TestCodexPricingBackfillDoesNotRetryInconsistentCacheCounts(t *testing.T) {
+	ctx := context.Background()
+	codexDir := t.TempDir()
+	writeAppUsageFixture(t, codexDir, `{"type":"session_meta","session_id":"session-cache-counts"}
+{"type":"turn_context","model":"gpt-6.1-sol"}
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":100,"cache_write_input_tokens":901,"output_tokens":100,"total_tokens":1100},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":100,"cache_write_input_tokens":901,"output_tokens":100,"total_tokens":1100}}},"timestamp":"2026-10-29T12:00:00Z"}
+`)
+	environment := newUsageTestEnvironment(t, t.TempDir(), codexDir)
+	if _, err := bootstrap.NewService(environment.runtime, nil, nil).Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := environment.service.SyncCodex(ctx); err != nil || result.ImportedEvents != 1 {
+		t.Fatalf("import inconsistent cache counts: %+v, %v", result, err)
+	}
+	db, err := environment.runtime.StoreFactory().OpenHealthy(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	summary, err := db.UsageSummary(ctx, ProviderCodex)
+	if err != nil || summary.EventCount != 1 || summary.UnknownCostEvents != 1 || summary.EstimatedCostMicros != 0 {
+		t.Fatalf("inconsistent cache counts received an estimate: %+v, %v", summary, err)
+	}
+	source, err := db.GetUsageSource(ctx, ProviderCodex, SourceCodexSessionJSONL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	models, err := db.ListUnknownUsageCostModels(ctx, ProviderCodex)
+	if err != nil || len(models) != 1 {
+		t.Fatalf("unknown model after import: %+v, %v", models, err)
+	}
+	facts, err := db.ListUnknownUsageFactCostCandidates(ctx, ProviderCodex, source.ID, store.UsageCostFilter{
+		ModelID: models[0].ModelID, UntilUnixMS: time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC).UnixMilli(),
+	}, 0, 10)
+	if err != nil || len(facts) != 1 || facts[0].CacheWriteInputTokens == nil || *facts[0].CacheWriteInputTokens != 901 {
+		t.Fatalf("import changed observed cache-write count: %+v, %v", facts, err)
+	}
+	for range 2 {
+		outcome, err := environment.service.sync(ctx, UsageSyncRequest{ProviderID: ProviderCodex}, SyncOptions{ProvisionMode: SyncExistingProvider})
+		if err != nil || outcome.Performed {
+			t.Fatalf("inconsistent cache counts triggered empty backfill: %+v, %v", outcome, err)
+		}
+		currentSource, err := db.GetUsageSource(ctx, ProviderCodex, SourceCodexSessionJSONL)
+		if err != nil || currentSource != source {
+			t.Fatalf("empty backfill changed source state: %+v, %v", currentSource, err)
+		}
+	}
+}
+
 func TestHaikuPricingBackfillWaitsForCompleteUsageInSupportedPeriod(t *testing.T) {
 	for _, test := range []struct {
 		name      string

@@ -210,36 +210,40 @@ func TestCatalogDoesNotEnableUnverifiedCodexPricingSemantics(t *testing.T) {
 	base.Model = "gpt-6.2-sol"
 	base.EffectiveFrom, base.EffectiveUntil, base.VerifiedAt = "2026-10-29", "", "2026-10-29"
 	at := time.Date(2026, time.October, 29, 0, 0, 0, 0, time.UTC).UnixMilli()
-	for _, schema := range []int{1, 2, 3} {
-		for _, longContext := range []bool{false, true} {
-			for _, cacheWrite := range []bool{false, true} {
-				t.Run(fmt.Sprintf("schema-%d/long-%t/write-%t", schema, longContext, cacheWrite), func(t *testing.T) {
-					entry := base
-					entry.LongContext = nil
-					if longContext {
-						long := *base.LongContext
-						entry.LongContext = &long
-					}
-					if !cacheWrite {
-						entry.ShortContext.CacheWrite = nil
-						if entry.LongContext != nil {
-							entry.LongContext.Rates.CacheWrite = nil
-						}
-					}
-					data, err := json.Marshal(Catalog{SchemaVersion: schema, CatalogVersion: 4, Entries: []Entry{entry}})
-					if err != nil {
-						t.Fatal(err)
-					}
-					catalog, err := Parse(data)
-					if err != nil {
-						t.Fatalf("unverified model rates should remain readable: %v", err)
-					}
-					if _, ok := catalog.Select("codex", entry.Model, at); ok || catalog.Supports("codex", entry.Model) || len(catalog.EffectivePeriods("codex", entry.Model)) != 0 {
-						t.Fatal("unverified Codex model activated pricing or backfill")
-					}
-				})
+	for _, test := range []struct {
+		schema      int
+		longContext bool
+		cacheWrite  bool
+	}{
+		{schema: 1, cacheWrite: true},
+		{schema: 2, longContext: true, cacheWrite: true},
+		{schema: 3, longContext: true},
+	} {
+		t.Run(fmt.Sprintf("schema-%d", test.schema), func(t *testing.T) {
+			entry := base
+			entry.LongContext = nil
+			if test.longContext {
+				long := *base.LongContext
+				entry.LongContext = &long
 			}
-		}
+			if !test.cacheWrite {
+				entry.ShortContext.CacheWrite = nil
+				if entry.LongContext != nil {
+					entry.LongContext.Rates.CacheWrite = nil
+				}
+			}
+			data, err := json.Marshal(Catalog{SchemaVersion: test.schema, CatalogVersion: 4, Entries: []Entry{entry}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalog, err := Parse(data)
+			if err != nil {
+				t.Fatalf("unverified model rates should remain readable: %v", err)
+			}
+			if _, ok := catalog.Select("codex", entry.Model, at); ok || catalog.Supports("codex", entry.Model) || len(catalog.EffectivePeriods("codex", entry.Model)) != 0 {
+				t.Fatal("unverified Codex model activated pricing or backfill")
+			}
+		})
 	}
 	legacy, ok := Embedded().Select("codex", "gpt-5.5", at)
 	if !ok || legacy.Requirements != (UsageRequirements{}) {

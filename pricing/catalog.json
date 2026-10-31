@@ -737,7 +737,7 @@
       "model": "grok-code-fast-1",
       "basis": "xai-standard-api-short-context",
       "effective_from": "2026-10-29",
-      "source_url": "https://docs.x.ai/developers/pricing",
+      "source_url": "https://docs.x.ai/developers/models/grok-build-0.1",
       "verified_at": "2026-10-29",
       "short_context": {
         "input": "1",
@@ -760,7 +760,7 @@
       "model": "grok-code-fast",
       "basis": "xai-standard-api-short-context",
       "effective_from": "2026-10-29",
-      "source_url": "https://docs.x.ai/developers/pricing",
+      "source_url": "https://docs.x.ai/developers/models/grok-build-0.1",
       "verified_at": "2026-10-29",
       "short_context": {
         "input": "1",
@@ -783,7 +783,7 @@
       "model": "grok-code-fast-1-0825",
       "basis": "xai-standard-api-short-context",
       "effective_from": "2026-10-29",
-      "source_url": "https://docs.x.ai/developers/pricing",
+      "source_url": "https://docs.x.ai/developers/models/grok-build-0.1",
       "verified_at": "2026-10-29",
       "short_context": {
         "input": "1",

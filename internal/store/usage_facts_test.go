@@ -433,7 +433,7 @@ func TestUsageCostQueriesRequirePositiveWriteEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	zero, writes := int64(0), int64(10)
+	zero, writes, atLimit, aboveLimit := int64(0), int64(10), int64(900), int64(901)
 	tests := []struct {
 		name  string
 		count *int64
@@ -441,13 +441,15 @@ func TestUsageCostQueriesRequirePositiveWriteEvidence(t *testing.T) {
 		{"missing", nil},
 		{"unproven zero", &zero},
 		{"positive", &writes},
+		{"at uncached input limit", &atLimit},
+		{"above uncached input limit", &aboveLimit},
 	}
 	facts := make([]CreateUsageFactParams, 0, len(tests))
 	for i, test := range tests {
 		facts = append(facts, CreateUsageFactParams{
 			EventKey: testUsageKey(test.name), SourceID: source.ID,
 			SessionKey: "session", ModelKey: "gpt-6-sol", OccurredAtUnixMS: int64(i + 1),
-			InputTokens: 100, TotalTokens: 100, CacheWriteInputTokens: test.count,
+			InputTokens: 1_000, CachedInputTokens: 100, TotalTokens: 1_000, CacheWriteInputTokens: test.count,
 		})
 	}
 	if _, err := db.InsertUsageFacts(ctx, testUsageFactBatch(source, facts)); err != nil {
@@ -464,7 +466,7 @@ func TestUsageCostQueriesRequirePositiveWriteEvidence(t *testing.T) {
 					ModelID: models[0].ModelID, FromUnixMS: int64(i + 1), UntilUnixMS: int64(i + 2),
 					RequirePositiveCacheWrites: requirePositive,
 				}
-				want := !requirePositive || test.count != nil && *test.count > 0
+				want := !requirePositive || test.count != nil && *test.count > 0 && *test.count <= 900
 				found, err := db.HasUnknownUsageFactCostInPeriod(ctx, source.ID, filter)
 				if err != nil || found != want {
 					t.Fatalf("preflight requirePositive=%t: found=%t want=%t err=%v", requirePositive, found, want, err)

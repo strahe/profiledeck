@@ -1128,7 +1128,7 @@ func (s *Store) HasUnknownUsageFactCostInPeriod(ctx context.Context, sourceID in
 				AND f.occurred_at_unix_ms >= ? AND f.occurred_at_unix_ms < ?
 				AND (s.provider_id <> 'claude-code' OR (f.pricing_eligible=1 AND f.token_status IN (0,1)))
 				AND (NOT ? OR f.token_status = ?)
-				AND (NOT ? OR f.cache_write_input_tokens > 0)
+				AND (NOT ? OR (f.cache_write_input_tokens > 0 AND f.cache_write_input_tokens <= f.input_tokens - f.cached_input_tokens))
 			LIMIT 1
 		)
 	`, sourceID, UsageCostStatusUnknown, filter.ModelID, filter.FromUnixMS, filter.UntilUnixMS,
@@ -1161,7 +1161,7 @@ func (s *Store) ListUnknownUsageFactCostCandidates(
 			AND f.occurred_at_unix_ms >= ? AND f.occurred_at_unix_ms < ?
 			AND (s.provider_id <> 'claude-code' OR (f.pricing_eligible=1 AND f.token_status IN (0,1)))
 			AND (NOT ? OR f.token_status = ?)
-			AND (NOT ? OR f.cache_write_input_tokens > 0)
+			AND (NOT ? OR (f.cache_write_input_tokens > 0 AND f.cache_write_input_tokens <= f.input_tokens - f.cached_input_tokens))
 		ORDER BY f.id ASC
 		LIMIT ?
 	`, providerID, sourceID, UsageCostStatusUnknown, filter.ModelID, afterID, filter.FromUnixMS, filter.UntilUnixMS,
